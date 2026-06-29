@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/order_platform.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -55,6 +56,17 @@ class _OrderPlatformCatalogScreenState
 
   @override
   Widget build(BuildContext context) {
+    if (AppSession.instance.employee?.canManagePlatforms != true) {
+      return const BrandedScaffold(
+        title: 'Plataformas',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'No tienes permiso para administrar plataformas.',
+        ),
+      );
+    }
+
     return BrandedScaffold(
       title: 'Plataformas',
       actions: [

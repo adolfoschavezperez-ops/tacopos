@@ -9,6 +9,7 @@ import '../models/order_platform.dart';
 import '../models/payment.dart';
 import '../models/pos_table.dart';
 import '../models/product.dart';
+import 'app_session.dart';
 
 class KitchenOrderBundle {
   const KitchenOrderBundle({required this.order, required this.items});
@@ -155,6 +156,45 @@ class TacoPosRepository {
           ? employees.where((employee) => employee.active).toList()
           : employees;
     });
+  }
+
+  Future<void> ensureInitialAdminEmployee() async {
+    final adminRef = _employeesRef.doc('admin');
+    final doc = await adminRef.get();
+    if (doc.exists) {
+      return;
+    }
+
+    await adminRef.set({
+      'id': 'admin',
+      'name': 'Admin',
+      // TODO: Replace plain PIN storage with a salted hash before production.
+      'pin': '1234',
+      'active': true,
+      'canTakeOrders': true,
+      'canCharge': true,
+      'canViewKitchen': true,
+      'canViewAdmin': true,
+      'canManageProducts': true,
+      'canManageTables': true,
+      'canManagePlatforms': true,
+      'canManageEmployees': true,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<bool> validateEmployeePin({
+    required String employeeId,
+    required String pin,
+  }) async {
+    final doc = await _employeesRef.doc(employeeId).get();
+    if (!doc.exists) {
+      return false;
+    }
+
+    final employee = Employee.fromDoc(doc);
+    return employee.active && employee.pin == pin;
   }
 
   Stream<List<PosOrder>> watchOpenOrders() {
@@ -347,9 +387,15 @@ class TacoPosRepository {
           });
 
     if (existing.isNotEmpty) {
+      _requireAnyPermission(
+        takeOrders: true,
+        charge: true,
+        message: 'No tienes permiso para abrir ordenes.',
+      );
       return existing.first;
     }
 
+    _requireTakeOrders();
     final orderRef = _ordersRef.doc();
     final data = {
       'tableId': table.id,
@@ -363,6 +409,7 @@ class TacoPosRepository {
       'pendingTotal': 0.0,
       'personNames': {'1': 'Persona 1'},
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      ..._employeeAuditFields(prefix: 'createdBy'),
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -384,6 +431,7 @@ class TacoPosRepository {
     required OrderPlatform platform,
     String? customerName,
   }) async {
+    _requireTakeOrders();
     final orderRef = _ordersRef.doc();
     final takeoutNumber = await _nextTakeoutNumber();
     final cleanCustomer = customerName?.trim();
@@ -404,6 +452,7 @@ class TacoPosRepository {
       'pendingTotal': 0.0,
       'personNames': {'1': 'Persona 1'},
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      ..._employeeAuditFields(prefix: 'createdBy'),
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     };
@@ -430,11 +479,24 @@ class TacoPosRepository {
     required Product product,
     required int personNumber,
   }) async {
-    final personName = await _personNameForOrder(orderId, personNumber);
+    _requireTakeOrders();
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
+    final personName =
+        order?.personName(personNumber) ?? 'Persona $personNumber';
+    final platformId = order?.orderType == 'takeout' ? order?.platformId : null;
+    final platformName = order?.orderType == 'takeout'
+        ? order?.platformName
+        : null;
+    final usePlatformPrice = platformId != null && platformId != 'en_persona';
+    final appliedPrice = usePlatformPrice
+        ? product.priceForPlatform(platformId)
+        : product.price;
     final existingItem = await _findMatchingPendingItem(
       orderId: orderId,
       productId: product.id,
       personNumber: personNumber,
+      appliedPlatformId: usePlatformPrice ? platformId : null,
     );
 
     if (existingItem != null) {
@@ -454,9 +516,13 @@ class TacoPosRepository {
       'productName': product.name,
       'category': product.category,
       'qty': 1,
-      'unitPrice': product.price,
-      'total': product.price,
+      'unitPrice': appliedPrice,
+      'total': appliedPrice,
+      'appliedPlatformId': usePlatformPrice ? platformId : null,
+      'appliedPlatformName': usePlatformPrice ? platformName : null,
+      'priceSource': usePlatformPrice ? 'platform' : 'store',
       'notes': '',
+      ..._employeeAuditFields(prefix: 'createdBy'),
       'sendToKitchen': product.sendToKitchen,
       'kitchenStatus': product.sendToKitchen ? 'pending' : 'not_required',
       'kitchenBatchId': null,
@@ -473,6 +539,7 @@ class TacoPosRepository {
     required int personNumber,
     required String name,
   }) async {
+    _requireTakeOrders();
     final cleanName = name.trim().isEmpty
         ? 'Persona $personNumber'
         : name.trim();
@@ -498,18 +565,11 @@ class TacoPosRepository {
     await batch.commit();
   }
 
-  Future<String> _personNameForOrder(String orderId, int personNumber) async {
-    final orderDoc = await _ordersRef.doc(orderId).get();
-    if (orderDoc.exists) {
-      return PosOrder.fromDoc(orderDoc).personName(personNumber);
-    }
-    return 'Persona $personNumber';
-  }
-
   Future<OrderItem?> _findMatchingPendingItem({
     required String orderId,
     required String productId,
     required int personNumber,
+    String? appliedPlatformId,
   }) async {
     final snapshot = await _ordersRef.doc(orderId).collection('items').get();
 
@@ -517,6 +577,7 @@ class TacoPosRepository {
       final item = OrderItem.fromDoc(doc);
       if (item.productId == productId &&
           item.personNumber == personNumber &&
+          item.appliedPlatformId == appliedPlatformId &&
           item.kitchenStatus == 'pending' &&
           item.paymentStatus == 'pending') {
         return item;
@@ -530,6 +591,7 @@ class TacoPosRepository {
     required OrderItem item,
     required int qty,
   }) async {
+    _requireTakeOrders();
     if (qty <= 0) {
       await deleteItem(orderId: orderId, itemId: item.id);
       return;
@@ -547,11 +609,13 @@ class TacoPosRepository {
     required String orderId,
     required String itemId,
   }) async {
+    _requireTakeOrders();
     await _ordersRef.doc(orderId).collection('items').doc(itemId).delete();
     await recalculateOrderTotal(orderId);
   }
 
   Future<int> sendOrderToKitchen(String orderId) async {
+    _requireTakeOrders();
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
@@ -789,7 +853,9 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    _requireCharge();
     await _ensureNoPaymentType(orderId, blockedType: 'person');
+    await _ensureEmployeeConsumptionAllowed(orderId, method);
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -847,7 +913,9 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    _requireCharge();
     await _ensureNoPaymentType(orderId, blockedType: 'partial');
+    await _ensureEmployeeConsumptionAllowed(orderId, method);
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -918,7 +986,9 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    _requireCharge();
     await _ensureNoPaymentType(orderId, blockedType: 'person');
+    await _ensureEmployeeConsumptionAllowed(orderId, method);
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -953,6 +1023,62 @@ class TacoPosRepository {
     );
     await batch.commit();
     return PaymentResult(allPaid: allPaid);
+  }
+
+  Future<PaymentResult> payPlatformOrder({required String orderId}) async {
+    _requireCharge();
+    await _ensureKitchenReadyForPayment(orderId);
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    final order = PosOrder.fromDoc(orderDoc);
+    if (order.orderType != 'takeout' || order.platformId == 'en_persona') {
+      throw StateError('Este pedido no aplica para pago en plataforma.');
+    }
+
+    final itemsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('items')
+        .get();
+    final pendingItems = itemsSnapshot.docs
+        .map(OrderItem.fromDoc)
+        .where((item) => item.paymentStatus != 'paid')
+        .toList();
+    final baseAmount = pendingItems.fold<double>(
+      0,
+      (runningTotal, item) => runningTotal + item.total,
+    );
+
+    if (baseAmount <= 0) {
+      return const PaymentResult(allPaid: true);
+    }
+
+    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final batch = _db.batch();
+    _setPayment(
+      batch: batch,
+      paymentRef: paymentRef,
+      order: order,
+      type: 'platform',
+      method: 'platform_paid',
+      baseAmount: baseAmount,
+      platformId: order.platformId,
+      platformName: order.platformName,
+    );
+
+    for (final doc in itemsSnapshot.docs) {
+      final item = OrderItem.fromDoc(doc);
+      if (item.paymentStatus != 'paid') {
+        batch.update(doc.reference, {
+          'paymentStatus': 'paid',
+          'paidAt': FieldValue.serverTimestamp(),
+          'paymentId': paymentRef.id,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    _closeOrderInBatch(batch, order, paidTotal: order.total);
+    await batch.commit();
+    return const PaymentResult(allPaid: true);
   }
 
   bool _updateOrderPaymentTotalsInBatch(
@@ -1023,6 +1149,8 @@ class TacoPosRepository {
     String? personName,
     String? employeeId,
     String? employeeName,
+    String? platformId,
+    String? platformName,
   }) {
     if (method == 'employee_consumption' &&
         (employeeId == null || employeeName == null)) {
@@ -1048,9 +1176,51 @@ class TacoPosRepository {
       'chargedAmount': chargedAmount,
       'employeeId': employeeId,
       'employeeName': employeeName,
+      'platformId': platformId,
+      'platformName': platformName,
       'createdAt': FieldValue.serverTimestamp(),
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      ..._employeeAuditFields(prefix: 'createdBy'),
     });
+  }
+
+  Map<String, Object> _employeeAuditFields({required String prefix}) {
+    final employee = AppSession.instance.employee;
+    if (employee == null) {
+      return const {};
+    }
+    return {
+      '${prefix}EmployeeId': employee.id,
+      '${prefix}EmployeeName': employee.name,
+    };
+  }
+
+  void _requireTakeOrders() {
+    if (AppSession.instance.employee?.canTakeOrders == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para levantar pedidos');
+  }
+
+  void _requireCharge() {
+    if (AppSession.instance.employee?.canCharge == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para cobrar');
+  }
+
+  void _requireAnyPermission({
+    required bool takeOrders,
+    required bool charge,
+    required String message,
+  }) {
+    final employee = AppSession.instance.employee;
+    final allowed =
+        (takeOrders && employee?.canTakeOrders == true) ||
+        (charge && employee?.canCharge == true);
+    if (!allowed) {
+      throw StateError(message);
+    }
   }
 
   Future<void> _ensureKitchenReadyForPayment(String orderId) async {
@@ -1093,6 +1263,29 @@ class TacoPosRepository {
     }
   }
 
+  Future<void> _ensureEmployeeConsumptionAllowed(
+    String orderId,
+    String method,
+  ) async {
+    if (method != 'employee_consumption') {
+      return;
+    }
+
+    final paymentsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .get();
+    final hasClientPayment = paymentsSnapshot.docs
+        .map(Payment.fromDoc)
+        .any((payment) => ['cash', 'card'].contains(payment.method));
+
+    if (hasClientPayment) {
+      throw StateError(
+        'Consumo empleado no disponible porque ya existe un pago de cliente.',
+      );
+    }
+  }
+
   Future<void> recalculateOrderTotal(String orderId) async {
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
@@ -1125,9 +1318,14 @@ class TacoPosRepository {
     required String name,
     required String category,
     required double price,
+    required Map<String, double> platformPrices,
     required bool active,
     required bool sendToKitchen,
   }) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManageProducts == true,
+      'No tienes permiso para administrar productos.',
+    );
     final docRef = productId == null
         ? _productsRef.doc()
         : _productsRef.doc(productId);
@@ -1138,6 +1336,7 @@ class TacoPosRepository {
       'name': name.trim(),
       'category': category.trim(),
       'price': price,
+      'platformPrices': platformPrices,
       'active': active,
       'sendToKitchen': sendToKitchen,
       'sortOrder': current.docs.length + 1,
@@ -1152,6 +1351,10 @@ class TacoPosRepository {
     required bool active,
     required int sortOrder,
   }) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManageTables == true,
+      'No tienes permiso para administrar mesas.',
+    );
     final docRef = tableId == null ? _tablesRef.doc() : _tablesRef.doc(tableId);
 
     await docRef.set({
@@ -1167,6 +1370,10 @@ class TacoPosRepository {
   }
 
   Future<void> toggleTable(PosTable table) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManageTables == true,
+      'No tienes permiso para administrar mesas.',
+    );
     await _tablesRef.doc(table.id).update({
       'active': !table.active,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -1179,6 +1386,10 @@ class TacoPosRepository {
     required bool active,
     required int sortOrder,
   }) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManagePlatforms == true,
+      'No tienes permiso para administrar plataformas.',
+    );
     final docRef = platformId == null
         ? _platformsRef.doc()
         : _platformsRef.doc(platformId);
@@ -1194,6 +1405,10 @@ class TacoPosRepository {
   }
 
   Future<void> toggleOrderPlatform(OrderPlatform platform) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManagePlatforms == true,
+      'No tienes permiso para administrar plataformas.',
+    );
     await _platformsRef.doc(platform.id).update({
       'active': !platform.active,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -1201,6 +1416,10 @@ class TacoPosRepository {
   }
 
   Future<void> toggleProduct(Product product) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManageProducts == true,
+      'No tienes permiso para administrar productos.',
+    );
     await _productsRef.doc(product.id).update({
       'active': !product.active,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -1211,7 +1430,20 @@ class TacoPosRepository {
     String? employeeId,
     required String name,
     required bool active,
+    required String pin,
+    required bool canTakeOrders,
+    required bool canCharge,
+    required bool canViewKitchen,
+    required bool canViewAdmin,
+    required bool canManageProducts,
+    required bool canManageTables,
+    required bool canManagePlatforms,
+    required bool canManageEmployees,
   }) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManageEmployees == true,
+      'No tienes permiso para administrar empleados.',
+    );
     final docRef = employeeId == null
         ? _employeesRef.doc()
         : _employeesRef.doc(employeeId);
@@ -1219,16 +1451,37 @@ class TacoPosRepository {
     await docRef.set({
       'id': docRef.id,
       'name': name.trim(),
+      // TODO: Replace plain PIN storage with a salted hash before production.
+      'pin': pin.trim(),
       'active': active,
+      'canTakeOrders': canTakeOrders,
+      'canCharge': canCharge,
+      'canViewKitchen': canViewKitchen,
+      'canViewAdmin': canViewAdmin,
+      'canManageProducts': canManageProducts,
+      'canManageTables': canManageTables,
+      'canManagePlatforms': canManagePlatforms,
+      'canManageEmployees': canManageEmployees,
       if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
   }
 
   Future<void> toggleEmployee(Employee employee) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManageEmployees == true,
+      'No tienes permiso para administrar empleados.',
+    );
     await _employeesRef.doc(employee.id).update({
       'active': !employee.active,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  void _requireAdminPermission(bool allowed, String message) {
+    if (allowed) {
+      return;
+    }
+    throw StateError(message);
   }
 }

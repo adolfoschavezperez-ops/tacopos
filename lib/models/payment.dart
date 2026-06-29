@@ -16,6 +16,8 @@ class Payment {
     this.personName,
     this.employeeId,
     this.employeeName,
+    this.platformId,
+    this.platformName,
     this.createdAt,
     this.createdBy,
   });
@@ -34,6 +36,8 @@ class Payment {
   final String? personName;
   final String? employeeId;
   final String? employeeName;
+  final String? platformId;
+  final String? platformName;
   final DateTime? createdAt;
   final String? createdBy;
 
@@ -64,6 +68,8 @@ class Payment {
       personName: data['personName'] as String?,
       employeeId: data['employeeId'] as String?,
       employeeName: data['employeeName'] as String?,
+      platformId: data['platformId'] as String?,
+      platformName: data['platformName'] as String?,
       createdAt: _toDate(data['createdAt']),
       createdBy: data['createdBy'] as String?,
     );

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
+import '../models/employee.dart';
+import '../services/app_session.dart';
 import '../widgets/glass.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'kitchen/kitchen_screen.dart';
@@ -29,6 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final employee = AppSession.instance.employee;
     return Scaffold(
       body: PremiumBackground(
         child: SafeArea(
@@ -56,7 +59,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                 const SizedBox(width: 34),
                                 Expanded(
                                   flex: 9,
-                                  child: _ModePanel(onOpenMode: _openMode),
+                                  child: _ModePanel(
+                                    employee: employee,
+                                    onOpenMode: _openMode,
+                                  ),
                                 ),
                               ],
                             )
@@ -65,7 +71,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               children: [
                                 const _HeroBlock(),
                                 const SizedBox(height: 24),
-                                _ModePanel(onOpenMode: _openMode),
+                                _ModePanel(
+                                  employee: employee,
+                                  onOpenMode: _openMode,
+                                ),
                               ],
                             ),
                     ),
@@ -145,8 +154,9 @@ class _HeroBlock extends StatelessWidget {
 }
 
 class _ModePanel extends StatelessWidget {
-  const _ModePanel({required this.onOpenMode});
+  const _ModePanel({required this.employee, required this.onOpenMode});
 
+  final Employee? employee;
   final ValueChanged<AppMode> onOpenMode;
 
   @override
@@ -163,26 +173,41 @@ class _ModePanel extends StatelessWidget {
             subtitle: 'Elige el flujo de trabajo.',
           ),
           const SizedBox(height: 18),
-          _ModeTile(
-            icon: Icons.table_restaurant_outlined,
-            title: 'Mesero / Caja',
-            subtitle: 'Mesas, personas y cobro simple',
-            onTap: () => onOpenMode(AppMode.waiterCashier),
-          ),
-          const SizedBox(height: 12),
-          _ModeTile(
-            icon: Icons.room_service_outlined,
-            title: 'Cocina',
-            subtitle: 'Comandas enviadas en tiempo real',
-            onTap: () => onOpenMode(AppMode.kitchen),
-          ),
-          const SizedBox(height: 12),
-          _ModeTile(
-            icon: Icons.insights_outlined,
-            title: 'Socio / Admin',
-            subtitle: 'Metricas y catalogo de productos',
-            onTap: () => onOpenMode(AppMode.admin),
-          ),
+          if (employee?.canTakeOrders == true ||
+              employee?.canCharge == true) ...[
+            _ModeTile(
+              icon: Icons.table_restaurant_outlined,
+              title: 'Mesero / Caja',
+              subtitle: 'Mesas, personas y cobro simple',
+              onTap: () => onOpenMode(AppMode.waiterCashier),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (employee?.canViewKitchen == true) ...[
+            _ModeTile(
+              icon: Icons.room_service_outlined,
+              title: 'Cocina',
+              subtitle: 'Comandas enviadas en tiempo real',
+              onTap: () => onOpenMode(AppMode.kitchen),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (employee?.canViewAdmin == true)
+            _ModeTile(
+              icon: Icons.insights_outlined,
+              title: 'Socio / Admin',
+              subtitle: 'Metricas y catalogo de productos',
+              onTap: () => onOpenMode(AppMode.admin),
+            ),
+          if (employee != null &&
+              !employee!.canTakeOrders &&
+              !employee!.canCharge &&
+              !employee!.canViewKitchen &&
+              !employee!.canViewAdmin)
+            const Text(
+              'Este usuario no tiene permisos asignados.',
+              style: TextStyle(color: BrandColors.textMuted),
+            ),
         ],
       ),
     );

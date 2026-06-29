@@ -31,8 +31,11 @@ class DemoSeedService {
 
     for (final product in _products) {
       final id = product['id'] as String;
+      final price = (product['price'] as num?)?.toDouble() ?? 0;
       batch.set(restaurantRef.collection('products').doc(id), {
         ...product,
+        'platformPrices':
+            product['platformPrices'] ?? _demoPlatformPrices(price),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
@@ -61,6 +64,10 @@ class DemoSeedService {
 
     await batch.commit();
   }
+}
+
+Map<String, double> _demoPlatformPrices(double price) {
+  return {'didi': price, 'uber': price, 'rappi': price};
 }
 
 const _tables = [
@@ -107,8 +114,48 @@ const _tables = [
 ];
 
 const _employees = [
-  {'id': 'ricardo_bernal', 'name': 'Ricardo Bernal', 'active': true},
-  {'id': 'gael', 'name': 'Gael', 'active': true},
+  {
+    'id': 'admin',
+    'name': 'Admin',
+    'active': true,
+    'pin': '1234',
+    'canTakeOrders': true,
+    'canCharge': true,
+    'canViewKitchen': true,
+    'canViewAdmin': true,
+    'canManageProducts': true,
+    'canManageTables': true,
+    'canManagePlatforms': true,
+    'canManageEmployees': true,
+  },
+  {
+    'id': 'ricardo_bernal',
+    'name': 'Ricardo Bernal',
+    'active': true,
+    'pin': '1111',
+    'canTakeOrders': true,
+    'canCharge': true,
+    'canViewKitchen': true,
+    'canViewAdmin': false,
+    'canManageProducts': false,
+    'canManageTables': false,
+    'canManagePlatforms': false,
+    'canManageEmployees': false,
+  },
+  {
+    'id': 'gael',
+    'name': 'Gael',
+    'active': true,
+    'pin': '2222',
+    'canTakeOrders': true,
+    'canCharge': false,
+    'canViewKitchen': true,
+    'canViewAdmin': false,
+    'canManageProducts': false,
+    'canManageTables': false,
+    'canManagePlatforms': false,
+    'canManageEmployees': false,
+  },
 ];
 
 const _orderPlatforms = [

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/product.dart';
+import '../../models/order_platform.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -15,6 +17,16 @@ class ProductCatalogScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final repository = TacoPosRepository();
+    if (AppSession.instance.employee?.canManageProducts != true) {
+      return const BrandedScaffold(
+        title: 'Catalogo',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'No tienes permiso para administrar productos.',
+        ),
+      );
+    }
 
     return BrandedScaffold(
       title: 'Catalogo',
@@ -49,29 +61,44 @@ class ProductCatalogScreen extends StatelessWidget {
             );
           }
 
-          return ListView(
-            padding: const EdgeInsets.all(22),
-            children: [
-              SectionHeader(
-                title: 'Catalogo',
-                subtitle: '${products.length} productos configurados',
-              ),
-              const SizedBox(height: 18),
-              ...products.map(
-                (product) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: _ProductAdminTile(
-                    product: product,
-                    onEdit: () => _showProductDialog(
-                      context,
-                      repository,
-                      product: product,
-                    ),
-                    onToggle: () => repository.toggleProduct(product),
+          return StreamBuilder<List<OrderPlatform>>(
+            stream: repository.watchOrderPlatforms(),
+            builder: (context, platformSnapshot) {
+              if (platformSnapshot.hasError) {
+                return EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'No se pudieron cargar plataformas',
+                  message: '${platformSnapshot.error}',
+                );
+              }
+
+              final platforms = platformSnapshot.data ?? [];
+              return ListView(
+                padding: const EdgeInsets.all(22),
+                children: [
+                  SectionHeader(
+                    title: 'Catalogo',
+                    subtitle: '${products.length} productos configurados',
                   ),
-                ),
-              ),
-            ],
+                  const SizedBox(height: 18),
+                  ...products.map(
+                    (product) => Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: _ProductAdminTile(
+                        product: product,
+                        onEdit: () => _showProductDialog(
+                          context,
+                          repository,
+                          platforms: platforms,
+                          product: product,
+                        ),
+                        onToggle: () => repository.toggleProduct(product),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
           );
         },
       ),
@@ -90,8 +117,16 @@ class ProductCatalogScreen extends StatelessWidget {
   Future<void> _showProductDialog(
     BuildContext context,
     TacoPosRepository repository, {
+    List<OrderPlatform> platforms = const [],
     Product? product,
   }) async {
+    await repository.ensureDefaultOrderPlatforms();
+    final availablePlatforms = platforms.isEmpty
+        ? await repository.watchOrderPlatforms().first
+        : platforms;
+    if (!context.mounted) {
+      return;
+    }
     final nameController = TextEditingController(text: product?.name ?? '');
     final categoryController = TextEditingController(
       text: product?.category ?? 'Tacos',
@@ -101,6 +136,14 @@ class ProductCatalogScreen extends StatelessWidget {
     );
     var active = product?.active ?? true;
     var sendToKitchen = product?.sendToKitchen ?? true;
+    final platformControllers = <String, TextEditingController>{
+      for (final platform in availablePlatforms.where(
+        (platform) => platform.id != 'en_persona',
+      ))
+        platform.id: TextEditingController(
+          text: product?.platformPrices[platform.id]?.toStringAsFixed(2) ?? '',
+        ),
+    };
 
     await showDialog<void>(
       context: context,
@@ -133,8 +176,25 @@ class ProductCatalogScreen extends StatelessWidget {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(labelText: 'Precio'),
+                      decoration: const InputDecoration(
+                        labelText: 'Precio en tienda',
+                      ),
                     ),
+                    for (final platform in availablePlatforms.where(
+                      (platform) => platform.id != 'en_persona',
+                    )) ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: platformControllers[platform.id],
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: InputDecoration(
+                          labelText: 'Precio ${platform.name}',
+                          helperText: 'Vacio usa precio en tienda',
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
@@ -184,11 +244,30 @@ class ProductCatalogScreen extends StatelessWidget {
                       return;
                     }
 
+                    final platformPrices = <String, double>{};
+                    for (final entry in platformControllers.entries) {
+                      final raw = entry.value.text.trim();
+                      if (raw.isEmpty) {
+                        continue;
+                      }
+                      final value = double.tryParse(raw.replaceAll(',', '.'));
+                      if (value == null || value <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Revisa precios por plataforma.'),
+                          ),
+                        );
+                        return;
+                      }
+                      platformPrices[entry.key] = value;
+                    }
+
                     await repository.saveProduct(
                       productId: product?.id,
                       name: nameController.text,
                       category: categoryController.text,
                       price: price,
+                      platformPrices: platformPrices,
                       active: active,
                       sendToKitchen: sendToKitchen,
                     );
@@ -209,6 +288,9 @@ class ProductCatalogScreen extends StatelessWidget {
     nameController.dispose();
     categoryController.dispose();
     priceController.dispose();
+    for (final controller in platformControllers.values) {
+      controller.dispose();
+    }
   }
 }
 
@@ -262,7 +344,9 @@ class _ProductAdminTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  product.category,
+                  product.platformPrices.isEmpty
+                      ? product.category
+                      : '${product.category} · ${product.platformPrices.length} precios plataforma',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: BrandColors.textMuted),

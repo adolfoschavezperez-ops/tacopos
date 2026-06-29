@@ -23,6 +23,9 @@ class OrderItem {
     this.readyAt,
     this.paidAt,
     this.paymentId,
+    this.appliedPlatformId,
+    this.appliedPlatformName,
+    this.priceSource,
   });
 
   final String id;
@@ -46,6 +49,9 @@ class OrderItem {
   final DateTime? readyAt;
   final DateTime? paidAt;
   final String? paymentId;
+  final String? appliedPlatformId;
+  final String? appliedPlatformName;
+  final String? priceSource;
 
   factory OrderItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -73,6 +79,9 @@ class OrderItem {
       readyAt: _toDate(data['readyAt']),
       paidAt: _toDate(data['paidAt']),
       paymentId: data['paymentId'] as String?,
+      appliedPlatformId: data['appliedPlatformId'] as String?,
+      appliedPlatformName: data['appliedPlatformName'] as String?,
+      priceSource: data['priceSource'] as String?,
     );
   }
 

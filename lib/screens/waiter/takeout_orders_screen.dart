@@ -4,6 +4,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/order_platform.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -35,6 +36,15 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
   }
 
   Future<void> _newOrder(List<OrderPlatform> platforms) async {
+    if (AppSession.instance.employee?.canTakeOrders != true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No tienes permiso para levantar pedidos'),
+        ),
+      );
+      return;
+    }
+
     if (_busy) {
       return;
     }
@@ -96,6 +106,19 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final canTakeOrders = AppSession.instance.employee?.canTakeOrders == true;
+    final canCharge = AppSession.instance.employee?.canCharge == true;
+    if (!canTakeOrders && !canCharge) {
+      return const BrandedScaffold(
+        title: 'Para llevar',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'No tienes permiso para levantar pedidos ni cobrar.',
+        ),
+      );
+    }
+
     return BrandedScaffold(
       title: 'Para llevar',
       body: StreamBuilder<List<OrderPlatform>>(
@@ -145,7 +168,7 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
                       ),
                       const SizedBox(width: 12),
                       FilledButton.icon(
-                        onPressed: _busy || platforms.isEmpty
+                        onPressed: _busy || platforms.isEmpty || !canTakeOrders
                             ? null
                             : () => _newOrder(platforms),
                         icon: const Icon(Icons.add_shopping_cart),
@@ -193,7 +216,7 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
               icon: Icons.add,
               label: _busy ? 'Creando...' : 'Nuevo pedido para llevar',
               prominent: true,
-              onTap: _busy || platforms.isEmpty
+              onTap: _busy || platforms.isEmpty || !canTakeOrders
                   ? null
                   : () => _newOrder(platforms),
             ),

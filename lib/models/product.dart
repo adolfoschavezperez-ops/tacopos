@@ -9,6 +9,7 @@ class Product {
     required this.active,
     required this.sendToKitchen,
     required this.sortOrder,
+    required this.platformPrices,
   });
 
   final String id;
@@ -18,6 +19,7 @@ class Product {
   final bool active;
   final bool sendToKitchen;
   final int sortOrder;
+  final Map<String, double> platformPrices;
 
   factory Product.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -34,7 +36,15 @@ class Product {
         fallback: _defaultSendToKitchen(category),
       ),
       sortOrder: _readInt(data['sortOrder']),
+      platformPrices: _readPlatformPrices(data['platformPrices']),
     );
+  }
+
+  double priceForPlatform(String? platformId) {
+    if (platformId == null || platformId == 'en_persona') {
+      return price;
+    }
+    return platformPrices[platformId] ?? price;
   }
 
   static String _readString(Object? value, String fallback) {
@@ -55,6 +65,22 @@ class Product {
     }
 
     return 0;
+  }
+
+  static Map<String, double> _readPlatformPrices(Object? value) {
+    if (value is! Map) {
+      return const {};
+    }
+
+    final prices = <String, double>{};
+    for (final entry in value.entries) {
+      final key = entry.key.toString().trim();
+      if (key.isEmpty) {
+        continue;
+      }
+      prices[key] = _readDouble(entry.value);
+    }
+    return prices;
   }
 
   static int _readInt(Object? value) {

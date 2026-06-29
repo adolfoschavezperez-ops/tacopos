@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -33,6 +34,17 @@ class _KitchenScreenState extends State<KitchenScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (AppSession.instance.employee?.canViewKitchen != true) {
+      return const BrandedScaffold(
+        title: 'Cocina',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'No tienes permiso para ver cocina.',
+        ),
+      );
+    }
+
     return BrandedScaffold(
       title: 'Cocina',
       body: StreamBuilder<List<KitchenOrderBundle>>(

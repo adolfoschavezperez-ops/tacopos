@@ -6,6 +6,7 @@ import '../../models/employee.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -36,8 +37,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     super.dispose();
   }
 
-  Future<void> _payFullTable(PosOrder order) async {
-    if (!_validateEmployee()) {
+  Future<void> _payFullTable(PosOrder order, {required String method}) async {
+    if (!_validateEmployee(method)) {
       return;
     }
 
@@ -52,15 +53,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
     await _runPayment(
       () => _repository.payFullTable(
         orderId: widget.orderId,
-        method: _method,
+        method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
       ),
     );
   }
 
-  Future<void> _payPerson(int personNumber, String personName) async {
-    if (!_validateEmployee()) {
+  Future<void> _payPerson(
+    int personNumber,
+    String personName, {
+    required String method,
+  }) async {
+    if (!_validateEmployee(method)) {
       return;
     }
 
@@ -76,15 +81,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
       () => _repository.payPerson(
         orderId: widget.orderId,
         personNumber: personNumber,
-        method: _method,
+        method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
       ),
     );
   }
 
-  Future<void> _payPartial(PosOrder order) async {
-    if (!_validateEmployee()) {
+  Future<void> _payPartial(PosOrder order, {required String method}) async {
+    if (!_validateEmployee(method)) {
       return;
     }
 
@@ -108,7 +113,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       () => _repository.payPartialAmount(
         orderId: widget.orderId,
         baseAmount: amount,
-        method: _method,
+        method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
       ),
@@ -116,8 +121,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
-  bool _validateEmployee() {
-    if (_method == 'employee_consumption' && _selectedEmployee == null) {
+  Future<void> _payPlatformOrder(PosOrder order) async {
+    final confirmed = await _confirm(
+      title: 'Registrar pagado en plataforma',
+      message: 'Se cerrara ${order.displayName} como pagado en plataforma.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    await _runPayment(
+      () => _repository.payPlatformOrder(orderId: widget.orderId),
+    );
+  }
+
+  bool _validateEmployee(String method) {
+    if (method == 'employee_consumption' && _selectedEmployee == null) {
       _showMessage('Selecciona un empleado para consumo empleado.');
       return false;
     }
@@ -195,6 +214,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (AppSession.instance.employee?.canCharge != true) {
+      return const BrandedScaffold(
+        title: 'Cobro',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'No tienes permiso para cobrar.',
+        ),
+      );
+    }
+
     return BrandedScaffold(
       title: 'Cobro',
       body: StreamBuilder<PosOrder?>(
@@ -256,6 +286,27 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       final hasPersonPayments = payments.any(
                         (payment) => payment.type == 'person',
                       );
+                      final hasClientPayment = payments.any(
+                        (payment) =>
+                            payment.method == 'cash' ||
+                            payment.method == 'card',
+                      );
+                      final selectedMethod =
+                          hasClientPayment && _method == 'employee_consumption'
+                          ? 'cash'
+                          : _method;
+                      final platformOnlyPayment =
+                          order.orderType == 'takeout' &&
+                          order.platformId != null &&
+                          order.platformId != 'en_persona';
+
+                      if (platformOnlyPayment) {
+                        return _PlatformPaymentView(
+                          order: order,
+                          busy: _busy,
+                          onPay: () => _payPlatformOrder(order),
+                        );
+                      }
 
                       return ListView(
                         padding: const EdgeInsets.all(22),
@@ -263,9 +314,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           _TotalsPanel(order: order),
                           const SizedBox(height: 16),
                           _PaymentMethodSelector(
-                            selected: _method,
+                            selected: selectedMethod,
                             employees: employees,
                             selectedEmployee: _selectedEmployee,
+                            employeeDisabled: hasClientPayment,
                             onMethodChanged: (value) {
                               setState(() {
                                 _method = value;
@@ -283,7 +335,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           const SizedBox(height: 16),
                           _ChargePreview(
                             baseAmount: order.pendingTotal,
-                            method: _method,
+                            method: selectedMethod,
                           ),
                           const SizedBox(height: 16),
                           GlassButton(
@@ -299,15 +351,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                     order.pendingTotal <= 0.01 ||
                                     hasPersonPayments
                                 ? null
-                                : () => _payFullTable(order),
+                                : () => _payFullTable(
+                                    order,
+                                    method: selectedMethod,
+                                  ),
                           ),
                           const SizedBox(height: 20),
                           _PartialPaymentPanel(
                             controller: _partialController,
                             order: order,
-                            method: _method,
+                            method: selectedMethod,
                             busy: _busy,
-                            onPay: () => _payPartial(order),
+                            onPay: () =>
+                                _payPartial(order, method: selectedMethod),
                             disabledReason: hasPersonPayments
                                 ? 'Esta cuenta ya inicio cobro por persona. Termina el cobro por persona.'
                                 : null,
@@ -345,10 +401,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
                               personNumber: person,
                               personName: personName,
                               items: personItems,
-                              method: _method,
+                              method: selectedMethod,
                               busy: _busy,
                               disabled: hasPartialPayments,
-                              onPay: () => _payPerson(person, personName),
+                              onPay: () => _payPerson(
+                                person,
+                                personName,
+                                method: selectedMethod,
+                              ),
                             );
                           }),
                           const SizedBox(height: 20),
@@ -474,11 +534,63 @@ class _MoneyStat extends StatelessWidget {
   }
 }
 
+class _PlatformPaymentView extends StatelessWidget {
+  const _PlatformPaymentView({
+    required this.order,
+    required this.busy,
+    required this.onPay,
+  });
+
+  final PosOrder order;
+  final bool busy;
+  final VoidCallback onPay;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(22),
+      children: [
+        _TotalsPanel(order: order),
+        const SizedBox(height: 16),
+        GlassPanel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SectionHeader(
+                title: 'Pagado en plataforma',
+                subtitle:
+                    'Este pedido se liquida fuera de caja por su plataforma.',
+              ),
+              const SizedBox(height: 14),
+              _PreviewRow(label: 'Plataforma', textValue: order.platformName),
+              _PreviewRow(label: 'Monto base', value: order.pendingTotal),
+              const Divider(height: 18),
+              _PreviewRow(
+                label: 'Total a registrar',
+                value: order.pendingTotal,
+                highlight: true,
+              ),
+              const SizedBox(height: 14),
+              GlassButton(
+                icon: Icons.check_circle_outline,
+                label: busy ? 'Registrando...' : 'Registrar como pagado',
+                prominent: true,
+                onTap: busy || order.pendingTotal <= 0.01 ? null : onPay,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _PaymentMethodSelector extends StatelessWidget {
   const _PaymentMethodSelector({
     required this.selected,
     required this.employees,
     required this.selectedEmployee,
+    required this.employeeDisabled,
     required this.onMethodChanged,
     required this.onEmployeeChanged,
   });
@@ -486,6 +598,7 @@ class _PaymentMethodSelector extends StatelessWidget {
   final String selected;
   final List<Employee> employees;
   final Employee? selectedEmployee;
+  final bool employeeDisabled;
   final ValueChanged<String> onMethodChanged;
   final ValueChanged<Employee?> onEmployeeChanged;
 
@@ -515,10 +628,23 @@ class _PaymentMethodSelector extends StatelessWidget {
               return ChoiceChip(
                 selected: selected == entry.key,
                 label: Text(entry.value),
-                onSelected: (_) => onMethodChanged(entry.key),
+                onSelected:
+                    entry.key == 'employee_consumption' && employeeDisabled
+                    ? null
+                    : (_) => onMethodChanged(entry.key),
               );
             }).toList(),
           ),
+          if (employeeDisabled) ...[
+            const SizedBox(height: 10),
+            const Text(
+              'Consumo empleado no disponible porque ya existe un pago de cliente',
+              style: TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
           if (selected == 'employee_consumption') ...[
             const SizedBox(height: 14),
             DropdownButtonFormField<Employee>(
@@ -592,12 +718,14 @@ class _ChargePreview extends StatelessWidget {
 class _PreviewRow extends StatelessWidget {
   const _PreviewRow({
     required this.label,
-    required this.value,
+    this.value,
+    this.textValue,
     this.highlight = false,
   });
 
   final String label;
-  final double value;
+  final double? value;
+  final String? textValue;
   final bool highlight;
 
   @override
@@ -617,15 +745,27 @@ class _PreviewRow extends StatelessWidget {
               ),
             ),
           ),
-          MoneyText(
-            value: value,
-            style: TextStyle(
-              color: highlight
-                  ? BrandColors.accentYellow
-                  : BrandColors.textSecondary,
-              fontWeight: FontWeight.w800,
+          if (value != null)
+            MoneyText(
+              value: value!,
+              style: TextStyle(
+                color: highlight
+                    ? BrandColors.accentYellow
+                    : BrandColors.textSecondary,
+                fontWeight: FontWeight.w800,
+              ),
+            )
+          else
+            Text(
+              textValue ?? '',
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                color: highlight
+                    ? BrandColors.accentYellow
+                    : BrandColors.textSecondary,
+                fontWeight: FontWeight.w800,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -935,10 +1075,12 @@ class _PaymentsHistory extends StatelessWidget {
     final method = switch (payment.method) {
       'card' => 'Tarjeta',
       'employee_consumption' => 'Consumo empleado',
+      'platform_paid' => 'Pagado en plataforma',
       _ => 'Efectivo',
     };
     final type = switch (payment.type) {
       'person' => payment.personName ?? 'Persona',
+      'platform' => payment.platformName ?? 'Plataforma',
       'partial' => 'Pago parcial',
       _ => 'Mesa completa',
     };

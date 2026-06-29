@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/employee.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -26,6 +27,17 @@ class _EmployeeCatalogScreenState extends State<EmployeeCatalogScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (AppSession.instance.employee?.canManageEmployees != true) {
+      return const BrandedScaffold(
+        title: 'Empleados',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'No tienes permiso para administrar empleados.',
+        ),
+      );
+    }
+
     return BrandedScaffold(
       title: 'Empleados',
       actions: [
@@ -126,7 +138,16 @@ class _EmployeeDialog extends StatefulWidget {
 
 class _EmployeeDialogState extends State<_EmployeeDialog> {
   late final TextEditingController _nameController;
+  late final TextEditingController _pinController;
   late bool _active;
+  late bool _canTakeOrders;
+  late bool _canCharge;
+  late bool _canViewKitchen;
+  late bool _canViewAdmin;
+  late bool _canManageProducts;
+  late bool _canManageTables;
+  late bool _canManagePlatforms;
+  late bool _canManageEmployees;
   bool _saving = false;
   String _error = '';
 
@@ -134,12 +155,22 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.employee?.name ?? '');
+    _pinController = TextEditingController(text: widget.employee?.pin ?? '');
     _active = widget.employee?.active ?? true;
+    _canTakeOrders = widget.employee?.canTakeOrders ?? false;
+    _canCharge = widget.employee?.canCharge ?? false;
+    _canViewKitchen = widget.employee?.canViewKitchen ?? false;
+    _canViewAdmin = widget.employee?.canViewAdmin ?? false;
+    _canManageProducts = widget.employee?.canManageProducts ?? false;
+    _canManageTables = widget.employee?.canManageTables ?? false;
+    _canManagePlatforms = widget.employee?.canManagePlatforms ?? false;
+    _canManageEmployees = widget.employee?.canManageEmployees ?? false;
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _pinController.dispose();
     super.dispose();
   }
 
@@ -148,6 +179,12 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     if (name.isEmpty) {
       setState(() {
         _error = 'Captura el nombre del empleado.';
+      });
+      return;
+    }
+    if (_pinController.text.trim().isEmpty) {
+      setState(() {
+        _error = 'Captura el PIN del empleado.';
       });
       return;
     }
@@ -164,6 +201,15 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         employeeId: widget.employee?.id,
         name: name,
         active: _active,
+        pin: _pinController.text,
+        canTakeOrders: _canTakeOrders,
+        canCharge: _canCharge,
+        canViewKitchen: _canViewKitchen,
+        canViewAdmin: _canViewAdmin,
+        canManageProducts: _canManageProducts,
+        canManageTables: _canManageTables,
+        canManagePlatforms: _canManagePlatforms,
+        canManageEmployees: _canManageEmployees,
       );
     } catch (error) {
       if (!mounted) {
@@ -190,39 +236,116 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
       ),
       content: SizedBox(
         width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _nameController,
-              enabled: !_saving,
-              textCapitalization: TextCapitalization.words,
-              decoration: const InputDecoration(labelText: 'Nombre'),
-            ),
-            const SizedBox(height: 12),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Activo'),
-              value: _active,
-              onChanged: _saving
-                  ? null
-                  : (value) {
-                      setState(() {
-                        _active = value;
-                      });
-                    },
-            ),
-            if (_error.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                _error,
-                style: const TextStyle(
-                  color: BrandColors.danger,
-                  fontWeight: FontWeight.w700,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _nameController,
+                enabled: !_saving,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(labelText: 'Nombre'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _pinController,
+                enabled: !_saving,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'PIN'),
+              ),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Activo'),
+                value: _active,
+                onChanged: _saving
+                    ? null
+                    : (value) {
+                        setState(() {
+                          _active = value;
+                        });
+                      },
+              ),
+              const Divider(height: 20),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Operacion',
+                  style: TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
+              _PermissionSwitch(
+                title: 'Puede levantar pedidos',
+                value: _canTakeOrders,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canTakeOrders = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede cobrar',
+                value: _canCharge,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canCharge = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede ver cocina',
+                value: _canViewKitchen,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canViewKitchen = value),
+              ),
+              const Divider(height: 20),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Administracion',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              _PermissionSwitch(
+                title: 'Puede ver admin',
+                value: _canViewAdmin,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canViewAdmin = value),
+              ),
+              _PermissionSwitch(
+                title: 'Administrar productos',
+                value: _canManageProducts,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canManageProducts = value),
+              ),
+              _PermissionSwitch(
+                title: 'Administrar mesas',
+                value: _canManageTables,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canManageTables = value),
+              ),
+              _PermissionSwitch(
+                title: 'Administrar plataformas',
+                value: _canManagePlatforms,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canManagePlatforms = value),
+              ),
+              _PermissionSwitch(
+                title: 'Administrar empleados',
+                value: _canManageEmployees,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canManageEmployees = value),
+              ),
+              if (_error.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _error,
+                  style: const TextStyle(
+                    color: BrandColors.danger,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
       actions: [
@@ -235,6 +358,31 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
           child: Text(_saving ? 'Guardando...' : 'Listo'),
         ),
       ],
+    );
+  }
+}
+
+class _PermissionSwitch extends StatelessWidget {
+  const _PermissionSwitch({
+    required this.title,
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final String title;
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      title: Text(title),
+      value: value,
+      onChanged: enabled ? onChanged : null,
     );
   }
 }
@@ -287,7 +435,7 @@ class _EmployeeAdminTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  employee.active ? 'Activo' : 'Inactivo',
+                  employee.active ? _permissionSummary(employee) : 'Inactivo',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: BrandColors.textMuted),
@@ -312,5 +460,15 @@ class _EmployeeAdminTile extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _permissionSummary(Employee employee) {
+    final permissions = <String>[
+      if (employee.canTakeOrders) 'Pedidos',
+      if (employee.canCharge) 'Cobro',
+      if (employee.canViewKitchen) 'Cocina',
+      if (employee.canViewAdmin) 'Admin',
+    ];
+    return permissions.isEmpty ? 'Sin permisos' : permissions.join(' · ');
   }
 }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
+import '../services/app_session.dart';
 import 'glass.dart';
 
 class BrandedScaffold extends StatelessWidget {
@@ -66,6 +67,7 @@ class BrandedScaffold extends StatelessWidget {
                 ],
               ),
               actions: [
+                const _SessionBadge(),
                 const _ConnectionStatusBadge(),
                 if (actions != null) ...actions!,
               ],
@@ -80,6 +82,73 @@ class BrandedScaffold extends StatelessWidget {
         ),
       ),
       bottomNavigationBar: bottomNavigationBar,
+    );
+  }
+}
+
+class _SessionBadge extends StatelessWidget {
+  const _SessionBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: AppSession.instance,
+      builder: (context, _) {
+        final employee = AppSession.instance.employee;
+        if (employee == null) {
+          return const SizedBox.shrink();
+        }
+
+        return Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Tooltip(
+            message: 'Cerrar sesion',
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () {
+                Navigator.of(context).popUntil((route) => route.isFirst);
+                AppSession.instance.signOut();
+              },
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 170),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: BrandColors.glassFill,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: BrandColors.glassBorder),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.person_outline,
+                      size: 16,
+                      color: BrandColors.accentYellow,
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        employee.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Icon(Icons.logout, size: 15),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

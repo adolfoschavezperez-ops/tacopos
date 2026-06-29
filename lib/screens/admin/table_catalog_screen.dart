@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/pos_table.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -50,6 +51,17 @@ class _TableCatalogScreenState extends State<TableCatalogScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (AppSession.instance.employee?.canManageTables != true) {
+      return const BrandedScaffold(
+        title: 'Mesas',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'No tienes permiso para administrar mesas.',
+        ),
+      );
+    }
+
     return BrandedScaffold(
       title: 'Mesas',
       actions: [

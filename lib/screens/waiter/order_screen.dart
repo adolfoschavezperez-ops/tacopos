@@ -6,6 +6,7 @@ import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/product.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -60,6 +61,10 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _sendToKitchen() async {
+    if (AppSession.instance.employee?.canTakeOrders != true) {
+      _showMessage('No tienes permiso para levantar pedidos');
+      return;
+    }
     if (_busy) {
       return;
     }
@@ -106,6 +111,10 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _openPayment() async {
+    if (AppSession.instance.employee?.canCharge != true) {
+      _showMessage('No tienes permiso para cobrar');
+      return;
+    }
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => PaymentScreen(orderId: widget.orderId)),
@@ -131,6 +140,10 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   void _addPerson() {
+    if (AppSession.instance.employee?.canTakeOrders != true) {
+      _showMessage('No tienes permiso para levantar pedidos');
+      return;
+    }
     setState(() {
       _personCount += 1;
       _selectedPerson = _personCount;
@@ -138,6 +151,10 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _renamePerson(int personNumber, String currentName) async {
+    if (AppSession.instance.employee?.canTakeOrders != true) {
+      _showMessage('No tienes permiso para levantar pedidos');
+      return;
+    }
     final newName = await showDialog<String>(
       context: context,
       builder: (_) => _RenamePersonDialog(
@@ -166,12 +183,21 @@ class _OrderScreenState extends State<OrderScreen> {
     }
   }
 
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<PosOrder?>(
       stream: _orderStream,
       builder: (context, orderSnapshot) {
         final order = orderSnapshot.data;
+        final canTakeOrders =
+            AppSession.instance.employee?.canTakeOrders == true;
+        final canCharge = AppSession.instance.employee?.canCharge == true;
 
         return BrandedScaffold(
           title: order?.displayName ?? widget.tableName,
@@ -188,6 +214,8 @@ class _OrderScreenState extends State<OrderScreen> {
                   onSendToKitchen: _sendToKitchen,
                   onOpenPayment: _openPayment,
                   onBlockedPayment: _showKitchenPendingDialog,
+                  canTakeOrders: canTakeOrders,
+                  canCharge: canCharge,
                 );
               },
             ),
@@ -204,6 +232,9 @@ class _OrderScreenState extends State<OrderScreen> {
       builder: (context, constraints) {
         final wide = constraints.maxWidth >= 960;
         final selectedPerson = _selectedPerson < 1 ? 1 : _selectedPerson;
+        final order = orderSnapshot.data;
+        final canTakeOrders =
+            AppSession.instance.employee?.canTakeOrders == true;
         final summary = _OrderSummaryLoader(
           orderSnapshot: orderSnapshot,
           itemsStream: _itemsStream,
@@ -231,10 +262,12 @@ class _OrderScreenState extends State<OrderScreen> {
           ),
           onDelete: (item) =>
               _repository.deleteItem(orderId: widget.orderId, itemId: item.id),
+          canEditOrder: canTakeOrders,
         );
         final menu = _ProductMenu(
           productsStream: _productsStream,
           selectedCategory: _selectedCategory,
+          platformId: order?.orderType == 'takeout' ? order?.platformId : null,
           onCategoryChanged: (category) {
             setState(() {
               _selectedCategory = category;
@@ -245,6 +278,9 @@ class _OrderScreenState extends State<OrderScreen> {
             product: product,
             personNumber: selectedPerson,
           ),
+          canAddProducts: canTakeOrders,
+          onBlockedAddProduct: () =>
+              _showMessage('No tienes permiso para levantar pedidos'),
         );
 
         if (wide) {
@@ -367,6 +403,7 @@ class _OrderSummaryLoader extends StatelessWidget {
     required this.onRenamePerson,
     required this.onQtyChanged,
     required this.onDelete,
+    required this.canEditOrder,
   });
 
   final AsyncSnapshot<PosOrder?> orderSnapshot;
@@ -379,6 +416,7 @@ class _OrderSummaryLoader extends StatelessWidget {
   final void Function(int personNumber, String currentName) onRenamePerson;
   final void Function(OrderItem item, int qty) onQtyChanged;
   final ValueChanged<OrderItem> onDelete;
+  final bool canEditOrder;
 
   @override
   Widget build(BuildContext context) {
@@ -453,6 +491,7 @@ class _OrderSummaryLoader extends StatelessWidget {
           onRenamePerson: onRenamePerson,
           onQtyChanged: onQtyChanged,
           onDelete: onDelete,
+          canEditOrder: canEditOrder,
         );
       },
     );
@@ -470,6 +509,7 @@ class _OrderSummary extends StatefulWidget {
     required this.onRenamePerson,
     required this.onQtyChanged,
     required this.onDelete,
+    required this.canEditOrder,
   });
 
   final PosOrder order;
@@ -481,6 +521,7 @@ class _OrderSummary extends StatefulWidget {
   final void Function(int personNumber, String currentName) onRenamePerson;
   final void Function(OrderItem item, int qty) onQtyChanged;
   final ValueChanged<OrderItem> onDelete;
+  final bool canEditOrder;
 
   @override
   State<_OrderSummary> createState() => _OrderSummaryState();
@@ -661,6 +702,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
                       onRename: () => widget.onRenamePerson(person, personName),
                       onQtyChanged: widget.onQtyChanged,
                       onDelete: widget.onDelete,
+                      canEditOrder: widget.canEditOrder,
                     );
                   },
                 ),
@@ -683,6 +725,7 @@ class _PersonItemsCard extends StatelessWidget {
     required this.onRename,
     required this.onQtyChanged,
     required this.onDelete,
+    required this.canEditOrder,
   });
 
   final int person;
@@ -695,6 +738,7 @@ class _PersonItemsCard extends StatelessWidget {
   final VoidCallback onRename;
   final void Function(OrderItem item, int qty) onQtyChanged;
   final ValueChanged<OrderItem> onDelete;
+  final bool canEditOrder;
 
   @override
   Widget build(BuildContext context) {
@@ -721,7 +765,7 @@ class _PersonItemsCard extends StatelessWidget {
                 ),
                 IconButton(
                   tooltip: 'Renombrar persona',
-                  onPressed: onRename,
+                  onPressed: canEditOrder ? onRename : null,
                   icon: const Icon(Icons.edit_outlined),
                 ),
                 const SizedBox(width: 4),
@@ -750,6 +794,7 @@ class _PersonItemsCard extends StatelessWidget {
                       item: item,
                       onQtyChanged: (qty) => onQtyChanged(item, qty),
                       onDelete: () => onDelete(item),
+                      canEditOrder: canEditOrder,
                     ),
                   ),
                 ],
@@ -949,6 +994,8 @@ class _TopOrderActions extends StatelessWidget {
     required this.onSendToKitchen,
     required this.onOpenPayment,
     required this.onBlockedPayment,
+    required this.canTakeOrders,
+    required this.canCharge,
   });
 
   final PosOrder? order;
@@ -958,6 +1005,8 @@ class _TopOrderActions extends StatelessWidget {
   final VoidCallback onSendToKitchen;
   final VoidCallback onOpenPayment;
   final VoidCallback onBlockedPayment;
+  final bool canTakeOrders;
+  final bool canCharge;
 
   @override
   Widget build(BuildContext context) {
@@ -970,7 +1019,7 @@ class _TopOrderActions extends StatelessWidget {
           item.sendToKitchen &&
           ['sent', 'cooking', 'ready'].contains(item.kitchenStatus),
     );
-    final canSend = !busy && pendingKitchenCount > 0;
+    final canSend = canTakeOrders && !busy && pendingKitchenCount > 0;
     final sendLabel = pendingKitchenCount == 0
         ? 'Cocina al dia'
         : hadKitchenSend
@@ -982,9 +1031,15 @@ class _TopOrderActions extends StatelessWidget {
           ['pending', 'sent', 'cooking'].contains(item.kitchenStatus),
     );
     final canAttemptCharge =
-        currentOrder != null && currentOrder.total > 0 && !busy && itemsLoaded;
+        canCharge &&
+        currentOrder != null &&
+        currentOrder.total > 0 &&
+        !busy &&
+        itemsLoaded;
     final chargeLabel = hasKitchenPending
         ? 'Hay productos pendientes en cocina'
+        : !canCharge
+        ? 'No tienes permiso para cobrar'
         : 'Cobrar';
 
     return Padding(
@@ -1025,11 +1080,13 @@ class _OrderItemRow extends StatelessWidget {
     required this.item,
     required this.onQtyChanged,
     required this.onDelete,
+    required this.canEditOrder,
   });
 
   final OrderItem item;
   final ValueChanged<int> onQtyChanged;
   final VoidCallback onDelete;
+  final bool canEditOrder;
 
   @override
   Widget build(BuildContext context) {
@@ -1063,7 +1120,7 @@ class _OrderItemRow extends StatelessWidget {
           const SizedBox(width: 8),
           IconButton.filledTonal(
             tooltip: 'Menos',
-            onPressed: () => onQtyChanged(item.qty - 1),
+            onPressed: canEditOrder ? () => onQtyChanged(item.qty - 1) : null,
             icon: const Icon(Icons.remove),
           ),
           SizedBox(
@@ -1076,7 +1133,7 @@ class _OrderItemRow extends StatelessWidget {
           ),
           IconButton.filledTonal(
             tooltip: 'Mas',
-            onPressed: () => onQtyChanged(item.qty + 1),
+            onPressed: canEditOrder ? () => onQtyChanged(item.qty + 1) : null,
             icon: const Icon(Icons.add),
           ),
           const SizedBox(width: 8),
@@ -1090,7 +1147,7 @@ class _OrderItemRow extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'Eliminar',
-            onPressed: onDelete,
+            onPressed: canEditOrder ? onDelete : null,
             icon: const Icon(Icons.delete_outline, color: BrandColors.danger),
           ),
         ],
@@ -1103,14 +1160,20 @@ class _ProductMenu extends StatelessWidget {
   const _ProductMenu({
     required this.productsStream,
     required this.selectedCategory,
+    required this.platformId,
     required this.onCategoryChanged,
     required this.onAddProduct,
+    required this.canAddProducts,
+    required this.onBlockedAddProduct,
   });
 
   final Stream<List<Product>> productsStream;
   final String selectedCategory;
+  final String? platformId;
   final ValueChanged<String> onCategoryChanged;
   final ValueChanged<Product> onAddProduct;
+  final bool canAddProducts;
+  final VoidCallback onBlockedAddProduct;
 
   @override
   Widget build(BuildContext context) {
@@ -1207,7 +1270,10 @@ class _ProductMenu extends StatelessWidget {
                       return _ProductTile(
                         key: ValueKey('product-${product.id}'),
                         product: product,
-                        onTap: () => onAddProduct(product),
+                        platformId: platformId,
+                        onTap: canAddProducts
+                            ? () => onAddProduct(product)
+                            : onBlockedAddProduct,
                       );
                     },
                   );
@@ -1222,9 +1288,15 @@ class _ProductMenu extends StatelessWidget {
 }
 
 class _ProductTile extends StatelessWidget {
-  const _ProductTile({super.key, required this.product, required this.onTap});
+  const _ProductTile({
+    super.key,
+    required this.product,
+    required this.platformId,
+    required this.onTap,
+  });
 
   final Product product;
+  final String? platformId;
   final VoidCallback onTap;
 
   @override
@@ -1269,7 +1341,7 @@ class _ProductTile extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           MoneyText(
-            value: product.price,
+            value: product.priceForPlatform(platformId),
             style: const TextStyle(
               color: BrandColors.accentYellow,
               fontSize: 18,

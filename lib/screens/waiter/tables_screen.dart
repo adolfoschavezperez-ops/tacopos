@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
+import '../../models/order.dart';
 import '../../models/pos_table.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -24,11 +26,26 @@ class _TablesScreenState extends State<TablesScreen> {
   bool _opening = false;
 
   Future<void> _openTable(PosTable table) async {
+    final employee = AppSession.instance.employee;
+    final canTakeOrders = employee?.canTakeOrders == true;
+    final canCharge = employee?.canCharge == true;
+    if (!canTakeOrders && !canCharge) {
+      _showMessage('No tienes permiso para levantar pedidos');
+      return;
+    }
+
     if (table.type == 'takeout' || table.type == 'takeout_entry') {
       await Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const TakeoutOrdersScreen()),
       );
+      return;
+    }
+
+    final hasOpenOrder =
+        table.currentOrderId != null || table.status != 'available';
+    if (!canTakeOrders && !hasOpenOrder) {
+      _showMessage('No tienes permiso para levantar pedidos');
       return;
     }
 
@@ -70,8 +87,26 @@ class _TablesScreenState extends State<TablesScreen> {
     }
   }
 
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
+    final employee = AppSession.instance.employee;
+    if (employee?.canTakeOrders != true && employee?.canCharge != true) {
+      return const BrandedScaffold(
+        title: 'Mesas',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'No tienes permiso para levantar pedidos ni cobrar.',
+        ),
+      );
+    }
+
     return BrandedScaffold(
       title: 'Mesas',
       actions: [
@@ -111,45 +146,63 @@ class _TablesScreenState extends State<TablesScreen> {
             );
           }
 
-          return LayoutBuilder(
-            builder: (context, constraints) {
-              final width = constraints.maxWidth;
-              final columns = width >= 1100
-                  ? 4
-                  : width >= 760
-                  ? 3
-                  : 2;
+          return StreamBuilder<List<PosOrder>>(
+            stream: _repository.watchOpenTakeoutOrders(),
+            initialData: const [],
+            builder: (context, takeoutSnapshot) {
+              if (takeoutSnapshot.hasError) {
+                return EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'No se pudieron cargar pedidos para llevar',
+                  message: '${takeoutSnapshot.error}',
+                );
+              }
 
-              return Padding(
-                padding: const EdgeInsets.all(22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SectionHeader(
-                      title: 'Mesas',
-                      subtitle: '${tables.length} puntos de servicio activos',
-                    ),
-                    const SizedBox(height: 18),
-                    Expanded(
-                      child: GridView.builder(
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: columns,
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                          childAspectRatio: width >= 760 ? 1.5 : 1.18,
+              final takeoutCount = takeoutSnapshot.data?.length ?? 0;
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final width = constraints.maxWidth;
+                  final columns = width >= 1100
+                      ? 4
+                      : width >= 760
+                      ? 3
+                      : 2;
+
+                  return Padding(
+                    padding: const EdgeInsets.all(22),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SectionHeader(
+                          title: 'Mesas',
+                          subtitle:
+                              '${tables.length} puntos de servicio activos',
                         ),
-                        itemCount: tables.length,
-                        itemBuilder: (context, index) {
-                          final table = tables[index];
-                          return _TableCard(
-                            table: table,
-                            onTap: () => _openTable(table),
-                          );
-                        },
-                      ),
+                        const SizedBox(height: 18),
+                        Expanded(
+                          child: GridView.builder(
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: columns,
+                                  crossAxisSpacing: 16,
+                                  mainAxisSpacing: 16,
+                                  childAspectRatio: width >= 760 ? 1.5 : 1.18,
+                                ),
+                            itemCount: tables.length,
+                            itemBuilder: (context, index) {
+                              final table = tables[index];
+                              return _TableCard(
+                                table: table,
+                                takeoutCount: takeoutCount,
+                                onTap: () => _openTable(table),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  );
+                },
               );
             },
           );
@@ -160,9 +213,14 @@ class _TablesScreenState extends State<TablesScreen> {
 }
 
 class _TableCard extends StatelessWidget {
-  const _TableCard({required this.table, required this.onTap});
+  const _TableCard({
+    required this.table,
+    required this.takeoutCount,
+    required this.onTap,
+  });
 
   final PosTable table;
+  final int takeoutCount;
   final VoidCallback onTap;
 
   @override
@@ -172,11 +230,13 @@ class _TableCard extends StatelessWidget {
     final hasOrder =
         !isTakeout &&
         (table.currentOrderId != null || table.status != 'available');
+    final takeoutActive = isTakeout && takeoutCount > 0;
+    final accent = takeoutActive ? BrandColors.accentOrange : status.color;
 
     return GlassCard(
       onTap: onTap,
-      accent: status.color,
-      selected: hasOrder,
+      accent: accent,
+      selected: hasOrder || takeoutActive,
       padding: const EdgeInsets.all(18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -197,7 +257,7 @@ class _TableCard extends StatelessWidget {
                 ),
               ),
               const Spacer(),
-              Flexible(child: StatusBadge(style: status)),
+              if (!isTakeout) Flexible(child: StatusBadge(style: status)),
             ],
           ),
           const Spacer(),
@@ -217,7 +277,11 @@ class _TableCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   isTakeout
-                      ? 'Crear o abrir pedidos para llevar'
+                      ? takeoutCount == 0
+                            ? 'Sin pedidos activos'
+                            : takeoutCount == 1
+                            ? '1 pedido activo'
+                            : '$takeoutCount pedidos activos'
                       : hasOrder
                       ? 'Orden abierta'
                       : 'Lista para tomar orden',
