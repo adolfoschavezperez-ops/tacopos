@@ -4,8 +4,30 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../core/constants/app_constants.dart';
 import '../models/order.dart';
 import '../models/order_item.dart';
+import '../models/payment.dart';
 import '../models/pos_table.dart';
 import '../models/product.dart';
+
+class KitchenOrderBundle {
+  const KitchenOrderBundle({required this.order, required this.items});
+
+  final PosOrder order;
+  final List<OrderItem> items;
+
+  int get personCount => items.map((item) => item.personNumber).toSet().length;
+
+  String get shortSummary {
+    final counts = <String, int>{};
+    for (final item in items) {
+      counts[item.productName] = (counts[item.productName] ?? 0) + item.qty;
+    }
+
+    return counts.entries
+        .take(3)
+        .map((entry) => '${entry.value} ${entry.key}')
+        .join(' · ');
+  }
+}
 
 class TacoPosRepository {
   TacoPosRepository({FirebaseFirestore? firestore, FirebaseAuth? auth})
@@ -89,29 +111,40 @@ class TacoPosRepository {
     });
   }
 
-  Stream<List<PosOrder>> watchKitchenOrders() {
-    return _ordersRef.snapshots().map((snapshot) {
-      final orders =
-          snapshot.docs
-              .map(PosOrder.fromDoc)
-              .where(
-                (order) =>
-                    order.status != 'paid' &&
-                    [
-                      'sent',
-                      'preparing',
-                      'ready',
-                    ].contains(order.kitchenStatus),
-              )
-              .toList()
-            ..sort((a, b) {
-              final aDate =
-                  a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              final bDate =
-                  b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              return aDate.compareTo(bDate);
-            });
-      return orders;
+  Stream<List<KitchenOrderBundle>> watchKitchenOrderBundles() {
+    return _ordersRef.snapshots().asyncMap((snapshot) async {
+      final activeOrders = snapshot.docs
+          .map(PosOrder.fromDoc)
+          .where(
+            (order) =>
+                order.status != 'paid' &&
+                ['sent', 'cooking'].contains(order.kitchenStatus),
+          )
+          .toList();
+
+      final bundles = <KitchenOrderBundle>[];
+      for (final order in activeOrders) {
+        final items = await getKitchenItems(order.id);
+        if (items.isNotEmpty) {
+          bundles.add(KitchenOrderBundle(order: order, items: items));
+        }
+      }
+
+      bundles.sort((a, b) {
+        final aDate =
+            a.order.sentToKitchenAt ??
+            a.order.updatedAt ??
+            a.order.createdAt ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        final bDate =
+            b.order.sentToKitchenAt ??
+            b.order.updatedAt ??
+            b.order.createdAt ??
+            DateTime.fromMillisecondsSinceEpoch(0);
+        return aDate.compareTo(bDate);
+      });
+
+      return bundles;
     });
   }
 
@@ -138,6 +171,41 @@ class TacoPosRepository {
           return a.productName.compareTo(b.productName);
         });
       return items;
+    });
+  }
+
+  Stream<List<OrderItem>> watchKitchenItems(String orderId) {
+    return watchOrderItems(
+      orderId,
+    ).map((items) => items.where((item) => item.sendToKitchen).toList());
+  }
+
+  Future<List<OrderItem>> getKitchenItems(String orderId) async {
+    final snapshot = await _ordersRef.doc(orderId).collection('items').get();
+    final items =
+        snapshot.docs
+            .map(OrderItem.fromDoc)
+            .where((item) => item.sendToKitchen)
+            .toList()
+          ..sort((a, b) {
+            final personCompare = a.personNumber.compareTo(b.personNumber);
+            if (personCompare != 0) {
+              return personCompare;
+            }
+            return a.productName.compareTo(b.productName);
+          });
+    return items;
+  }
+
+  Stream<List<Payment>> watchPayments() {
+    return _db.collectionGroup('payments').snapshots().map((snapshot) {
+      final payments = snapshot.docs.map(Payment.fromDoc).toList()
+        ..sort((a, b) {
+          final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bDate.compareTo(aDate);
+        });
+      return payments;
     });
   }
 
@@ -221,7 +289,8 @@ class TacoPosRepository {
       'unitPrice': product.price,
       'total': product.price,
       'notes': '',
-      'kitchenStatus': 'pending',
+      'sendToKitchen': product.sendToKitchen,
+      'kitchenStatus': product.sendToKitchen ? 'pending' : 'not_required',
       'paymentStatus': 'pending',
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
@@ -277,16 +346,18 @@ class TacoPosRepository {
     await recalculateOrderTotal(orderId);
   }
 
-  Future<void> sendOrderToKitchen(String orderId) async {
+  Future<int> sendOrderToKitchen(String orderId) async {
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
         .get();
     final batch = _db.batch();
+    var sentCount = 0;
 
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
-      if (item.kitchenStatus == 'pending') {
+      if (item.sendToKitchen && item.kitchenStatus == 'pending') {
+        sentCount += 1;
         batch.update(doc.reference, {
           'kitchenStatus': 'sent',
           'updatedAt': FieldValue.serverTimestamp(),
@@ -294,28 +365,39 @@ class TacoPosRepository {
       }
     }
 
-    batch.update(_ordersRef.doc(orderId), {
-      'status': 'sent',
-      'kitchenStatus': 'sent',
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
     final orderDoc = await _ordersRef.doc(orderId).get();
     final tableId = orderDoc.data()?['tableId'] as String?;
-    if (tableId != null) {
-      batch.set(_tablesRef.doc(tableId), {
+
+    if (sentCount > 0) {
+      batch.update(_ordersRef.doc(orderId), {
         'status': 'sent',
+        'kitchenStatus': 'sent',
+        'sentToKitchenAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      });
+
+      if (tableId != null) {
+        batch.set(_tablesRef.doc(tableId), {
+          'status': 'sent',
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    } else {
+      batch.update(_ordersRef.doc(orderId), {
+        'kitchenStatus': 'not_required',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     }
 
     await batch.commit();
+    return sentCount;
   }
 
   Future<void> updateKitchenStatus({
     required String orderId,
     required String status,
   }) async {
+    final normalizedStatus = status == 'preparing' ? 'cooking' : status;
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
@@ -324,9 +406,9 @@ class TacoPosRepository {
 
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
-      if (item.paymentStatus != 'paid') {
+      if (item.sendToKitchen && item.paymentStatus != 'paid') {
         batch.update(doc.reference, {
-          'kitchenStatus': status,
+          'kitchenStatus': normalizedStatus,
           'updatedAt': FieldValue.serverTimestamp(),
         });
       }
@@ -334,11 +416,11 @@ class TacoPosRepository {
 
     final orderDoc = await _ordersRef.doc(orderId).get();
     final tableId = orderDoc.data()?['tableId'] as String?;
-    final orderStatus = status == 'ready' ? 'ready' : 'sent';
+    final orderStatus = normalizedStatus == 'ready' ? 'ready' : 'sent';
 
     batch.update(_ordersRef.doc(orderId), {
       'status': orderStatus,
-      'kitchenStatus': status,
+      'kitchenStatus': normalizedStatus,
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
@@ -352,27 +434,62 @@ class TacoPosRepository {
     await batch.commit();
   }
 
-  Future<void> markOrderPaid(String orderId) async {
+  Future<void> markOrderPaid(String orderId, {String method = 'cash'}) {
+    return payFullTable(orderId: orderId, method: method);
+  }
+
+  Future<void> payFullTable({
+    required String orderId,
+    required String method,
+  }) async {
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    final order = PosOrder.fromDoc(orderDoc);
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
         .get();
-    final orderDoc = await _ordersRef.doc(orderId).get();
-    final order = PosOrder.fromDoc(orderDoc);
+    final pendingItems = itemsSnapshot.docs
+        .map(OrderItem.fromDoc)
+        .where((item) => item.paymentStatus != 'paid')
+        .toList();
+    final amount = pendingItems.fold<double>(
+      0,
+      (runningTotal, item) => runningTotal + item.total,
+    );
+
+    if (amount <= 0) {
+      return;
+    }
+
+    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
+    _setPayment(
+      batch: batch,
+      paymentRef: paymentRef,
+      order: order,
+      type: 'full_table',
+      method: method,
+      amount: amount,
+    );
 
     for (final doc in itemsSnapshot.docs) {
-      batch.update(doc.reference, {
-        'paymentStatus': 'paid',
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
+      final item = OrderItem.fromDoc(doc);
+      if (item.paymentStatus != 'paid') {
+        batch.update(doc.reference, {
+          'paymentStatus': 'paid',
+          'paidAt': FieldValue.serverTimestamp(),
+          'paymentId': paymentRef.id,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
     }
 
     batch.update(_ordersRef.doc(orderId), {
       'status': 'paid',
       'paymentStatus': 'paid',
-      'paidTotal': order.total,
+      'paidTotal': order.paidTotal + amount,
       'pendingTotal': 0.0,
+      'paidAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
     batch.set(_tablesRef.doc(order.tableId), {
@@ -384,19 +501,129 @@ class TacoPosRepository {
     await batch.commit();
   }
 
+  Future<void> payPerson({
+    required String orderId,
+    required int personNumber,
+    required String method,
+  }) async {
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    final order = PosOrder.fromDoc(orderDoc);
+    final itemsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('items')
+        .get();
+    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    final personItems = items
+        .where(
+          (item) =>
+              item.personNumber == personNumber && item.paymentStatus != 'paid',
+        )
+        .toList();
+    final amount = personItems.fold<double>(
+      0,
+      (runningTotal, item) => runningTotal + item.total,
+    );
+
+    if (amount <= 0) {
+      return;
+    }
+
+    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final batch = _db.batch();
+    _setPayment(
+      batch: batch,
+      paymentRef: paymentRef,
+      order: order,
+      type: 'person',
+      method: method,
+      amount: amount,
+      personNumber: personNumber,
+      personName: 'Persona $personNumber',
+    );
+
+    for (final doc in itemsSnapshot.docs) {
+      final item = OrderItem.fromDoc(doc);
+      if (item.personNumber == personNumber && item.paymentStatus != 'paid') {
+        batch.update(doc.reference, {
+          'paymentStatus': 'paid',
+          'paidAt': FieldValue.serverTimestamp(),
+          'paymentId': paymentRef.id,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    final paidTotal = order.paidTotal + amount;
+    final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
+    final allPaid = pendingTotal <= 0.01;
+
+    batch.update(_ordersRef.doc(orderId), {
+      'status': allPaid ? 'paid' : order.status,
+      'paymentStatus': allPaid ? 'paid' : 'partial',
+      'paidTotal': paidTotal,
+      'pendingTotal': allPaid ? 0.0 : pendingTotal,
+      if (allPaid) 'paidAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (allPaid) {
+      batch.set(_tablesRef.doc(order.tableId), {
+        'status': 'available',
+        'currentOrderId': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
+    await batch.commit();
+  }
+
+  void _setPayment({
+    required WriteBatch batch,
+    required DocumentReference<Map<String, dynamic>> paymentRef,
+    required PosOrder order,
+    required String type,
+    required String method,
+    required double amount,
+    int? personNumber,
+    String? personName,
+  }) {
+    batch.set(paymentRef, {
+      'orderId': order.id,
+      'tableId': order.tableId,
+      'tableName': order.tableName,
+      'type': type,
+      'personNumber': personNumber,
+      'personName': personName,
+      'method': method,
+      'amount': amount,
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+    });
+  }
+
   Future<void> recalculateOrderTotal(String orderId) async {
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
         .get();
-    final total = itemsSnapshot.docs.fold<double>(0, (runningTotal, doc) {
-      final item = OrderItem.fromDoc(doc);
+    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    final total = items.fold<double>(0, (runningTotal, item) {
       return runningTotal + item.total;
     });
+    final paidTotal = items
+        .where((item) => item.paymentStatus == 'paid')
+        .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
+    final pendingTotal = (total - paidTotal).clamp(0, double.infinity);
 
     await _ordersRef.doc(orderId).update({
       'total': total,
-      'pendingTotal': total,
+      'paidTotal': paidTotal,
+      'pendingTotal': pendingTotal,
+      'paymentStatus': paidTotal <= 0
+          ? 'pending'
+          : pendingTotal <= 0.01
+          ? 'paid'
+          : 'partial',
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
@@ -407,6 +634,7 @@ class TacoPosRepository {
     required String category,
     required double price,
     required bool active,
+    required bool sendToKitchen,
   }) async {
     final docRef = productId == null
         ? _productsRef.doc()
@@ -419,6 +647,7 @@ class TacoPosRepository {
       'category': category.trim(),
       'price': price,
       'active': active,
+      'sendToKitchen': sendToKitchen,
       'sortOrder': current.docs.length + 1,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

@@ -13,8 +13,8 @@ class StatusBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: style.background,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: style.color.withValues(alpha: 0.6)),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: style.color.withValues(alpha: 0.38)),
       ),
       child: Text(
         style.label,
@@ -23,7 +23,7 @@ class StatusBadge extends StatelessWidget {
         style: TextStyle(
           color: style.color,
           fontSize: 12,
-          fontWeight: FontWeight.w900,
+          fontWeight: FontWeight.w700,
         ),
       ),
     );

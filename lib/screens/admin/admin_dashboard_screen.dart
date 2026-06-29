@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/order.dart';
+import '../../models/payment.dart';
 import '../../models/product.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import 'product_catalog_screen.dart';
@@ -39,150 +41,209 @@ class AdminDashboardScreen extends StatelessWidget {
 
           final orders = ordersSnapshot.data ?? [];
 
-          return StreamBuilder<List<Product>>(
-            stream: repository.watchProducts(),
-            builder: (context, productsSnapshot) {
-              final products = productsSnapshot.data ?? [];
-              final todaySales = _todaySales(orders);
-              final openTables = orders
-                  .where((order) => order.status != 'paid')
-                  .length;
-              final kitchenOrders = orders
+          return StreamBuilder<List<Payment>>(
+            stream: repository.watchPayments(),
+            builder: (context, paymentsSnapshot) {
+              final payments = _todayPayments(paymentsSnapshot.data ?? []);
+              final totalSales = payments.fold<double>(
+                0,
+                (runningTotal, payment) => runningTotal + payment.amount,
+              );
+              final cash = _paymentsByMethod(payments, 'cash');
+              final card = _paymentsByMethod(payments, 'card');
+              final transfer = _paymentsByMethod(payments, 'transfer');
+              final mixed = _paymentsByMethod(payments, 'mixed');
+              final paidOrders = orders
                   .where(
-                    (order) =>
-                        order.status != 'paid' &&
-                        [
-                          'sent',
-                          'preparing',
-                          'ready',
-                        ].contains(order.kitchenStatus),
+                    (order) => _isToday(order.paidAt) && order.status == 'paid',
                   )
                   .length;
-              final activeProducts = products
-                  .where((product) => product.active)
+              final openOrders = orders
+                  .where((order) => order.status != 'paid')
+                  .length;
+              final partialOrders = orders
+                  .where((order) => order.paymentStatus == 'partial')
                   .length;
 
-              return ListView(
-                padding: const EdgeInsets.all(20),
-                children: [
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final columns = constraints.maxWidth >= 900 ? 4 : 2;
-                      return GridView.count(
-                        crossAxisCount: columns,
-                        crossAxisSpacing: 14,
-                        mainAxisSpacing: 14,
-                        childAspectRatio: constraints.maxWidth >= 900
-                            ? 1.6
-                            : 1.25,
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        children: [
-                          _MetricCard(
-                            title: 'Ventas del dia',
-                            icon: Icons.payments,
-                            money: todaySales,
-                            accent: BrandColors.yellow,
-                          ),
-                          _MetricCard(
-                            title: 'Mesas abiertas',
-                            icon: Icons.table_bar,
-                            value: '$openTables',
-                            accent: BrandColors.orange,
-                          ),
-                          _MetricCard(
-                            title: 'Ordenes cocina',
-                            icon: Icons.soup_kitchen,
-                            value: '$kitchenOrders',
-                            accent: BrandColors.success,
-                          ),
-                          _MetricCard(
-                            title: 'Productos activos',
-                            icon: Icons.fastfood,
-                            value: '$activeProducts',
-                            accent: BrandColors.info,
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                  Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(18),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 58,
-                            height: 58,
-                            decoration: BoxDecoration(
-                              color: BrandColors.orange.withValues(alpha: 0.18),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(
-                              Icons.restaurant_menu,
-                              color: BrandColors.yellow,
-                              size: 32,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Catalogo de productos',
-                                  style: TextStyle(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                                SizedBox(height: 4),
-                                Text(
-                                  'Ver, agregar, editar y activar productos del menu.',
-                                  style: TextStyle(color: BrandColors.muted),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          FilledButton.icon(
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => const ProductCatalogScreen(),
-                                ),
-                              );
-                            },
-                            icon: const Icon(Icons.arrow_forward),
-                            label: const Text('Abrir'),
-                          ),
-                        ],
+              return StreamBuilder<List<Product>>(
+                stream: repository.watchProducts(),
+                builder: (context, productsSnapshot) {
+                  final products = productsSnapshot.data ?? [];
+                  final activeProducts = products
+                      .where((product) => product.active)
+                      .length;
+
+                  return ListView(
+                    padding: const EdgeInsets.all(22),
+                    children: [
+                      const SectionHeader(
+                        title: 'Dashboard',
+                        subtitle: 'Operacion en tiempo real.',
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Ordenes recientes',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900),
-                  ),
-                  const SizedBox(height: 12),
-                  if (orders.isEmpty)
-                    const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(18),
-                        child: Text(
-                          'Aun no hay ordenes. Abre una mesa desde Mesero / Caja.',
-                          style: TextStyle(color: BrandColors.muted),
+                      const SizedBox(height: 18),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final columns = constraints.maxWidth >= 900 ? 4 : 2;
+                          return GridView.count(
+                            crossAxisCount: columns,
+                            crossAxisSpacing: 14,
+                            mainAxisSpacing: 14,
+                            childAspectRatio: constraints.maxWidth >= 900
+                                ? 1.6
+                                : 1.25,
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            children: [
+                              _MetricCard(
+                                title: 'Ventas del dia',
+                                icon: Icons.payments,
+                                money: totalSales,
+                                accent: BrandColors.accentYellow,
+                              ),
+                              _MetricCard(
+                                title: 'Efectivo',
+                                icon: Icons.attach_money,
+                                money: cash,
+                                accent: BrandColors.accentOrange,
+                              ),
+                              _MetricCard(
+                                title: 'Tarjeta',
+                                icon: Icons.credit_card,
+                                money: card,
+                                accent: BrandColors.success,
+                              ),
+                              _MetricCard(
+                                title: 'Transferencia',
+                                icon: Icons.sync_alt,
+                                money: transfer,
+                                accent: BrandColors.info,
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 14),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final columns = constraints.maxWidth >= 900 ? 4 : 2;
+                          return GridView.count(
+                            crossAxisCount: columns,
+                            crossAxisSpacing: 14,
+                            mainAxisSpacing: 14,
+                            childAspectRatio: constraints.maxWidth >= 900
+                                ? 1.8
+                                : 1.35,
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            children: [
+                              _MetricCard(
+                                title: 'Mixto',
+                                icon: Icons.call_split,
+                                money: mixed,
+                                accent: BrandColors.accentYellow,
+                              ),
+                              _MetricCard(
+                                title: 'Ordenes pagadas',
+                                icon: Icons.check_circle_outline,
+                                value: '$paidOrders',
+                                accent: BrandColors.success,
+                              ),
+                              _MetricCard(
+                                title: 'Ordenes abiertas',
+                                icon: Icons.receipt_long,
+                                value: '$openOrders',
+                                accent: BrandColors.accentOrange,
+                              ),
+                              _MetricCard(
+                                title: 'Ordenes parciales',
+                                icon: Icons.pie_chart_outline,
+                                value: '$partialOrders',
+                                accent: BrandColors.info,
+                              ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      GlassPanel(
+                        padding: const EdgeInsets.all(18),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                color: BrandColors.glassHighlight,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: const Icon(
+                                Icons.restaurant_menu,
+                                color: BrandColors.accentYellow,
+                                size: 30,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Catalogo de productos',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Ver, agregar, editar y activar productos del menu. $activeProducts activos.',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: BrandColors.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            GlassButton(
+                              icon: Icons.arrow_forward,
+                              label: 'Abrir',
+                              prominent: true,
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const ProductCatalogScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
                         ),
                       ),
-                    )
-                  else
-                    ...orders
-                        .take(8)
-                        .map((order) => _RecentOrderTile(order: order)),
-                ],
+                      const SizedBox(height: 20),
+                      const SectionHeader(
+                        title: 'Ordenes recientes',
+                        subtitle: 'Ultimos movimientos registrados.',
+                      ),
+                      const SizedBox(height: 12),
+                      if (orders.isEmpty)
+                        const GlassPanel(
+                          child: Text(
+                            'Aun no hay ordenes. Abre una mesa desde Mesero / Caja.',
+                            style: TextStyle(color: BrandColors.textMuted),
+                          ),
+                        )
+                      else
+                        ...orders
+                            .take(8)
+                            .map((order) => _RecentOrderTile(order: order)),
+                    ],
+                  );
+                },
               );
             },
           );
@@ -191,20 +252,28 @@ class AdminDashboardScreen extends StatelessWidget {
     );
   }
 
-  double _todaySales(List<PosOrder> orders) {
-    final now = DateTime.now();
-    return orders
-        .where((order) {
-          final createdAt = order.createdAt;
-          if (createdAt == null || order.status != 'paid') {
-            return false;
-          }
+  List<Payment> _todayPayments(List<Payment> payments) {
+    return payments.where((payment) => _isToday(payment.createdAt)).toList();
+  }
 
-          return createdAt.year == now.year &&
-              createdAt.month == now.month &&
-              createdAt.day == now.day;
-        })
-        .fold<double>(0, (sum, order) => sum + order.paidTotal);
+  double _paymentsByMethod(List<Payment> payments, String method) {
+    return payments
+        .where((payment) => payment.method == method)
+        .fold<double>(
+          0,
+          (runningTotal, payment) => runningTotal + payment.amount,
+        );
+  }
+
+  bool _isToday(DateTime? date) {
+    if (date == null) {
+      return false;
+    }
+
+    final now = DateTime.now();
+    return date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day;
   }
 }
 
@@ -225,44 +294,42 @@ class _MetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: accent, size: 30),
-            const Spacer(),
+    return GlassCard(
+      accent: accent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: accent, size: 28),
+          const Spacer(),
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: BrandColors.textMuted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (money != null)
+            MoneyText(
+              value: money!,
+              style: TextStyle(
+                color: accent,
+                fontSize: 25,
+                fontWeight: FontWeight.w800,
+              ),
+            )
+          else
             Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: BrandColors.muted,
+              value ?? '0',
+              style: TextStyle(
+                color: accent,
+                fontSize: 28,
                 fontWeight: FontWeight.w800,
               ),
             ),
-            const SizedBox(height: 6),
-            if (money != null)
-              MoneyText(
-                value: money!,
-                style: TextStyle(
-                  color: accent,
-                  fontSize: 27,
-                  fontWeight: FontWeight.w900,
-                ),
-              )
-            else
-              Text(
-                value ?? '0',
-                style: TextStyle(
-                  color: accent,
-                  fontSize: 30,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -275,20 +342,27 @@ class _RecentOrderTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: ListTile(
-        leading: const Icon(Icons.receipt_long, color: BrandColors.orange),
-        title: Text(
-          order.tableName,
-          style: const TextStyle(fontWeight: FontWeight.w900),
-        ),
-        subtitle: Text('${order.status} | ${order.kitchenStatus}'),
-        trailing: MoneyText(
-          value: order.total,
-          style: const TextStyle(
-            color: BrandColors.yellow,
-            fontWeight: FontWeight.w900,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: GlassCard(
+        padding: EdgeInsets.zero,
+        accent: BrandColors.accentOrange,
+        child: ListTile(
+          leading: const Icon(
+            Icons.receipt_long,
+            color: BrandColors.accentOrange,
+          ),
+          title: Text(
+            order.tableName,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+          subtitle: Text('${order.status} | ${order.kitchenStatus}'),
+          trailing: MoneyText(
+            value: order.total,
+            style: const TextStyle(
+              color: BrandColors.accentYellow,
+              fontWeight: FontWeight.w800,
+            ),
           ),
         ),
       ),

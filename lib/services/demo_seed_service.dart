@@ -91,6 +91,7 @@ const _products = [
     'category': 'Tacos',
     'price': 24.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 1,
   },
   {
@@ -99,6 +100,7 @@ const _products = [
     'category': 'Tacos',
     'price': 24.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 2,
   },
   {
@@ -107,6 +109,7 @@ const _products = [
     'category': 'Tacos',
     'price': 24.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 3,
   },
   {
@@ -115,6 +118,7 @@ const _products = [
     'category': 'Tacos',
     'price': 32.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 4,
   },
   {
@@ -123,6 +127,7 @@ const _products = [
     'category': 'Tacos',
     'price': 24.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 5,
   },
   {
@@ -131,6 +136,7 @@ const _products = [
     'category': 'Tacos',
     'price': 24.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 6,
   },
   {
@@ -139,6 +145,7 @@ const _products = [
     'category': 'Tacos',
     'price': 28.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 7,
   },
   {
@@ -147,6 +154,7 @@ const _products = [
     'category': 'Tacos',
     'price': 28.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 8,
   },
   {
@@ -155,6 +163,7 @@ const _products = [
     'category': 'Tacos',
     'price': 30.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 9,
   },
   {
@@ -163,6 +172,7 @@ const _products = [
     'category': 'Gringas',
     'price': 58.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 10,
   },
   {
@@ -171,6 +181,7 @@ const _products = [
     'category': 'Gringas',
     'price': 88.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 11,
   },
   {
@@ -179,6 +190,7 @@ const _products = [
     'category': 'Gringas',
     'price': 72.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 12,
   },
   {
@@ -187,6 +199,7 @@ const _products = [
     'category': 'Gringas',
     'price': 105.0,
     'active': true,
+    'sendToKitchen': true,
     'sortOrder': 13,
   },
   {
@@ -195,6 +208,7 @@ const _products = [
     'category': 'Bebidas',
     'price': 28.0,
     'active': true,
+    'sendToKitchen': false,
     'sortOrder': 14,
   },
 ];

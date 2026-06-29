@@ -12,8 +12,11 @@ class OrderItem {
     required this.unitPrice,
     required this.total,
     required this.notes,
+    required this.sendToKitchen,
     required this.kitchenStatus,
     required this.paymentStatus,
+    this.paidAt,
+    this.paymentId,
   });
 
   final String id;
@@ -26,8 +29,11 @@ class OrderItem {
   final double unitPrice;
   final double total;
   final String notes;
+  final bool sendToKitchen;
   final String kitchenStatus;
   final String paymentStatus;
+  final DateTime? paidAt;
+  final String? paymentId;
 
   factory OrderItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -43,8 +49,25 @@ class OrderItem {
       unitPrice: (data['unitPrice'] as num?)?.toDouble() ?? 0,
       total: (data['total'] as num?)?.toDouble() ?? 0,
       notes: data['notes'] as String? ?? '',
+      sendToKitchen:
+          data['sendToKitchen'] as bool? ?? _defaultSendToKitchen(data),
       kitchenStatus: data['kitchenStatus'] as String? ?? 'pending',
       paymentStatus: data['paymentStatus'] as String? ?? 'pending',
+      paidAt: _toDate(data['paidAt']),
+      paymentId: data['paymentId'] as String?,
     );
+  }
+
+  static bool _defaultSendToKitchen(Map<String, dynamic> data) {
+    final category = (data['category'] as String? ?? '').toLowerCase().trim();
+    return category != 'bebidas';
+  }
+
+  static DateTime? _toDate(Object? value) {
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+
+    return null;
   }
 }

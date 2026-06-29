@@ -6,6 +6,7 @@ import '../../models/pos_table.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
 import 'order_screen.dart';
@@ -110,22 +111,36 @@ class _TablesScreenState extends State<TablesScreen> {
                   ? 3
                   : 2;
 
-              return GridView.builder(
-                padding: const EdgeInsets.all(20),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: columns,
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  childAspectRatio: width >= 760 ? 1.45 : 1.15,
+              return Padding(
+                padding: const EdgeInsets.all(22),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SectionHeader(
+                      title: 'Mesas',
+                      subtitle: '${tables.length} puntos de servicio activos',
+                    ),
+                    const SizedBox(height: 18),
+                    Expanded(
+                      child: GridView.builder(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: columns,
+                          crossAxisSpacing: 16,
+                          mainAxisSpacing: 16,
+                          childAspectRatio: width >= 760 ? 1.5 : 1.18,
+                        ),
+                        itemCount: tables.length,
+                        itemBuilder: (context, index) {
+                          final table = tables[index];
+                          return _TableCard(
+                            table: table,
+                            onTap: () => _openTable(table),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-                itemCount: tables.length,
-                itemBuilder: (context, index) {
-                  final table = tables[index];
-                  return _TableCard(
-                    table: table,
-                    onTap: () => _openTable(table),
-                  );
-                },
               );
             },
           );
@@ -148,62 +163,68 @@ class _TableCard extends StatelessWidget {
     final hasOrder =
         table.currentOrderId != null || table.status != 'available';
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border(top: BorderSide(color: status.color, width: 5)),
-          ),
-          padding: const EdgeInsets.all(18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return GlassCard(
+      onTap: onTap,
+      accent: status.color,
+      selected: hasOrder,
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: status.background,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      isTakeout ? Icons.shopping_bag : Icons.table_bar,
-                      color: status.color,
-                      size: 30,
-                    ),
-                  ),
-                  const Spacer(),
-                  StatusBadge(style: status),
-                ],
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: status.background,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Icon(
+                  isTakeout ? Icons.shopping_bag_outlined : Icons.table_bar,
+                  color: status.color,
+                  size: 28,
+                ),
               ),
               const Spacer(),
-              Text(
-                table.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
-                  color: BrandColors.white,
+              Flexible(child: StatusBadge(style: status)),
+            ],
+          ),
+          const Spacer(),
+          Text(
+            table.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 26,
+              fontWeight: FontWeight.w800,
+              color: BrandColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  hasOrder ? 'Orden abierta' : 'Lista para tomar orden',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: BrandColors.textMuted,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                hasOrder ? 'Orden abierta' : 'Lista para tomar orden',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: BrandColors.muted,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
+              const SizedBox(width: 8),
+              const Icon(
+                Icons.arrow_forward_ios_rounded,
+                size: 14,
+                color: BrandColors.textMuted,
               ),
             ],
           ),
-        ),
+        ],
       ),
     );
   }

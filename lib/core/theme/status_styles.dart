@@ -19,32 +19,32 @@ StatusStyle tableStatusStyle(String status) {
     case 'occupied':
       return const StatusStyle(
         label: 'Abierta',
-        color: BrandColors.yellow,
-        background: Color(0x33FFD400),
+        color: BrandColors.accentYellow,
+        background: Color(0x1FFFD54A),
       );
     case 'sent':
       return const StatusStyle(
         label: 'En cocina',
-        color: BrandColors.orange,
-        background: Color(0x33F58A07),
+        color: BrandColors.accentOrange,
+        background: Color(0x1FF59A23),
       );
     case 'ready':
       return const StatusStyle(
         label: 'Lista',
         color: BrandColors.success,
-        background: Color(0x3329C56B),
+        background: Color(0x1F55D98B),
       );
     case 'paid':
       return const StatusStyle(
         label: 'Pagada',
         color: BrandColors.info,
-        background: Color(0x3342A5F5),
+        background: Color(0x1F7AB8FF),
       );
     default:
       return const StatusStyle(
         label: 'Disponible',
-        color: BrandColors.muted,
-        background: Color(0x22BDBDBD),
+        color: BrandColors.textMuted,
+        background: Color(0x12FFFFFF),
       );
   }
 }
@@ -54,26 +54,27 @@ StatusStyle kitchenStatusStyle(String status) {
     case 'sent':
       return const StatusStyle(
         label: 'Nueva',
-        color: BrandColors.yellow,
-        background: Color(0x33FFD400),
+        color: BrandColors.accentYellow,
+        background: Color(0x1FFFD54A),
       );
     case 'preparing':
+    case 'cooking':
       return const StatusStyle(
         label: 'En preparacion',
-        color: BrandColors.orange,
-        background: Color(0x33F58A07),
+        color: BrandColors.accentOrange,
+        background: Color(0x1FF59A23),
       );
     case 'ready':
       return const StatusStyle(
         label: 'Lista',
         color: BrandColors.success,
-        background: Color(0x3329C56B),
+        background: Color(0x1F55D98B),
       );
     default:
       return const StatusStyle(
         label: 'Pendiente',
-        color: BrandColors.muted,
-        background: Color(0x22BDBDBD),
+        color: BrandColors.textMuted,
+        background: Color(0x12FFFFFF),
       );
   }
 }

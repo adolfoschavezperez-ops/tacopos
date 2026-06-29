@@ -13,6 +13,8 @@ class PosOrder {
     required this.pendingTotal,
     this.createdAt,
     this.updatedAt,
+    this.sentToKitchenAt,
+    this.paidAt,
   });
 
   final String id;
@@ -26,6 +28,8 @@ class PosOrder {
   final double pendingTotal;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final DateTime? sentToKitchenAt;
+  final DateTime? paidAt;
 
   factory PosOrder.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -42,6 +46,8 @@ class PosOrder {
       pendingTotal: (data['pendingTotal'] as num?)?.toDouble() ?? 0,
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),
+      sentToKitchenAt: _toDate(data['sentToKitchenAt']),
+      paidAt: _toDate(data['paidAt']),
     );
   }
 

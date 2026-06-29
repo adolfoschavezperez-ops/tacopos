@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/theme/brand_colors.dart';
+import 'glass.dart';
 
 class EmptyState extends StatelessWidget {
   const EmptyState({
@@ -17,23 +18,23 @@ class EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: GlassPanel(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 48, color: BrandColors.orange),
+            Icon(icon, size: 46, color: BrandColors.accentOrange),
             const SizedBox(height: 12),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 8),
             Text(
               message,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: BrandColors.muted),
+              style: const TextStyle(color: BrandColors.textMuted),
             ),
           ],
         ),

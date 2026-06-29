@@ -1,7 +1,10 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
+import 'glass.dart';
 
 class BrandedScaffold extends StatelessWidget {
   const BrandedScaffold({
@@ -20,69 +23,85 @@ class BrandedScaffold extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title),
-            const Text(
-              AppConstants.brandName,
-              style: TextStyle(
-                color: BrandColors.orange,
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
+      extendBodyBehindAppBar: true,
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(68),
+        child: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+            child: AppBar(
+              toolbarHeight: 68,
+              titleSpacing: 12,
+              backgroundColor: BrandColors.backgroundPrimary.withValues(
+                alpha: 0.62,
               ),
+              title: Row(
+                children: [
+                  const _AppBarLogo(),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const Text(
+                          AppConstants.brandName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: BrandColors.textMuted,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              actions: actions,
             ),
-          ],
+          ),
         ),
-        actions: actions,
       ),
-      body: Stack(
-        children: [
-          const _BrushAccent(top: 18, right: -60),
-          const _BrushAccent(bottom: 24, left: -90, compact: true),
-          SafeArea(child: body),
-        ],
+      body: PremiumBackground(
+        child: SafeArea(
+          top: false,
+          child: Padding(padding: const EdgeInsets.only(top: 68), child: body),
+        ),
       ),
       bottomNavigationBar: bottomNavigationBar,
     );
   }
 }
 
-class _BrushAccent extends StatelessWidget {
-  const _BrushAccent({
-    this.top,
-    this.right,
-    this.bottom,
-    this.left,
-    this.compact = false,
-  });
-
-  final double? top;
-  final double? right;
-  final double? bottom;
-  final double? left;
-  final bool compact;
+class _AppBarLogo extends StatelessWidget {
+  const _AppBarLogo();
 
   @override
   Widget build(BuildContext context) {
-    return Positioned(
-      top: top,
-      right: right,
-      bottom: bottom,
-      left: left,
-      child: IgnorePointer(
-        child: Transform.rotate(
-          angle: -0.18,
-          child: Container(
-            width: compact ? 180 : 260,
-            height: compact ? 28 : 42,
-            decoration: BoxDecoration(
-              color: BrandColors.orange.withValues(
-                alpha: compact ? 0.16 : 0.22,
-              ),
-              borderRadius: BorderRadius.circular(4),
-            ),
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: BrandColors.glassFill,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: BrandColors.glassBorder),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(3),
+        child: Image.asset(
+          AppConstants.logoAsset,
+          fit: BoxFit.contain,
+          errorBuilder: (context, error, stackTrace) => const Icon(
+            Icons.local_fire_department,
+            color: BrandColors.accentYellow,
           ),
         ),
       ),

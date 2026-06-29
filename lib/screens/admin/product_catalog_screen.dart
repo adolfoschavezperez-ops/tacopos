@@ -5,6 +5,7 @@ import '../../models/product.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 
@@ -48,28 +49,39 @@ class ProductCatalogScreen extends StatelessWidget {
             );
           }
 
-          return ListView.separated(
-            padding: const EdgeInsets.all(20),
-            itemCount: products.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 10),
-            itemBuilder: (context, index) {
-              final product = products[index];
-              return _ProductAdminTile(
-                product: product,
-                onEdit: () =>
-                    _showProductDialog(context, repository, product: product),
-                onToggle: () => repository.toggleProduct(product),
-              );
-            },
+          return ListView(
+            padding: const EdgeInsets.all(22),
+            children: [
+              SectionHeader(
+                title: 'Catalogo',
+                subtitle: '${products.length} productos configurados',
+              ),
+              const SizedBox(height: 18),
+              ...products.map(
+                (product) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _ProductAdminTile(
+                    product: product,
+                    onEdit: () => _showProductDialog(
+                      context,
+                      repository,
+                      product: product,
+                    ),
+                    onToggle: () => repository.toggleProduct(product),
+                  ),
+                ),
+              ),
+            ],
           );
         },
       ),
       bottomNavigationBar: SafeArea(
         minimum: const EdgeInsets.all(16),
-        child: FilledButton.icon(
-          onPressed: () => _showProductDialog(context, repository),
-          icon: const Icon(Icons.add),
-          label: const Text('Agregar producto'),
+        child: GlassButton(
+          onTap: () => _showProductDialog(context, repository),
+          icon: Icons.add,
+          label: 'Agregar producto',
+          prominent: true,
         ),
       ),
     );
@@ -88,6 +100,7 @@ class ProductCatalogScreen extends StatelessWidget {
       text: product == null ? '' : product.price.toStringAsFixed(2),
     );
     var active = product?.active ?? true;
+    var sendToKitchen = product?.sendToKitchen ?? true;
 
     await showDialog<void>(
       context: context,
@@ -133,6 +146,19 @@ class ProductCatalogScreen extends StatelessWidget {
                         });
                       },
                     ),
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('Enviar a cocina'),
+                      subtitle: const Text(
+                        'Desactivalo para bebidas u otros extras.',
+                      ),
+                      value: sendToKitchen,
+                      onChanged: (value) {
+                        setDialogState(() {
+                          sendToKitchen = value;
+                        });
+                      },
+                    ),
                   ],
                 ),
               ),
@@ -164,6 +190,7 @@ class ProductCatalogScreen extends StatelessWidget {
                       category: categoryController.text,
                       price: price,
                       active: active,
+                      sendToKitchen: sendToKitchen,
                     );
 
                     if (context.mounted) {
@@ -198,76 +225,91 @@ class _ProductAdminTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Container(
-              width: 52,
-              height: 52,
-              decoration: BoxDecoration(
-                color: product.active
-                    ? BrandColors.orange.withValues(alpha: 0.18)
-                    : BrandColors.surfaceHigh,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(
-                product.active ? Icons.fastfood : Icons.visibility_off,
-                color: product.active ? BrandColors.yellow : BrandColors.muted,
-              ),
+    return GlassCard(
+      accent: product.active ? BrandColors.accentOrange : BrandColors.textMuted,
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: product.active
+                  ? BrandColors.accentOrange.withValues(alpha: 0.16)
+                  : BrandColors.glassFill,
+              borderRadius: BorderRadius.circular(16),
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    product.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 17,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    product.category,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: BrandColors.muted),
-                  ),
-                ],
-              ),
+            child: Icon(
+              product.active ? Icons.fastfood : Icons.visibility_off,
+              color: product.active
+                  ? BrandColors.accentYellow
+                  : BrandColors.textMuted,
             ),
-            const SizedBox(width: 12),
-            SizedBox(
-              width: 110,
-              child: MoneyText(
-                value: product.price,
-                textAlign: TextAlign.end,
-                style: const TextStyle(
-                  color: BrandColors.yellow,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  product.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
+                const SizedBox(height: 4),
+                Text(
+                  product.category,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrandColors.textMuted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          Tooltip(
+            message: product.sendToKitchen
+                ? 'Se envia a cocina'
+                : 'No se envia a cocina',
+            child: Icon(
+              product.sendToKitchen
+                  ? Icons.room_service_outlined
+                  : Icons.local_drink_outlined,
+              color: product.sendToKitchen
+                  ? BrandColors.accentOrange
+                  : BrandColors.info,
+            ),
+          ),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 110,
+            child: MoneyText(
+              value: product.price,
+              textAlign: TextAlign.end,
+              style: const TextStyle(
+                color: BrandColors.accentYellow,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
               ),
             ),
-            const SizedBox(width: 10),
-            IconButton(
-              tooltip: 'Editar',
-              onPressed: onEdit,
-              icon: const Icon(Icons.edit),
-            ),
-            IconButton(
-              tooltip: product.active ? 'Desactivar' : 'Activar',
-              onPressed: onToggle,
-              icon: Icon(product.active ? Icons.toggle_on : Icons.toggle_off),
-              color: product.active ? BrandColors.success : BrandColors.muted,
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(width: 10),
+          IconButton(
+            tooltip: 'Editar',
+            onPressed: onEdit,
+            icon: const Icon(Icons.edit_outlined),
+          ),
+          IconButton(
+            tooltip: product.active ? 'Desactivar' : 'Activar',
+            onPressed: onToggle,
+            icon: Icon(product.active ? Icons.toggle_on : Icons.toggle_off),
+            color: product.active ? BrandColors.success : BrandColors.textMuted,
+          ),
+        ],
       ),
     );
   }

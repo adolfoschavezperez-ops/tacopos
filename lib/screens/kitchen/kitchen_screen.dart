@@ -3,13 +3,13 @@ import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
-import '../../models/order.dart';
-import '../../models/order_item.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
+import 'kitchen_order_detail_screen.dart';
 
 class KitchenScreen extends StatelessWidget {
   const KitchenScreen({super.key});
@@ -20,8 +20,8 @@ class KitchenScreen extends StatelessWidget {
 
     return BrandedScaffold(
       title: 'Cocina',
-      body: StreamBuilder<List<PosOrder>>(
-        stream: repository.watchKitchenOrders(),
+      body: StreamBuilder<List<KitchenOrderBundle>>(
+        stream: repository.watchKitchenOrderBundles(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const LoadingPanel(message: 'Cargando comandas...');
@@ -35,12 +35,12 @@ class KitchenScreen extends StatelessWidget {
             );
           }
 
-          final orders = snapshot.data ?? [];
-          if (orders.isEmpty) {
+          final bundles = snapshot.data ?? [];
+          if (bundles.isEmpty) {
             return const EmptyState(
-              icon: Icons.soup_kitchen,
-              title: 'Sin comandas en cocina',
-              message: 'Cuando Mesero envie una orden, aparecera aqui.',
+              icon: Icons.room_service_outlined,
+              title: 'Sin comandas activas',
+              message: 'Solo apareceran tacos y gringas enviados a cocina.',
             );
           }
 
@@ -52,21 +52,36 @@ class KitchenScreen extends StatelessWidget {
                   ? 2
                   : 1;
 
-              return GridView.builder(
-                padding: const EdgeInsets.all(20),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: columns,
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  childAspectRatio: columns == 1 ? 1.18 : 0.92,
+              return Padding(
+                padding: const EdgeInsets.all(22),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SectionHeader(
+                      title: 'Comandas',
+                      subtitle:
+                          '${bundles.length} activas · primero la mas vieja',
+                    ),
+                    const SizedBox(height: 18),
+                    Expanded(
+                      child: GridView.builder(
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: columns,
+                          crossAxisSpacing: 16,
+                          mainAxisSpacing: 16,
+                          childAspectRatio: columns == 1 ? 1.75 : 1.22,
+                        ),
+                        itemCount: bundles.length,
+                        itemBuilder: (context, index) {
+                          return _KitchenOrderCard(
+                            key: ValueKey('kitchen-${bundles[index].order.id}'),
+                            bundle: bundles[index],
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
-                itemCount: orders.length,
-                itemBuilder: (context, index) {
-                  return _KitchenOrderCard(
-                    order: orders[index],
-                    repository: repository,
-                  );
-                },
               );
             },
           );
@@ -77,177 +92,87 @@ class KitchenScreen extends StatelessWidget {
 }
 
 class _KitchenOrderCard extends StatelessWidget {
-  const _KitchenOrderCard({required this.order, required this.repository});
+  const _KitchenOrderCard({super.key, required this.bundle});
 
-  final PosOrder order;
-  final TacoPosRepository repository;
+  final KitchenOrderBundle bundle;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
+    final order = bundle.order;
+    final style = kitchenStatusStyle(order.kitchenStatus);
+
+    return GlassCard(
+      accent: style.color,
+      selected: order.kitchenStatus == 'cooking',
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            fullscreenDialog: true,
+            builder: (_) => KitchenOrderDetailScreen(orderId: order.id),
+          ),
+        );
+      },
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: kitchenStatusStyle(order.kitchenStatus).background,
-              border: Border(
-                top: BorderSide(
-                  color: kitchenStatusStyle(order.kitchenStatus).color,
-                  width: 5,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  order.tableName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        order.tableName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 26,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _formatTime(order.createdAt),
-                        style: const TextStyle(
-                          color: BrandColors.muted,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                StatusBadge(style: kitchenStatusStyle(order.kitchenStatus)),
-              ],
+              StatusBadge(style: style),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _formatTime(order.sentToKitchenAt ?? order.updatedAt),
+            style: const TextStyle(
+              color: BrandColors.textMuted,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          Expanded(
-            child: StreamBuilder<List<OrderItem>>(
-              stream: repository.watchOrderItems(order.id),
-              builder: (context, snapshot) {
-                final items = snapshot.data ?? [];
-
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const LoadingPanel(message: 'Cargando items...');
-                }
-
-                if (items.isEmpty) {
-                  return const EmptyState(
-                    icon: Icons.receipt,
-                    title: 'Sin items',
-                    message: 'Esta orden aun no tiene productos.',
-                  );
-                }
-
-                final grouped = <int, List<OrderItem>>{};
-                for (final item in items) {
-                  grouped.putIfAbsent(item.personNumber, () => []).add(item);
-                }
-
-                final people = grouped.keys.toList()..sort();
-
-                return ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: people.length,
-                  separatorBuilder: (_, _) => const Divider(height: 22),
-                  itemBuilder: (context, index) {
-                    final person = people[index];
-                    final personItems = grouped[person] ?? [];
-
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Persona $person',
-                          style: const TextStyle(
-                            color: BrandColors.yellow,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        ...personItems.map(
-                          (item) => Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  width: 34,
-                                  height: 34,
-                                  alignment: Alignment.center,
-                                  decoration: BoxDecoration(
-                                    color: BrandColors.orange.withValues(
-                                      alpha: 0.18,
-                                    ),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    '${item.qty}',
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w900,
-                                      color: BrandColors.yellow,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Text(
-                                    item.productName,
-                                    style: const TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                );
-              },
+          const Spacer(),
+          Text(
+            '${bundle.personCount} personas',
+            style: const TextStyle(
+              color: BrandColors.accentYellow,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => repository.updateKitchenStatus(
-                      orderId: order.id,
-                      status: 'preparing',
-                    ),
-                    icon: const Icon(Icons.timer),
-                    label: const Text('En preparacion'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton.icon(
-                    onPressed: () => repository.updateKitchenStatus(
-                      orderId: order.id,
-                      status: 'ready',
-                    ),
-                    icon: const Icon(Icons.check_circle),
-                    label: const Text('Listo'),
-                  ),
-                ),
-              ],
+          const SizedBox(height: 8),
+          Text(
+            bundle.shortSummary,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: BrandColors.textSecondary,
+              fontSize: 15,
+              height: 1.25,
             ),
+          ),
+          const SizedBox(height: 14),
+          const Row(
+            children: [
+              Text(
+                'Abrir comanda',
+                style: TextStyle(
+                  color: BrandColors.textMuted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              SizedBox(width: 8),
+              Icon(Icons.open_in_full, size: 16, color: BrandColors.textMuted),
+            ],
           ),
         ],
       ),

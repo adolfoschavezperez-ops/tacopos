@@ -8,9 +8,11 @@ import '../../models/product.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import '../../widgets/status_badge.dart';
+import 'payment_screen.dart';
 
 class OrderScreen extends StatefulWidget {
   const OrderScreen({
@@ -28,57 +30,21 @@ class OrderScreen extends StatefulWidget {
 
 class _OrderScreenState extends State<OrderScreen> {
   final _repository = TacoPosRepository();
+  late final Stream<List<OrderItem>> _itemsStream;
+  late final Stream<List<Product>> _productsStream;
   int _selectedPerson = 1;
   int _personCount = 1;
   String _selectedCategory = 'Todos';
   bool _busy = false;
 
+  @override
+  void initState() {
+    super.initState();
+    _itemsStream = _repository.watchOrderItems(widget.orderId);
+    _productsStream = _repository.watchProducts(activeOnly: true);
+  }
+
   Future<void> _sendToKitchen() async {
-    await _runAction(
-      action: () => _repository.sendOrderToKitchen(widget.orderId),
-      success: 'Orden enviada a cocina.',
-    );
-  }
-
-  Future<void> _markPaid(PosOrder order) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cobrar mesa'),
-        content: Text(
-          'Se marcara ${order.tableName} como pagada por un total de '
-          r'$'
-          '${order.total.toStringAsFixed(2)}.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Marcar pagada'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) {
-      return;
-    }
-
-    await _runAction(
-      action: () => _repository.markOrderPaid(widget.orderId),
-      success: 'Orden pagada y mesa liberada.',
-      popAfter: true,
-    );
-  }
-
-  Future<void> _runAction({
-    required Future<void> Function() action,
-    required String success,
-    bool popAfter = false,
-  }) async {
     if (_busy) {
       return;
     }
@@ -88,25 +54,27 @@ class _OrderScreenState extends State<OrderScreen> {
     });
 
     try {
-      await action();
-
+      final sentCount = await _repository.sendOrderToKitchen(widget.orderId);
       if (!mounted) {
         return;
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(success)));
-      if (popAfter) {
-        Navigator.pop(context);
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            sentCount == 0
+                ? 'No hay productos de cocina para enviar.'
+                : 'Comanda enviada a cocina.',
+          ),
+        ),
+      );
     } catch (error) {
       if (!mounted) {
         return;
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo completar la accion: $error')),
+        SnackBar(content: Text('No se pudo enviar la comanda: $error')),
       );
     } finally {
       if (mounted) {
@@ -115,6 +83,13 @@ class _OrderScreenState extends State<OrderScreen> {
         });
       }
     }
+  }
+
+  Future<void> _openPayment() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => PaymentScreen(orderId: widget.orderId)),
+    );
   }
 
   void _addPerson() {
@@ -145,16 +120,6 @@ class _OrderScreenState extends State<OrderScreen> {
                   ),
                 ),
               ),
-            IconButton(
-              tooltip: 'Enviar a cocina',
-              onPressed: _busy ? null : _sendToKitchen,
-              icon: const Icon(Icons.outdoor_grill),
-            ),
-            IconButton(
-              tooltip: 'Cobrar',
-              onPressed: order == null || _busy ? null : () => _markPaid(order),
-              icon: const Icon(Icons.payments),
-            ),
           ],
           body: _buildBody(orderSnapshot),
         );
@@ -185,7 +150,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
 
     return StreamBuilder<List<OrderItem>>(
-      stream: _repository.watchOrderItems(widget.orderId),
+      stream: _itemsStream,
       builder: (context, itemsSnapshot) {
         if (itemsSnapshot.connectionState == ConnectionState.waiting) {
           return const LoadingPanel(message: 'Cargando productos...');
@@ -224,8 +189,11 @@ class _OrderScreenState extends State<OrderScreen> {
                 orderId: widget.orderId,
                 itemId: item.id,
               ),
+              onSendToKitchen: _busy ? null : _sendToKitchen,
+              onOpenPayment: _busy ? null : _openPayment,
             );
             final menu = _ProductMenu(
+              productsStream: _productsStream,
               selectedCategory: _selectedCategory,
               onCategoryChanged: (category) {
                 setState(() {
@@ -240,22 +208,50 @@ class _OrderScreenState extends State<OrderScreen> {
             );
 
             if (wide) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  SizedBox(width: constraints.maxWidth * 0.48, child: summary),
-                  const VerticalDivider(width: 1),
-                  Expanded(child: menu),
-                ],
+              return Padding(
+                padding: const EdgeInsets.all(18),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    RepaintBoundary(
+                      child: SizedBox(
+                        width: constraints.maxWidth * 0.46,
+                        child: GlassPanel(
+                          padding: EdgeInsets.zero,
+                          blur: 8,
+                          child: summary,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: RepaintBoundary(
+                        child: GlassPanel(
+                          padding: EdgeInsets.zero,
+                          blur: 8,
+                          child: menu,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               );
             }
 
             return ListView(
-              padding: EdgeInsets.zero,
+              padding: const EdgeInsets.all(18),
               children: [
-                SizedBox(height: 560, child: summary),
-                const Divider(height: 1),
-                SizedBox(height: 640, child: menu),
+                GlassPanel(
+                  padding: EdgeInsets.zero,
+                  blur: 8,
+                  child: SizedBox(height: 560, child: summary),
+                ),
+                const SizedBox(height: 16),
+                GlassPanel(
+                  padding: EdgeInsets.zero,
+                  blur: 8,
+                  child: SizedBox(height: 640, child: menu),
+                ),
               ],
             );
           },
@@ -275,6 +271,8 @@ class _OrderSummary extends StatelessWidget {
     required this.onAddPerson,
     required this.onQtyChanged,
     required this.onDelete,
+    required this.onSendToKitchen,
+    required this.onOpenPayment,
   });
 
   final PosOrder order;
@@ -285,6 +283,8 @@ class _OrderSummary extends StatelessWidget {
   final VoidCallback onAddPerson;
   final void Function(OrderItem item, int qty) onQtyChanged;
   final ValueChanged<OrderItem> onDelete;
+  final VoidCallback? onSendToKitchen;
+  final VoidCallback? onOpenPayment;
 
   @override
   Widget build(BuildContext context) {
@@ -304,17 +304,13 @@ class _OrderSummary extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      order.tableName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w900,
+                    SectionHeader(
+                      title: order.tableName,
+                      subtitle: 'Orden por personas',
+                      trailing: StatusBadge(
+                        style: kitchenStatusStyle(order.kitchenStatus),
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    StatusBadge(style: kitchenStatusStyle(order.kitchenStatus)),
                   ],
                 ),
               ),
@@ -325,22 +321,30 @@ class _OrderSummary extends StatelessWidget {
                   const Text(
                     'TOTAL',
                     style: TextStyle(
-                      color: BrandColors.muted,
+                      color: BrandColors.textMuted,
                       fontSize: 12,
-                      fontWeight: FontWeight.w900,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                   MoneyText(
                     value: order.total,
                     style: const TextStyle(
-                      color: BrandColors.yellow,
-                      fontSize: 30,
-                      fontWeight: FontWeight.w900,
+                      color: BrandColors.accentYellow,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ],
               ),
             ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
+          child: _OrderActionPanel(
+            order: order,
+            onSendToKitchen: onSendToKitchen,
+            onOpenPayment: onOpenPayment,
           ),
         ),
         SizedBox(
@@ -388,6 +392,7 @@ class _OrderSummary extends StatelessWidget {
                     );
 
                     return _PersonItemsCard(
+                      key: ValueKey('person-$person'),
                       person: person,
                       selected: selectedPerson == person,
                       items: personItems,
@@ -406,6 +411,7 @@ class _OrderSummary extends StatelessWidget {
 
 class _PersonItemsCard extends StatelessWidget {
   const _PersonItemsCard({
+    super.key,
     required this.person,
     required this.selected,
     required this.items,
@@ -425,55 +431,171 @@ class _PersonItemsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 14),
-      color: selected ? const Color(0xFF24210F) : BrandColors.surface,
-      child: InkWell(
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: GlassCard(
         onTap: onSelect,
-        borderRadius: BorderRadius.circular(8),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Persona $person',
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                  MoneyText(
-                    value: subtotal,
+        selected: selected,
+        accent: BrandColors.accentYellow,
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Persona $person',
                     style: const TextStyle(
-                      color: BrandColors.yellow,
                       fontSize: 18,
-                      fontWeight: FontWeight.w900,
+                      fontWeight: FontWeight.w800,
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              if (items.isEmpty)
-                const Text(
-                  'Sin productos',
-                  style: TextStyle(color: BrandColors.muted),
-                )
-              else
-                ...items.map(
-                  (item) => _OrderItemRow(
-                    item: item,
-                    onQtyChanged: (qty) => onQtyChanged(item, qty),
-                    onDelete: () => onDelete(item),
                   ),
                 ),
-            ],
+                MoneyText(
+                  value: subtotal,
+                  style: const TextStyle(
+                    color: BrandColors.accentYellow,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (items.isEmpty)
+              const Text(
+                'Sin productos',
+                style: TextStyle(color: BrandColors.textMuted),
+              )
+            else
+              ...items.map(
+                (item) => _OrderItemRow(
+                  item: item,
+                  onQtyChanged: (qty) => onQtyChanged(item, qty),
+                  onDelete: () => onDelete(item),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _OrderActionPanel extends StatelessWidget {
+  const _OrderActionPanel({
+    required this.order,
+    required this.onSendToKitchen,
+    required this.onOpenPayment,
+  });
+
+  final PosOrder order;
+  final VoidCallback? onSendToKitchen;
+  final VoidCallback? onOpenPayment;
+
+  @override
+  Widget build(BuildContext context) {
+    final kitchenLabel = switch (order.kitchenStatus) {
+      'sent' => 'Comanda enviada',
+      'cooking' => 'En preparacion',
+      'ready' => 'Lista para cobrar',
+      'not_required' => 'Sin cocina',
+      _ => 'Enviar comanda',
+    };
+    final kitchenHint = switch (order.kitchenStatus) {
+      'sent' => 'Cocina ya recibio los tacos por persona',
+      'cooking' => 'La comanda esta en preparacion',
+      'ready' => 'Cocina marco la comanda como lista',
+      'not_required' => 'Solo hay productos que no pasan por cocina',
+      _ => 'Cocina vera tacos y gringas por persona',
+    };
+    final canSend = !['sent', 'cooking', 'ready'].contains(order.kitchenStatus);
+
+    return Row(
+      children: [
+        Expanded(
+          child: _ActionTile(
+            icon: Icons.room_service_outlined,
+            title: kitchenLabel,
+            subtitle: kitchenHint,
+            prominent: canSend,
+            onTap: canSend ? onSendToKitchen : null,
           ),
         ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _ActionTile(
+            icon: Icons.point_of_sale_outlined,
+            title: 'Cobrar mesa',
+            subtitle: 'Pago completo o por persona',
+            prominent: order.kitchenStatus == 'ready',
+            onTap: onOpenPayment,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ActionTile extends StatelessWidget {
+  const _ActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.prominent,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool prominent;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      onTap: onTap,
+      selected: prominent,
+      accent: prominent ? BrandColors.accentYellow : BrandColors.accentOrange,
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Icon(
+            icon,
+            color: prominent
+                ? BrandColors.accentYellow
+                : BrandColors.textSecondary,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: BrandColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: BrandColors.textMuted,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -512,7 +634,7 @@ class _OrderItemRow extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: BrandColors.muted,
+                    color: BrandColors.textMuted,
                     fontSize: 12,
                   ),
                 ),
@@ -560,21 +682,21 @@ class _OrderItemRow extends StatelessWidget {
 
 class _ProductMenu extends StatelessWidget {
   const _ProductMenu({
+    required this.productsStream,
     required this.selectedCategory,
     required this.onCategoryChanged,
     required this.onAddProduct,
   });
 
+  final Stream<List<Product>> productsStream;
   final String selectedCategory;
   final ValueChanged<String> onCategoryChanged;
   final ValueChanged<Product> onAddProduct;
 
   @override
   Widget build(BuildContext context) {
-    final repository = TacoPosRepository();
-
     return StreamBuilder<List<Product>>(
-      stream: repository.watchProducts(activeOnly: true),
+      stream: productsStream,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const LoadingPanel(message: 'Cargando menu...');
@@ -617,10 +739,7 @@ class _ProductMenu extends StatelessWidget {
                   ),
                   Text(
                     '${visibleProducts.length} productos',
-                    style: const TextStyle(
-                      color: BrandColors.muted,
-                      fontWeight: FontWeight.w800,
-                    ),
+                    style: const TextStyle(color: BrandColors.textMuted),
                   ),
                 ],
               ),
@@ -659,6 +778,7 @@ class _ProductMenu extends StatelessWidget {
                     itemBuilder: (context, index) {
                       final product = visibleProducts[index];
                       return _ProductTile(
+                        key: ValueKey('product-${product.id}'),
                         product: product,
                         onTap: () => onAddProduct(product),
                       );
@@ -675,62 +795,61 @@ class _ProductMenu extends StatelessWidget {
 }
 
 class _ProductTile extends StatelessWidget {
-  const _ProductTile({required this.product, required this.onTap});
+  const _ProductTile({super.key, required this.product, required this.onTap});
 
   final Product product;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return GlassCard(
+      onTap: onTap,
+      padding: const EdgeInsets.all(14),
+      accent: BrandColors.accentOrange,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      product.category.toUpperCase(),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: BrandColors.orange,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
+              Expanded(
+                child: Text(
+                  product.category.toUpperCase(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: BrandColors.accentOrange,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
                   ),
-                  const Icon(Icons.add_circle, color: BrandColors.yellow),
-                ],
-              ),
-              const Spacer(),
-              Text(
-                product.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
-                  height: 1.05,
                 ),
               ),
-              const SizedBox(height: 8),
-              MoneyText(
-                value: product.price,
-                style: const TextStyle(
-                  color: BrandColors.yellow,
-                  fontSize: 19,
-                  fontWeight: FontWeight.w900,
-                ),
+              const Icon(
+                Icons.add_circle_outline,
+                color: BrandColors.accentYellow,
               ),
             ],
           ),
-        ),
+          const Spacer(),
+          Text(
+            product.name,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              height: 1.05,
+            ),
+          ),
+          const SizedBox(height: 8),
+          MoneyText(
+            value: product.price,
+            style: const TextStyle(
+              color: BrandColors.accentYellow,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
       ),
     );
   }

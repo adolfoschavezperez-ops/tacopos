@@ -10,7 +10,7 @@ class BrandLogoMark extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final size = compact ? 52.0 : 88.0;
+    final size = compact ? 48.0 : 96.0;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -19,48 +19,63 @@ class BrandLogoMark extends StatelessWidget {
           width: size,
           height: size,
           decoration: BoxDecoration(
-            color: BrandColors.yellow,
-            borderRadius: BorderRadius.circular(8),
+            color: BrandColors.backgroundPrimary,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: BrandColors.glassBorder),
             boxShadow: const [
               BoxShadow(
-                color: Color(0x66F58A07),
-                blurRadius: 22,
+                color: BrandColors.accentGlow,
+                blurRadius: 30,
                 offset: Offset(0, 10),
               ),
             ],
           ),
-          child: Icon(
-            Icons.local_fire_department,
-            size: compact ? 34 : 54,
-            color: BrandColors.black,
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: EdgeInsets.all(compact ? 4 : 6),
+            child: Image.asset(
+              AppConstants.logoAsset,
+              fit: BoxFit.contain,
+              errorBuilder: (context, error, stackTrace) => Icon(
+                Icons.local_fire_department,
+                size: compact ? 30 : 54,
+                color: BrandColors.accentYellow,
+              ),
+            ),
           ),
         ),
         const SizedBox(width: 14),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              AppConstants.brandName.toUpperCase(),
-              style: TextStyle(
-                color: BrandColors.white,
-                fontSize: compact ? 19 : 34,
-                fontWeight: FontWeight.w900,
-                height: 0.95,
-                letterSpacing: 0,
+        Flexible(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                AppConstants.brandName.toUpperCase(),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: BrandColors.textPrimary,
+                  fontSize: compact ? 18 : 32,
+                  fontWeight: FontWeight.w800,
+                  height: 0.95,
+                  letterSpacing: 0,
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '${AppConstants.appName} by ${AppConstants.creator}',
-              style: TextStyle(
-                color: BrandColors.orange,
-                fontSize: compact ? 12 : 16,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 0,
+              const SizedBox(height: 6),
+              Text(
+                '${AppConstants.appName} by ${AppConstants.creator}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: BrandColors.accentOrange,
+                  fontSize: compact ? 12 : 16,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ],
     );
