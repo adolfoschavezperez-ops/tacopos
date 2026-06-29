@@ -11,7 +11,9 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import 'employee_catalog_screen.dart';
+import 'order_platform_catalog_screen.dart';
 import 'product_catalog_screen.dart';
+import 'table_catalog_screen.dart';
 
 class AdminDashboardScreen extends StatelessWidget {
   const AdminDashboardScreen({super.key});
@@ -23,6 +25,28 @@ class AdminDashboardScreen extends StatelessWidget {
     return BrandedScaffold(
       title: 'Socio / Admin',
       actions: [
+        IconButton(
+          tooltip: 'Mesas',
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const TableCatalogScreen()),
+            );
+          },
+          icon: const Icon(Icons.table_restaurant),
+        ),
+        IconButton(
+          tooltip: 'Plataformas',
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const OrderPlatformCatalogScreen(),
+              ),
+            );
+          },
+          icon: const Icon(Icons.delivery_dining),
+        ),
         IconButton(
           tooltip: 'Productos',
           onPressed: () {
@@ -251,6 +275,39 @@ class AdminDashboardScreen extends StatelessWidget {
                         },
                       ),
                       const SizedBox(height: 20),
+                      _AdminLinkPanel(
+                        icon: Icons.table_restaurant,
+                        iconColor: BrandColors.accentOrange,
+                        title: 'Catalogo de mesas',
+                        subtitle:
+                            'Ver, agregar, editar y activar mesas fisicas y la entrada Para llevar.',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const TableCatalogScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      _AdminLinkPanel(
+                        icon: Icons.delivery_dining,
+                        iconColor: BrandColors.info,
+                        title: 'Catalogo de plataformas',
+                        subtitle:
+                            'Configura canales para pedidos para llevar: En persona, DiDi, Uber o Rappi.',
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  const OrderPlatformCatalogScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 20),
                       GlassPanel(
                         padding: const EdgeInsets.all(18),
                         child: Row(
@@ -423,6 +480,71 @@ class AdminDashboardScreen extends StatelessWidget {
   }
 }
 
+class _AdminLinkPanel extends StatelessWidget {
+  const _AdminLinkPanel({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: BrandColors.glassHighlight,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(icon, color: iconColor, size: 30),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: BrandColors.textMuted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          GlassButton(
+            icon: Icons.arrow_forward,
+            label: 'Abrir',
+            prominent: true,
+            onTap: onTap,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _MetricCard extends StatelessWidget {
   const _MetricCard({
     required this.title,
@@ -499,7 +621,7 @@ class _RecentOrderTile extends StatelessWidget {
             color: BrandColors.accentOrange,
           ),
           title: Text(
-            order.tableName,
+            order.displayName,
             style: const TextStyle(fontWeight: FontWeight.w800),
           ),
           subtitle: Text('${order.status} | ${order.kitchenStatus}'),

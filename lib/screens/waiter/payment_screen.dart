@@ -43,7 +43,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     final confirmed = await _confirm(
       title: 'Cobrar mesa completa',
-      message: 'Se cubrira todo el pendiente de ${order.tableName}.',
+      message: 'Se cubrira todo el pendiente de ${order.displayName}.',
     );
     if (!confirmed) {
       return;
@@ -98,7 +98,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     final confirmed = await _confirm(
       title: 'Agregar pago parcial',
-      message: 'Se abonara este monto a la cuenta de ${order.tableName}.',
+      message: 'Se abonara este monto a la cuenta de ${order.displayName}.',
     );
     if (!confirmed) {
       return;
@@ -250,6 +250,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       }
 
                       final payments = paymentSnapshot.data ?? [];
+                      final hasPartialPayments = payments.any(
+                        (payment) => payment.type == 'partial',
+                      );
+                      final hasPersonPayments = payments.any(
+                        (payment) => payment.type == 'person',
+                      );
 
                       return ListView(
                         padding: const EdgeInsets.all(22),
@@ -284,9 +290,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             icon: Icons.point_of_sale_outlined,
                             label: _busy
                                 ? 'Cobrando...'
+                                : hasPersonPayments
+                                ? 'Cobro por persona iniciado'
                                 : 'Cobrar mesa completa',
                             prominent: true,
-                            onTap: _busy || order.pendingTotal <= 0.01
+                            onTap:
+                                _busy ||
+                                    order.pendingTotal <= 0.01 ||
+                                    hasPersonPayments
                                 ? null
                                 : () => _payFullTable(order),
                           ),
@@ -296,8 +307,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             order: order,
                             method: _method,
                             busy: _busy,
-                            onChanged: () => setState(() {}),
                             onPay: () => _payPartial(order),
+                            disabledReason: hasPersonPayments
+                                ? 'Esta cuenta ya inicio cobro por persona. Termina el cobro por persona.'
+                                : null,
                           ),
                           const SizedBox(height: 20),
                           SectionHeader(
@@ -306,6 +319,18 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                 '${_people(items).length} cuentas separadas',
                           ),
                           const SizedBox(height: 12),
+                          if (hasPartialPayments) ...[
+                            const GlassPanel(
+                              child: Text(
+                                'Esta cuenta ya tiene pagos parciales. Termina el cobro por parcialidades.',
+                                style: TextStyle(
+                                  color: BrandColors.textMuted,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
                           ..._people(items).map((person) {
                             final personItems = items
                                 .where((item) => item.personNumber == person)
@@ -322,6 +347,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                               items: personItems,
                               method: _method,
                               busy: _busy,
+                              disabled: hasPartialPayments,
                               onPay: () => _payPerson(person, personName),
                             );
                           }),
@@ -378,7 +404,7 @@ class _TotalsPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: SectionHeader(
-                  title: order.tableName,
+                  title: order.displayName,
                   subtitle: 'Cuenta actual',
                 ),
               ),
@@ -552,8 +578,9 @@ class _ChargePreview extends StatelessWidget {
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 12),
-          _PreviewRow(label: 'Subtotal a cubrir', value: baseAmount),
-          _PreviewRow(label: 'Comision tarjeta 4%', value: surcharge),
+          _PreviewRow(label: 'Monto base', value: baseAmount),
+          if (method == 'card')
+            _PreviewRow(label: 'Comision tarjeta 4%', value: surcharge),
           const Divider(height: 18),
           _PreviewRow(label: 'Total a cobrar', value: charged, highlight: true),
         ],
@@ -605,26 +632,70 @@ class _PreviewRow extends StatelessWidget {
   }
 }
 
-class _PartialPaymentPanel extends StatelessWidget {
+class _PartialPaymentPanel extends StatefulWidget {
   const _PartialPaymentPanel({
     required this.controller,
     required this.order,
     required this.method,
     required this.busy,
-    required this.onChanged,
     required this.onPay,
+    this.disabledReason,
   });
 
   final TextEditingController controller;
   final PosOrder order;
   final String method;
   final bool busy;
-  final VoidCallback onChanged;
   final VoidCallback onPay;
+  final String? disabledReason;
+
+  @override
+  State<_PartialPaymentPanel> createState() => _PartialPaymentPanelState();
+}
+
+class _PartialPaymentPanelState extends State<_PartialPaymentPanel> {
+  double _amount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _amount = _parseAmount();
+    widget.controller.addListener(_handleAmountChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PartialPaymentPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_handleAmountChanged);
+      widget.controller.addListener(_handleAmountChanged);
+      _amount = _parseAmount();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handleAmountChanged);
+    super.dispose();
+  }
+
+  void _handleAmountChanged() {
+    final nextAmount = _parseAmount();
+    if (nextAmount == _amount) {
+      return;
+    }
+    setState(() {
+      _amount = nextAmount;
+    });
+  }
+
+  double _parseAmount() {
+    return double.tryParse(widget.controller.text.replaceAll(',', '.')) ?? 0;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final amount = double.tryParse(controller.text.replaceAll(',', '.')) ?? 0;
+    final disabledReason = widget.disabledReason;
 
     return GlassPanel(
       child: Column(
@@ -635,26 +706,36 @@ class _PartialPaymentPanel extends StatelessWidget {
             subtitle: 'Agrega un abono por monto a la cuenta.',
           ),
           const SizedBox(height: 12),
+          if (disabledReason != null) ...[
+            Text(
+              disabledReason,
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           TextField(
-            controller: controller,
-            onChanged: (_) => onChanged(),
+            controller: widget.controller,
+            enabled: disabledReason == null,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
               labelText: 'Monto base a cubrir',
               helperText:
-                  'Pendiente maximo: \$${order.pendingTotal.toStringAsFixed(2)}',
+                  'Pendiente maximo: \$${widget.order.pendingTotal.toStringAsFixed(2)}',
             ),
           ),
-          if (amount > 0) ...[
+          if (_amount > 0) ...[
             const SizedBox(height: 12),
-            _ChargePreview(baseAmount: amount, method: method),
+            _ChargePreview(baseAmount: _amount, method: widget.method),
           ],
           const SizedBox(height: 12),
           GlassButton(
             icon: Icons.add_card_outlined,
             label: 'Agregar pago parcial',
             prominent: false,
-            onTap: busy ? null : onPay,
+            onTap: widget.busy || disabledReason != null ? null : widget.onPay,
           ),
         ],
       ),
@@ -670,6 +751,7 @@ class _PersonPaymentCard extends StatelessWidget {
     required this.items,
     required this.method,
     required this.busy,
+    required this.disabled,
     required this.onPay,
   });
 
@@ -678,6 +760,7 @@ class _PersonPaymentCard extends StatelessWidget {
   final List<OrderItem> items;
   final String method;
   final bool busy;
+  final bool disabled;
   final VoidCallback onPay;
 
   @override
@@ -731,7 +814,7 @@ class _PersonPaymentCard extends StatelessWidget {
                         ),
                       )
                     : OutlinedButton.icon(
-                        onPressed: busy ? null : onPay,
+                        onPressed: busy || disabled ? null : onPay,
                         icon: const Icon(Icons.payments_outlined),
                         label: const Text('Cobrar persona'),
                       ),

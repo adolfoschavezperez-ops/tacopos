@@ -174,7 +174,7 @@ class _OrderScreenState extends State<OrderScreen> {
         final order = orderSnapshot.data;
 
         return BrandedScaffold(
-          title: order?.tableName ?? widget.tableName,
+          title: order?.displayName ?? widget.tableName,
           actions: [
             StreamBuilder<List<OrderItem>>(
               stream: _itemsStream,
@@ -560,7 +560,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SectionHeader(
-                      title: widget.order.tableName,
+                      title: widget.order.displayName,
                       subtitle: 'Orden por personas',
                       trailing: StatusBadge(
                         style: kitchenStatusStyle(widget.order.kitchenStatus),

@@ -46,6 +46,19 @@ class DemoSeedService {
       }, SetOptions(merge: true));
     }
 
+    for (final platform in _orderPlatforms) {
+      final id = platform['id'] as String;
+      batch.set(
+        restaurantRef.collection('orderPlatforms').doc(id),
+        {
+          ...platform,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    }
+
     await batch.commit();
   }
 }
@@ -86,7 +99,7 @@ const _tables = [
   {
     'id': 'para_llevar',
     'name': 'Para llevar',
-    'type': 'takeout',
+    'type': 'takeout_entry',
     'status': 'available',
     'active': true,
     'sortOrder': 99,
@@ -96,6 +109,13 @@ const _tables = [
 const _employees = [
   {'id': 'ricardo_bernal', 'name': 'Ricardo Bernal', 'active': true},
   {'id': 'gael', 'name': 'Gael', 'active': true},
+];
+
+const _orderPlatforms = [
+  {'id': 'en_persona', 'name': 'En persona', 'active': true, 'sortOrder': 1},
+  {'id': 'didi', 'name': 'DiDi', 'active': true, 'sortOrder': 2},
+  {'id': 'uber', 'name': 'Uber', 'active': true, 'sortOrder': 3},
+  {'id': 'rappi', 'name': 'Rappi', 'active': true, 'sortOrder': 4},
 ];
 
 const _products = [

@@ -12,6 +12,11 @@ class PosOrder {
     required this.paidTotal,
     required this.pendingTotal,
     required this.personNames,
+    required this.orderType,
+    this.platformId,
+    this.platformName,
+    this.takeoutNumber,
+    this.customerName,
     this.createdAt,
     this.updatedAt,
     this.sentToKitchenAt,
@@ -28,6 +33,11 @@ class PosOrder {
   final double paidTotal;
   final double pendingTotal;
   final Map<int, String> personNames;
+  final String orderType;
+  final String? platformId;
+  final String? platformName;
+  final int? takeoutNumber;
+  final String? customerName;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? sentToKitchenAt;
@@ -47,6 +57,11 @@ class PosOrder {
       paidTotal: (data['paidTotal'] as num?)?.toDouble() ?? 0,
       pendingTotal: (data['pendingTotal'] as num?)?.toDouble() ?? 0,
       personNames: _readPersonNames(data['personNames']),
+      orderType: data['orderType'] as String? ?? 'dine_in',
+      platformId: data['platformId'] as String?,
+      platformName: data['platformName'] as String?,
+      takeoutNumber: (data['takeoutNumber'] as num?)?.toInt(),
+      customerName: data['customerName'] as String?,
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),
       sentToKitchenAt: _toDate(data['sentToKitchenAt']),
@@ -60,6 +75,18 @@ class PosOrder {
       return custom;
     }
     return 'Persona $personNumber';
+  }
+
+  String get displayName {
+    if (orderType == 'takeout') {
+      final platform = platformName?.trim();
+      final number = takeoutNumber == null ? '' : ' · #$takeoutNumber';
+      if (platform != null && platform.isNotEmpty) {
+        return 'Para llevar · $platform$number';
+      }
+      return 'Para llevar$number';
+    }
+    return tableName;
   }
 
   static Map<int, String> _readPersonNames(Object? value) {

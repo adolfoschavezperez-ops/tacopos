@@ -10,6 +10,7 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
 import 'order_screen.dart';
+import 'takeout_orders_screen.dart';
 
 class TablesScreen extends StatefulWidget {
   const TablesScreen({super.key});
@@ -23,6 +24,14 @@ class _TablesScreenState extends State<TablesScreen> {
   bool _opening = false;
 
   Future<void> _openTable(PosTable table) async {
+    if (table.type == 'takeout' || table.type == 'takeout_entry') {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const TakeoutOrdersScreen()),
+      );
+      return;
+    }
+
     if (_opening) {
       return;
     }
@@ -158,10 +167,11 @@ class _TableCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final status = tableStatusStyle(table.status);
-    final isTakeout = table.type == 'takeout';
+    final isTakeout = table.type == 'takeout' || table.type == 'takeout_entry';
+    final status = tableStatusStyle(isTakeout ? 'available' : table.status);
     final hasOrder =
-        table.currentOrderId != null || table.status != 'available';
+        !isTakeout &&
+        (table.currentOrderId != null || table.status != 'available');
 
     return GlassCard(
       onTap: onTap,
@@ -206,7 +216,11 @@ class _TableCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  hasOrder ? 'Orden abierta' : 'Lista para tomar orden',
+                  isTakeout
+                      ? 'Crear o abrir pedidos para llevar'
+                      : hasOrder
+                      ? 'Orden abierta'
+                      : 'Lista para tomar orden',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(

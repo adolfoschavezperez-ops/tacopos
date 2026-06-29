@@ -5,6 +5,7 @@ import '../core/constants/app_constants.dart';
 import '../models/employee.dart';
 import '../models/order.dart';
 import '../models/order_item.dart';
+import '../models/order_platform.dart';
 import '../models/payment.dart';
 import '../models/pos_table.dart';
 import '../models/product.dart';
@@ -78,6 +79,9 @@ class TacoPosRepository {
   CollectionReference<Map<String, dynamic>> get _employeesRef =>
       _restaurantRef.collection('employees');
 
+  CollectionReference<Map<String, dynamic>> get _platformsRef =>
+      _restaurantRef.collection('orderPlatforms');
+
   CollectionReference<Map<String, dynamic>> get _ordersRef =>
       _restaurantRef.collection('orders');
 
@@ -89,6 +93,43 @@ class TacoPosRepository {
           ? tables.where((table) => table.active).toList()
           : tables;
     });
+  }
+
+  Stream<List<OrderPlatform>> watchOrderPlatforms({bool activeOnly = true}) {
+    return _platformsRef.snapshots().map((snapshot) {
+      final platforms = snapshot.docs.map(OrderPlatform.fromDoc).toList()
+        ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+      return activeOnly
+          ? platforms.where((platform) => platform.active).toList()
+          : platforms;
+    });
+  }
+
+  Future<void> ensureDefaultOrderPlatforms() async {
+    final snapshot = await _platformsRef.limit(1).get();
+    if (snapshot.docs.isNotEmpty) {
+      return;
+    }
+
+    final batch = _db.batch();
+    const defaults = [
+      {'id': 'en_persona', 'name': 'En persona', 'sortOrder': 1},
+      {'id': 'didi', 'name': 'DiDi', 'sortOrder': 2},
+      {'id': 'uber', 'name': 'Uber', 'sortOrder': 3},
+      {'id': 'rappi', 'name': 'Rappi', 'sortOrder': 4},
+    ];
+
+    for (final platform in defaults) {
+      final id = platform['id']! as String;
+      batch.set(_platformsRef.doc(id), {
+        ...platform,
+        'active': true,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
+    await batch.commit();
   }
 
   Stream<List<Product>> watchProducts({bool activeOnly = false}) {
@@ -122,6 +163,28 @@ class TacoPosRepository {
           snapshot.docs
               .map(PosOrder.fromDoc)
               .where((order) => order.status != 'paid')
+              .toList()
+            ..sort((a, b) {
+              final aDate =
+                  a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+              final bDate =
+                  b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+              return bDate.compareTo(aDate);
+            });
+      return orders;
+    });
+  }
+
+  Stream<List<PosOrder>> watchOpenTakeoutOrders() {
+    return _ordersRef.snapshots().map((snapshot) {
+      final orders =
+          snapshot.docs
+              .map(PosOrder.fromDoc)
+              .where(
+                (order) =>
+                    order.orderType == 'takeout' &&
+                    !['paid', 'cancelled'].contains(order.status),
+              )
               .toList()
             ..sort((a, b) {
               final aDate =
@@ -291,6 +354,7 @@ class TacoPosRepository {
     final data = {
       'tableId': table.id,
       'tableName': table.name,
+      'orderType': 'dine_in',
       'status': 'open',
       'kitchenStatus': 'pending',
       'paymentStatus': 'pending',
@@ -314,6 +378,51 @@ class TacoPosRepository {
 
     final doc = await orderRef.get();
     return PosOrder.fromDoc(doc);
+  }
+
+  Future<PosOrder> createTakeoutOrder({
+    required OrderPlatform platform,
+    String? customerName,
+  }) async {
+    final orderRef = _ordersRef.doc();
+    final takeoutNumber = await _nextTakeoutNumber();
+    final cleanCustomer = customerName?.trim();
+    final data = {
+      'tableId': 'takeout',
+      'tableName': 'Para llevar',
+      'orderType': 'takeout',
+      'platformId': platform.id,
+      'platformName': platform.name,
+      'takeoutNumber': takeoutNumber,
+      if (cleanCustomer != null && cleanCustomer.isNotEmpty)
+        'customerName': cleanCustomer,
+      'status': 'open',
+      'kitchenStatus': 'pending',
+      'paymentStatus': 'pending',
+      'total': 0.0,
+      'paidTotal': 0.0,
+      'pendingTotal': 0.0,
+      'personNames': {'1': 'Persona 1'},
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
+    await orderRef.set(data);
+    final doc = await orderRef.get();
+    return PosOrder.fromDoc(doc);
+  }
+
+  Future<int> _nextTakeoutNumber() async {
+    final snapshot = await _ordersRef.get();
+    var maxNumber = 0;
+    for (final doc in snapshot.docs) {
+      final number = (doc.data()['takeoutNumber'] as num?)?.toInt() ?? 0;
+      if (number > maxNumber) {
+        maxNumber = number;
+      }
+    }
+    return maxNumber + 1;
   }
 
   Future<void> addProductToOrder({
@@ -484,7 +593,9 @@ class TacoPosRepository {
     }
 
     final orderDoc = await _ordersRef.doc(orderId).get();
-    final tableId = orderDoc.data()?['tableId'] as String?;
+    final orderData = orderDoc.data();
+    final tableId = orderData?['tableId'] as String?;
+    final orderType = orderData?['orderType'] as String? ?? 'dine_in';
     batch.update(_ordersRef.doc(orderId), {
       'status': 'sent',
       'kitchenStatus': 'sent',
@@ -492,7 +603,7 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    if (tableId != null) {
+    if (tableId != null && orderType != 'takeout') {
       batch.set(_tablesRef.doc(tableId), {
         'status': 'sent',
         'updatedAt': FieldValue.serverTimestamp(),
@@ -536,7 +647,9 @@ class TacoPosRepository {
     }
 
     final orderDoc = await _ordersRef.doc(orderId).get();
-    final tableId = orderDoc.data()?['tableId'] as String?;
+    final orderData = orderDoc.data();
+    final tableId = orderData?['tableId'] as String?;
+    final orderType = orderData?['orderType'] as String? ?? 'dine_in';
     final orderStatus = normalizedStatus == 'ready' ? 'ready' : 'sent';
 
     batch.update(_ordersRef.doc(orderId), {
@@ -545,7 +658,7 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    if (tableId != null) {
+    if (tableId != null && orderType != 'takeout') {
       batch.set(_tablesRef.doc(tableId), {
         'status': orderStatus,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -596,7 +709,9 @@ class TacoPosRepository {
     }
 
     final orderDoc = await _ordersRef.doc(orderId).get();
-    final tableId = orderDoc.data()?['tableId'] as String?;
+    final orderData = orderDoc.data();
+    final tableId = orderData?['tableId'] as String?;
+    final orderType = orderData?['orderType'] as String? ?? 'dine_in';
     final kitchenStatus = _aggregateKitchenStatus(
       allItems: allItems,
       changedIds: changedIds,
@@ -612,7 +727,7 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    if (tableId != null) {
+    if (tableId != null && orderType != 'takeout') {
       batch.set(_tablesRef.doc(tableId), {
         'status': orderStatus,
         'updatedAt': FieldValue.serverTimestamp(),
@@ -674,6 +789,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    await _ensureNoPaymentType(orderId, blockedType: 'person');
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -731,6 +847,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    await _ensureNoPaymentType(orderId, blockedType: 'partial');
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -801,6 +918,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    await _ensureNoPaymentType(orderId, blockedType: 'person');
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -885,11 +1003,13 @@ class TacoPosRepository {
       'paidAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
-    batch.set(_tablesRef.doc(order.tableId), {
-      'status': 'available',
-      'currentOrderId': FieldValue.delete(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    if (order.orderType != 'takeout') {
+      batch.set(_tablesRef.doc(order.tableId), {
+        'status': 'available',
+        'currentOrderId': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
   }
 
   void _setPayment({
@@ -953,6 +1073,26 @@ class TacoPosRepository {
     }
   }
 
+  Future<void> _ensureNoPaymentType(
+    String orderId, {
+    required String blockedType,
+  }) async {
+    final paymentsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .get();
+    final hasBlockedType = paymentsSnapshot.docs
+        .map(Payment.fromDoc)
+        .any((payment) => payment.type == blockedType);
+
+    if (hasBlockedType) {
+      final message = blockedType == 'partial'
+          ? 'Esta cuenta ya tiene pagos parciales. Termina el cobro por parcialidades.'
+          : 'Esta cuenta ya inicio cobro por persona. Termina el cobro por persona.';
+      throw StateError(message);
+    }
+  }
+
   Future<void> recalculateOrderTotal(String orderId) async {
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
@@ -1003,6 +1143,61 @@ class TacoPosRepository {
       'sortOrder': current.docs.length + 1,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  Future<void> saveTable({
+    String? tableId,
+    required String name,
+    required String type,
+    required bool active,
+    required int sortOrder,
+  }) async {
+    final docRef = tableId == null ? _tablesRef.doc() : _tablesRef.doc(tableId);
+
+    await docRef.set({
+      'id': docRef.id,
+      'name': name.trim(),
+      'type': type,
+      'active': active,
+      'sortOrder': sortOrder,
+      if (tableId == null) 'status': 'available',
+      if (tableId == null) 'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> toggleTable(PosTable table) async {
+    await _tablesRef.doc(table.id).update({
+      'active': !table.active,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> saveOrderPlatform({
+    String? platformId,
+    required String name,
+    required bool active,
+    required int sortOrder,
+  }) async {
+    final docRef = platformId == null
+        ? _platformsRef.doc()
+        : _platformsRef.doc(platformId);
+
+    await docRef.set({
+      'id': docRef.id,
+      'name': name.trim(),
+      'active': active,
+      'sortOrder': sortOrder,
+      if (platformId == null) 'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> toggleOrderPlatform(OrderPlatform platform) async {
+    await _platformsRef.doc(platform.id).update({
+      'active': !platform.active,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   Future<void> toggleProduct(Product product) async {

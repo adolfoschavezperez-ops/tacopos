@@ -137,7 +137,7 @@ class _KitchenOrderCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  order.tableName,
+                  order.displayName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
