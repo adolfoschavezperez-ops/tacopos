@@ -484,6 +484,115 @@ class TacoPosRepository {
     await batch.commit();
   }
 
+  Future<void> updateKitchenItemsStatus({
+    required String orderId,
+    required Iterable<String> itemIds,
+    required String status,
+  }) async {
+    final normalizedStatus = status == 'preparing' ? 'cooking' : status;
+    final targetIds = itemIds.toSet();
+    if (targetIds.isEmpty) {
+      return;
+    }
+
+    final itemsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('items')
+        .get();
+    final allItems = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    final batch = _db.batch();
+    final changedIds = <String>{};
+
+    for (final doc in itemsSnapshot.docs) {
+      final item = OrderItem.fromDoc(doc);
+      if (targetIds.contains(item.id) &&
+          item.sendToKitchen &&
+          ['sent', 'cooking'].contains(item.kitchenStatus)) {
+        changedIds.add(item.id);
+        batch.update(doc.reference, {
+          'kitchenStatus': normalizedStatus,
+          if (normalizedStatus == 'cooking')
+            'cookingAt': FieldValue.serverTimestamp(),
+          if (normalizedStatus == 'ready')
+            'readyAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    if (changedIds.isEmpty) {
+      return;
+    }
+
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    final tableId = orderDoc.data()?['tableId'] as String?;
+    final kitchenStatus = _aggregateKitchenStatus(
+      allItems: allItems,
+      changedIds: changedIds,
+      changedStatus: normalizedStatus,
+    );
+    final orderStatus = ['ready', 'not_required'].contains(kitchenStatus)
+        ? 'ready'
+        : 'sent';
+
+    batch.update(_ordersRef.doc(orderId), {
+      'status': orderStatus,
+      'kitchenStatus': kitchenStatus,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (tableId != null) {
+      batch.set(_tablesRef.doc(tableId), {
+        'status': orderStatus,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
+    await batch.commit();
+  }
+
+  String _aggregateKitchenStatus({
+    required List<OrderItem> allItems,
+    required Set<String> changedIds,
+    required String changedStatus,
+  }) {
+    var hasPending = false;
+    var hasSent = false;
+    var hasCooking = false;
+    var hasReady = false;
+
+    for (final item in allItems.where((item) => item.sendToKitchen)) {
+      final status = changedIds.contains(item.id)
+          ? changedStatus
+          : item.kitchenStatus;
+
+      switch (status) {
+        case 'cooking':
+          hasCooking = true;
+        case 'sent':
+          hasSent = true;
+        case 'pending':
+          hasPending = true;
+        case 'ready':
+          hasReady = true;
+      }
+    }
+
+    if (hasCooking) {
+      return 'cooking';
+    }
+    if (hasSent) {
+      return 'sent';
+    }
+    if (hasPending) {
+      return 'pending';
+    }
+    if (hasReady) {
+      return 'ready';
+    }
+    return 'not_required';
+  }
+
   Future<void> markActiveKitchenItemsCooking(String orderId) {
     return updateKitchenStatus(orderId: orderId, status: 'cooking');
   }
@@ -802,6 +911,31 @@ class TacoPosRepository {
   Future<void> toggleProduct(Product product) async {
     await _productsRef.doc(product.id).update({
       'active': !product.active,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> saveEmployee({
+    String? employeeId,
+    required String name,
+    required bool active,
+  }) async {
+    final docRef = employeeId == null
+        ? _employeesRef.doc()
+        : _employeesRef.doc(employeeId);
+
+    await docRef.set({
+      'id': docRef.id,
+      'name': name.trim(),
+      'active': active,
+      if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> toggleEmployee(Employee employee) async {
+    await _employeesRef.doc(employee.id).update({
+      'active': !employee.active,
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }

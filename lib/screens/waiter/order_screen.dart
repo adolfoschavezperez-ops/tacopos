@@ -30,6 +30,7 @@ class OrderScreen extends StatefulWidget {
 
 class _OrderScreenState extends State<OrderScreen> {
   final _repository = TacoPosRepository();
+  late final Stream<PosOrder?> _orderStream;
   late final Stream<List<OrderItem>> _itemsStream;
   late final Stream<List<Product>> _productsStream;
   int _selectedPerson = 1;
@@ -40,6 +41,7 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   void initState() {
     super.initState();
+    _orderStream = _repository.watchOrder(widget.orderId);
     _itemsStream = _repository.watchOrderItems(widget.orderId);
     _productsStream = _repository.watchProducts(activeOnly: true);
   }
@@ -102,7 +104,7 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<PosOrder?>(
-      stream: _repository.watchOrder(widget.orderId),
+      stream: _orderStream,
       builder: (context, orderSnapshot) {
         final order = orderSnapshot.data;
 
@@ -130,16 +132,16 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Widget _buildBody(AsyncSnapshot<PosOrder?> orderSnapshot) {
-    if (orderSnapshot.connectionState == ConnectionState.waiting) {
-      return const LoadingPanel(message: 'Abriendo orden...');
-    }
-
     if (orderSnapshot.hasError) {
       return EmptyState(
         icon: Icons.error_outline,
         title: 'No se pudo cargar la orden',
         message: '${orderSnapshot.error}',
       );
+    }
+
+    if (orderSnapshot.connectionState == ConnectionState.waiting) {
+      return const LoadingPanel(message: 'Abriendo orden...');
     }
 
     final order = orderSnapshot.data;
@@ -154,19 +156,27 @@ class _OrderScreenState extends State<OrderScreen> {
     return StreamBuilder<List<OrderItem>>(
       stream: _itemsStream,
       builder: (context, itemsSnapshot) {
+        if (itemsSnapshot.hasError) {
+          return EmptyState(
+            icon: Icons.error_outline,
+            title: 'No se pudieron cargar los articulos',
+            message: '${itemsSnapshot.error}',
+          );
+        }
+
         if (itemsSnapshot.connectionState == ConnectionState.waiting) {
-          return const LoadingPanel(message: 'Cargando productos...');
+          return const LoadingPanel(message: 'Cargando articulos...');
         }
 
         final items = itemsSnapshot.data ?? [];
-        final maxPerson = items.fold<int>(
-          _personCount,
+        final maxPersonFromItems = items.fold<int>(
+          1,
           (max, item) => item.personNumber > max ? item.personNumber : max,
         );
-        _personCount = maxPerson < 1 ? 1 : maxPerson;
-        if (_selectedPerson > _personCount) {
-          _selectedPerson = _personCount;
-        }
+        final personCount = _personCount > maxPersonFromItems
+            ? _personCount
+            : maxPersonFromItems;
+        final selectedPerson = _selectedPerson.clamp(1, personCount).toInt();
 
         return LayoutBuilder(
           builder: (context, constraints) {
@@ -174,8 +184,8 @@ class _OrderScreenState extends State<OrderScreen> {
             final summary = _OrderSummary(
               order: order,
               items: items,
-              personCount: _personCount,
-              selectedPerson: _selectedPerson,
+              personCount: personCount,
+              selectedPerson: selectedPerson,
               onSelectPerson: (person) {
                 setState(() {
                   _selectedPerson = person;
@@ -203,7 +213,7 @@ class _OrderScreenState extends State<OrderScreen> {
               onAddProduct: (product) => _repository.addProductToOrder(
                 orderId: widget.orderId,
                 product: product,
-                personNumber: _selectedPerson,
+                personNumber: selectedPerson,
               ),
             );
 
@@ -628,16 +638,24 @@ class _ProductMenu extends StatelessWidget {
     return StreamBuilder<List<Product>>(
       stream: productsStream,
       builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return EmptyState(
+            icon: Icons.error_outline,
+            title: 'No se pudieron cargar los productos',
+            message: '${snapshot.error}',
+          );
+        }
+
         if (snapshot.connectionState == ConnectionState.waiting) {
-          return const LoadingPanel(message: 'Cargando menu...');
+          return const LoadingPanel(message: 'Cargando productos...');
         }
 
         final products = snapshot.data ?? [];
         if (products.isEmpty) {
           return const EmptyState(
             icon: Icons.restaurant_menu,
-            title: 'Menu vacio',
-            message: 'Crea datos demo o agrega productos en Admin.',
+            title: 'No hay productos activos',
+            message: 'Agrega o activa productos desde el catalogo de Admin.',
           );
         }
 

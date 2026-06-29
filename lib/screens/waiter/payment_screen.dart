@@ -8,6 +8,7 @@ import '../../models/order_item.dart';
 import '../../models/payment.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
+import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
@@ -199,6 +200,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
       body: StreamBuilder<PosOrder?>(
         stream: _repository.watchOrder(widget.orderId),
         builder: (context, orderSnapshot) {
+          if (orderSnapshot.hasError) {
+            return EmptyState(
+              icon: Icons.error_outline,
+              title: 'No se pudo cargar la cuenta',
+              message: '${orderSnapshot.error}',
+            );
+          }
+
           final order = orderSnapshot.data;
           if (orderSnapshot.connectionState == ConnectionState.waiting ||
               order == null) {
@@ -208,14 +217,38 @@ class _PaymentScreenState extends State<PaymentScreen> {
           return StreamBuilder<List<OrderItem>>(
             stream: _repository.watchOrderItems(widget.orderId),
             builder: (context, itemSnapshot) {
+              if (itemSnapshot.hasError) {
+                return EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'No se pudieron cargar articulos',
+                  message: '${itemSnapshot.error}',
+                );
+              }
+
               final items = itemSnapshot.data ?? [];
               return StreamBuilder<List<Employee>>(
                 stream: _repository.watchEmployees(),
                 builder: (context, employeeSnapshot) {
+                  if (employeeSnapshot.hasError) {
+                    return EmptyState(
+                      icon: Icons.error_outline,
+                      title: 'No se pudieron cargar empleados',
+                      message: '${employeeSnapshot.error}',
+                    );
+                  }
+
                   final employees = employeeSnapshot.data ?? [];
                   return StreamBuilder<List<Payment>>(
                     stream: _repository.watchOrderPayments(widget.orderId),
                     builder: (context, paymentSnapshot) {
+                      if (paymentSnapshot.hasError) {
+                        return EmptyState(
+                          icon: Icons.error_outline,
+                          title: 'No se pudieron cargar pagos',
+                          message: '${paymentSnapshot.error}',
+                        );
+                      }
+
                       final payments = paymentSnapshot.data ?? [];
 
                       return ListView(

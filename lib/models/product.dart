@@ -21,21 +21,78 @@ class Product {
 
   factory Product.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
+    final category = _readString(data['category'], 'General');
 
     return Product(
       id: doc.id,
-      name: data['name'] as String? ?? doc.id,
-      category: data['category'] as String? ?? 'General',
-      price: (data['price'] as num?)?.toDouble() ?? 0,
-      active: data['active'] as bool? ?? true,
-      sendToKitchen:
-          data['sendToKitchen'] as bool? ?? _defaultSendToKitchen(data),
-      sortOrder: (data['sortOrder'] as num?)?.toInt() ?? 0,
+      name: _readString(data['name'], doc.id),
+      category: category,
+      price: _readDouble(data['price']),
+      active: _readBool(data['active'], fallback: true),
+      sendToKitchen: _readBool(
+        data['sendToKitchen'],
+        fallback: _defaultSendToKitchen(category),
+      ),
+      sortOrder: _readInt(data['sortOrder']),
     );
   }
 
-  static bool _defaultSendToKitchen(Map<String, dynamic> data) {
-    final category = (data['category'] as String? ?? '').toLowerCase().trim();
+  static String _readString(Object? value, String fallback) {
+    if (value is String && value.trim().isNotEmpty) {
+      return value.trim();
+    }
+
+    return fallback;
+  }
+
+  static double _readDouble(Object? value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    if (value is String) {
+      return double.tryParse(value.replaceAll(',', '.')) ?? 0;
+    }
+
+    return 0;
+  }
+
+  static int _readInt(Object? value) {
+    if (value is num) {
+      return value.toInt();
+    }
+
+    if (value is String) {
+      return int.tryParse(value) ?? 0;
+    }
+
+    return 0;
+  }
+
+  static bool _readBool(Object? value, {required bool fallback}) {
+    if (value is bool) {
+      return value;
+    }
+
+    if (value is num) {
+      return value != 0;
+    }
+
+    if (value is String) {
+      final normalized = value.toLowerCase().trim();
+      if (['true', '1', 'yes', 'si'].contains(normalized)) {
+        return true;
+      }
+      if (['false', '0', 'no'].contains(normalized)) {
+        return false;
+      }
+    }
+
+    return fallback;
+  }
+
+  static bool _defaultSendToKitchen(String category) {
+    category = category.toLowerCase().trim();
     return category != 'bebidas';
   }
 }

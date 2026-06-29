@@ -1,9 +1,7 @@
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
-import '../services/demo_seed_service.dart';
 import '../widgets/glass.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'kitchen/kitchen_screen.dart';
@@ -19,45 +17,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _seedService = DemoSeedService();
-  bool _loading = false;
-  String _message = '';
-
-  User? get _user => FirebaseAuth.instance.currentUser;
-
-  Future<void> _createDemoData() async {
-    setState(() {
-      _loading = true;
-      _message = '';
-    });
-
-    try {
-      await _seedService.createDemoData();
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _message = 'Datos demo creados correctamente.';
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _message = 'Error: $error';
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-        });
-      }
-    }
-  }
-
   void _openMode(AppMode mode) {
     final Widget screen = switch (mode) {
       AppMode.waiterCashier => const TablesScreen(),
@@ -70,8 +29,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final uid = _user?.uid ?? 'Sin usuario';
-
     return Scaffold(
       body: PremiumBackground(
         child: SafeArea(
@@ -99,13 +56,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 const SizedBox(width: 34),
                                 Expanded(
                                   flex: 9,
-                                  child: _ModePanel(
-                                    uid: uid,
-                                    loading: _loading,
-                                    message: _message,
-                                    onSeed: _createDemoData,
-                                    onOpenMode: _openMode,
-                                  ),
+                                  child: _ModePanel(onOpenMode: _openMode),
                                 ),
                               ],
                             )
@@ -114,13 +65,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               children: [
                                 const _HeroBlock(),
                                 const SizedBox(height: 24),
-                                _ModePanel(
-                                  uid: uid,
-                                  loading: _loading,
-                                  message: _message,
-                                  onSeed: _createDemoData,
-                                  onOpenMode: _openMode,
-                                ),
+                                _ModePanel(onOpenMode: _openMode),
                               ],
                             ),
                     ),
@@ -200,18 +145,8 @@ class _HeroBlock extends StatelessWidget {
 }
 
 class _ModePanel extends StatelessWidget {
-  const _ModePanel({
-    required this.uid,
-    required this.loading,
-    required this.message,
-    required this.onSeed,
-    required this.onOpenMode,
-  });
+  const _ModePanel({required this.onOpenMode});
 
-  final String uid;
-  final bool loading;
-  final String message;
-  final VoidCallback onSeed;
   final ValueChanged<AppMode> onOpenMode;
 
   @override
@@ -248,51 +183,9 @@ class _ModePanel extends StatelessWidget {
             subtitle: 'Metricas y catalogo de productos',
             onTap: () => onOpenMode(AppMode.admin),
           ),
-          const SizedBox(height: 18),
-          GlassButton(
-            icon: loading ? Icons.hourglass_top : Icons.cloud_upload_outlined,
-            label: loading ? 'Creando datos...' : 'Crear datos demo',
-            onTap: loading ? null : onSeed,
-            prominent: true,
-          ),
-          if (message.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: message.startsWith('Error')
-                    ? BrandColors.danger
-                    : BrandColors.success,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-          const SizedBox(height: 14),
-          Text(
-            'Firebase conectado | ${_shortUid(uid)}',
-            textAlign: TextAlign.center,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: BrandColors.textMuted,
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
         ],
       ),
     );
-  }
-
-  String _shortUid(String uid) {
-    if (uid.length <= 12) {
-      return uid;
-    }
-
-    return '${uid.substring(0, 6)}...${uid.substring(uid.length - 4)}';
   }
 }
 

@@ -6,6 +6,7 @@ import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
@@ -33,12 +34,17 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     });
   }
 
-  Future<void> _markReady() async {
+  Future<void> _markReady(
+    List<OrderItem> visibleItems, {
+    required bool closeAfter,
+  }) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Marcar comanda lista'),
-        content: const Text('La comanda saldra de la lista activa de cocina.'),
+        title: const Text('Marcar persona lista'),
+        content: const Text(
+          'Solo se marcaran listos los productos visibles de esta persona.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -57,11 +63,12 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     }
 
     await _run(() {
-      return _repository.updateKitchenStatus(
+      return _repository.updateKitchenItemsStatus(
         orderId: widget.orderId,
+        itemIds: visibleItems.map((item) => item.id),
         status: 'ready',
       );
-    }, popAfter: true);
+    }, popAfter: closeAfter);
   }
 
   Future<void> _run(
@@ -98,6 +105,14 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
           child: StreamBuilder<PosOrder?>(
             stream: _repository.watchOrder(widget.orderId),
             builder: (context, orderSnapshot) {
+              if (orderSnapshot.hasError) {
+                return EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'No se pudo abrir la comanda',
+                  message: '${orderSnapshot.error}',
+                );
+              }
+
               final order = orderSnapshot.data;
               if (orderSnapshot.connectionState == ConnectionState.waiting ||
                   order == null) {
@@ -107,6 +122,14 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
               return StreamBuilder<List<OrderItem>>(
                 stream: _repository.watchKitchenItems(widget.orderId),
                 builder: (context, itemSnapshot) {
+                  if (itemSnapshot.hasError) {
+                    return EmptyState(
+                      icon: Icons.error_outline,
+                      title: 'No se pudieron cargar articulos de cocina',
+                      message: '${itemSnapshot.error}',
+                    );
+                  }
+
                   final items = itemSnapshot.data ?? [];
                   final grouped = <int, List<OrderItem>>{};
                   for (final item in items) {
@@ -250,7 +273,13 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                             Expanded(
                               flex: 2,
                               child: FilledButton.icon(
-                                onPressed: _busy ? null : _markReady,
+                                onPressed: _busy
+                                    ? null
+                                    : () => _markReady(
+                                        personItems,
+                                        closeAfter:
+                                            items.length == personItems.length,
+                                      ),
                                 icon: const Icon(Icons.check_circle_outline),
                                 label: const Text('Listo'),
                               ),

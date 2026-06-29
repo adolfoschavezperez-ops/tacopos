@@ -23,16 +23,16 @@ class KitchenScreen extends StatelessWidget {
       body: StreamBuilder<List<KitchenOrderBundle>>(
         stream: repository.watchKitchenOrderBundles(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const LoadingPanel(message: 'Cargando comandas...');
-          }
-
           if (snapshot.hasError) {
             return EmptyState(
               icon: Icons.error_outline,
               title: 'No se pudieron cargar comandas',
               message: '${snapshot.error}',
             );
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const LoadingPanel(message: 'Cargando comandas...');
           }
 
           final bundles = snapshot.data ?? [];

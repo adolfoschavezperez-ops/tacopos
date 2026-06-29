@@ -28,10 +28,6 @@ class ProductCatalogScreen extends StatelessWidget {
       body: StreamBuilder<List<Product>>(
         stream: repository.watchProducts(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const LoadingPanel(message: 'Cargando catalogo...');
-          }
-
           if (snapshot.hasError) {
             return EmptyState(
               icon: Icons.error_outline,
@@ -40,12 +36,16 @@ class ProductCatalogScreen extends StatelessWidget {
             );
           }
 
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const LoadingPanel(message: 'Cargando catalogo...');
+          }
+
           final products = snapshot.data ?? [];
           if (products.isEmpty) {
             return const EmptyState(
               icon: Icons.restaurant_menu,
               title: 'Catalogo vacio',
-              message: 'Agrega productos o crea datos demo desde el inicio.',
+              message: 'Agrega productos para que aparezcan en Mesero / Caja.',
             );
           }
 

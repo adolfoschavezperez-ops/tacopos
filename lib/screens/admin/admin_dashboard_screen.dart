@@ -6,9 +6,11 @@ import '../../models/payment.dart';
 import '../../models/product.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
+import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
+import 'employee_catalog_screen.dart';
 import 'product_catalog_screen.dart';
 
 class AdminDashboardScreen extends StatelessWidget {
@@ -22,7 +24,7 @@ class AdminDashboardScreen extends StatelessWidget {
       title: 'Socio / Admin',
       actions: [
         IconButton(
-          tooltip: 'Catalogo',
+          tooltip: 'Productos',
           onPressed: () {
             Navigator.push(
               context,
@@ -31,10 +33,28 @@ class AdminDashboardScreen extends StatelessWidget {
           },
           icon: const Icon(Icons.restaurant_menu),
         ),
+        IconButton(
+          tooltip: 'Empleados',
+          onPressed: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const EmployeeCatalogScreen()),
+            );
+          },
+          icon: const Icon(Icons.badge_outlined),
+        ),
       ],
       body: StreamBuilder<List<PosOrder>>(
         stream: repository.watchAllOrders(),
         builder: (context, ordersSnapshot) {
+          if (ordersSnapshot.hasError) {
+            return EmptyState(
+              icon: Icons.error_outline,
+              title: 'No se pudieron cargar ordenes',
+              message: '${ordersSnapshot.error}',
+            );
+          }
+
           if (ordersSnapshot.connectionState == ConnectionState.waiting) {
             return const LoadingPanel(message: 'Cargando dashboard...');
           }
@@ -44,6 +64,14 @@ class AdminDashboardScreen extends StatelessWidget {
           return StreamBuilder<List<Payment>>(
             stream: repository.watchPayments(),
             builder: (context, paymentsSnapshot) {
+              if (paymentsSnapshot.hasError) {
+                return EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'No se pudieron cargar pagos',
+                  message: '${paymentsSnapshot.error}',
+                );
+              }
+
               final payments = _todayPayments(paymentsSnapshot.data ?? []);
               final baseSales = payments.fold<double>(
                 0,
@@ -88,6 +116,14 @@ class AdminDashboardScreen extends StatelessWidget {
               return StreamBuilder<List<Product>>(
                 stream: repository.watchProducts(),
                 builder: (context, productsSnapshot) {
+                  if (productsSnapshot.hasError) {
+                    return EmptyState(
+                      icon: Icons.error_outline,
+                      title: 'No se pudieron cargar productos',
+                      message: '${productsSnapshot.error}',
+                    );
+                  }
+
                   final products = productsSnapshot.data ?? [];
                   final activeProducts = products
                       .where((product) => product.active)
@@ -267,6 +303,66 @@ class AdminDashboardScreen extends StatelessWidget {
                                   MaterialPageRoute(
                                     builder: (_) =>
                                         const ProductCatalogScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      GlassPanel(
+                        padding: const EdgeInsets.all(18),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                color: BrandColors.glassHighlight,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: const Icon(
+                                Icons.badge_outlined,
+                                color: BrandColors.info,
+                                size: 30,
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Catalogo de empleados',
+                                    style: TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Ver, agregar, editar y activar empleados para consumo empleado.',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: BrandColors.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            GlassButton(
+                              icon: Icons.arrow_forward,
+                              label: 'Abrir',
+                              prominent: true,
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        const EmployeeCatalogScreen(),
                                   ),
                                 );
                               },

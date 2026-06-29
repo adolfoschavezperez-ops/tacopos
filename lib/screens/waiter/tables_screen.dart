@@ -81,10 +81,6 @@ class _TablesScreenState extends State<TablesScreen> {
       body: StreamBuilder<List<PosTable>>(
         stream: _repository.watchTables(),
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const LoadingPanel(message: 'Cargando mesas...');
-          }
-
           if (snapshot.hasError) {
             return EmptyState(
               icon: Icons.error_outline,
@@ -93,12 +89,16 @@ class _TablesScreenState extends State<TablesScreen> {
             );
           }
 
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const LoadingPanel(message: 'Cargando mesas...');
+          }
+
           final tables = snapshot.data ?? [];
           if (tables.isEmpty) {
             return const EmptyState(
               icon: Icons.table_restaurant,
               title: 'Aun no hay mesas',
-              message: 'Crea los datos demo desde la pantalla inicial.',
+              message: 'Configura mesas activas en Firestore.',
             );
           }
 
