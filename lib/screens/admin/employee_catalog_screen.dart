@@ -149,6 +149,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canManagePlatforms;
   late bool _canManageEmployees;
   late bool _canManageCash;
+  late bool _canAuthorizeCashWithdrawals;
   bool _saving = false;
   String _error = '';
 
@@ -167,6 +168,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canManagePlatforms = widget.employee?.canManagePlatforms ?? false;
     _canManageEmployees = widget.employee?.canManageEmployees ?? false;
     _canManageCash = widget.employee?.canManageCash ?? false;
+    _canAuthorizeCashWithdrawals =
+        widget.employee?.canAuthorizeCashWithdrawals ?? false;
   }
 
   @override
@@ -213,6 +216,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canManagePlatforms: _canManagePlatforms,
         canManageEmployees: _canManageEmployees,
         canManageCash: _canManageCash,
+        canAuthorizeCashWithdrawals: _canAuthorizeCashWithdrawals,
       );
     } catch (error) {
       if (!mounted) {
@@ -342,6 +346,13 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 enabled: !_saving,
                 onChanged: (value) =>
                     setState(() => _canManageEmployees = value),
+              ),
+              _PermissionSwitch(
+                title: 'Autorizar retiros de caja',
+                value: _canAuthorizeCashWithdrawals,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canAuthorizeCashWithdrawals = value),
               ),
               if (_error.isNotEmpty) ...[
                 const SizedBox(height: 8),
@@ -476,6 +487,7 @@ class _EmployeeAdminTile extends StatelessWidget {
       if (employee.canTakeOrders) 'Pedidos',
       if (employee.canCharge) 'Cobro',
       if (employee.canManageCash) 'Caja',
+      if (employee.canAuthorizeCashWithdrawals) 'Retiros',
       if (employee.canViewKitchen) 'Cocina',
       if (employee.canViewAdmin) 'Admin',
     ];

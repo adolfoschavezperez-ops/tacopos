@@ -128,6 +128,7 @@ const _employees = [
     'canManagePlatforms': true,
     'canManageEmployees': true,
     'canManageCash': true,
+    'canAuthorizeCashWithdrawals': true,
   },
   {
     'id': 'ricardo_bernal',
@@ -143,6 +144,7 @@ const _employees = [
     'canManagePlatforms': false,
     'canManageEmployees': false,
     'canManageCash': false,
+    'canAuthorizeCashWithdrawals': false,
   },
   {
     'id': 'gael',
@@ -158,6 +160,7 @@ const _employees = [
     'canManagePlatforms': false,
     'canManageEmployees': false,
     'canManageCash': false,
+    'canAuthorizeCashWithdrawals': false,
   },
 ];
 

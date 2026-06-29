@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
+import '../../models/cash_withdrawal_request.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
@@ -114,6 +115,20 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
     }
   }
 
+  Future<void> _requestWithdrawal(CashSession session) async {
+    final sent = await showDialog<bool>(
+      context: context,
+      builder: (_) =>
+          _WithdrawalRequestDialog(repository: _repository, session: session),
+    );
+
+    if (!mounted || sent != true) {
+      return;
+    }
+
+    _showMessage('Solicitud enviada. Pendiente de autorizacion.');
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(
       context,
@@ -185,8 +200,13 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
                 _OpenSessionPanel(
                   session: session,
                   canManageCash: employee?.canManageCash == true,
+                  canRequestWithdrawal:
+                      employee?.canCharge == true ||
+                      employee?.canManageCash == true,
+                  currentEmployeeId: employee?.id ?? '',
                   repository: _repository,
                   onClose: () => _closeCashSession(session),
+                  onRequestWithdrawal: () => _requestWithdrawal(session),
                 ),
             ],
           );
@@ -268,29 +288,41 @@ class _OpenSessionPanel extends StatelessWidget {
   const _OpenSessionPanel({
     required this.session,
     required this.canManageCash,
+    required this.canRequestWithdrawal,
+    required this.currentEmployeeId,
     required this.repository,
     required this.onClose,
+    required this.onRequestWithdrawal,
   });
 
   final CashSession session;
   final bool canManageCash;
+  final bool canRequestWithdrawal;
+  final String currentEmployeeId;
   final TacoPosRepository repository;
   final VoidCallback onClose;
+  final VoidCallback onRequestWithdrawal;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<CashSessionTotals>(
-      stream: repository.watchCashSessionTotals(session.id),
+    return StreamBuilder<List<CashWithdrawalRequest>>(
+      stream: repository.watchCashWithdrawalRequests(
+        cashSessionId: session.id,
+        requestedByEmployeeId: currentEmployeeId.isEmpty
+            ? null
+            : currentEmployeeId,
+      ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return EmptyState(
             icon: Icons.error_outline,
-            title: 'No se pudieron cargar totales de caja',
+            title: 'No se pudieron cargar retiros',
             message: '${snapshot.error}',
           );
         }
 
-        final totals = snapshot.data ?? const CashSessionTotals();
+        final requests = snapshot.data ?? [];
+        final hasPending = requests.any((request) => request.isPending);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -312,32 +344,45 @@ class _OpenSessionPanel extends StatelessWidget {
                     label: 'Fondo inicial',
                     value: session.openingCashAmount,
                   ),
-                  _MoneyLine(
-                    label: 'Efectivo esperado',
-                    value: totals.expectedCashAmount,
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Los totales del sistema se calculan al cerrar y solo se muestran en Admin.',
+                    style: TextStyle(
+                      color: BrandColors.textMuted,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                  _MoneyLine(
-                    label: 'Tarjeta cobrada',
-                    value: totals.expectedCardChargedAmount,
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            GlassPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SectionHeader(
+                    title: 'Retiros solicitados',
+                    subtitle: hasPending
+                        ? 'Hay retiros pendientes de autorizacion.'
+                        : 'Solicitudes del dia para este usuario.',
+                    trailing: canRequestWithdrawal
+                        ? IconButton(
+                            tooltip: 'Solicitar retiro',
+                            onPressed: onRequestWithdrawal,
+                            icon: const Icon(Icons.request_quote_outlined),
+                          )
+                        : null,
                   ),
-                  _MoneyLine(
-                    label: 'Comision tarjeta',
-                    value: totals.expectedCardSurchargeAmount,
-                  ),
-                  _MoneyLine(
-                    label: 'Pagado en plataforma',
-                    value: totals.expectedPlatformAmount,
-                  ),
-                  _MoneyLine(
-                    label: 'Consumo empleado',
-                    value: totals.expectedEmployeeConsumptionAmount,
-                  ),
-                  const Divider(height: 22),
-                  _MoneyLine(
-                    label: 'Dinero real esperado',
-                    value: totals.totalExpectedRealMoney,
-                    highlight: true,
-                  ),
+                  const SizedBox(height: 10),
+                  if (requests.isEmpty)
+                    const Text(
+                      'Sin solicitudes registradas.',
+                      style: TextStyle(color: BrandColors.textMuted),
+                    )
+                  else
+                    ...requests.map(
+                      (request) => _WithdrawalRequestTile(request: request),
+                    ),
                 ],
               ),
             ),
@@ -369,16 +414,178 @@ class _OpenSessionPanel extends StatelessWidget {
   }
 }
 
-class _MoneyLine extends StatelessWidget {
-  const _MoneyLine({
-    required this.label,
-    required this.value,
-    this.highlight = false,
+class _WithdrawalRequestDialog extends StatefulWidget {
+  const _WithdrawalRequestDialog({
+    required this.repository,
+    required this.session,
   });
+
+  final TacoPosRepository repository;
+  final CashSession session;
+
+  @override
+  State<_WithdrawalRequestDialog> createState() =>
+      _WithdrawalRequestDialogState();
+}
+
+class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
+  final _amountController = TextEditingController();
+  final _reasonController = TextEditingController();
+  final _amountFocusNode = FocusNode();
+  final _reasonFocusNode = FocusNode();
+  bool _saving = false;
+  String _error = '';
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _reasonController.dispose();
+    _amountFocusNode.dispose();
+    _reasonFocusNode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final amount = double.tryParse(
+      _amountController.text.trim().replaceAll(',', '.'),
+    );
+    if (amount == null || amount <= 0) {
+      setState(() {
+        _error = 'Captura un monto valido.';
+      });
+      return;
+    }
+    if (_reasonController.text.trim().isEmpty) {
+      setState(() {
+        _error = 'Captura el motivo.';
+      });
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = '';
+    });
+
+    try {
+      await widget.repository.requestCashWithdrawal(
+        cashSessionId: widget.session.id,
+        amount: amount,
+        reason: _reasonController.text,
+      );
+      if (!mounted) {
+        return;
+      }
+      Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _saving = false;
+        _error = error.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Solicitar retiro'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _amountController,
+              focusNode: _amountFocusNode,
+              enabled: !_saving,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Monto',
+                prefixText: '\$ ',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _reasonController,
+              focusNode: _reasonFocusNode,
+              enabled: !_saving,
+              minLines: 2,
+              maxLines: 4,
+              decoration: const InputDecoration(labelText: 'Motivo'),
+            ),
+            if (_error.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error,
+                style: const TextStyle(
+                  color: BrandColors.danger,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _submit,
+          child: Text(_saving ? 'Enviando...' : 'Enviar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _WithdrawalRequestTile extends StatelessWidget {
+  const _WithdrawalRequestTile({required this.request});
+
+  final CashWithdrawalRequest request;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = request.isApproved
+        ? BrandColors.success
+        : request.isRejected
+        ? BrandColors.danger
+        : BrandColors.accentYellow;
+    final label = request.isApproved
+        ? 'Aprobado'
+        : request.isRejected
+        ? 'Rechazado'
+        : 'Pendiente';
+
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(Icons.request_quote_outlined, color: color),
+      title: Text(
+        request.reason,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+      subtitle: Text(label, style: TextStyle(color: color)),
+      trailing: MoneyText(
+        value: request.amount,
+        style: TextStyle(color: color, fontWeight: FontWeight.w800),
+      ),
+    );
+  }
+}
+
+class _MoneyLine extends StatelessWidget {
+  const _MoneyLine({required this.label, required this.value});
 
   final String label;
   final double value;
-  final bool highlight;
 
   @override
   Widget build(BuildContext context) {
@@ -389,20 +596,16 @@ class _MoneyLine extends StatelessWidget {
           Expanded(
             child: Text(
               label,
-              style: TextStyle(
-                color: highlight
-                    ? BrandColors.textPrimary
-                    : BrandColors.textMuted,
-                fontWeight: highlight ? FontWeight.w800 : FontWeight.w600,
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
           MoneyText(
             value: value,
-            style: TextStyle(
-              color: highlight
-                  ? BrandColors.accentYellow
-                  : BrandColors.textSecondary,
+            style: const TextStyle(
+              color: BrandColors.textSecondary,
               fontWeight: FontWeight.w800,
             ),
           ),

@@ -23,6 +23,9 @@ class CashSession {
     required this.netDifference,
     required this.shortageAmount,
     required this.overAmount,
+    required this.approvedWithdrawalsTotal,
+    required this.pendingWithdrawalsTotal,
+    required this.withdrawalRequestCount,
     required this.notes,
     this.openedAt,
     this.closedAt,
@@ -55,6 +58,9 @@ class CashSession {
   final double netDifference;
   final double shortageAmount;
   final double overAmount;
+  final double approvedWithdrawalsTotal;
+  final double pendingWithdrawalsTotal;
+  final int withdrawalRequestCount;
   final String notes;
 
   bool get isOpen => status == 'open';
@@ -92,6 +98,10 @@ class CashSession {
       netDifference: _toDouble(data['netDifference']),
       shortageAmount: _toDouble(data['shortageAmount']),
       overAmount: _toDouble(data['overAmount']),
+      approvedWithdrawalsTotal: _toDouble(data['approvedWithdrawalsTotal']),
+      pendingWithdrawalsTotal: _toDouble(data['pendingWithdrawalsTotal']),
+      withdrawalRequestCount:
+          (data['withdrawalRequestCount'] as num?)?.toInt() ?? 0,
       notes: data['notes'] as String? ?? '',
     );
   }
@@ -116,6 +126,9 @@ class CashSessionTotals {
     this.expectedCardSurchargeAmount = 0,
     this.expectedPlatformAmount = 0,
     this.expectedEmployeeConsumptionAmount = 0,
+    this.approvedWithdrawalsTotal = 0,
+    this.pendingWithdrawalsTotal = 0,
+    this.withdrawalRequestCount = 0,
   });
 
   final double expectedCashAmount;
@@ -124,6 +137,9 @@ class CashSessionTotals {
   final double expectedCardSurchargeAmount;
   final double expectedPlatformAmount;
   final double expectedEmployeeConsumptionAmount;
+  final double approvedWithdrawalsTotal;
+  final double pendingWithdrawalsTotal;
+  final int withdrawalRequestCount;
 
   double get totalExpectedRealMoney =>
       expectedCashAmount + expectedCardChargedAmount;

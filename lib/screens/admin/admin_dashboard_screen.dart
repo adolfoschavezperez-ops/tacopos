@@ -13,6 +13,7 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import '../cash/cash_session_screen.dart';
+import 'cash_admin_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'order_platform_catalog_screen.dart';
 import 'product_catalog_screen.dart';
@@ -83,15 +84,13 @@ class AdminDashboardScreen extends StatelessWidget {
           icon: const Icon(Icons.restaurant_menu),
         ),
         IconButton(
-          tooltip: 'Caja / Corte',
+          tooltip: 'Caja Admin',
           onPressed:
-              employee?.canManageCash == true || employee?.canCharge == true
+              employee?.canManageCash == true || employee?.canViewAdmin == true
               ? () {
                   Navigator.push(
                     context,
-                    MaterialPageRoute(
-                      builder: (_) => const CashSessionScreen(),
-                    ),
+                    MaterialPageRoute(builder: (_) => const CashAdminScreen()),
                   );
                 }
               : null,
@@ -380,12 +379,30 @@ class AdminDashboardScreen extends StatelessWidget {
                           iconColor: BrandColors.accentYellow,
                           title: 'Caja / Corte',
                           subtitle:
-                              'Abrir dia, revisar totales parciales y cerrar caja.',
+                              'Abrir dia, solicitar retiros y cerrar caja operativa.',
                           onTap: () {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
                                 builder: (_) => const CashSessionScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                      if (employee?.canViewAdmin == true) ...[
+                        _AdminLinkPanel(
+                          icon: Icons.receipt_long,
+                          iconColor: BrandColors.success,
+                          title: 'Cortes y retiros',
+                          subtitle:
+                              'Ver desglose completo y autorizar retiros de efectivo.',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const CashAdminScreen(),
                               ),
                             );
                           },

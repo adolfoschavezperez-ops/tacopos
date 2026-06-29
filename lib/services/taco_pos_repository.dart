@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../core/constants/app_constants.dart';
 import '../models/cash_session.dart';
+import '../models/cash_withdrawal_request.dart';
 import '../models/employee.dart';
 import '../models/order.dart';
 import '../models/order_item.dart';
@@ -90,6 +91,9 @@ class TacoPosRepository {
   CollectionReference<Map<String, dynamic>> get _cashSessionsRef =>
       _restaurantRef.collection('cashSessions');
 
+  CollectionReference<Map<String, dynamic>> get _cashWithdrawalRequestsRef =>
+      _restaurantRef.collection('cashWithdrawalRequests');
+
   Stream<List<PosTable>> watchTables({bool activeOnly = true}) {
     return _tablesRef.snapshots().map((snapshot) {
       final tables = snapshot.docs.map(PosTable.fromDoc).toList()
@@ -166,9 +170,12 @@ class TacoPosRepository {
     final adminRef = _employeesRef.doc('admin');
     final doc = await adminRef.get();
     if (doc.exists) {
-      if (doc.data()?['canManageCash'] != true) {
+      final data = doc.data() ?? {};
+      if (data['canManageCash'] != true ||
+          data['canAuthorizeCashWithdrawals'] != true) {
         await adminRef.set({
           'canManageCash': true,
+          'canAuthorizeCashWithdrawals': true,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
@@ -190,6 +197,7 @@ class TacoPosRepository {
       'canManagePlatforms': true,
       'canManageEmployees': true,
       'canManageCash': true,
+      'canAuthorizeCashWithdrawals': true,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -405,13 +413,57 @@ class TacoPosRepository {
   }
 
   Stream<CashSessionTotals> watchCashSessionTotals(String cashSessionId) {
-    return watchPayments().map(
-      (payments) => _totalsForPayments(
+    return watchPayments().asyncMap((payments) async {
+      final sessionDoc = await _cashSessionsRef.doc(cashSessionId).get();
+      final session = sessionDoc.exists
+          ? CashSession.fromDoc(sessionDoc)
+          : null;
+      final withdrawals = await _cashWithdrawalRequestsForSessionOnce(
+        cashSessionId,
+      );
+      return _totalsForPayments(
         payments
             .where((payment) => payment.cashSessionId == cashSessionId)
             .toList(),
-      ),
-    );
+        openingCashAmount: session?.openingCashAmount ?? 0,
+        withdrawals: withdrawals,
+      );
+    });
+  }
+
+  Stream<List<CashWithdrawalRequest>> watchCashWithdrawalRequests({
+    String? cashSessionId,
+    String? businessDate,
+    String? status,
+    String? requestedByEmployeeId,
+  }) {
+    return _cashWithdrawalRequestsRef.snapshots().map((snapshot) {
+      final requests =
+          snapshot.docs.map(CashWithdrawalRequest.fromDoc).where((request) {
+            if (cashSessionId != null &&
+                request.cashSessionId != cashSessionId) {
+              return false;
+            }
+            if (businessDate != null && request.businessDate != businessDate) {
+              return false;
+            }
+            if (status != null && request.status != status) {
+              return false;
+            }
+            if (requestedByEmployeeId != null &&
+                request.requestedByEmployeeId != requestedByEmployeeId) {
+              return false;
+            }
+            return true;
+          }).toList()..sort((a, b) {
+            final aDate =
+                a.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate =
+                b.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
+      return requests;
+    });
   }
 
   Future<CashSession?> getOpenCashSession() async {
@@ -487,8 +539,81 @@ class TacoPosRepository {
       'netDifference': 0.0,
       'shortageAmount': 0.0,
       'overAmount': 0.0,
+      'approvedWithdrawalsTotal': 0.0,
+      'pendingWithdrawalsTotal': 0.0,
+      'withdrawalRequestCount': 0,
       'notes': '',
       'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> requestCashWithdrawal({
+    required String cashSessionId,
+    required double amount,
+    required String reason,
+  }) async {
+    _requireCashWithdrawalRequester();
+    if (amount <= 0) {
+      throw ArgumentError('Captura un monto de retiro valido.');
+    }
+    if (reason.trim().isEmpty) {
+      throw ArgumentError('Captura el motivo del retiro.');
+    }
+
+    final sessionDoc = await _cashSessionsRef.doc(cashSessionId).get();
+    if (!sessionDoc.exists) {
+      throw StateError('La caja ya no existe.');
+    }
+    final session = CashSession.fromDoc(sessionDoc);
+    if (!session.isOpen) {
+      throw StateError('La caja ya esta cerrada.');
+    }
+
+    final employee = AppSession.instance.employee;
+    final docRef = _cashWithdrawalRequestsRef.doc();
+    await docRef.set({
+      'id': docRef.id,
+      'cashSessionId': cashSessionId,
+      'businessDate': session.businessDate,
+      'amount': amount,
+      'reason': reason.trim(),
+      'requestedByEmployeeId': employee?.id ?? '',
+      'requestedByEmployeeName': employee?.name ?? '',
+      'requestedAt': FieldValue.serverTimestamp(),
+      'status': 'pending',
+      'authorizedByEmployeeId': null,
+      'authorizedByEmployeeName': null,
+      'authorizedAt': null,
+      'adminNotes': null,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> authorizeCashWithdrawal({
+    required String requestId,
+    required bool approved,
+    String adminNotes = '',
+  }) async {
+    _requireCashWithdrawalAuthorizer();
+    final docRef = _cashWithdrawalRequestsRef.doc(requestId);
+    final doc = await docRef.get();
+    if (!doc.exists) {
+      throw StateError('La solicitud ya no existe.');
+    }
+    final request = CashWithdrawalRequest.fromDoc(doc);
+    if (!request.isPending) {
+      throw StateError('La solicitud ya fue atendida.');
+    }
+
+    final employee = AppSession.instance.employee;
+    await docRef.update({
+      'status': approved ? 'approved' : 'rejected',
+      'authorizedByEmployeeId': employee?.id ?? '',
+      'authorizedByEmployeeName': employee?.name ?? '',
+      'authorizedAt': FieldValue.serverTimestamp(),
+      'adminNotes': adminNotes.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
@@ -513,6 +638,13 @@ class TacoPosRepository {
     final session = CashSession.fromDoc(doc);
     if (session.status != 'open') {
       throw StateError('Esta caja ya esta cerrada.');
+    }
+
+    final withdrawals = await _cashWithdrawalRequestsForSessionOnce(
+      cashSessionId,
+    );
+    if (withdrawals.any((request) => request.isPending)) {
+      throw StateError('Hay retiros pendientes de autorizacion.');
     }
 
     final totals = await _cashSessionTotalsOnce(cashSessionId);
@@ -550,6 +682,9 @@ class TacoPosRepository {
       'expectedPlatformAmount': totals.expectedPlatformAmount,
       'expectedEmployeeConsumptionAmount':
           totals.expectedEmployeeConsumptionAmount,
+      'approvedWithdrawalsTotal': totals.approvedWithdrawalsTotal,
+      'pendingWithdrawalsTotal': totals.pendingWithdrawalsTotal,
+      'withdrawalRequestCount': totals.withdrawalRequestCount,
       'totalExpectedRealMoney': totals.totalExpectedRealMoney,
       'totalCountedRealMoney': totalCountedRealMoney,
       'cashDifference': cashDifference,
@@ -567,15 +702,35 @@ class TacoPosRepository {
 
   Future<CashSessionTotals> _cashSessionTotalsOnce(String cashSessionId) async {
     final snapshot = await _db.collectionGroup('payments').get();
+    final sessionDoc = await _cashSessionsRef.doc(cashSessionId).get();
+    final session = sessionDoc.exists ? CashSession.fromDoc(sessionDoc) : null;
+    final withdrawals = await _cashWithdrawalRequestsForSessionOnce(
+      cashSessionId,
+    );
     return _totalsForPayments(
       snapshot.docs
           .map(Payment.fromDoc)
           .where((payment) => payment.cashSessionId == cashSessionId)
           .toList(),
+      openingCashAmount: session?.openingCashAmount ?? 0,
+      withdrawals: withdrawals,
     );
   }
 
-  CashSessionTotals _totalsForPayments(List<Payment> payments) {
+  Future<List<CashWithdrawalRequest>> _cashWithdrawalRequestsForSessionOnce(
+    String cashSessionId,
+  ) async {
+    final snapshot = await _cashWithdrawalRequestsRef
+        .where('cashSessionId', isEqualTo: cashSessionId)
+        .get();
+    return snapshot.docs.map(CashWithdrawalRequest.fromDoc).toList();
+  }
+
+  CashSessionTotals _totalsForPayments(
+    List<Payment> payments, {
+    required double openingCashAmount,
+    required List<CashWithdrawalRequest> withdrawals,
+  }) {
     double cash = 0;
     double cardCharged = 0;
     double cardBase = 0;
@@ -602,13 +757,23 @@ class TacoPosRepository {
       }
     }
 
+    final approvedWithdrawals = withdrawals
+        .where((request) => request.isApproved)
+        .fold<double>(0, (total, request) => total + request.amount);
+    final pendingWithdrawals = withdrawals
+        .where((request) => request.isPending)
+        .fold<double>(0, (total, request) => total + request.amount);
+
     return CashSessionTotals(
-      expectedCashAmount: cash,
+      expectedCashAmount: cash + openingCashAmount - approvedWithdrawals,
       expectedCardChargedAmount: cardCharged,
       expectedCardBaseAmount: cardBase,
       expectedCardSurchargeAmount: cardSurcharge,
       expectedPlatformAmount: platform,
       expectedEmployeeConsumptionAmount: employeeConsumption,
+      approvedWithdrawalsTotal: approvedWithdrawals,
+      pendingWithdrawalsTotal: pendingWithdrawals,
+      withdrawalRequestCount: withdrawals.length,
     );
   }
 
@@ -1518,6 +1683,21 @@ class TacoPosRepository {
     throw StateError('No tienes permiso para cerrar caja.');
   }
 
+  void _requireCashWithdrawalRequester() {
+    final employee = AppSession.instance.employee;
+    if (employee?.canCharge == true || employee?.canManageCash == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para solicitar retiros.');
+  }
+
+  void _requireCashWithdrawalAuthorizer() {
+    if (AppSession.instance.employee?.canAuthorizeCashWithdrawals == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para autorizar retiros.');
+  }
+
   void _requireCashOpenPermission() {
     final employee = AppSession.instance.employee;
     if (employee?.canManageCash == true || employee?.canCharge == true) {
@@ -1765,6 +1945,7 @@ class TacoPosRepository {
     required bool canManagePlatforms,
     required bool canManageEmployees,
     required bool canManageCash,
+    required bool canAuthorizeCashWithdrawals,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageEmployees == true,
@@ -1789,6 +1970,7 @@ class TacoPosRepository {
       'canManagePlatforms': canManagePlatforms,
       'canManageEmployees': canManageEmployees,
       'canManageCash': canManageCash,
+      'canAuthorizeCashWithdrawals': canAuthorizeCashWithdrawals,
       if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

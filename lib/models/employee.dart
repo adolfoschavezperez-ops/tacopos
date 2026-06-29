@@ -15,6 +15,7 @@ class Employee {
     required this.canManagePlatforms,
     required this.canManageEmployees,
     required this.canManageCash,
+    required this.canAuthorizeCashWithdrawals,
   });
 
   final String id;
@@ -30,6 +31,7 @@ class Employee {
   final bool canManagePlatforms;
   final bool canManageEmployees;
   final bool canManageCash;
+  final bool canAuthorizeCashWithdrawals;
 
   factory Employee.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -48,6 +50,8 @@ class Employee {
       canManagePlatforms: data['canManagePlatforms'] as bool? ?? false,
       canManageEmployees: data['canManageEmployees'] as bool? ?? false,
       canManageCash: data['canManageCash'] as bool? ?? false,
+      canAuthorizeCashWithdrawals:
+          data['canAuthorizeCashWithdrawals'] as bool? ?? false,
     );
   }
 }
