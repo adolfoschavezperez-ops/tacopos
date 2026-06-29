@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "346084471865",
+    "project_id": "tacopos-renovadev",
+    "storage_bucket": "tacopos-renovadev.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:346084471865:android:fb196c5d19a1e300f949e8",
+        "android_client_info": {
+          "package_name": "com.renova.tacopos"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBIHzz2137NOuJhxq70Q9mXlHjEh4FbEsE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
