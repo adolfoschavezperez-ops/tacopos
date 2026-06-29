@@ -98,129 +98,152 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       body: PremiumBackground(
         child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
-              child: StreamBuilder<List<Employee>>(
-                stream: _repository.watchEmployees(),
-                builder: (context, snapshot) {
-                  if (snapshot.hasError) {
-                    return EmptyState(
-                      icon: Icons.error_outline,
-                      title: 'No se pudieron cargar empleados',
-                      message: '${snapshot.error}',
-                    );
-                  }
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+              return SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: EdgeInsets.fromLTRB(18, 18, 18, 18 + keyboardInset),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 460),
+                      child: StreamBuilder<List<Employee>>(
+                        stream: _repository.watchEmployees(),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasError) {
+                            return EmptyState(
+                              icon: Icons.error_outline,
+                              title: 'No se pudieron cargar empleados',
+                              message: '${snapshot.error}',
+                            );
+                          }
 
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const LoadingPanel(message: 'Cargando acceso...');
-                  }
+                          if (snapshot.connectionState ==
+                              ConnectionState.waiting) {
+                            return const LoadingPanel(
+                              message: 'Cargando acceso...',
+                            );
+                          }
 
-                  final employees = snapshot.data ?? [];
-                  if (employees.isEmpty) {
-                    return const EmptyState(
-                      icon: Icons.badge_outlined,
-                      title: 'Sin empleados activos',
-                      message: 'Activa un empleado desde Admin.',
-                    );
-                  }
+                          final employees = snapshot.data ?? [];
+                          if (employees.isEmpty) {
+                            return const EmptyState(
+                              icon: Icons.badge_outlined,
+                              title: 'Sin empleados activos',
+                              message: 'Activa un empleado desde Admin.',
+                            );
+                          }
 
-                  final selectedId = _selectedEmployee?.id;
-                  var selectedEmployee = employees.first;
-                  for (final employee in employees) {
-                    if (employee.id == selectedId) {
-                      selectedEmployee = employee;
-                      break;
-                    }
-                  }
-                  _selectedEmployee = selectedEmployee;
+                          final selectedId = _selectedEmployee?.id;
+                          var selectedEmployee = employees.first;
+                          for (final employee in employees) {
+                            if (employee.id == selectedId) {
+                              selectedEmployee = employee;
+                              break;
+                            }
+                          }
+                          _selectedEmployee = selectedEmployee;
 
-                  return GlassPanel(
-                    borderRadius: 28,
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Center(
-                          child: SizedBox(
-                            width: 118,
-                            height: 118,
-                            child: Image.asset(
-                              AppConstants.logoAsset,
-                              fit: BoxFit.contain,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 22),
-                        Text(
-                          AppConstants.brandName,
-                          textAlign: TextAlign.center,
-                          style: Theme.of(context).textTheme.headlineMedium,
-                        ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Inicio de sesion operativo',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: BrandColors.textMuted),
-                        ),
-                        const SizedBox(height: 22),
-                        DropdownButtonFormField<Employee>(
-                          initialValue: _selectedEmployee,
-                          decoration: const InputDecoration(
-                            labelText: 'Empleado',
-                          ),
-                          items: employees
-                              .map(
-                                (employee) => DropdownMenuItem(
-                                  value: employee,
-                                  child: Text(employee.name),
+                          return GlassPanel(
+                            borderRadius: 28,
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Center(
+                                  child: SizedBox(
+                                    width: 118,
+                                    height: 118,
+                                    child: Image.asset(
+                                      AppConstants.logoAsset,
+                                      fit: BoxFit.contain,
+                                    ),
+                                  ),
                                 ),
-                              )
-                              .toList(),
-                          onChanged: _busy
-                              ? null
-                              : (employee) {
-                                  setState(() {
-                                    _selectedEmployee = employee;
-                                    _error = '';
-                                  });
-                                },
-                        ),
-                        const SizedBox(height: 14),
-                        TextField(
-                          controller: _pinController,
-                          enabled: !_busy,
-                          obscureText: true,
-                          keyboardType: TextInputType.number,
-                          textInputAction: TextInputAction.done,
-                          decoration: const InputDecoration(labelText: 'PIN'),
-                          onSubmitted: (_) => _login(),
-                        ),
-                        if (_error.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            _error,
-                            style: const TextStyle(
-                              color: BrandColors.danger,
-                              fontWeight: FontWeight.w700,
+                                const SizedBox(height: 22),
+                                Text(
+                                  AppConstants.brandName,
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.headlineMedium,
+                                ),
+                                const SizedBox(height: 6),
+                                const Text(
+                                  'Inicio de sesion operativo',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: BrandColors.textMuted,
+                                  ),
+                                ),
+                                const SizedBox(height: 22),
+                                DropdownButtonFormField<Employee>(
+                                  initialValue: _selectedEmployee,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Empleado',
+                                  ),
+                                  items: employees
+                                      .map(
+                                        (employee) => DropdownMenuItem(
+                                          value: employee,
+                                          child: Text(employee.name),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: _busy
+                                      ? null
+                                      : (employee) {
+                                          setState(() {
+                                            _selectedEmployee = employee;
+                                            _error = '';
+                                          });
+                                        },
+                                ),
+                                const SizedBox(height: 14),
+                                TextField(
+                                  controller: _pinController,
+                                  enabled: !_busy,
+                                  obscureText: true,
+                                  keyboardType: TextInputType.number,
+                                  textInputAction: TextInputAction.done,
+                                  decoration: const InputDecoration(
+                                    labelText: 'PIN',
+                                  ),
+                                  onSubmitted: (_) => _login(),
+                                ),
+                                if (_error.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    _error,
+                                    style: const TextStyle(
+                                      color: BrandColors.danger,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 18),
+                                FilledButton.icon(
+                                  onPressed: _busy ? null : _login,
+                                  icon: const Icon(Icons.login),
+                                  label: Text(_busy ? 'Entrando...' : 'Entrar'),
+                                ),
+                              ],
                             ),
-                          ),
-                        ],
-                        const SizedBox(height: 18),
-                        FilledButton.icon(
-                          onPressed: _busy ? null : _login,
-                          icon: const Icon(Icons.login),
-                          label: Text(_busy ? 'Entrando...' : 'Entrar'),
-                        ),
-                      ],
+                          );
+                        },
+                      ),
                     ),
-                  );
-                },
-              ),
-            ),
+                  ),
+                ),
+              );
+            },
           ),
         ),
       ),

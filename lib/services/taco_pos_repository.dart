@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../core/constants/app_constants.dart';
+import '../models/cash_session.dart';
 import '../models/employee.dart';
 import '../models/order.dart';
 import '../models/order_item.dart';
@@ -86,6 +87,9 @@ class TacoPosRepository {
   CollectionReference<Map<String, dynamic>> get _ordersRef =>
       _restaurantRef.collection('orders');
 
+  CollectionReference<Map<String, dynamic>> get _cashSessionsRef =>
+      _restaurantRef.collection('cashSessions');
+
   Stream<List<PosTable>> watchTables({bool activeOnly = true}) {
     return _tablesRef.snapshots().map((snapshot) {
       final tables = snapshot.docs.map(PosTable.fromDoc).toList()
@@ -162,6 +166,12 @@ class TacoPosRepository {
     final adminRef = _employeesRef.doc('admin');
     final doc = await adminRef.get();
     if (doc.exists) {
+      if (doc.data()?['canManageCash'] != true) {
+        await adminRef.set({
+          'canManageCash': true,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
       return;
     }
 
@@ -179,6 +189,7 @@ class TacoPosRepository {
       'canManageTables': true,
       'canManagePlatforms': true,
       'canManageEmployees': true,
+      'canManageCash': true,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -367,6 +378,238 @@ class TacoPosRepository {
         });
       return payments;
     });
+  }
+
+  Stream<List<CashSession>> watchCashSessions() {
+    return _cashSessionsRef.snapshots().map((snapshot) {
+      final sessions = snapshot.docs.map(CashSession.fromDoc).toList()
+        ..sort((a, b) {
+          final aDate = a.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bDate = b.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bDate.compareTo(aDate);
+        });
+      return sessions;
+    });
+  }
+
+  Stream<CashSession?> watchOpenCashSession() {
+    return watchCashSessions().map((sessions) {
+      final openSessions = sessions
+          .where((session) => session.status == 'open')
+          .toList();
+      if (openSessions.isEmpty) {
+        return null;
+      }
+      return openSessions.first;
+    });
+  }
+
+  Stream<CashSessionTotals> watchCashSessionTotals(String cashSessionId) {
+    return watchPayments().map(
+      (payments) => _totalsForPayments(
+        payments
+            .where((payment) => payment.cashSessionId == cashSessionId)
+            .toList(),
+      ),
+    );
+  }
+
+  Future<CashSession?> getOpenCashSession() async {
+    final snapshot = await _cashSessionsRef.get();
+    final sessions =
+        snapshot.docs
+            .map(CashSession.fromDoc)
+            .where((session) => session.status == 'open')
+            .toList()
+          ..sort((a, b) {
+            final aDate = a.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate = b.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
+
+    return sessions.isEmpty ? null : sessions.first;
+  }
+
+  Future<void> openCashSession({
+    required String businessDate,
+    required double openingCashAmount,
+  }) async {
+    _requireCashOpenPermission();
+    if (businessDate.trim().isEmpty) {
+      throw ArgumentError('Selecciona la fecha operativa.');
+    }
+    if (openingCashAmount < 0) {
+      throw ArgumentError('El fondo inicial no puede ser negativo.');
+    }
+
+    final openSession = await getOpenCashSession();
+    if (openSession != null) {
+      if (openSession.businessDate == businessDate) {
+        return;
+      }
+      throw StateError(
+        'Ya existe una caja abierta para ${openSession.businessDate}.',
+      );
+    }
+
+    final existingForDate = await _cashSessionsRef
+        .where('businessDate', isEqualTo: businessDate)
+        .get();
+    final hasClosed = existingForDate.docs
+        .map(CashSession.fromDoc)
+        .any((session) => session.status == 'closed');
+    if (hasClosed) {
+      throw StateError('La fecha $businessDate ya tiene corte cerrado.');
+    }
+
+    final employee = AppSession.instance.employee;
+    final docRef = _cashSessionsRef.doc();
+    await docRef.set({
+      'id': docRef.id,
+      'businessDate': businessDate,
+      'status': 'open',
+      'openingCashAmount': openingCashAmount,
+      'openedAt': FieldValue.serverTimestamp(),
+      'openedByEmployeeId': employee?.id ?? '',
+      'openedByEmployeeName': employee?.name ?? '',
+      'countedCashAmount': 0.0,
+      'terminalReportedAmount': 0.0,
+      'expectedCashAmount': 0.0,
+      'expectedCardChargedAmount': 0.0,
+      'expectedCardBaseAmount': 0.0,
+      'expectedCardSurchargeAmount': 0.0,
+      'expectedPlatformAmount': 0.0,
+      'expectedEmployeeConsumptionAmount': 0.0,
+      'totalExpectedRealMoney': 0.0,
+      'totalCountedRealMoney': 0.0,
+      'cashDifference': 0.0,
+      'cardDifference': 0.0,
+      'netDifference': 0.0,
+      'shortageAmount': 0.0,
+      'overAmount': 0.0,
+      'notes': '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<CashSession> closeCashSession({
+    required String cashSessionId,
+    required double countedCashAmount,
+    required double terminalReportedAmount,
+    required String notes,
+  }) async {
+    _requireCashManager();
+    if (countedCashAmount < 0 || terminalReportedAmount < 0) {
+      throw ArgumentError('Los montos de cierre no pueden ser negativos.');
+    }
+
+    final docRef = _cashSessionsRef.doc(cashSessionId);
+    final doc = await docRef.get();
+    if (!doc.exists) {
+      throw StateError('La caja ya no existe.');
+    }
+
+    final session = CashSession.fromDoc(doc);
+    if (session.status != 'open') {
+      throw StateError('Esta caja ya esta cerrada.');
+    }
+
+    final totals = await _cashSessionTotalsOnce(cashSessionId);
+    final totalCountedRealMoney = totals.totalCountedRealMoney(
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+    );
+    final cashDifference = totals.cashDifference(countedCashAmount);
+    final cardDifference = totals.cardDifference(terminalReportedAmount);
+    final netDifference = totals.netDifference(
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+    );
+    final shortageAmount = totals.shortageAmount(
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+    );
+    final overAmount = totals.overAmount(
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+    );
+    final employee = AppSession.instance.employee;
+
+    await docRef.update({
+      'status': 'closed',
+      'closedAt': FieldValue.serverTimestamp(),
+      'closedByEmployeeId': employee?.id ?? '',
+      'closedByEmployeeName': employee?.name ?? '',
+      'countedCashAmount': countedCashAmount,
+      'terminalReportedAmount': terminalReportedAmount,
+      'expectedCashAmount': totals.expectedCashAmount,
+      'expectedCardChargedAmount': totals.expectedCardChargedAmount,
+      'expectedCardBaseAmount': totals.expectedCardBaseAmount,
+      'expectedCardSurchargeAmount': totals.expectedCardSurchargeAmount,
+      'expectedPlatformAmount': totals.expectedPlatformAmount,
+      'expectedEmployeeConsumptionAmount':
+          totals.expectedEmployeeConsumptionAmount,
+      'totalExpectedRealMoney': totals.totalExpectedRealMoney,
+      'totalCountedRealMoney': totalCountedRealMoney,
+      'cashDifference': cashDifference,
+      'cardDifference': cardDifference,
+      'netDifference': netDifference,
+      'shortageAmount': shortageAmount,
+      'overAmount': overAmount,
+      'notes': notes.trim(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    final updatedDoc = await docRef.get();
+    return CashSession.fromDoc(updatedDoc);
+  }
+
+  Future<CashSessionTotals> _cashSessionTotalsOnce(String cashSessionId) async {
+    final snapshot = await _db.collectionGroup('payments').get();
+    return _totalsForPayments(
+      snapshot.docs
+          .map(Payment.fromDoc)
+          .where((payment) => payment.cashSessionId == cashSessionId)
+          .toList(),
+    );
+  }
+
+  CashSessionTotals _totalsForPayments(List<Payment> payments) {
+    double cash = 0;
+    double cardCharged = 0;
+    double cardBase = 0;
+    double cardSurcharge = 0;
+    double platform = 0;
+    double employeeConsumption = 0;
+
+    for (final payment in payments) {
+      switch (payment.method) {
+        case 'cash':
+          cash += payment.chargedAmount;
+          break;
+        case 'card':
+          cardCharged += payment.chargedAmount;
+          cardBase += payment.baseAmount;
+          cardSurcharge += payment.surchargeAmount;
+          break;
+        case 'platform_paid':
+          platform += payment.baseAmount;
+          break;
+        case 'employee_consumption':
+          employeeConsumption += payment.baseAmount;
+          break;
+      }
+    }
+
+    return CashSessionTotals(
+      expectedCashAmount: cash,
+      expectedCardChargedAmount: cardCharged,
+      expectedCardBaseAmount: cardBase,
+      expectedCardSurchargeAmount: cardSurcharge,
+      expectedPlatformAmount: platform,
+      expectedEmployeeConsumptionAmount: employeeConsumption,
+    );
   }
 
   Future<PosOrder> createOrGetOpenOrder(PosTable table) async {
@@ -614,6 +857,54 @@ class TacoPosRepository {
     await recalculateOrderTotal(orderId);
   }
 
+  Future<void> cancelEmptyOrder(String orderId) async {
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    if (!orderDoc.exists) {
+      throw StateError('La orden ya no existe.');
+    }
+    final order = PosOrder.fromDoc(orderDoc);
+    final itemsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('items')
+        .get();
+    final paymentsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .get();
+
+    if (itemsSnapshot.docs.isNotEmpty) {
+      throw StateError('No se puede cerrar: la orden ya tiene articulos.');
+    }
+    if (paymentsSnapshot.docs.isNotEmpty) {
+      throw StateError('No se puede cerrar: la orden ya tiene pagos.');
+    }
+    if (order.status != 'open' ||
+        order.sentToKitchenAt != null ||
+        ['sent', 'cooking', 'ready'].contains(order.kitchenStatus)) {
+      throw StateError('No se puede cerrar: la orden ya fue enviada a cocina.');
+    }
+
+    final batch = _db.batch();
+    batch.update(_ordersRef.doc(orderId), {
+      'status': 'cancelled',
+      'kitchenStatus': 'cancelled',
+      'paymentStatus': 'cancelled',
+      'cancelledAt': FieldValue.serverTimestamp(),
+      ..._employeeAuditFields(prefix: 'cancelledBy'),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (order.orderType != 'takeout') {
+      batch.set(_tablesRef.doc(order.tableId), {
+        'status': 'available',
+        'currentOrderId': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
+    await batch.commit();
+  }
+
   Future<int> sendOrderToKitchen(String orderId) async {
     _requireTakeOrders();
     final itemsSnapshot = await _ordersRef
@@ -854,6 +1145,7 @@ class TacoPosRepository {
     String? employeeName,
   }) async {
     _requireCharge();
+    final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureNoPaymentType(orderId, blockedType: 'person');
     await _ensureEmployeeConsumptionAllowed(orderId, method);
     await _ensureKitchenReadyForPayment(orderId);
@@ -882,6 +1174,7 @@ class TacoPosRepository {
       batch: batch,
       paymentRef: paymentRef,
       order: order,
+      cashSession: cashSession,
       type: 'full_table',
       method: method,
       baseAmount: baseAmount,
@@ -914,6 +1207,7 @@ class TacoPosRepository {
     String? employeeName,
   }) async {
     _requireCharge();
+    final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureNoPaymentType(orderId, blockedType: 'partial');
     await _ensureEmployeeConsumptionAllowed(orderId, method);
     await _ensureKitchenReadyForPayment(orderId);
@@ -948,6 +1242,7 @@ class TacoPosRepository {
       batch: batch,
       paymentRef: paymentRef,
       order: order,
+      cashSession: cashSession,
       type: 'person',
       method: method,
       baseAmount: baseAmount,
@@ -987,6 +1282,7 @@ class TacoPosRepository {
     String? employeeName,
   }) async {
     _requireCharge();
+    final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureNoPaymentType(orderId, blockedType: 'person');
     await _ensureEmployeeConsumptionAllowed(orderId, method);
     await _ensureKitchenReadyForPayment(orderId);
@@ -1007,6 +1303,7 @@ class TacoPosRepository {
       batch: batch,
       paymentRef: paymentRef,
       order: order,
+      cashSession: cashSession,
       type: 'partial',
       method: method,
       baseAmount: baseAmount,
@@ -1027,6 +1324,7 @@ class TacoPosRepository {
 
   Future<PaymentResult> payPlatformOrder({required String orderId}) async {
     _requireCharge();
+    final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -1057,6 +1355,7 @@ class TacoPosRepository {
       batch: batch,
       paymentRef: paymentRef,
       order: order,
+      cashSession: cashSession,
       type: 'platform',
       method: 'platform_paid',
       baseAmount: baseAmount,
@@ -1142,6 +1441,7 @@ class TacoPosRepository {
     required WriteBatch batch,
     required DocumentReference<Map<String, dynamic>> paymentRef,
     required PosOrder order,
+    required CashSession cashSession,
     required String type,
     required String method,
     required double baseAmount,
@@ -1178,6 +1478,8 @@ class TacoPosRepository {
       'employeeName': employeeName,
       'platformId': platformId,
       'platformName': platformName,
+      'cashSessionId': cashSession.id,
+      'businessDate': cashSession.businessDate,
       'createdAt': FieldValue.serverTimestamp(),
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
@@ -1207,6 +1509,29 @@ class TacoPosRepository {
       return;
     }
     throw StateError('No tienes permiso para cobrar');
+  }
+
+  void _requireCashManager() {
+    if (AppSession.instance.employee?.canManageCash == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para cerrar caja.');
+  }
+
+  void _requireCashOpenPermission() {
+    final employee = AppSession.instance.employee;
+    if (employee?.canManageCash == true || employee?.canCharge == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para abrir caja.');
+  }
+
+  Future<CashSession> _requireOpenCashSessionForPayment() async {
+    final session = await getOpenCashSession();
+    if (session == null) {
+      throw StateError('Debes abrir caja antes de cobrar.');
+    }
+    return session;
   }
 
   void _requireAnyPermission({
@@ -1439,6 +1764,7 @@ class TacoPosRepository {
     required bool canManageTables,
     required bool canManagePlatforms,
     required bool canManageEmployees,
+    required bool canManageCash,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageEmployees == true,
@@ -1462,6 +1788,7 @@ class TacoPosRepository {
       'canManageTables': canManageTables,
       'canManagePlatforms': canManagePlatforms,
       'canManageEmployees': canManageEmployees,
+      'canManageCash': canManageCash,
       if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

@@ -127,6 +127,7 @@ const _employees = [
     'canManageTables': true,
     'canManagePlatforms': true,
     'canManageEmployees': true,
+    'canManageCash': true,
   },
   {
     'id': 'ricardo_bernal',
@@ -141,6 +142,7 @@ const _employees = [
     'canManageTables': false,
     'canManagePlatforms': false,
     'canManageEmployees': false,
+    'canManageCash': false,
   },
   {
     'id': 'gael',
@@ -155,6 +157,7 @@ const _employees = [
     'canManageTables': false,
     'canManagePlatforms': false,
     'canManageEmployees': false,
+    'canManageCash': false,
   },
 ];
 

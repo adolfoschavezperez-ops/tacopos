@@ -6,10 +6,11 @@ import '../models/employee.dart';
 import '../services/app_session.dart';
 import '../widgets/glass.dart';
 import 'admin/admin_dashboard_screen.dart';
+import 'cash/cash_session_screen.dart';
 import 'kitchen/kitchen_screen.dart';
 import 'waiter/tables_screen.dart';
 
-enum AppMode { waiterCashier, kitchen, admin }
+enum AppMode { waiterCashier, cash, kitchen, admin }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -19,9 +20,34 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  Future<void> _confirmSignOut() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cerrar sesion'),
+        content: const Text('Se cerrara la sesion operativa del empleado.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cerrar sesion'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      AppSession.instance.signOut();
+    }
+  }
+
   void _openMode(AppMode mode) {
     final Widget screen = switch (mode) {
       AppMode.waiterCashier => const TablesScreen(),
+      AppMode.cash => const CashSessionScreen(),
       AppMode.kitchen => const KitchenScreen(),
       AppMode.admin => const AdminDashboardScreen(),
     };
@@ -55,7 +81,13 @@ class _HomeScreenState extends State<HomeScreen> {
                           ? Row(
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
-                                const Expanded(flex: 11, child: _HeroBlock()),
+                                Expanded(
+                                  flex: 11,
+                                  child: _HeroBlock(
+                                    employee: employee,
+                                    onSignOut: _confirmSignOut,
+                                  ),
+                                ),
                                 const SizedBox(width: 34),
                                 Expanded(
                                   flex: 9,
@@ -69,7 +101,10 @@ class _HomeScreenState extends State<HomeScreen> {
                           : Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                const _HeroBlock(),
+                                _HeroBlock(
+                                  employee: employee,
+                                  onSignOut: _confirmSignOut,
+                                ),
                                 const SizedBox(height: 24),
                                 _ModePanel(
                                   employee: employee,
@@ -90,7 +125,10 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _HeroBlock extends StatelessWidget {
-  const _HeroBlock();
+  const _HeroBlock({required this.employee, required this.onSignOut});
+
+  final Employee? employee;
+  final VoidCallback onSignOut;
 
   @override
   Widget build(BuildContext context) {
@@ -148,6 +186,16 @@ class _HeroBlock extends StatelessWidget {
             ),
           ),
         ),
+        const SizedBox(height: 18),
+        OutlinedButton.icon(
+          onPressed: onSignOut,
+          icon: const Icon(Icons.logout),
+          label: Text(
+            employee == null
+                ? 'Cerrar sesion'
+                : 'Cerrar sesion · ${employee!.name}',
+          ),
+        ),
       ],
     );
   }
@@ -183,6 +231,16 @@ class _ModePanel extends StatelessWidget {
             ),
             const SizedBox(height: 12),
           ],
+          if (employee?.canCharge == true ||
+              employee?.canManageCash == true) ...[
+            _ModeTile(
+              icon: Icons.point_of_sale_outlined,
+              title: 'Caja / Corte',
+              subtitle: 'Abrir dia, revisar totales y cerrar caja',
+              onTap: () => onOpenMode(AppMode.cash),
+            ),
+            const SizedBox(height: 12),
+          ],
           if (employee?.canViewKitchen == true) ...[
             _ModeTile(
               icon: Icons.room_service_outlined,
@@ -202,6 +260,7 @@ class _ModePanel extends StatelessWidget {
           if (employee != null &&
               !employee!.canTakeOrders &&
               !employee!.canCharge &&
+              !employee!.canManageCash &&
               !employee!.canViewKitchen &&
               !employee!.canViewAdmin)
             const Text(

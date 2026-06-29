@@ -148,6 +148,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canManageTables;
   late bool _canManagePlatforms;
   late bool _canManageEmployees;
+  late bool _canManageCash;
   bool _saving = false;
   String _error = '';
 
@@ -165,6 +166,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canManageTables = widget.employee?.canManageTables ?? false;
     _canManagePlatforms = widget.employee?.canManagePlatforms ?? false;
     _canManageEmployees = widget.employee?.canManageEmployees ?? false;
+    _canManageCash = widget.employee?.canManageCash ?? false;
   }
 
   @override
@@ -210,6 +212,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canManageTables: _canManageTables,
         canManagePlatforms: _canManagePlatforms,
         canManageEmployees: _canManageEmployees,
+        canManageCash: _canManageCash,
       );
     } catch (error) {
       if (!mounted) {
@@ -286,6 +289,12 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 value: _canCharge,
                 enabled: !_saving,
                 onChanged: (value) => setState(() => _canCharge = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede abrir/cerrar caja',
+                value: _canManageCash,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canManageCash = value),
               ),
               _PermissionSwitch(
                 title: 'Puede ver cocina',
@@ -466,6 +475,7 @@ class _EmployeeAdminTile extends StatelessWidget {
     final permissions = <String>[
       if (employee.canTakeOrders) 'Pedidos',
       if (employee.canCharge) 'Cobro',
+      if (employee.canManageCash) 'Caja',
       if (employee.canViewKitchen) 'Cocina',
       if (employee.canViewAdmin) 'Admin',
     ];

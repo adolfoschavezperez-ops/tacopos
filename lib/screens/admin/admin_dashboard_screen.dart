@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
+import '../../models/cash_session.dart';
 import '../../models/order.dart';
 import '../../models/payment.dart';
 import '../../models/product.dart';
@@ -11,6 +12,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
+import '../cash/cash_session_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'order_platform_catalog_screen.dart';
 import 'product_catalog_screen.dart';
@@ -79,6 +81,21 @@ class AdminDashboardScreen extends StatelessWidget {
                 }
               : null,
           icon: const Icon(Icons.restaurant_menu),
+        ),
+        IconButton(
+          tooltip: 'Caja / Corte',
+          onPressed:
+              employee?.canManageCash == true || employee?.canCharge == true
+              ? () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const CashSessionScreen(),
+                    ),
+                  );
+                }
+              : null,
+          icon: const Icon(Icons.point_of_sale_outlined),
         ),
         IconButton(
           tooltip: 'Empleados',
@@ -192,6 +209,8 @@ class AdminDashboardScreen extends StatelessWidget {
                         subtitle: 'Operacion en tiempo real.',
                       ),
                       const SizedBox(height: 18),
+                      _CashStatusPanel(repository: repository),
+                      const SizedBox(height: 14),
                       LayoutBuilder(
                         builder: (context, constraints) {
                           final columns = constraints.maxWidth >= 900 ? 4 : 2;
@@ -354,6 +373,25 @@ class AdminDashboardScreen extends StatelessWidget {
                         },
                       ),
                       const SizedBox(height: 20),
+                      if (employee?.canManageCash == true ||
+                          employee?.canCharge == true) ...[
+                        _AdminLinkPanel(
+                          icon: Icons.point_of_sale_outlined,
+                          iconColor: BrandColors.accentYellow,
+                          title: 'Caja / Corte',
+                          subtitle:
+                              'Abrir dia, revisar totales parciales y cerrar caja.',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const CashSessionScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                      ],
                       if (employee?.canManageTables == true) ...[
                         _AdminLinkPanel(
                           icon: Icons.table_restaurant,
@@ -577,6 +615,160 @@ class AdminDashboardScreen extends StatelessWidget {
     return date.year == now.year &&
         date.month == now.month &&
         date.day == now.day;
+  }
+}
+
+class _CashStatusPanel extends StatelessWidget {
+  const _CashStatusPanel({required this.repository});
+
+  final TacoPosRepository repository;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<CashSession?>(
+      stream: repository.watchOpenCashSession(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return GlassPanel(
+            borderColor: BrandColors.danger,
+            child: Text(
+              'No se pudo cargar caja: ${snapshot.error}',
+              style: const TextStyle(
+                color: BrandColors.danger,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          );
+        }
+
+        final session = snapshot.data;
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const GlassPanel(
+            child: Text(
+              'Verificando estado de caja...',
+              style: TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          );
+        }
+
+        if (session == null) {
+          return const GlassPanel(
+            child: Row(
+              children: [
+                Icon(Icons.lock_outline, color: BrandColors.accentYellow),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Caja cerrada | sin fecha operativa abierta',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return StreamBuilder<CashSessionTotals>(
+          stream: repository.watchCashSessionTotals(session.id),
+          builder: (context, totalsSnapshot) {
+            if (totalsSnapshot.hasError) {
+              return GlassPanel(
+                borderColor: BrandColors.danger,
+                child: Text(
+                  'No se pudieron cargar totales de caja: ${totalsSnapshot.error}',
+                  style: const TextStyle(
+                    color: BrandColors.danger,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              );
+            }
+
+            final totals = totalsSnapshot.data ?? const CashSessionTotals();
+            return GlassPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SectionHeader(
+                    title: 'Caja abierta',
+                    subtitle: 'Fecha operativa ${session.businessDate}',
+                    trailing: const Icon(
+                      Icons.point_of_sale_outlined,
+                      color: BrandColors.success,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 18,
+                    runSpacing: 10,
+                    children: [
+                      _TinyMoney(
+                        label: 'Efectivo',
+                        value: totals.expectedCashAmount,
+                      ),
+                      _TinyMoney(
+                        label: 'Tarjeta',
+                        value: totals.expectedCardChargedAmount,
+                      ),
+                      _TinyMoney(
+                        label: 'Comision',
+                        value: totals.expectedCardSurchargeAmount,
+                      ),
+                      _TinyMoney(
+                        label: 'Plataforma',
+                        value: totals.expectedPlatformAmount,
+                      ),
+                      _TinyMoney(
+                        label: 'Consumo empleado',
+                        value: totals.expectedEmployeeConsumptionAmount,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _TinyMoney extends StatelessWidget {
+  const _TinyMoney({required this.label, required this.value});
+
+  final String label;
+  final double value;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 130),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: BrandColors.textMuted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 3),
+          MoneyText(
+            value: value,
+            style: const TextStyle(
+              color: BrandColors.accentYellow,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

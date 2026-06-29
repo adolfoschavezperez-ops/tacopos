@@ -196,7 +196,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (!mounted) {
         return;
       }
-      _showMessage('No se pudo cobrar: $error');
+      _showMessage(_paymentErrorText(error));
     } finally {
       if (mounted) {
         setState(() {
@@ -210,6 +210,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  String _paymentErrorText(Object error) {
+    final message = error.toString().replaceFirst('Bad state: ', '');
+    if (message == 'Debes abrir caja antes de cobrar.') {
+      return message;
+    }
+    return 'No se pudo cobrar: $message';
   }
 
   @override

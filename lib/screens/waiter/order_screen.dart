@@ -139,6 +139,45 @@ class _OrderScreenState extends State<OrderScreen> {
     );
   }
 
+  Future<void> _closeEmptyOrder() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cerrar mesa vacia'),
+        content: const Text(
+          'La mesa quedara disponible. Solo se puede cerrar si no tiene articulos, pagos ni envio a cocina.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Cerrar mesa'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    try {
+      await _repository.cancelEmptyOrder(widget.orderId);
+      if (!mounted) {
+        return;
+      }
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showMessage('$error');
+    }
+  }
+
   void _addPerson() {
     if (AppSession.instance.employee?.canTakeOrders != true) {
       _showMessage('No tienes permiso para levantar pedidos');
@@ -214,6 +253,7 @@ class _OrderScreenState extends State<OrderScreen> {
                   onSendToKitchen: _sendToKitchen,
                   onOpenPayment: _openPayment,
                   onBlockedPayment: _showKitchenPendingDialog,
+                  onCloseEmptyOrder: _closeEmptyOrder,
                   canTakeOrders: canTakeOrders,
                   canCharge: canCharge,
                 );
@@ -994,6 +1034,7 @@ class _TopOrderActions extends StatelessWidget {
     required this.onSendToKitchen,
     required this.onOpenPayment,
     required this.onBlockedPayment,
+    required this.onCloseEmptyOrder,
     required this.canTakeOrders,
     required this.canCharge,
   });
@@ -1005,6 +1046,7 @@ class _TopOrderActions extends StatelessWidget {
   final VoidCallback onSendToKitchen;
   final VoidCallback onOpenPayment;
   final VoidCallback onBlockedPayment;
+  final VoidCallback onCloseEmptyOrder;
   final bool canTakeOrders;
   final bool canCharge;
 
@@ -1030,6 +1072,12 @@ class _TopOrderActions extends StatelessWidget {
           item.sendToKitchen &&
           ['pending', 'sent', 'cooking'].contains(item.kitchenStatus),
     );
+    final canCloseEmpty =
+        currentOrder != null &&
+        currentOrder.status == 'open' &&
+        currentOrder.sentToKitchenAt == null &&
+        !['sent', 'cooking', 'ready'].contains(currentOrder.kitchenStatus) &&
+        items.isEmpty;
     final canAttemptCharge =
         canCharge &&
         currentOrder != null &&
@@ -1056,6 +1104,14 @@ class _TopOrderActions extends StatelessWidget {
             ),
             label: Text(sendLabel, overflow: TextOverflow.ellipsis),
           ),
+          if (canCloseEmpty) ...[
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: busy ? null : onCloseEmptyOrder,
+              icon: const Icon(Icons.close),
+              label: const Text('Cerrar mesa vacia'),
+            ),
+          ],
           const SizedBox(width: 8),
           Tooltip(
             message: chargeLabel,
