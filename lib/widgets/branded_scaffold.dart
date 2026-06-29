@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../core/constants/app_constants.dart';
@@ -64,7 +65,10 @@ class BrandedScaffold extends StatelessWidget {
                   ),
                 ],
               ),
-              actions: actions,
+              actions: [
+                const _ConnectionStatusBadge(),
+                if (actions != null) ...actions!,
+              ],
             ),
           ),
         ),
@@ -76,6 +80,74 @@ class BrandedScaffold extends StatelessWidget {
         ),
       ),
       bottomNavigationBar: bottomNavigationBar,
+    );
+  }
+}
+
+class _ConnectionStatusBadge extends StatelessWidget {
+  const _ConnectionStatusBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final restaurantStream = FirebaseFirestore.instance
+        .collection('restaurants')
+        .doc(AppConstants.restaurantId)
+        .snapshots(includeMetadataChanges: true);
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: restaurantStream,
+      builder: (context, snapshot) {
+        final metadata = snapshot.data?.metadata;
+        final offlineOrPending =
+            metadata == null ||
+            metadata.isFromCache ||
+            metadata.hasPendingWrites;
+        final label = offlineOrPending
+            ? 'Sin conexion / pendiente de sincronizar'
+            : 'En linea';
+        final color = offlineOrPending
+            ? BrandColors.accentYellow
+            : BrandColors.success;
+
+        return Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Tooltip(
+            message: label,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 190),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: color.withValues(alpha: 0.42)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    offlineOrPending ? Icons.cloud_off : Icons.cloud_done,
+                    size: 16,
+                    color: color,
+                  ),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

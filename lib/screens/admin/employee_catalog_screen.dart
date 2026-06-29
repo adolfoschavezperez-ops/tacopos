@@ -8,24 +8,35 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 
-class EmployeeCatalogScreen extends StatelessWidget {
+class EmployeeCatalogScreen extends StatefulWidget {
   const EmployeeCatalogScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final repository = TacoPosRepository();
+  State<EmployeeCatalogScreen> createState() => _EmployeeCatalogScreenState();
+}
 
+class _EmployeeCatalogScreenState extends State<EmployeeCatalogScreen> {
+  late final TacoPosRepository _repository;
+
+  @override
+  void initState() {
+    super.initState();
+    _repository = TacoPosRepository();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return BrandedScaffold(
       title: 'Empleados',
       actions: [
         IconButton(
           tooltip: 'Agregar empleado',
-          onPressed: () => _showEmployeeDialog(context, repository),
+          onPressed: () => _showEmployeeDialog(),
           icon: const Icon(Icons.person_add_alt_1),
         ),
       ],
       body: StreamBuilder<List<Employee>>(
-        stream: repository.watchEmployees(activeOnly: false),
+        stream: _repository.watchEmployees(activeOnly: false),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return EmptyState(
@@ -61,12 +72,8 @@ class EmployeeCatalogScreen extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 10),
                   child: _EmployeeAdminTile(
                     employee: employee,
-                    onEdit: () => _showEmployeeDialog(
-                      context,
-                      repository,
-                      employee: employee,
-                    ),
-                    onToggle: () => repository.toggleEmployee(employee),
+                    onEdit: () => _showEmployeeDialog(employee: employee),
+                    onToggle: () => _repository.toggleEmployee(employee),
                   ),
                 ),
               ),
@@ -77,7 +84,7 @@ class EmployeeCatalogScreen extends StatelessWidget {
       bottomNavigationBar: SafeArea(
         minimum: const EdgeInsets.all(16),
         child: GlassButton(
-          onTap: () => _showEmployeeDialog(context, repository),
+          onTap: () => _showEmployeeDialog(),
           icon: Icons.person_add_alt_1,
           label: 'Agregar empleado',
           prominent: true,
@@ -86,83 +93,149 @@ class EmployeeCatalogScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _showEmployeeDialog(
-    BuildContext context,
-    TacoPosRepository repository, {
-    Employee? employee,
-  }) async {
-    final nameController = TextEditingController(text: employee?.name ?? '');
-    var active = employee?.active ?? true;
-
-    await showDialog<void>(
+  Future<void> _showEmployeeDialog({Employee? employee}) async {
+    final saved = await showDialog<bool>(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: Text(
-                employee == null ? 'Agregar empleado' : 'Editar empleado',
-              ),
-              content: SizedBox(
-                width: 420,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextField(
-                      controller: nameController,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: const InputDecoration(labelText: 'Nombre'),
-                    ),
-                    const SizedBox(height: 12),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Activo'),
-                      value: active,
-                      onChanged: (value) {
-                        setDialogState(() {
-                          active = value;
-                        });
-                      },
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancelar'),
-                ),
-                FilledButton(
-                  onPressed: () async {
-                    if (nameController.text.trim().isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Captura el nombre del empleado.'),
-                        ),
-                      );
-                      return;
-                    }
-
-                    await repository.saveEmployee(
-                      employeeId: employee?.id,
-                      name: nameController.text,
-                      active: active,
-                    );
-
-                    if (context.mounted) {
-                      Navigator.pop(context);
-                    }
-                  },
-                  child: const Text('Guardar'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+      builder: (_) =>
+          _EmployeeDialog(repository: _repository, employee: employee),
     );
 
-    nameController.dispose();
+    if (!mounted || saved != true) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          employee == null ? 'Empleado agregado.' : 'Empleado actualizado.',
+        ),
+      ),
+    );
+  }
+}
+
+class _EmployeeDialog extends StatefulWidget {
+  const _EmployeeDialog({required this.repository, this.employee});
+
+  final TacoPosRepository repository;
+  final Employee? employee;
+
+  @override
+  State<_EmployeeDialog> createState() => _EmployeeDialogState();
+}
+
+class _EmployeeDialogState extends State<_EmployeeDialog> {
+  late final TextEditingController _nameController;
+  late bool _active;
+  bool _saving = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.employee?.name ?? '');
+    _active = widget.employee?.active ?? true;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      setState(() {
+        _error = 'Captura el nombre del empleado.';
+      });
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = '';
+    });
+
+    final navigator = Navigator.of(context);
+
+    try {
+      await widget.repository.saveEmployee(
+        employeeId: widget.employee?.id,
+        name: name,
+        active: _active,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _saving = false;
+        _error = 'No se pudo guardar: $error';
+      });
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+    navigator.pop(true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(
+        widget.employee == null ? 'Agregar empleado' : 'Editar empleado',
+      ),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameController,
+              enabled: !_saving,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Nombre'),
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Activo'),
+              value: _active,
+              onChanged: _saving
+                  ? null
+                  : (value) {
+                      setState(() {
+                        _active = value;
+                      });
+                    },
+            ),
+            if (_error.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error,
+                style: const TextStyle(
+                  color: BrandColors.danger,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Guardando...' : 'Listo'),
+        ),
+      ],
+    );
   }
 }
 

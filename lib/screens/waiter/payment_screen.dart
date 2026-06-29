@@ -668,59 +668,115 @@ class _PersonPaymentCard extends StatelessWidget {
     final surcharge = method == 'card'
         ? pending * TacoPosRepository.cardSurchargeRate
         : 0.0;
+    final charged = pending + surcharge;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: GlassCard(
         selected: paid,
         accent: paid ? BrandColors.success : BrandColors.accentOrange,
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
                     'Persona $personNumber',
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    paid
-                        ? 'Pagado'
-                        : 'Pendiente ${pending.toStringAsFixed(2)}'
-                              '${surcharge > 0 ? ' + 4%' : ''}',
-                    style: const TextStyle(color: BrandColors.textMuted),
+                ),
+                MoneyText(
+                  value: subtotal,
+                  style: const TextStyle(
+                    color: BrandColors.accentYellow,
+                    fontWeight: FontWeight.w800,
                   ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 12),
+                paid
+                    ? const StatusBadge(
+                        style: StatusStyle(
+                          label: 'Pagado',
+                          color: BrandColors.success,
+                          background: Color(0x1F55D98B),
+                        ),
+                      )
+                    : OutlinedButton.icon(
+                        onPressed: busy ? null : onPay,
+                        icon: const Icon(Icons.payments_outlined),
+                        label: const Text('Cobrar persona'),
+                      ),
+              ],
             ),
-            MoneyText(
-              value: subtotal,
-              style: const TextStyle(
-                color: BrandColors.accentYellow,
-                fontWeight: FontWeight.w800,
+            const SizedBox(height: 10),
+            if (paid)
+              const Text(
+                'Pagado',
+                style: TextStyle(color: BrandColors.textMuted),
+              )
+            else ...[
+              _PersonChargeRow(label: 'Subtotal base', value: pending),
+              if (method == 'card')
+                _PersonChargeRow(
+                  label: 'Comision tarjeta 4%',
+                  value: surcharge,
+                ),
+              const Divider(height: 14),
+              _PersonChargeRow(
+                label: 'Total a cobrar',
+                value: charged,
+                highlight: true,
               ),
-            ),
-            const SizedBox(width: 12),
-            paid
-                ? const StatusBadge(
-                    style: StatusStyle(
-                      label: 'Pagado',
-                      color: BrandColors.success,
-                      background: Color(0x1F55D98B),
-                    ),
-                  )
-                : OutlinedButton.icon(
-                    onPressed: busy ? null : onPay,
-                    icon: const Icon(Icons.payments_outlined),
-                    label: const Text('Cobrar persona'),
-                  ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _PersonChargeRow extends StatelessWidget {
+  const _PersonChargeRow({
+    required this.label,
+    required this.value,
+    this.highlight = false,
+  });
+
+  final String label;
+  final double value;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: highlight
+                    ? BrandColors.textPrimary
+                    : BrandColors.textMuted,
+                fontWeight: highlight ? FontWeight.w800 : FontWeight.w600,
+              ),
+            ),
+          ),
+          MoneyText(
+            value: value,
+            style: TextStyle(
+              color: highlight
+                  ? BrandColors.accentYellow
+                  : BrandColors.textSecondary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
       ),
     );
   }

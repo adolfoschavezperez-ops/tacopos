@@ -30,8 +30,8 @@ class OrderScreen extends StatefulWidget {
 
 class _OrderScreenState extends State<OrderScreen> {
   final _repository = TacoPosRepository();
-  late final Stream<PosOrder?> _orderStream;
-  late final Stream<List<OrderItem>> _itemsStream;
+  late Stream<PosOrder?> _orderStream;
+  late Stream<List<OrderItem>> _itemsStream;
   late final Stream<List<Product>> _productsStream;
   int _selectedPerson = 1;
   int _personCount = 1;
@@ -41,9 +41,21 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   void initState() {
     super.initState();
+    _bindOrderStreams();
+    _productsStream = _repository.watchProducts(activeOnly: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant OrderScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.orderId != widget.orderId) {
+      _bindOrderStreams();
+    }
+  }
+
+  void _bindOrderStreams() {
     _orderStream = _repository.watchOrder(widget.orderId);
     _itemsStream = _repository.watchOrderItems(widget.orderId);
-    _productsStream = _repository.watchProducts(activeOnly: true);
   }
 
   Future<void> _sendToKitchen() async {
@@ -136,6 +148,7 @@ class _OrderScreenState extends State<OrderScreen> {
           actions: [
             StreamBuilder<List<OrderItem>>(
               stream: _itemsStream,
+              initialData: const [],
               builder: (context, itemSnapshot) {
                 return _TopOrderActions(
                   order: order,
@@ -301,6 +314,7 @@ class _OrderSummaryLoader extends StatelessWidget {
 
     return StreamBuilder<List<OrderItem>>(
       stream: itemsStream,
+      initialData: const [],
       builder: (context, itemsSnapshot) {
         if (itemsSnapshot.hasError) {
           return EmptyState(
@@ -308,10 +322,6 @@ class _OrderSummaryLoader extends StatelessWidget {
             title: 'No se pudieron cargar los articulos',
             message: '${itemsSnapshot.error}',
           );
-        }
-
-        if (itemsSnapshot.connectionState == ConnectionState.waiting) {
-          return const LoadingPanel(message: 'Cargando articulos...');
         }
 
         final items = itemsSnapshot.data ?? [];
@@ -452,7 +462,7 @@ class _OrderSummary extends StatelessWidget {
           child: items.isEmpty
               ? const EmptyState(
                   icon: Icons.receipt_long,
-                  title: 'Orden vacia',
+                  title: 'Sin articulos agregados',
                   message: 'Elige una persona y agrega productos del menu.',
                 )
               : ListView.builder(

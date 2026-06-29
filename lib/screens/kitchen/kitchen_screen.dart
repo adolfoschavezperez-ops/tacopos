@@ -21,35 +21,22 @@ class KitchenScreen extends StatefulWidget {
 }
 
 class _KitchenScreenState extends State<KitchenScreen> {
-  late final Timer _timer;
-  DateTime _now = DateTime.now();
+  late final TacoPosRepository _repository;
+  late final Stream<List<KitchenOrderBundle>> _bundlesStream;
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) {
-        setState(() {
-          _now = DateTime.now();
-        });
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
+    _repository = TacoPosRepository();
+    _bundlesStream = _repository.watchKitchenOrderBundles();
   }
 
   @override
   Widget build(BuildContext context) {
-    final repository = TacoPosRepository();
-
     return BrandedScaffold(
       title: 'Cocina',
       body: StreamBuilder<List<KitchenOrderBundle>>(
-        stream: repository.watchKitchenOrderBundles(),
+        stream: _bundlesStream,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return EmptyState(
@@ -104,7 +91,6 @@ class _KitchenScreenState extends State<KitchenScreen> {
                           return _KitchenOrderCard(
                             key: ValueKey('kitchen-${bundles[index].order.id}'),
                             bundle: bundles[index],
-                            now: _now,
                           );
                         },
                       ),
@@ -121,10 +107,9 @@ class _KitchenScreenState extends State<KitchenScreen> {
 }
 
 class _KitchenOrderCard extends StatelessWidget {
-  const _KitchenOrderCard({super.key, required this.bundle, required this.now});
+  const _KitchenOrderCard({super.key, required this.bundle});
 
   final KitchenOrderBundle bundle;
-  final DateTime now;
 
   @override
   Widget build(BuildContext context) {
@@ -132,13 +117,9 @@ class _KitchenOrderCard extends StatelessWidget {
     final style = kitchenStatusStyle(order.kitchenStatus);
     final waitingSince =
         bundle.firstSentToKitchenAt ?? order.sentToKitchenAt ?? order.updatedAt;
-    final elapsed = waitingSince == null
-        ? Duration.zero
-        : now.difference(waitingSince);
-    final elapsedColor = _elapsedColor(elapsed);
 
     return GlassCard(
-      accent: elapsedColor,
+      accent: _elapsedColorForStart(waitingSince),
       selected: order.kitchenStatus == 'cooking',
       onTap: () {
         Navigator.push(
@@ -180,7 +161,7 @@ class _KitchenOrderCard extends StatelessWidget {
                   ),
                 ),
               ),
-              _ElapsedBadge(elapsed: elapsed, color: elapsedColor),
+              KitchenElapsedBadge(startTime: waitingSince),
             ],
           ),
           const Spacer(),
@@ -231,14 +212,44 @@ class _KitchenOrderCard extends StatelessWidget {
   }
 }
 
-class _ElapsedBadge extends StatelessWidget {
-  const _ElapsedBadge({required this.elapsed, required this.color});
+class KitchenElapsedBadge extends StatefulWidget {
+  const KitchenElapsedBadge({super.key, required this.startTime});
 
-  final Duration elapsed;
-  final Color color;
+  final DateTime? startTime;
+
+  @override
+  State<KitchenElapsedBadge> createState() => _KitchenElapsedBadgeState();
+}
+
+class _KitchenElapsedBadgeState extends State<KitchenElapsedBadge> {
+  late final Timer _timer;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          _now = DateTime.now();
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final elapsed = widget.startTime == null
+        ? Duration.zero
+        : _now.difference(widget.startTime!);
+    final color = _elapsedColor(elapsed);
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
@@ -252,6 +263,13 @@ class _ElapsedBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+Color _elapsedColorForStart(DateTime? startTime) {
+  if (startTime == null) {
+    return BrandColors.success;
+  }
+  return _elapsedColor(DateTime.now().difference(startTime));
 }
 
 Color _elapsedColor(Duration elapsed) {

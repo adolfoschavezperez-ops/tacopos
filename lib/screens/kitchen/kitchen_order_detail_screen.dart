@@ -25,30 +25,19 @@ class KitchenOrderDetailScreen extends StatefulWidget {
 
 class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
   final _repository = TacoPosRepository();
-  late final Timer _timer;
+  late final Stream<PosOrder?> _orderStream;
+  late final Stream<List<OrderItem>> _itemsStream;
   int _personIndex = 0;
   bool _busy = false;
-  DateTime _now = DateTime.now();
 
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) {
-        setState(() {
-          _now = DateTime.now();
-        });
-      }
-    });
+    _orderStream = _repository.watchOrder(widget.orderId);
+    _itemsStream = _repository.watchKitchenItems(widget.orderId);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _repository.markActiveKitchenItemsCooking(widget.orderId);
     });
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    super.dispose();
   }
 
   Future<void> _markReady(List<OrderItem> activeItems) async {
@@ -117,7 +106,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       body: PremiumBackground(
         child: SafeArea(
           child: StreamBuilder<PosOrder?>(
-            stream: _repository.watchOrder(widget.orderId),
+            stream: _orderStream,
             builder: (context, orderSnapshot) {
               if (orderSnapshot.hasError) {
                 return EmptyState(
@@ -134,7 +123,8 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
               }
 
               return StreamBuilder<List<OrderItem>>(
-                stream: _repository.watchKitchenItems(widget.orderId),
+                stream: _itemsStream,
+                initialData: const [],
                 builder: (context, itemSnapshot) {
                   if (itemSnapshot.hasError) {
                     return EmptyState(
@@ -164,10 +154,6 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                   final personItems = grouped[personNumber] ?? [];
                   final isLastPerson = _personIndex >= people.length - 1;
                   final elapsedSince = _elapsedStart(items);
-                  final elapsed = elapsedSince == null
-                      ? Duration.zero
-                      : _now.difference(elapsedSince);
-                  final elapsedColor = _elapsedColor(elapsed);
 
                   return Padding(
                     padding: const EdgeInsets.all(24),
@@ -251,10 +237,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: _PreparationTimer(
-                                elapsed: elapsed,
-                                color: elapsedColor,
-                              ),
+                              child: _PreparationTimer(startTime: elapsedSince),
                             ),
                             if (people.length > 1 && _personIndex > 0) ...[
                               const SizedBox(width: 12),
@@ -323,15 +306,67 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
 }
 
 class _PreparationTimer extends StatelessWidget {
-  const _PreparationTimer({required this.elapsed, required this.color});
+  const _PreparationTimer({required this.startTime});
 
-  final Duration elapsed;
-  final Color color;
+  final DateTime? startTime;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return KitchenElapsedBadge(
+      startTime: startTime,
+      prefix: 'En preparacion',
       height: 48,
+    );
+  }
+}
+
+class KitchenElapsedBadge extends StatefulWidget {
+  const KitchenElapsedBadge({
+    super.key,
+    required this.startTime,
+    required this.prefix,
+    required this.height,
+  });
+
+  final DateTime? startTime;
+  final String prefix;
+  final double height;
+
+  @override
+  State<KitchenElapsedBadge> createState() => _KitchenElapsedBadgeState();
+}
+
+class _KitchenElapsedBadgeState extends State<KitchenElapsedBadge> {
+  late final Timer _timer;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          _now = DateTime.now();
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final elapsed = widget.startTime == null
+        ? Duration.zero
+        : _now.difference(widget.startTime!);
+    final color = _elapsedColor(elapsed);
+
+    return Container(
+      height: widget.height,
       alignment: Alignment.center,
       padding: const EdgeInsets.symmetric(horizontal: 16),
       decoration: BoxDecoration(
@@ -347,7 +382,7 @@ class _PreparationTimer extends StatelessWidget {
           const SizedBox(width: 8),
           Flexible(
             child: Text(
-              'En preparacion ${_formatElapsed(elapsed)}',
+              '${widget.prefix} ${_formatElapsed(elapsed)}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(color: color, fontWeight: FontWeight.w900),
