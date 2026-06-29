@@ -109,17 +109,19 @@ class _OrderScreenState extends State<OrderScreen> {
         return BrandedScaffold(
           title: order?.tableName ?? widget.tableName,
           actions: [
-            if (_busy)
-              const Padding(
-                padding: EdgeInsets.only(right: 12),
-                child: Center(
-                  child: SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
-              ),
+            StreamBuilder<List<OrderItem>>(
+              stream: _itemsStream,
+              builder: (context, itemSnapshot) {
+                return _TopOrderActions(
+                  order: order,
+                  items: itemSnapshot.data ?? const [],
+                  busy: _busy,
+                  onSendToKitchen: _sendToKitchen,
+                  onOpenPayment: _openPayment,
+                );
+              },
+            ),
+            const SizedBox(width: 10),
           ],
           body: _buildBody(orderSnapshot),
         );
@@ -189,8 +191,6 @@ class _OrderScreenState extends State<OrderScreen> {
                 orderId: widget.orderId,
                 itemId: item.id,
               ),
-              onSendToKitchen: _busy ? null : _sendToKitchen,
-              onOpenPayment: _busy ? null : _openPayment,
             );
             final menu = _ProductMenu(
               productsStream: _productsStream,
@@ -271,8 +271,6 @@ class _OrderSummary extends StatelessWidget {
     required this.onAddPerson,
     required this.onQtyChanged,
     required this.onDelete,
-    required this.onSendToKitchen,
-    required this.onOpenPayment,
   });
 
   final PosOrder order;
@@ -283,8 +281,6 @@ class _OrderSummary extends StatelessWidget {
   final VoidCallback onAddPerson;
   final void Function(OrderItem item, int qty) onQtyChanged;
   final ValueChanged<OrderItem> onDelete;
-  final VoidCallback? onSendToKitchen;
-  final VoidCallback? onOpenPayment;
 
   @override
   Widget build(BuildContext context) {
@@ -337,14 +333,6 @@ class _OrderSummary extends StatelessWidget {
                 ],
               ),
             ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 0, 18, 12),
-          child: _OrderActionPanel(
-            order: order,
-            onSendToKitchen: onSendToKitchen,
-            onOpenPayment: onOpenPayment,
           ),
         ),
         SizedBox(
@@ -483,117 +471,59 @@ class _PersonItemsCard extends StatelessWidget {
   }
 }
 
-class _OrderActionPanel extends StatelessWidget {
-  const _OrderActionPanel({
+class _TopOrderActions extends StatelessWidget {
+  const _TopOrderActions({
     required this.order,
+    required this.items,
+    required this.busy,
     required this.onSendToKitchen,
     required this.onOpenPayment,
   });
 
-  final PosOrder order;
-  final VoidCallback? onSendToKitchen;
-  final VoidCallback? onOpenPayment;
+  final PosOrder? order;
+  final List<OrderItem> items;
+  final bool busy;
+  final VoidCallback onSendToKitchen;
+  final VoidCallback onOpenPayment;
 
   @override
   Widget build(BuildContext context) {
-    final kitchenLabel = switch (order.kitchenStatus) {
-      'sent' => 'Comanda enviada',
-      'cooking' => 'En preparacion',
-      'ready' => 'Lista para cobrar',
-      'not_required' => 'Sin cocina',
-      _ => 'Enviar comanda',
-    };
-    final kitchenHint = switch (order.kitchenStatus) {
-      'sent' => 'Cocina ya recibio los tacos por persona',
-      'cooking' => 'La comanda esta en preparacion',
-      'ready' => 'Cocina marco la comanda como lista',
-      'not_required' => 'Solo hay productos que no pasan por cocina',
-      _ => 'Cocina vera tacos y gringas por persona',
-    };
-    final canSend = !['sent', 'cooking', 'ready'].contains(order.kitchenStatus);
-
-    return Row(
-      children: [
-        Expanded(
-          child: _ActionTile(
-            icon: Icons.room_service_outlined,
-            title: kitchenLabel,
-            subtitle: kitchenHint,
-            prominent: canSend,
-            onTap: canSend ? onSendToKitchen : null,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _ActionTile(
-            icon: Icons.point_of_sale_outlined,
-            title: 'Cobrar mesa',
-            subtitle: 'Pago completo o por persona',
-            prominent: order.kitchenStatus == 'ready',
-            onTap: onOpenPayment,
-          ),
-        ),
-      ],
+    final currentOrder = order;
+    final pendingKitchenCount = items
+        .where((item) => item.sendToKitchen && item.kitchenStatus == 'pending')
+        .length;
+    final hadKitchenSend = items.any(
+      (item) =>
+          item.sendToKitchen &&
+          ['sent', 'cooking', 'ready'].contains(item.kitchenStatus),
     );
-  }
-}
+    final canSend = !busy && pendingKitchenCount > 0;
+    final sendLabel = pendingKitchenCount == 0
+        ? 'Cocina al dia'
+        : hadKitchenSend
+        ? 'Enviar extras'
+        : 'Enviar cocina';
+    final canCharge = currentOrder != null && currentOrder.total > 0 && !busy;
 
-class _ActionTile extends StatelessWidget {
-  const _ActionTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.prominent,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool prominent;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      onTap: onTap,
-      selected: prominent,
-      accent: prominent ? BrandColors.accentYellow : BrandColors.accentOrange,
-      padding: const EdgeInsets.all(14),
+    return Padding(
+      padding: const EdgeInsets.only(right: 2),
       child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            icon,
-            color: prominent
-                ? BrandColors.accentYellow
-                : BrandColors.textSecondary,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w800,
-                    color: BrandColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  subtitle,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: BrandColors.textMuted,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
+          OutlinedButton.icon(
+            onPressed: canSend ? onSendToKitchen : null,
+            icon: Icon(
+              pendingKitchenCount == 0
+                  ? Icons.check_circle_outline
+                  : Icons.room_service_outlined,
             ),
+            label: Text(sendLabel, overflow: TextOverflow.ellipsis),
+          ),
+          const SizedBox(width: 8),
+          FilledButton.icon(
+            onPressed: canCharge ? onOpenPayment : null,
+            icon: const Icon(Icons.point_of_sale_outlined),
+            label: const Text('Cobrar', overflow: TextOverflow.ellipsis),
           ),
         ],
       ),

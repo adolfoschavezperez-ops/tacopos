@@ -37,6 +37,15 @@ class DemoSeedService {
       }, SetOptions(merge: true));
     }
 
+    for (final employee in _employees) {
+      final id = employee['id'] as String;
+      batch.set(restaurantRef.collection('employees').doc(id), {
+        ...employee,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
     await batch.commit();
   }
 }
@@ -82,6 +91,11 @@ const _tables = [
     'active': true,
     'sortOrder': 99,
   },
+];
+
+const _employees = [
+  {'id': 'ricardo_bernal', 'name': 'Ricardo Bernal', 'active': true},
+  {'id': 'gael', 'name': 'Gael', 'active': true},
 ];
 
 const _products = [

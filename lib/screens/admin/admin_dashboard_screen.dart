@@ -45,14 +45,34 @@ class AdminDashboardScreen extends StatelessWidget {
             stream: repository.watchPayments(),
             builder: (context, paymentsSnapshot) {
               final payments = _todayPayments(paymentsSnapshot.data ?? []);
-              final totalSales = payments.fold<double>(
+              final baseSales = payments.fold<double>(
                 0,
-                (runningTotal, payment) => runningTotal + payment.amount,
+                (runningTotal, payment) => runningTotal + payment.baseAmount,
               );
-              final cash = _paymentsByMethod(payments, 'cash');
-              final card = _paymentsByMethod(payments, 'card');
-              final transfer = _paymentsByMethod(payments, 'transfer');
-              final mixed = _paymentsByMethod(payments, 'mixed');
+              final cash = _baseByMethod(payments, 'cash');
+              final cardBase = _baseByMethod(payments, 'card');
+              final cardSurcharge = payments
+                  .where((payment) => payment.method == 'card')
+                  .fold<double>(
+                    0,
+                    (runningTotal, payment) =>
+                        runningTotal + payment.surchargeAmount,
+                  );
+              final cardCharged = payments
+                  .where((payment) => payment.method == 'card')
+                  .fold<double>(
+                    0,
+                    (runningTotal, payment) =>
+                        runningTotal + payment.chargedAmount,
+                  );
+              final employeeConsumption = _baseByMethod(
+                payments,
+                'employee_consumption',
+              );
+              final realCharged = payments.fold<double>(
+                0,
+                (runningTotal, payment) => runningTotal + payment.chargedAmount,
+              );
               final paidOrders = orders
                   .where(
                     (order) => _isToday(order.paidAt) && order.status == 'paid',
@@ -97,7 +117,7 @@ class AdminDashboardScreen extends StatelessWidget {
                               _MetricCard(
                                 title: 'Ventas del dia',
                                 icon: Icons.payments,
-                                money: totalSales,
+                                money: baseSales,
                                 accent: BrandColors.accentYellow,
                               ),
                               _MetricCard(
@@ -107,15 +127,15 @@ class AdminDashboardScreen extends StatelessWidget {
                                 accent: BrandColors.accentOrange,
                               ),
                               _MetricCard(
-                                title: 'Tarjeta',
+                                title: 'Tarjeta base',
                                 icon: Icons.credit_card,
-                                money: card,
+                                money: cardBase,
                                 accent: BrandColors.success,
                               ),
                               _MetricCard(
-                                title: 'Transferencia',
-                                icon: Icons.sync_alt,
-                                money: transfer,
+                                title: 'Comision tarjeta',
+                                icon: Icons.percent,
+                                money: cardSurcharge,
                                 accent: BrandColors.info,
                               ),
                             ],
@@ -137,10 +157,22 @@ class AdminDashboardScreen extends StatelessWidget {
                             physics: const NeverScrollableScrollPhysics(),
                             children: [
                               _MetricCard(
-                                title: 'Mixto',
-                                icon: Icons.call_split,
-                                money: mixed,
+                                title: 'Total tarjeta',
+                                icon: Icons.credit_score,
+                                money: cardCharged,
                                 accent: BrandColors.accentYellow,
+                              ),
+                              _MetricCard(
+                                title: 'Consumo empleado',
+                                icon: Icons.badge_outlined,
+                                money: employeeConsumption,
+                                accent: BrandColors.info,
+                              ),
+                              _MetricCard(
+                                title: 'Total cobrado real',
+                                icon: Icons.point_of_sale,
+                                money: realCharged,
+                                accent: BrandColors.success,
                               ),
                               _MetricCard(
                                 title: 'Ordenes pagadas',
@@ -148,6 +180,24 @@ class AdminDashboardScreen extends StatelessWidget {
                                 value: '$paidOrders',
                                 accent: BrandColors.success,
                               ),
+                            ],
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 14),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final columns = constraints.maxWidth >= 900 ? 2 : 2;
+                          return GridView.count(
+                            crossAxisCount: columns,
+                            crossAxisSpacing: 14,
+                            mainAxisSpacing: 14,
+                            childAspectRatio: constraints.maxWidth >= 900
+                                ? 2.4
+                                : 1.45,
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            children: [
                               _MetricCard(
                                 title: 'Ordenes abiertas',
                                 icon: Icons.receipt_long,
@@ -256,12 +306,12 @@ class AdminDashboardScreen extends StatelessWidget {
     return payments.where((payment) => _isToday(payment.createdAt)).toList();
   }
 
-  double _paymentsByMethod(List<Payment> payments, String method) {
+  double _baseByMethod(List<Payment> payments, String method) {
     return payments
         .where((payment) => payment.method == method)
         .fold<double>(
           0,
-          (runningTotal, payment) => runningTotal + payment.amount,
+          (runningTotal, payment) => runningTotal + payment.baseAmount,
         );
   }
 

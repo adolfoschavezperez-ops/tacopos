@@ -25,12 +25,11 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
   int _personIndex = 0;
   bool _busy = false;
 
-  Future<void> _setCooking() async {
-    await _run(() {
-      return _repository.updateKitchenStatus(
-        orderId: widget.orderId,
-        status: 'cooking',
-      );
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _repository.markActiveKitchenItemsCooking(widget.orderId);
     });
   }
 
@@ -242,7 +241,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                           children: [
                             Expanded(
                               child: OutlinedButton.icon(
-                                onPressed: _busy ? null : _setCooking,
+                                onPressed: null,
                                 icon: const Icon(Icons.timer_outlined),
                                 label: const Text('En preparacion'),
                               ),

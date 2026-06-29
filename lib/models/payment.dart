@@ -8,9 +8,14 @@ class Payment {
     required this.tableName,
     required this.type,
     required this.method,
-    required this.amount,
+    required this.baseAmount,
+    required this.surchargeRate,
+    required this.surchargeAmount,
+    required this.chargedAmount,
     this.personNumber,
     this.personName,
+    this.employeeId,
+    this.employeeName,
     this.createdAt,
     this.createdBy,
   });
@@ -21,14 +26,25 @@ class Payment {
   final String tableName;
   final String type;
   final String method;
-  final double amount;
+  final double baseAmount;
+  final double surchargeRate;
+  final double surchargeAmount;
+  final double chargedAmount;
   final int? personNumber;
   final String? personName;
+  final String? employeeId;
+  final String? employeeName;
   final DateTime? createdAt;
   final String? createdBy;
 
+  double get amount => baseAmount;
+
   factory Payment.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
+    final legacyAmount = (data['amount'] as num?)?.toDouble();
+    final baseAmount =
+        (data['baseAmount'] as num?)?.toDouble() ?? legacyAmount ?? 0;
+    final surchargeAmount = (data['surchargeAmount'] as num?)?.toDouble() ?? 0;
 
     return Payment(
       id: doc.id,
@@ -37,9 +53,17 @@ class Payment {
       tableName: data['tableName'] as String? ?? '',
       type: data['type'] as String? ?? 'full_table',
       method: data['method'] as String? ?? 'cash',
-      amount: (data['amount'] as num?)?.toDouble() ?? 0,
+      baseAmount: baseAmount,
+      surchargeRate: (data['surchargeRate'] as num?)?.toDouble() ?? 0,
+      surchargeAmount: surchargeAmount,
+      chargedAmount:
+          (data['chargedAmount'] as num?)?.toDouble() ??
+          legacyAmount ??
+          baseAmount + surchargeAmount,
       personNumber: (data['personNumber'] as num?)?.toInt(),
       personName: data['personName'] as String?,
+      employeeId: data['employeeId'] as String?,
+      employeeName: data['employeeName'] as String?,
       createdAt: _toDate(data['createdAt']),
       createdBy: data['createdBy'] as String?,
     );

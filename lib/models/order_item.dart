@@ -15,6 +15,10 @@ class OrderItem {
     required this.sendToKitchen,
     required this.kitchenStatus,
     required this.paymentStatus,
+    this.kitchenBatchId,
+    this.sentToKitchenAt,
+    this.cookingAt,
+    this.readyAt,
     this.paidAt,
     this.paymentId,
   });
@@ -32,6 +36,10 @@ class OrderItem {
   final bool sendToKitchen;
   final String kitchenStatus;
   final String paymentStatus;
+  final String? kitchenBatchId;
+  final DateTime? sentToKitchenAt;
+  final DateTime? cookingAt;
+  final DateTime? readyAt;
   final DateTime? paidAt;
   final String? paymentId;
 
@@ -53,6 +61,10 @@ class OrderItem {
           data['sendToKitchen'] as bool? ?? _defaultSendToKitchen(data),
       kitchenStatus: data['kitchenStatus'] as String? ?? 'pending',
       paymentStatus: data['paymentStatus'] as String? ?? 'pending',
+      kitchenBatchId: data['kitchenBatchId'] as String?,
+      sentToKitchenAt: _toDate(data['sentToKitchenAt']),
+      cookingAt: _toDate(data['cookingAt']),
+      readyAt: _toDate(data['readyAt']),
       paidAt: _toDate(data['paidAt']),
       paymentId: data['paymentId'] as String?,
     );
