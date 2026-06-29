@@ -166,7 +166,9 @@ class _KitchenOrderCard extends StatelessWidget {
           ),
           const Spacer(),
           Text(
-            '${bundle.personCount} personas',
+            bundle.personLabel.isEmpty
+                ? '${bundle.personCount} personas'
+                : bundle.personLabel,
             style: const TextStyle(
               color: BrandColors.accentYellow,
               fontSize: 18,

@@ -17,6 +17,16 @@ class KitchenOrderBundle {
 
   int get personCount => items.map((item) => item.personNumber).toSet().length;
 
+  String get personLabel {
+    final namesByPerson = <int, String>{};
+    for (final item in items) {
+      namesByPerson.putIfAbsent(item.personNumber, () => item.personName);
+    }
+    final names = namesByPerson.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return names.map((entry) => entry.value).join(', ');
+  }
+
   DateTime? get firstSentToKitchenAt {
     return items
         .map((item) => item.sentToKitchenAt)
@@ -287,6 +297,7 @@ class TacoPosRepository {
       'total': 0.0,
       'paidTotal': 0.0,
       'pendingTotal': 0.0,
+      'personNames': {'1': 'Persona 1'},
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
@@ -310,6 +321,7 @@ class TacoPosRepository {
     required Product product,
     required int personNumber,
   }) async {
+    final personName = await _personNameForOrder(orderId, personNumber);
     final existingItem = await _findMatchingPendingItem(
       orderId: orderId,
       productId: product.id,
@@ -328,7 +340,7 @@ class TacoPosRepository {
     final itemRef = _ordersRef.doc(orderId).collection('items').doc();
     await itemRef.set({
       'personNumber': personNumber,
-      'personName': 'Persona $personNumber',
+      'personName': personName,
       'productId': product.id,
       'productName': product.name,
       'category': product.category,
@@ -345,6 +357,44 @@ class TacoPosRepository {
     });
 
     await recalculateOrderTotal(orderId);
+  }
+
+  Future<void> renamePerson({
+    required String orderId,
+    required int personNumber,
+    required String name,
+  }) async {
+    final cleanName = name.trim().isEmpty
+        ? 'Persona $personNumber'
+        : name.trim();
+    final orderRef = _ordersRef.doc(orderId);
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final batch = _db.batch();
+
+    batch.update(orderRef, {
+      'personNames.$personNumber': cleanName,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    for (final doc in itemsSnapshot.docs) {
+      final item = OrderItem.fromDoc(doc);
+      if (item.personNumber == personNumber) {
+        batch.update(doc.reference, {
+          'personName': cleanName,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    await batch.commit();
+  }
+
+  Future<String> _personNameForOrder(String orderId, int personNumber) async {
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    if (orderDoc.exists) {
+      return PosOrder.fromDoc(orderDoc).personName(personNumber);
+    }
+    return 'Persona $personNumber';
   }
 
   Future<OrderItem?> _findMatchingPendingItem({
@@ -407,10 +457,21 @@ class TacoPosRepository {
 
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
+      final shouldAttachToBatch =
+          item.kitchenBatchId == null &&
+          item.paymentStatus == 'pending' &&
+          (item.kitchenStatus == 'pending' ||
+              item.kitchenStatus == 'not_required');
       if (item.sendToKitchen && item.kitchenStatus == 'pending') {
         sentCount += 1;
         batch.update(doc.reference, {
           'kitchenStatus': 'sent',
+          'kitchenBatchId': kitchenBatchId,
+          'sentToKitchenAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      } else if (shouldAttachToBatch) {
+        batch.update(doc.reference, {
           'kitchenBatchId': kitchenBatchId,
           'sentToKitchenAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
@@ -684,6 +745,9 @@ class TacoPosRepository {
               item.personNumber == personNumber && item.paymentStatus != 'paid',
         )
         .toList();
+    final personName = personItems.isEmpty
+        ? 'Persona $personNumber'
+        : personItems.first.personName;
     final baseAmount = personItems.fold<double>(
       0,
       (runningTotal, item) => runningTotal + item.total,
@@ -703,7 +767,7 @@ class TacoPosRepository {
       method: method,
       baseAmount: baseAmount,
       personNumber: personNumber,
-      personName: 'Persona $personNumber',
+      personName: personName,
       employeeId: employeeId,
       employeeName: employeeName,
     );

@@ -152,6 +152,10 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
 
                   final personNumber = people[_personIndex];
                   final personItems = grouped[personNumber] ?? [];
+                  final personName = _personDisplayName(
+                    personNumber,
+                    personItems,
+                  );
                   final isLastPerson = _personIndex >= people.length - 1;
                   final elapsedSince = _elapsedStart(items);
 
@@ -173,7 +177,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 Text(
-                                  'Persona $personNumber',
+                                  personName,
                                   style: const TextStyle(
                                     fontSize: 36,
                                     fontWeight: FontWeight.w800,
@@ -303,6 +307,16 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
           (min, date) => min == null || date.isBefore(min) ? date : min,
         );
   }
+}
+
+String _personDisplayName(int personNumber, List<OrderItem> items) {
+  for (final item in items) {
+    final name = item.personName.trim();
+    if (name.isNotEmpty && name != 'Persona $personNumber') {
+      return name;
+    }
+  }
+  return 'Persona $personNumber';
 }
 
 class _PreparationTimer extends StatelessWidget {

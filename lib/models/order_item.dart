@@ -16,6 +16,8 @@ class OrderItem {
     required this.kitchenStatus,
     required this.paymentStatus,
     this.kitchenBatchId,
+    this.createdAt,
+    this.updatedAt,
     this.sentToKitchenAt,
     this.cookingAt,
     this.readyAt,
@@ -37,6 +39,8 @@ class OrderItem {
   final String kitchenStatus;
   final String paymentStatus;
   final String? kitchenBatchId;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
   final DateTime? sentToKitchenAt;
   final DateTime? cookingAt;
   final DateTime? readyAt;
@@ -49,7 +53,7 @@ class OrderItem {
     return OrderItem(
       id: doc.id,
       personNumber: (data['personNumber'] as num?)?.toInt() ?? 1,
-      personName: data['personName'] as String? ?? 'Persona 1',
+      personName: _readPersonName(data),
       productId: data['productId'] as String? ?? '',
       productName: data['productName'] as String? ?? 'Producto',
       category: data['category'] as String? ?? 'General',
@@ -62,6 +66,8 @@ class OrderItem {
       kitchenStatus: data['kitchenStatus'] as String? ?? 'pending',
       paymentStatus: data['paymentStatus'] as String? ?? 'pending',
       kitchenBatchId: data['kitchenBatchId'] as String?,
+      createdAt: _toDate(data['createdAt']),
+      updatedAt: _toDate(data['updatedAt']),
       sentToKitchenAt: _toDate(data['sentToKitchenAt']),
       cookingAt: _toDate(data['cookingAt']),
       readyAt: _toDate(data['readyAt']),
@@ -73,6 +79,12 @@ class OrderItem {
   static bool _defaultSendToKitchen(Map<String, dynamic> data) {
     final category = (data['category'] as String? ?? '').toLowerCase().trim();
     return category != 'bebidas';
+  }
+
+  static String _readPersonName(Map<String, dynamic> data) {
+    final personNumber = (data['personNumber'] as num?)?.toInt() ?? 1;
+    final name = (data['personName'] as String?)?.trim();
+    return name == null || name.isEmpty ? 'Persona $personNumber' : name;
   }
 
   static DateTime? _toDate(Object? value) {

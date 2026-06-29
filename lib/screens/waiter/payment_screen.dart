@@ -59,13 +59,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
-  Future<void> _payPerson(int personNumber) async {
+  Future<void> _payPerson(int personNumber, String personName) async {
     if (!_validateEmployee()) {
       return;
     }
 
     final confirmed = await _confirm(
-      title: 'Cobrar Persona $personNumber',
+      title: 'Cobrar $personName',
       message: 'Solo se marcaran pagados los items de esta persona.',
     );
     if (!confirmed) {
@@ -306,18 +306,25 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                 '${_people(items).length} cuentas separadas',
                           ),
                           const SizedBox(height: 12),
-                          ..._people(items).map(
-                            (person) => _PersonPaymentCard(
+                          ..._people(items).map((person) {
+                            final personItems = items
+                                .where((item) => item.personNumber == person)
+                                .toList();
+                            final personName = _personName(
+                              person,
+                              personItems,
+                              order,
+                            );
+                            return _PersonPaymentCard(
                               key: ValueKey('payment-person-$person'),
                               personNumber: person,
-                              items: items
-                                  .where((item) => item.personNumber == person)
-                                  .toList(),
+                              personName: personName,
+                              items: personItems,
                               method: _method,
                               busy: _busy,
-                              onPay: () => _payPerson(person),
-                            ),
-                          ),
+                              onPay: () => _payPerson(person, personName),
+                            );
+                          }),
                           const SizedBox(height: 20),
                           _PaymentsHistory(payments: payments),
                         ],
@@ -337,6 +344,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final people = items.map((item) => item.personNumber).toSet().toList()
       ..sort();
     return people;
+  }
+
+  String _personName(int person, List<OrderItem> items, PosOrder order) {
+    final orderName = order.personName(person);
+    if (orderName != 'Persona $person') {
+      return orderName;
+    }
+
+    for (final item in items) {
+      final itemName = item.personName.trim();
+      if (itemName.isNotEmpty && itemName != 'Persona $person') {
+        return itemName;
+      }
+    }
+
+    return orderName;
   }
 }
 
@@ -643,6 +666,7 @@ class _PersonPaymentCard extends StatelessWidget {
   const _PersonPaymentCard({
     super.key,
     required this.personNumber,
+    required this.personName,
     required this.items,
     required this.method,
     required this.busy,
@@ -650,6 +674,7 @@ class _PersonPaymentCard extends StatelessWidget {
   });
 
   final int personNumber;
+  final String personName;
   final List<OrderItem> items;
   final String method;
   final bool busy;
@@ -682,7 +707,7 @@ class _PersonPaymentCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Persona $personNumber',
+                    personName,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,

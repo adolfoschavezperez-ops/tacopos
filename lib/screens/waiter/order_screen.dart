@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
@@ -136,6 +137,53 @@ class _OrderScreenState extends State<OrderScreen> {
     });
   }
 
+  Future<void> _renamePerson(int personNumber, String currentName) async {
+    final controller = TextEditingController(text: currentName);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Renombrar $currentName'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textInputAction: TextInputAction.done,
+          decoration: const InputDecoration(labelText: 'Nombre de persona'),
+          onSubmitted: (_) => Navigator.pop(context, controller.text.trim()),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Guardar'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (!mounted || newName == null) {
+      return;
+    }
+
+    try {
+      await _repository.renamePerson(
+        orderId: widget.orderId,
+        personNumber: personNumber,
+        name: newName,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo renombrar la persona: $error')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<PosOrder?>(
@@ -180,10 +228,12 @@ class _OrderScreenState extends State<OrderScreen> {
           personCount: _personCount,
           selectedPerson: selectedPerson,
           onPersonCountChanged: (personCount) {
-            _personCount = personCount;
-            if (_selectedPerson > _personCount) {
-              _selectedPerson = _personCount;
-            }
+            setState(() {
+              _personCount = personCount;
+              if (_selectedPerson > _personCount) {
+                _selectedPerson = _personCount;
+              }
+            });
           },
           onSelectPerson: (person) {
             setState(() {
@@ -191,6 +241,7 @@ class _OrderScreenState extends State<OrderScreen> {
             });
           },
           onAddPerson: _addPerson,
+          onRenamePerson: _renamePerson,
           onQtyChanged: (item, qty) => _repository.updateItemQty(
             orderId: widget.orderId,
             item: item,
@@ -275,6 +326,7 @@ class _OrderSummaryLoader extends StatelessWidget {
     required this.onPersonCountChanged,
     required this.onSelectPerson,
     required this.onAddPerson,
+    required this.onRenamePerson,
     required this.onQtyChanged,
     required this.onDelete,
   });
@@ -286,6 +338,7 @@ class _OrderSummaryLoader extends StatelessWidget {
   final ValueChanged<int> onPersonCountChanged;
   final ValueChanged<int> onSelectPerson;
   final VoidCallback onAddPerson;
+  final void Function(int personNumber, String currentName) onRenamePerson;
   final void Function(OrderItem item, int qty) onQtyChanged;
   final ValueChanged<OrderItem> onDelete;
 
@@ -329,9 +382,15 @@ class _OrderSummaryLoader extends StatelessWidget {
           1,
           (max, item) => item.personNumber > max ? item.personNumber : max,
         );
-        final nextPersonCount = personCount > maxPersonFromItems
-            ? personCount
-            : maxPersonFromItems;
+        final maxPersonFromNames = order.personNames.keys.fold<int>(
+          1,
+          (max, person) => person > max ? person : max,
+        );
+        final nextPersonCount = [
+          personCount,
+          maxPersonFromItems,
+          maxPersonFromNames,
+        ].reduce((max, value) => value > max ? value : max);
         final nextSelectedPerson = selectedPerson
             .clamp(1, nextPersonCount)
             .toInt();
@@ -339,6 +398,9 @@ class _OrderSummaryLoader extends StatelessWidget {
         if (nextPersonCount != personCount ||
             nextSelectedPerson != selectedPerson) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!context.mounted) {
+              return;
+            }
             onPersonCountChanged(nextPersonCount);
           });
         }
@@ -350,6 +412,7 @@ class _OrderSummaryLoader extends StatelessWidget {
           selectedPerson: nextSelectedPerson,
           onSelectPerson: onSelectPerson,
           onAddPerson: onAddPerson,
+          onRenamePerson: onRenamePerson,
           onQtyChanged: onQtyChanged,
           onDelete: onDelete,
         );
@@ -358,7 +421,7 @@ class _OrderSummaryLoader extends StatelessWidget {
   }
 }
 
-class _OrderSummary extends StatelessWidget {
+class _OrderSummary extends StatefulWidget {
   const _OrderSummary({
     required this.order,
     required this.items,
@@ -366,6 +429,7 @@ class _OrderSummary extends StatelessWidget {
     required this.selectedPerson,
     required this.onSelectPerson,
     required this.onAddPerson,
+    required this.onRenamePerson,
     required this.onQtyChanged,
     required this.onDelete,
   });
@@ -376,15 +440,75 @@ class _OrderSummary extends StatelessWidget {
   final int selectedPerson;
   final ValueChanged<int> onSelectPerson;
   final VoidCallback onAddPerson;
+  final void Function(int personNumber, String currentName) onRenamePerson;
   final void Function(OrderItem item, int qty) onQtyChanged;
   final ValueChanged<OrderItem> onDelete;
 
   @override
+  State<_OrderSummary> createState() => _OrderSummaryState();
+}
+
+class _OrderSummaryState extends State<_OrderSummary> {
+  final _scrollController = ScrollController();
+  final _personKeys = <int, GlobalKey>{};
+  String? _lastFocusSignature;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleSelectedPersonFocus();
+  }
+
+  @override
+  void didUpdateWidget(covariant _OrderSummary oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scheduleSelectedPersonFocus();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scheduleSelectedPersonFocus() {
+    final selectedItems = widget.items
+        .where((item) => item.personNumber == widget.selectedPerson)
+        .length;
+    final signature = '${widget.selectedPerson}:$selectedItems';
+    if (signature == _lastFocusSignature) {
+      return;
+    }
+    _lastFocusSignature = signature;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      final targetContext = _personKeys[widget.selectedPerson]?.currentContext;
+      if (targetContext == null) {
+        return;
+      }
+      Scrollable.ensureVisible(
+        targetContext,
+        duration: const Duration(milliseconds: 260),
+        curve: Curves.easeOutCubic,
+        alignment: 0.08,
+      );
+    });
+  }
+
+  GlobalKey _personKey(int person) {
+    return _personKeys.putIfAbsent(person, GlobalKey.new);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final grouped = <int, List<OrderItem>>{};
-    for (final item in items) {
+    for (final item in widget.items) {
       grouped.putIfAbsent(item.personNumber, () => []).add(item);
     }
+    final batchLabels = _buildBatchLabels(widget.items, widget.order.createdAt);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -398,10 +522,10 @@ class _OrderSummary extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SectionHeader(
-                      title: order.tableName,
+                      title: widget.order.tableName,
                       subtitle: 'Orden por personas',
                       trailing: StatusBadge(
-                        style: kitchenStatusStyle(order.kitchenStatus),
+                        style: kitchenStatusStyle(widget.order.kitchenStatus),
                       ),
                     ),
                   ],
@@ -420,7 +544,7 @@ class _OrderSummary extends StatelessWidget {
                     ),
                   ),
                   MoneyText(
-                    value: order.total,
+                    value: widget.order.total,
                     style: const TextStyle(
                       color: BrandColors.accentYellow,
                       fontSize: 28,
@@ -437,37 +561,43 @@ class _OrderSummary extends StatelessWidget {
           child: ListView.separated(
             padding: const EdgeInsets.symmetric(horizontal: 18),
             scrollDirection: Axis.horizontal,
-            itemCount: personCount + 1,
+            itemCount: widget.personCount + 1,
             separatorBuilder: (_, _) => const SizedBox(width: 10),
             itemBuilder: (context, index) {
-              if (index == personCount) {
+              if (index == widget.personCount) {
                 return OutlinedButton.icon(
-                  onPressed: onAddPerson,
+                  onPressed: widget.onAddPerson,
                   icon: const Icon(Icons.person_add),
                   label: const Text('Persona'),
                 );
               }
 
               final person = index + 1;
+              final personName = _personDisplayName(
+                order: widget.order,
+                person: person,
+                items: grouped[person] ?? const [],
+              );
               return ChoiceChip(
-                selected: selectedPerson == person,
-                onSelected: (_) => onSelectPerson(person),
-                label: Text('Persona $person'),
+                selected: widget.selectedPerson == person,
+                onSelected: (_) => widget.onSelectPerson(person),
+                label: Text(personName),
               );
             },
           ),
         ),
         const SizedBox(height: 6),
         Expanded(
-          child: items.isEmpty
+          child: widget.items.isEmpty
               ? const EmptyState(
                   icon: Icons.receipt_long,
                   title: 'Sin articulos agregados',
                   message: 'Elige una persona y agrega productos del menu.',
                 )
               : ListView.builder(
+                  controller: _scrollController,
                   padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
-                  itemCount: personCount,
+                  itemCount: widget.personCount,
                   itemBuilder: (context, index) {
                     final person = index + 1;
                     final personItems = grouped[person] ?? [];
@@ -475,16 +605,24 @@ class _OrderSummary extends StatelessWidget {
                       0,
                       (sum, item) => sum + item.total,
                     );
+                    final personName = _personDisplayName(
+                      order: widget.order,
+                      person: person,
+                      items: personItems,
+                    );
 
                     return _PersonItemsCard(
-                      key: ValueKey('person-$person'),
+                      key: _personKey(person),
                       person: person,
-                      selected: selectedPerson == person,
+                      personName: personName,
+                      selected: widget.selectedPerson == person,
                       items: personItems,
+                      batchLabels: batchLabels,
                       subtotal: subtotal,
-                      onSelect: () => onSelectPerson(person),
-                      onQtyChanged: onQtyChanged,
-                      onDelete: onDelete,
+                      onSelect: () => widget.onSelectPerson(person),
+                      onRename: () => widget.onRenamePerson(person, personName),
+                      onQtyChanged: widget.onQtyChanged,
+                      onDelete: widget.onDelete,
                     );
                   },
                 ),
@@ -498,19 +636,25 @@ class _PersonItemsCard extends StatelessWidget {
   const _PersonItemsCard({
     super.key,
     required this.person,
+    required this.personName,
     required this.selected,
     required this.items,
+    required this.batchLabels,
     required this.subtotal,
     required this.onSelect,
+    required this.onRename,
     required this.onQtyChanged,
     required this.onDelete,
   });
 
   final int person;
+  final String personName;
   final bool selected;
   final List<OrderItem> items;
+  final Map<String, _OrderBatchLabel> batchLabels;
   final double subtotal;
   final VoidCallback onSelect;
+  final VoidCallback onRename;
   final void Function(OrderItem item, int qty) onQtyChanged;
   final ValueChanged<OrderItem> onDelete;
 
@@ -530,13 +674,19 @@ class _PersonItemsCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    'Persona $person',
+                    personName,
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
+                IconButton(
+                  tooltip: 'Renombrar persona',
+                  onPressed: onRename,
+                  icon: const Icon(Icons.edit_outlined),
+                ),
+                const SizedBox(width: 4),
                 MoneyText(
                   value: subtotal,
                   style: const TextStyle(
@@ -554,18 +704,202 @@ class _PersonItemsCard extends StatelessWidget {
                 style: TextStyle(color: BrandColors.textMuted),
               )
             else
-              ...items.map(
-                (item) => _OrderItemRow(
-                  item: item,
-                  onQtyChanged: (qty) => onQtyChanged(item, qty),
-                  onDelete: () => onDelete(item),
-                ),
+              ..._buildPersonBatches(items, batchLabels).expand(
+                (batch) => [
+                  _OrderBatchDivider(label: batch.label),
+                  ...batch.items.map(
+                    (item) => _OrderItemRow(
+                      item: item,
+                      onQtyChanged: (qty) => onQtyChanged(item, qty),
+                      onDelete: () => onDelete(item),
+                    ),
+                  ),
+                ],
               ),
           ],
         ),
       ),
     );
   }
+}
+
+class _OrderBatchDivider extends StatelessWidget {
+  const _OrderBatchDivider({required this.label});
+
+  final _OrderBatchLabel label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Divider(
+              color: BrandColors.glassBorder.withValues(alpha: 0.85),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              '${label.title} · ${_formatBatchTime(label.time)}',
+              style: TextStyle(
+                color: label.initial
+                    ? BrandColors.textMuted
+                    : BrandColors.accentYellow,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Divider(
+              color: BrandColors.glassBorder.withValues(alpha: 0.85),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PersonBatch {
+  const _PersonBatch({required this.label, required this.items});
+
+  final _OrderBatchLabel label;
+  final List<OrderItem> items;
+}
+
+class _OrderBatchLabel {
+  const _OrderBatchLabel({
+    required this.key,
+    required this.title,
+    required this.time,
+    required this.initial,
+  });
+
+  final String key;
+  final String title;
+  final DateTime? time;
+  final bool initial;
+}
+
+Map<String, _OrderBatchLabel> _buildBatchLabels(
+  List<OrderItem> items,
+  DateTime? orderCreatedAt,
+) {
+  final batchTimes = <String, DateTime?>{};
+  for (final item in items) {
+    final key = _batchKey(item);
+    final itemTime = _batchTime(item) ?? orderCreatedAt;
+    final current = batchTimes[key];
+    if (current == null || (itemTime != null && itemTime.isBefore(current))) {
+      batchTimes[key] = itemTime;
+    } else {
+      batchTimes.putIfAbsent(key, () => itemTime);
+    }
+  }
+
+  final ordered = batchTimes.entries.toList()
+    ..sort((a, b) {
+      final aTime = a.value ?? DateTime.now();
+      final bTime = b.value ?? DateTime.now();
+      return aTime.compareTo(bTime);
+    });
+
+  final labels = <String, _OrderBatchLabel>{};
+  for (var index = 0; index < ordered.length; index += 1) {
+    final entry = ordered[index];
+    final initial = index == 0;
+    labels[entry.key] = _OrderBatchLabel(
+      key: entry.key,
+      title: initial ? 'Orden inicial' : 'Orden extra',
+      time: entry.value,
+      initial: initial,
+    );
+  }
+  return labels;
+}
+
+List<_PersonBatch> _buildPersonBatches(
+  List<OrderItem> items,
+  Map<String, _OrderBatchLabel> labels,
+) {
+  final grouped = <String, List<OrderItem>>{};
+  for (final item in items) {
+    grouped.putIfAbsent(_batchKey(item), () => []).add(item);
+  }
+
+  final batches =
+      grouped.entries.map((entry) {
+        final label =
+            labels[entry.key] ??
+            _OrderBatchLabel(
+              key: entry.key,
+              title: 'Orden extra',
+              time: null,
+              initial: false,
+            );
+        final sortedItems = entry.value.toList()
+          ..sort((a, b) {
+            final aTime =
+                _batchTime(a) ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bTime =
+                _batchTime(b) ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final timeCompare = aTime.compareTo(bTime);
+            return timeCompare != 0
+                ? timeCompare
+                : a.productName.compareTo(b.productName);
+          });
+        return _PersonBatch(label: label, items: sortedItems);
+      }).toList()..sort((a, b) {
+        final aTime = a.label.time ?? DateTime.now();
+        final bTime = b.label.time ?? DateTime.now();
+        return aTime.compareTo(bTime);
+      });
+
+  return batches;
+}
+
+String _batchKey(OrderItem item) {
+  final batchId = item.kitchenBatchId;
+  if (batchId != null && batchId.isNotEmpty) {
+    return batchId;
+  }
+  final sentAt = item.sentToKitchenAt;
+  if (sentAt != null) {
+    return 'legacy-${sentAt.millisecondsSinceEpoch}';
+  }
+  return 'pending';
+}
+
+DateTime? _batchTime(OrderItem item) {
+  return item.sentToKitchenAt ?? item.createdAt ?? item.updatedAt;
+}
+
+String _formatBatchTime(DateTime? time) {
+  if (time == null) {
+    return DateFormat('h:mm a').format(DateTime.now());
+  }
+  return DateFormat('h:mm a').format(time);
+}
+
+String _personDisplayName({
+  required PosOrder order,
+  required int person,
+  required List<OrderItem> items,
+}) {
+  final orderName = order.personName(person);
+  if (orderName != 'Persona $person') {
+    return orderName;
+  }
+  for (final item in items) {
+    final itemName = item.personName.trim();
+    if (itemName.isNotEmpty && itemName != 'Persona $person') {
+      return itemName;
+    }
+  }
+  return orderName;
 }
 
 class _TopOrderActions extends StatelessWidget {
