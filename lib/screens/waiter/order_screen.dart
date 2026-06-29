@@ -138,31 +138,13 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _renamePerson(int personNumber, String currentName) async {
-    final controller = TextEditingController(text: currentName);
     final newName = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Renombrar $currentName'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          textInputAction: TextInputAction.done,
-          decoration: const InputDecoration(labelText: 'Nombre de persona'),
-          onSubmitted: (_) => Navigator.pop(context, controller.text.trim()),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Guardar'),
-          ),
-        ],
+      builder: (_) => _RenamePersonDialog(
+        currentName: currentName,
+        personNumber: personNumber,
       ),
     );
-    controller.dispose();
 
     if (!mounted || newName == null) {
       return;
@@ -313,6 +295,62 @@ class _OrderScreenState extends State<OrderScreen> {
           ],
         );
       },
+    );
+  }
+}
+
+class _RenamePersonDialog extends StatefulWidget {
+  const _RenamePersonDialog({
+    required this.currentName,
+    required this.personNumber,
+  });
+
+  final String currentName;
+  final int personNumber;
+
+  @override
+  State<_RenamePersonDialog> createState() => _RenamePersonDialogState();
+}
+
+class _RenamePersonDialogState extends State<_RenamePersonDialog> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.currentName);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _controller.text.trim();
+    final safeName = name.isEmpty ? 'Persona ${widget.personNumber}' : name;
+    Navigator.pop(context, safeName);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Renombrar ${widget.currentName}'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        textInputAction: TextInputAction.done,
+        decoration: const InputDecoration(labelText: 'Nombre de persona'),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Guardar')),
+      ],
     );
   }
 }
