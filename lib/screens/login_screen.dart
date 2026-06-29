@@ -36,6 +36,8 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _repository = TacoPosRepository();
   final _pinController = TextEditingController();
+  final _pinFocusNode = FocusNode();
+  late final Stream<List<Employee>> _employeesStream;
   Employee? _selectedEmployee;
   bool _busy = false;
   String _error = '';
@@ -43,11 +45,13 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
+    _employeesStream = _repository.watchEmployees();
     _repository.ensureInitialAdminEmployee();
   }
 
   @override
   void dispose() {
+    _pinFocusNode.dispose();
     _pinController.dispose();
     super.dispose();
   }
@@ -114,7 +118,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 460),
                       child: StreamBuilder<List<Employee>>(
-                        stream: _repository.watchEmployees(),
+                        stream: _employeesStream,
                         builder: (context, snapshot) {
                           if (snapshot.hasError) {
                             return EmptyState(
@@ -141,14 +145,13 @@ class _LoginScreenState extends State<LoginScreen> {
                           }
 
                           final selectedId = _selectedEmployee?.id;
-                          var selectedEmployee = employees.first;
-                          for (final employee in employees) {
-                            if (employee.id == selectedId) {
-                              selectedEmployee = employee;
-                              break;
-                            }
-                          }
-                          _selectedEmployee = selectedEmployee;
+                          final selectedEmployee = selectedId == null
+                              ? null
+                              : employees
+                                    .where(
+                                      (employee) => employee.id == selectedId,
+                                    )
+                                    .firstOrNull;
 
                           return GlassPanel(
                             borderRadius: 28,
@@ -185,7 +188,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                                 const SizedBox(height: 22),
                                 DropdownButtonFormField<Employee>(
-                                  initialValue: _selectedEmployee,
+                                  key: ValueKey(selectedEmployee?.id ?? 'none'),
+                                  initialValue: selectedEmployee,
                                   decoration: const InputDecoration(
                                     labelText: 'Empleado',
                                   ),
@@ -209,6 +213,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                 const SizedBox(height: 14),
                                 TextField(
                                   controller: _pinController,
+                                  focusNode: _pinFocusNode,
                                   enabled: !_busy,
                                   obscureText: true,
                                   keyboardType: TextInputType.number,
