@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -11,8 +13,34 @@ import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
 import 'kitchen_order_detail_screen.dart';
 
-class KitchenScreen extends StatelessWidget {
+class KitchenScreen extends StatefulWidget {
   const KitchenScreen({super.key});
+
+  @override
+  State<KitchenScreen> createState() => _KitchenScreenState();
+}
+
+class _KitchenScreenState extends State<KitchenScreen> {
+  late final Timer _timer;
+  DateTime _now = DateTime.now();
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          _now = DateTime.now();
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -76,6 +104,7 @@ class KitchenScreen extends StatelessWidget {
                           return _KitchenOrderCard(
                             key: ValueKey('kitchen-${bundles[index].order.id}'),
                             bundle: bundles[index],
+                            now: _now,
                           );
                         },
                       ),
@@ -92,17 +121,24 @@ class KitchenScreen extends StatelessWidget {
 }
 
 class _KitchenOrderCard extends StatelessWidget {
-  const _KitchenOrderCard({super.key, required this.bundle});
+  const _KitchenOrderCard({super.key, required this.bundle, required this.now});
 
   final KitchenOrderBundle bundle;
+  final DateTime now;
 
   @override
   Widget build(BuildContext context) {
     final order = bundle.order;
     final style = kitchenStatusStyle(order.kitchenStatus);
+    final waitingSince =
+        bundle.firstSentToKitchenAt ?? order.sentToKitchenAt ?? order.updatedAt;
+    final elapsed = waitingSince == null
+        ? Duration.zero
+        : now.difference(waitingSince);
+    final elapsedColor = _elapsedColor(elapsed);
 
     return GlassCard(
-      accent: style.color,
+      accent: elapsedColor,
       selected: order.kitchenStatus == 'cooking',
       onTap: () {
         Navigator.push(
@@ -133,12 +169,19 @@ class _KitchenOrderCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            _formatTime(order.sentToKitchenAt ?? order.updatedAt),
-            style: const TextStyle(
-              color: BrandColors.textMuted,
-              fontWeight: FontWeight.w600,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _formatTime(waitingSince),
+                  style: const TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              _ElapsedBadge(elapsed: elapsed, color: elapsedColor),
+            ],
           ),
           const Spacer(),
           Text(
@@ -186,4 +229,47 @@ class _KitchenOrderCard extends StatelessWidget {
 
     return DateFormat('HH:mm').format(date);
   }
+}
+
+class _ElapsedBadge extends StatelessWidget {
+  const _ElapsedBadge({required this.elapsed, required this.color});
+
+  final Duration elapsed;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        _formatElapsed(elapsed),
+        style: TextStyle(color: color, fontWeight: FontWeight.w900),
+      ),
+    );
+  }
+}
+
+Color _elapsedColor(Duration elapsed) {
+  if (elapsed <= const Duration(minutes: 4)) {
+    return BrandColors.success;
+  }
+  if (elapsed <= const Duration(minutes: 6)) {
+    return BrandColors.accentYellow;
+  }
+  return BrandColors.danger;
+}
+
+String _formatElapsed(Duration elapsed) {
+  final safeElapsed = elapsed.isNegative ? Duration.zero : elapsed;
+  final minutes = safeElapsed.inMinutes;
+  final seconds = safeElapsed.inSeconds
+      .remainder(60)
+      .toString()
+      .padLeft(2, '0');
+  return '$minutes:$seconds';
 }

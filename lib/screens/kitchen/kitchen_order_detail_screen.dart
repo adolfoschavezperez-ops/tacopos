@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -23,27 +25,39 @@ class KitchenOrderDetailScreen extends StatefulWidget {
 
 class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
   final _repository = TacoPosRepository();
+  late final Timer _timer;
   int _personIndex = 0;
   bool _busy = false;
+  DateTime _now = DateTime.now();
 
   @override
   void initState() {
     super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          _now = DateTime.now();
+        });
+      }
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _repository.markActiveKitchenItemsCooking(widget.orderId);
     });
   }
 
-  Future<void> _markReady(
-    List<OrderItem> visibleItems, {
-    required bool closeAfter,
-  }) async {
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
+
+  Future<void> _markReady(List<OrderItem> activeItems) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Marcar persona lista'),
+        title: const Text('Marcar comanda lista'),
         content: const Text(
-          'Solo se marcaran listos los productos visibles de esta persona.',
+          'Se marcaran listos todos los productos activos de esta comanda.',
         ),
         actions: [
           TextButton(
@@ -65,10 +79,10 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     await _run(() {
       return _repository.updateKitchenItemsStatus(
         orderId: widget.orderId,
-        itemIds: visibleItems.map((item) => item.id),
+        itemIds: activeItems.map((item) => item.id),
         status: 'ready',
       );
-    }, popAfter: closeAfter);
+    }, popAfter: true);
   }
 
   Future<void> _run(
@@ -148,6 +162,12 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
 
                   final personNumber = people[_personIndex];
                   final personItems = grouped[personNumber] ?? [];
+                  final isLastPerson = _personIndex >= people.length - 1;
+                  final elapsedSince = _elapsedStart(items);
+                  final elapsed = elapsedSince == null
+                      ? Duration.zero
+                      : _now.difference(elapsedSince);
+                  final elapsedColor = _elapsedColor(elapsed);
 
                   return Padding(
                     padding: const EdgeInsets.all(24),
@@ -174,7 +194,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                                   ),
                                 ),
                                 Text(
-                                  'Persona ${_personIndex + 1} de ${people.length}',
+                                  '${_personIndex + 1} de ${people.length}',
                                   style: const TextStyle(
                                     color: BrandColors.textMuted,
                                     fontSize: 18,
@@ -231,58 +251,51 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                         Row(
                           children: [
                             Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _personIndex == 0
-                                    ? null
-                                    : () {
-                                        setState(() {
-                                          _personIndex -= 1;
-                                        });
-                                      },
-                                icon: const Icon(Icons.chevron_left),
-                                label: const Text('Persona anterior'),
+                              child: _PreparationTimer(
+                                elapsed: elapsed,
+                                color: elapsedColor,
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: _personIndex >= people.length - 1
-                                    ? null
-                                    : () {
-                                        setState(() {
-                                          _personIndex += 1;
-                                        });
-                                      },
-                                icon: const Icon(Icons.chevron_right),
-                                label: const Text('Persona siguiente'),
+                            if (people.length > 1 && _personIndex > 0) ...[
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: _busy
+                                      ? null
+                                      : () {
+                                          setState(() {
+                                            _personIndex -= 1;
+                                          });
+                                        },
+                                  icon: const Icon(Icons.chevron_left),
+                                  label: const Text('Anterior'),
+                                ),
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: null,
-                                icon: const Icon(Icons.timer_outlined),
-                                label: const Text('En preparacion'),
-                              ),
-                            ),
+                            ],
                             const SizedBox(width: 12),
                             Expanded(
                               flex: 2,
-                              child: FilledButton.icon(
-                                onPressed: _busy
-                                    ? null
-                                    : () => _markReady(
-                                        personItems,
-                                        closeAfter:
-                                            items.length == personItems.length,
+                              child: isLastPerson
+                                  ? FilledButton.icon(
+                                      onPressed: _busy
+                                          ? null
+                                          : () => _markReady(items),
+                                      icon: const Icon(
+                                        Icons.check_circle_outline,
                                       ),
-                                icon: const Icon(Icons.check_circle_outline),
-                                label: const Text('Listo'),
-                              ),
+                                      label: const Text('Listo'),
+                                    )
+                                  : FilledButton.icon(
+                                      onPressed: _busy
+                                          ? null
+                                          : () {
+                                              setState(() {
+                                                _personIndex += 1;
+                                              });
+                                            },
+                                      icon: const Icon(Icons.chevron_right),
+                                      label: const Text('Siguiente plato'),
+                                    ),
                             ),
                           ],
                         ),
@@ -294,6 +307,53 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
             },
           ),
         ),
+      ),
+    );
+  }
+
+  DateTime? _elapsedStart(List<OrderItem> items) {
+    return items
+        .map((item) => item.cookingAt ?? item.sentToKitchenAt)
+        .whereType<DateTime>()
+        .fold<DateTime?>(
+          null,
+          (min, date) => min == null || date.isBefore(min) ? date : min,
+        );
+  }
+}
+
+class _PreparationTimer extends StatelessWidget {
+  const _PreparationTimer({required this.elapsed, required this.color});
+
+  final Duration elapsed;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 48,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withValues(alpha: 0.42)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.timer_outlined, color: color),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              'En preparacion ${_formatElapsed(elapsed)}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: color, fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -343,4 +403,24 @@ class _Header extends StatelessWidget {
 
     return DateFormat('HH:mm').format(date);
   }
+}
+
+Color _elapsedColor(Duration elapsed) {
+  if (elapsed <= const Duration(minutes: 4)) {
+    return BrandColors.success;
+  }
+  if (elapsed <= const Duration(minutes: 6)) {
+    return BrandColors.accentYellow;
+  }
+  return BrandColors.danger;
+}
+
+String _formatElapsed(Duration elapsed) {
+  final safeElapsed = elapsed.isNegative ? Duration.zero : elapsed;
+  final minutes = safeElapsed.inMinutes;
+  final seconds = safeElapsed.inSeconds
+      .remainder(60)
+      .toString()
+      .padLeft(2, '0');
+  return '$minutes:$seconds';
 }

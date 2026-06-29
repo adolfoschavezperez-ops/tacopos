@@ -17,6 +17,16 @@ class KitchenOrderBundle {
 
   int get personCount => items.map((item) => item.personNumber).toSet().length;
 
+  DateTime? get firstSentToKitchenAt {
+    return items
+        .map((item) => item.sentToKitchenAt)
+        .whereType<DateTime>()
+        .fold<DateTime?>(
+          null,
+          (min, date) => min == null || date.isBefore(min) ? date : min,
+        );
+  }
+
   String get shortSummary {
     final counts = <String, int>{};
     for (final item in items) {
@@ -451,7 +461,7 @@ class TacoPosRepository {
         changed += 1;
         batch.update(doc.reference, {
           'kitchenStatus': normalizedStatus,
-          if (normalizedStatus == 'cooking')
+          if (normalizedStatus == 'cooking' && item.cookingAt == null)
             'cookingAt': FieldValue.serverTimestamp(),
           if (normalizedStatus == 'ready')
             'readyAt': FieldValue.serverTimestamp(),
@@ -511,7 +521,7 @@ class TacoPosRepository {
         changedIds.add(item.id);
         batch.update(doc.reference, {
           'kitchenStatus': normalizedStatus,
-          if (normalizedStatus == 'cooking')
+          if (normalizedStatus == 'cooking' && item.cookingAt == null)
             'cookingAt': FieldValue.serverTimestamp(),
           if (normalizedStatus == 'ready')
             'readyAt': FieldValue.serverTimestamp(),
@@ -603,6 +613,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
     final itemsSnapshot = await _ordersRef
@@ -659,6 +670,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
     final itemsSnapshot = await _ordersRef
@@ -725,6 +737,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
   }) async {
+    await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
 
@@ -854,6 +867,26 @@ class TacoPosRepository {
       'createdAt': FieldValue.serverTimestamp(),
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
     });
+  }
+
+  Future<void> _ensureKitchenReadyForPayment(String orderId) async {
+    final itemsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('items')
+        .get();
+    final hasKitchenPending = itemsSnapshot.docs
+        .map(OrderItem.fromDoc)
+        .any(
+          (item) =>
+              item.sendToKitchen &&
+              ['pending', 'sent', 'cooking'].contains(item.kitchenStatus),
+        );
+
+    if (hasKitchenPending) {
+      throw StateError(
+        'No puedes cobrar hasta que cocina marque todo como listo.',
+      );
+    }
   }
 
   Future<void> recalculateOrderTotal(String orderId) async {

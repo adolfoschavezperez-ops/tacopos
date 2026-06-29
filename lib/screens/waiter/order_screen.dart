@@ -63,6 +63,7 @@ class _OrderScreenState extends State<OrderScreen> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          duration: const Duration(milliseconds: 900),
           content: Text(
             sentCount == 0
                 ? 'No hay productos de cocina para enviar.'
@@ -70,6 +71,10 @@ class _OrderScreenState extends State<OrderScreen> {
           ),
         ),
       );
+
+      if (sentCount > 0) {
+        Navigator.pop(context);
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -91,6 +96,24 @@ class _OrderScreenState extends State<OrderScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => PaymentScreen(orderId: widget.orderId)),
+    );
+  }
+
+  Future<void> _showKitchenPendingDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hay productos pendientes en cocina'),
+        content: const Text(
+          'No puedes cobrar hasta que cocina marque todo como listo.',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Entendido'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -118,8 +141,10 @@ class _OrderScreenState extends State<OrderScreen> {
                   order: order,
                   items: itemSnapshot.data ?? const [],
                   busy: _busy,
+                  itemsLoaded: itemSnapshot.hasData,
                   onSendToKitchen: _sendToKitchen,
                   onOpenPayment: _openPayment,
+                  onBlockedPayment: _showKitchenPendingDialog,
                 );
               },
             ),
@@ -132,6 +157,127 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Widget _buildBody(AsyncSnapshot<PosOrder?> orderSnapshot) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 960;
+        final selectedPerson = _selectedPerson < 1 ? 1 : _selectedPerson;
+        final summary = _OrderSummaryLoader(
+          orderSnapshot: orderSnapshot,
+          itemsStream: _itemsStream,
+          personCount: _personCount,
+          selectedPerson: selectedPerson,
+          onPersonCountChanged: (personCount) {
+            _personCount = personCount;
+            if (_selectedPerson > _personCount) {
+              _selectedPerson = _personCount;
+            }
+          },
+          onSelectPerson: (person) {
+            setState(() {
+              _selectedPerson = person;
+            });
+          },
+          onAddPerson: _addPerson,
+          onQtyChanged: (item, qty) => _repository.updateItemQty(
+            orderId: widget.orderId,
+            item: item,
+            qty: qty,
+          ),
+          onDelete: (item) =>
+              _repository.deleteItem(orderId: widget.orderId, itemId: item.id),
+        );
+        final menu = _ProductMenu(
+          productsStream: _productsStream,
+          selectedCategory: _selectedCategory,
+          onCategoryChanged: (category) {
+            setState(() {
+              _selectedCategory = category;
+            });
+          },
+          onAddProduct: (product) => _repository.addProductToOrder(
+            orderId: widget.orderId,
+            product: product,
+            personNumber: selectedPerson,
+          ),
+        );
+
+        if (wide) {
+          return Padding(
+            padding: const EdgeInsets.all(18),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                RepaintBoundary(
+                  child: SizedBox(
+                    width: constraints.maxWidth * 0.46,
+                    child: GlassPanel(
+                      padding: EdgeInsets.zero,
+                      blur: 8,
+                      child: summary,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: RepaintBoundary(
+                    child: GlassPanel(
+                      padding: EdgeInsets.zero,
+                      blur: 8,
+                      child: menu,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            GlassPanel(
+              padding: EdgeInsets.zero,
+              blur: 8,
+              child: SizedBox(height: 560, child: summary),
+            ),
+            const SizedBox(height: 16),
+            GlassPanel(
+              padding: EdgeInsets.zero,
+              blur: 8,
+              child: SizedBox(height: 640, child: menu),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _OrderSummaryLoader extends StatelessWidget {
+  const _OrderSummaryLoader({
+    required this.orderSnapshot,
+    required this.itemsStream,
+    required this.personCount,
+    required this.selectedPerson,
+    required this.onPersonCountChanged,
+    required this.onSelectPerson,
+    required this.onAddPerson,
+    required this.onQtyChanged,
+    required this.onDelete,
+  });
+
+  final AsyncSnapshot<PosOrder?> orderSnapshot;
+  final Stream<List<OrderItem>> itemsStream;
+  final int personCount;
+  final int selectedPerson;
+  final ValueChanged<int> onPersonCountChanged;
+  final ValueChanged<int> onSelectPerson;
+  final VoidCallback onAddPerson;
+  final void Function(OrderItem item, int qty) onQtyChanged;
+  final ValueChanged<OrderItem> onDelete;
+
+  @override
+  Widget build(BuildContext context) {
     if (orderSnapshot.hasError) {
       return EmptyState(
         icon: Icons.error_outline,
@@ -154,7 +300,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
 
     return StreamBuilder<List<OrderItem>>(
-      stream: _itemsStream,
+      stream: itemsStream,
       builder: (context, itemsSnapshot) {
         if (itemsSnapshot.hasError) {
           return EmptyState(
@@ -173,98 +319,29 @@ class _OrderScreenState extends State<OrderScreen> {
           1,
           (max, item) => item.personNumber > max ? item.personNumber : max,
         );
-        final personCount = _personCount > maxPersonFromItems
-            ? _personCount
+        final nextPersonCount = personCount > maxPersonFromItems
+            ? personCount
             : maxPersonFromItems;
-        final selectedPerson = _selectedPerson.clamp(1, personCount).toInt();
+        final nextSelectedPerson = selectedPerson
+            .clamp(1, nextPersonCount)
+            .toInt();
 
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 960;
-            final summary = _OrderSummary(
-              order: order,
-              items: items,
-              personCount: personCount,
-              selectedPerson: selectedPerson,
-              onSelectPerson: (person) {
-                setState(() {
-                  _selectedPerson = person;
-                });
-              },
-              onAddPerson: _addPerson,
-              onQtyChanged: (item, qty) => _repository.updateItemQty(
-                orderId: widget.orderId,
-                item: item,
-                qty: qty,
-              ),
-              onDelete: (item) => _repository.deleteItem(
-                orderId: widget.orderId,
-                itemId: item.id,
-              ),
-            );
-            final menu = _ProductMenu(
-              productsStream: _productsStream,
-              selectedCategory: _selectedCategory,
-              onCategoryChanged: (category) {
-                setState(() {
-                  _selectedCategory = category;
-                });
-              },
-              onAddProduct: (product) => _repository.addProductToOrder(
-                orderId: widget.orderId,
-                product: product,
-                personNumber: selectedPerson,
-              ),
-            );
+        if (nextPersonCount != personCount ||
+            nextSelectedPerson != selectedPerson) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            onPersonCountChanged(nextPersonCount);
+          });
+        }
 
-            if (wide) {
-              return Padding(
-                padding: const EdgeInsets.all(18),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    RepaintBoundary(
-                      child: SizedBox(
-                        width: constraints.maxWidth * 0.46,
-                        child: GlassPanel(
-                          padding: EdgeInsets.zero,
-                          blur: 8,
-                          child: summary,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: RepaintBoundary(
-                        child: GlassPanel(
-                          padding: EdgeInsets.zero,
-                          blur: 8,
-                          child: menu,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            return ListView(
-              padding: const EdgeInsets.all(18),
-              children: [
-                GlassPanel(
-                  padding: EdgeInsets.zero,
-                  blur: 8,
-                  child: SizedBox(height: 560, child: summary),
-                ),
-                const SizedBox(height: 16),
-                GlassPanel(
-                  padding: EdgeInsets.zero,
-                  blur: 8,
-                  child: SizedBox(height: 640, child: menu),
-                ),
-              ],
-            );
-          },
+        return _OrderSummary(
+          order: order,
+          items: items,
+          personCount: nextPersonCount,
+          selectedPerson: nextSelectedPerson,
+          onSelectPerson: onSelectPerson,
+          onAddPerson: onAddPerson,
+          onQtyChanged: onQtyChanged,
+          onDelete: onDelete,
         );
       },
     );
@@ -486,15 +563,19 @@ class _TopOrderActions extends StatelessWidget {
     required this.order,
     required this.items,
     required this.busy,
+    required this.itemsLoaded,
     required this.onSendToKitchen,
     required this.onOpenPayment,
+    required this.onBlockedPayment,
   });
 
   final PosOrder? order;
   final List<OrderItem> items;
   final bool busy;
+  final bool itemsLoaded;
   final VoidCallback onSendToKitchen;
   final VoidCallback onOpenPayment;
+  final VoidCallback onBlockedPayment;
 
   @override
   Widget build(BuildContext context) {
@@ -513,7 +594,16 @@ class _TopOrderActions extends StatelessWidget {
         : hadKitchenSend
         ? 'Enviar extras'
         : 'Enviar cocina';
-    final canCharge = currentOrder != null && currentOrder.total > 0 && !busy;
+    final hasKitchenPending = items.any(
+      (item) =>
+          item.sendToKitchen &&
+          ['pending', 'sent', 'cooking'].contains(item.kitchenStatus),
+    );
+    final canAttemptCharge =
+        currentOrder != null && currentOrder.total > 0 && !busy && itemsLoaded;
+    final chargeLabel = hasKitchenPending
+        ? 'Hay productos pendientes en cocina'
+        : 'Cobrar';
 
     return Padding(
       padding: const EdgeInsets.only(right: 2),
@@ -530,10 +620,17 @@ class _TopOrderActions extends StatelessWidget {
             label: Text(sendLabel, overflow: TextOverflow.ellipsis),
           ),
           const SizedBox(width: 8),
-          FilledButton.icon(
-            onPressed: canCharge ? onOpenPayment : null,
-            icon: const Icon(Icons.point_of_sale_outlined),
-            label: const Text('Cobrar', overflow: TextOverflow.ellipsis),
+          Tooltip(
+            message: chargeLabel,
+            child: FilledButton.icon(
+              onPressed: !canAttemptCharge
+                  ? null
+                  : hasKitchenPending
+                  ? onBlockedPayment
+                  : onOpenPayment,
+              icon: const Icon(Icons.point_of_sale_outlined),
+              label: Text(chargeLabel, overflow: TextOverflow.ellipsis),
+            ),
           ),
         ],
       ),
