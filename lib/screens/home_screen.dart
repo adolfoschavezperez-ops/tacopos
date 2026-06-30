@@ -252,6 +252,8 @@ class _HeroBlock extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 18),
+        const _HomeOperationBadge(),
+        const SizedBox(height: 10),
         OutlinedButton.icon(
           onPressed: onSignOut,
           icon: const Icon(Icons.logout),
@@ -262,6 +264,52 @@ class _HeroBlock extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _HomeOperationBadge extends StatelessWidget {
+  const _HomeOperationBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final repository = TacoPosRepository();
+    return StreamBuilder(
+      stream: repository.watchOpenCashSession(),
+      builder: (context, snapshot) {
+        final businessDate = snapshot.data?.businessDate;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: BrandColors.glassFill,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: BrandColors.glassBorder),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.event_outlined,
+                size: 16,
+                color: businessDate == null
+                    ? BrandColors.accentYellow
+                    : BrandColors.textSecondary,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                businessDate == null
+                    ? 'Sin caja abierta'
+                    : 'Operacion: $businessDate',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: BrandColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
-import '../../models/kitchen_session.dart';
 import '../../models/kitchen_stock_item.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
@@ -200,8 +199,8 @@ class _KitchenReportTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final repository = TacoPosRepository();
-    return StreamBuilder<List<KitchenSession>>(
-      stream: repository.watchKitchenSessions(
+    return FutureBuilder<List<KitchenYieldReportRow>>(
+      future: repository.kitchenYieldReport(
         startBusinessDate: startBusinessDate,
         endBusinessDate: endBusinessDate,
       ),
@@ -216,8 +215,8 @@ class _KitchenReportTab extends StatelessWidget {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const LoadingPanel(message: 'Cargando reporte...');
         }
-        final sessions = snapshot.data ?? [];
-        if (sessions.isEmpty) {
+        final rows = snapshot.data ?? [];
+        if (rows.isEmpty) {
           return const EmptyState(
             icon: Icons.analytics_outlined,
             title: 'Sin control de cocina',
@@ -229,15 +228,54 @@ class _KitchenReportTab extends StatelessWidget {
           children: [
             const SectionHeader(
               title: 'Reporte de cocina',
-              subtitle: 'Consumo operativo y rendimiento por insumo.',
+              subtitle:
+                  'Disponible menos sobrante y merma; rendimiento por venta.',
             ),
             const SizedBox(height: 18),
-            ...sessions.map(
-              (session) => Padding(
-                padding: const EdgeInsets.only(bottom: 14),
-                child: _KitchenSessionReportCard(
-                  session: session,
-                  repository: repository,
+            GlassPanel(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: DataTable(
+                  columns: const [
+                    DataColumn(label: Text('Insumo')),
+                    DataColumn(label: Text('Unidad')),
+                    DataColumn(label: Text('Disponible')),
+                    DataColumn(label: Text('Sobrante')),
+                    DataColumn(label: Text('Merma')),
+                    DataColumn(label: Text('Consumo real')),
+                    DataColumn(label: Text('Vendidos')),
+                    DataColumn(label: Text('Rendimiento optimo')),
+                    DataColumn(label: Text('Rendimiento actual')),
+                    DataColumn(label: Text('Rendimiento promedio')),
+                    DataColumn(label: Text('Diferencia vs optimo')),
+                  ],
+                  rows: rows
+                      .map(
+                        (row) => DataRow(
+                          cells: [
+                            DataCell(Text(row.item.name)),
+                            DataCell(Text(_unitLabel(row.item.unit))),
+                            DataCell(Text(_qty(row.availableQty))),
+                            DataCell(Text(_qty(row.finalRemainingQty))),
+                            DataCell(Text(_qty(row.wasteQty))),
+                            DataCell(Text(_qty(row.usefulConsumedQty))),
+                            DataCell(Text(_qty(row.soldQty))),
+                            DataCell(Text(_yieldText(row.optimalYield, row))),
+                            DataCell(
+                              Text(
+                                row.hasSales && row.hasConsumption
+                                    ? _yieldText(row.currentYield, row)
+                                    : row.hasSales
+                                    ? 'Sin consumo'
+                                    : 'Sin ventas',
+                              ),
+                            ),
+                            DataCell(Text(_yieldText(row.averageYield, row))),
+                            DataCell(Text(_differenceText(row))),
+                          ],
+                        ),
+                      )
+                      .toList(),
                 ),
               ),
             ),
@@ -246,79 +284,38 @@ class _KitchenReportTab extends StatelessWidget {
       },
     );
   }
-}
-
-class _KitchenSessionReportCard extends StatelessWidget {
-  const _KitchenSessionReportCard({
-    required this.session,
-    required this.repository,
-  });
-
-  final KitchenSession session;
-  final TacoPosRepository repository;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassPanel(
-      child: StreamBuilder<List<KitchenSessionItem>>(
-        stream: repository.watchKitchenSessionItems(session.id),
-        builder: (context, snapshot) {
-          final items = snapshot.data ?? [];
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SectionHeader(
-                title: 'Fecha ${session.businessDate}',
-                subtitle:
-                    '${session.status} | abre ${session.openedByEmployeeName ?? 'Empleado'} | cierra ${session.closedByEmployeeName ?? 'Sin cierre'}',
-              ),
-              const SizedBox(height: 12),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: DataTable(
-                  columns: const [
-                    DataColumn(label: Text('Insumo')),
-                    DataColumn(label: Text('Unidad')),
-                    DataColumn(label: Text('Anterior')),
-                    DataColumn(label: Text('Entradas')),
-                    DataColumn(label: Text('Disponible')),
-                    DataColumn(label: Text('Sobrante')),
-                    DataColumn(label: Text('Merma')),
-                    DataColumn(label: Text('Consumo util')),
-                    DataColumn(label: Text('Vendido')),
-                    DataColumn(label: Text('Rendimiento')),
-                  ],
-                  rows: items
-                      .map(
-                        (item) => DataRow(
-                          cells: [
-                            DataCell(Text(item.name)),
-                            DataCell(Text(item.unit)),
-                            DataCell(Text(_qty(item.previousRemainingQty))),
-                            DataCell(Text(_qty(item.todayInputQty))),
-                            DataCell(Text(_qty(item.availableQty))),
-                            DataCell(Text(_qty(item.finalRemainingQty))),
-                            DataCell(Text(_qty(item.wasteQty))),
-                            DataCell(Text(_qty(item.usefulConsumedQty))),
-                            DataCell(Text(_qty(item.soldQty))),
-                            DataCell(Text(_qty(item.yieldQtyPerUnit))),
-                          ],
-                        ),
-                      )
-                      .toList(),
-                ),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-  }
 
   String _qty(double value) {
     return value == value.roundToDouble()
         ? value.toStringAsFixed(0)
         : value.toStringAsFixed(2);
+  }
+
+  String _yieldText(double value, KitchenYieldReportRow row) {
+    if (value <= 0) return 'Sin configurar';
+    final suffix = row.item.unit == 'kg'
+        ? 'g/producto'
+        : row.item.unit == 'piece'
+        ? 'piezas/producto'
+        : '${row.item.unit}/producto';
+    return '${_qty(value)} $suffix';
+  }
+
+  String _differenceText(KitchenYieldReportRow row) {
+    final optimal = row.optimalYield;
+    if (optimal <= 0) return 'Sin optimo';
+    if (!row.hasSales) return 'Sin ventas';
+    if (!row.hasConsumption) return 'Sin consumo';
+    final diff = row.currentYield - optimal;
+    final tolerance = optimal * 0.05;
+    if (diff.abs() <= tolerance) return 'Dentro del rango';
+    final prefix = diff > 0 ? 'Sirviendo de mas' : 'Sirviendo de menos';
+    final unit = row.item.unit == 'kg'
+        ? 'g'
+        : row.item.unit == 'piece'
+        ? 'piezas'
+        : row.item.unit;
+    return '$prefix: ${diff > 0 ? '+' : ''}${_qty(diff)} $unit';
   }
 }
 
@@ -419,7 +416,7 @@ class _KitchenStockCatalogTabState extends State<_KitchenStockCatalogTab> {
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
                         subtitle: Text(
-                          '${_categoryLabel(item.category)} | ${_unitLabel(item.unit)} | orden ${item.sortOrder}\n$linkedText',
+                          '${_categoryLabel(item.category)} | ${_unitLabel(item.unit)} | ${_optimalLabel(item)} | orden ${item.sortOrder}\n$linkedText',
                         ),
                         trailing: canManage
                             ? Wrap(
@@ -470,8 +467,10 @@ class _KitchenStockDialog extends StatefulWidget {
 class _KitchenStockDialogState extends State<_KitchenStockDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _sortController;
+  late final TextEditingController _optimalController;
   late String _category;
   late String _unit;
+  late String _optimalUnit;
   late bool _active;
   bool _saving = false;
   String _error = '';
@@ -482,8 +481,14 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
     final item = widget.item;
     _nameController = TextEditingController(text: item?.name ?? '');
     _sortController = TextEditingController(text: '${item?.sortOrder ?? 1}');
+    _optimalController = TextEditingController(
+      text: item == null || item.optimalConsumptionPerSaleQty <= 0
+          ? ''
+          : _qty(item.optimalConsumptionPerSaleQty),
+    );
     _category = item?.category ?? 'meat';
     _unit = item?.unit ?? 'kg';
+    _optimalUnit = item?.optimalConsumptionUnit ?? _defaultOptimalUnit(_unit);
     _active = item?.active ?? true;
   }
 
@@ -491,13 +496,21 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
   void dispose() {
     _nameController.dispose();
     _sortController.dispose();
+    _optimalController.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
     final sortOrder = int.tryParse(_sortController.text.trim());
+    final optimal = _optimalController.text.trim().isEmpty
+        ? 0.0
+        : double.tryParse(_optimalController.text.trim().replaceAll(',', '.'));
     if (_nameController.text.trim().isEmpty || sortOrder == null) {
       setState(() => _error = 'Captura nombre y orden validos.');
+      return;
+    }
+    if (optimal == null || optimal < 0) {
+      setState(() => _error = 'Captura un rendimiento optimo valido.');
       return;
     }
     setState(() {
@@ -512,6 +525,8 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
         unit: _unit,
         active: _active,
         sortOrder: sortOrder,
+        optimalConsumptionPerSaleQty: optimal,
+        optimalConsumptionUnit: _optimalUnit,
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -565,7 +580,41 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
                 ],
                 onChanged: _saving
                     ? null
-                    : (value) => setState(() => _unit = value ?? 'kg'),
+                    : (value) => setState(() {
+                        _unit = value ?? 'kg';
+                        _optimalUnit = _defaultOptimalUnit(_unit);
+                      }),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _optimalController,
+                enabled: !_saving,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Rendimiento optimo',
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _optimalUnit.isEmpty ? null : _optimalUnit,
+                decoration: const InputDecoration(
+                  labelText: 'Unidad de rendimiento',
+                ),
+                items: const [
+                  DropdownMenuItem(
+                    value: 'g_per_item',
+                    child: Text('g por taco/producto'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'piece_per_item',
+                    child: Text('pieza por venta'),
+                  ),
+                ],
+                onChanged: _saving
+                    ? null
+                    : (value) => setState(() => _optimalUnit = value ?? ''),
               ),
               const SizedBox(height: 12),
               TextField(
@@ -624,4 +673,30 @@ String _unitLabel(String unit) {
     'liter' => 'litro',
     _ => unit,
   };
+}
+
+String _optimalLabel(KitchenStockItem item) {
+  if (item.optimalConsumptionPerSaleQty <= 0) {
+    return 'sin rendimiento optimo';
+  }
+  final qty = _qty(item.optimalConsumptionPerSaleQty);
+  return switch (item.optimalConsumptionUnit) {
+    'piece_per_item' => '$qty pieza por venta',
+    'g_per_item' => '$qty g por producto',
+    _ => '$qty por producto',
+  };
+}
+
+String _defaultOptimalUnit(String unit) {
+  return switch (unit) {
+    'piece' => 'piece_per_item',
+    'kg' => 'g_per_item',
+    _ => '',
+  };
+}
+
+String _qty(double value) {
+  return value == value.roundToDouble()
+      ? value.toStringAsFixed(0)
+      : value.toStringAsFixed(2);
 }

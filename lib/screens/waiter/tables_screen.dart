@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
-import '../../models/cash_session.dart';
 import '../../models/order.dart';
 import '../../models/pos_table.dart';
 import '../../services/app_session.dart';
@@ -12,7 +11,6 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
-import '../cash/cash_session_screen.dart';
 import 'order_screen.dart';
 import 'takeout_orders_screen.dart';
 
@@ -181,121 +179,6 @@ class _TablesScreenState extends State<TablesScreen> {
                               '${tables.length} puntos de servicio activos',
                         ),
                         const SizedBox(height: 18),
-                        StreamBuilder<CashSession?>(
-                          stream: _repository.watchOpenCashSession(),
-                          builder: (context, cashSnapshot) {
-                            if (cashSnapshot.hasError) {
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 16),
-                                child: GlassPanel(
-                                  borderColor: BrandColors.danger,
-                                  child: Text(
-                                    'No se pudo cargar el estado de caja: ${cashSnapshot.error}',
-                                    style: const TextStyle(
-                                      color: BrandColors.danger,
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                ),
-                              );
-                            }
-
-                            if (cashSnapshot.connectionState ==
-                                ConnectionState.waiting) {
-                              return const Padding(
-                                padding: EdgeInsets.only(bottom: 16),
-                                child: GlassPanel(
-                                  child: Text(
-                                    'Verificando caja abierta...',
-                                    style: TextStyle(
-                                      color: BrandColors.textMuted,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                              );
-                            }
-
-                            final session = cashSnapshot.data;
-                            if (session != null) {
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 16),
-                                child: GlassPanel(
-                                  child: Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.point_of_sale_outlined,
-                                        color: BrandColors.success,
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Text(
-                                          'Caja abierta: ${session.businessDate}',
-                                          style: const TextStyle(
-                                            color: BrandColors.textSecondary,
-                                            fontWeight: FontWeight.w800,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
-                            }
-
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: GlassPanel(
-                                borderColor: BrandColors.accentYellow,
-                                child: Row(
-                                  children: [
-                                    const Icon(
-                                      Icons.warning_amber_rounded,
-                                      color: BrandColors.accentYellow,
-                                    ),
-                                    const SizedBox(width: 10),
-                                    const Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            'No hay caja abierta',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w900,
-                                            ),
-                                          ),
-                                          SizedBox(height: 2),
-                                          Text(
-                                            'Puedes levantar pedidos, pero debes abrir caja antes de cobrar.',
-                                            style: TextStyle(
-                                              color: BrandColors.textMuted,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    GlassButton(
-                                      icon: Icons.lock_open_outlined,
-                                      label: 'Abrir caja',
-                                      prominent: true,
-                                      onTap: () {
-                                        Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                const CashSessionScreen(),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
                         Expanded(
                           child: GridView.builder(
                             gridDelegate:

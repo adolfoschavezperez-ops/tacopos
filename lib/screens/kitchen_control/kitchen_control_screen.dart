@@ -364,7 +364,8 @@ class _OpenKitchenPanel extends StatelessWidget {
                   '${session.businessDate} | abierta por ${session.openedByEmployeeName ?? 'Empleado'}',
             ),
             const SizedBox(height: 18),
-            _KitchenInputEditor(
+            _KitchenOpenInputsPanel(
+              session: session,
               sessionId: session.id,
               items: items,
               repository: repository,
@@ -386,90 +387,36 @@ class _OpenKitchenPanel extends StatelessWidget {
   }
 }
 
-class _KitchenInputEditor extends StatefulWidget {
-  const _KitchenInputEditor({
+class _KitchenOpenInputsPanel extends StatefulWidget {
+  const _KitchenOpenInputsPanel({
+    required this.session,
     required this.sessionId,
     required this.items,
     required this.repository,
   });
 
+  final KitchenSession session;
   final String sessionId;
   final List<KitchenSessionItem> items;
   final TacoPosRepository repository;
 
   @override
-  State<_KitchenInputEditor> createState() => _KitchenInputEditorState();
+  State<_KitchenOpenInputsPanel> createState() =>
+      _KitchenOpenInputsPanelState();
 }
 
-class _KitchenInputEditorState extends State<_KitchenInputEditor> {
-  final _controllers = <String, TextEditingController>{};
-  final _focusNodes = <String, FocusNode>{};
-  String _savingId = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _syncControllers();
-  }
-
-  @override
-  void didUpdateWidget(covariant _KitchenInputEditor oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _syncControllers();
-  }
-
-  @override
-  void dispose() {
-    for (final controller in _controllers.values) {
-      controller.dispose();
-    }
-    for (final focusNode in _focusNodes.values) {
-      focusNode.dispose();
-    }
-    super.dispose();
-  }
-
-  void _syncControllers() {
-    for (final item in widget.items) {
-      _controllers.putIfAbsent(
-        item.id,
-        () => TextEditingController(text: _formatQty(item.todayInputQty)),
-      );
-      _focusNodes.putIfAbsent(item.id, () {
-        final focusNode = FocusNode();
-        focusNode.addListener(() {
-          if (focusNode.hasFocus) {
-            _selectAll(_controllers[item.id]!);
-          }
-        });
-        return focusNode;
-      });
-    }
-  }
-
-  Future<void> _save(KitchenSessionItem item) async {
-    final amount = double.tryParse(
-      (_controllers[item.id]?.text ?? '').trim().replaceAll(',', '.'),
-    );
-    if (amount == null || amount < 0) {
-      _message('Captura una entrada valida.');
-      return;
-    }
-    setState(() => _savingId = item.id);
-    try {
-      await widget.repository.updateKitchenSessionItemInput(
-        kitchenSessionId: widget.sessionId,
+class _KitchenOpenInputsPanelState extends State<_KitchenOpenInputsPanel> {
+  Future<void> _addEntry(KitchenSessionItem item) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _AdditionalEntryDialog(
+        repository: widget.repository,
+        sessionId: widget.sessionId,
         item: item,
-        todayInputQty: amount,
-      );
-      if (!mounted) return;
-      _message('Entrada actualizada.');
-    } catch (error) {
-      if (!mounted) return;
-      _message(error.toString().replaceFirst('Bad state: ', ''));
-    } finally {
-      if (mounted) setState(() => _savingId = '');
-    }
+      ),
+    );
+    if (!mounted || saved != true) return;
+    _message('Entrada del dia registrada.');
   }
 
   void _message(String text) {
@@ -485,6 +432,21 @@ class _KitchenInputEditorState extends State<_KitchenInputEditor> {
 
     return Column(
       children: [
+        const GlassPanel(
+          child: Row(
+            children: [
+              Icon(Icons.lock_outline, color: BrandColors.accentYellow),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Apertura bloqueada. Las entradas iniciales ya no se pueden editar.',
+                  style: TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
         for (final entry in grouped.entries) ...[
           GlassPanel(
             child: Column(
@@ -504,13 +466,15 @@ class _KitchenInputEditorState extends State<_KitchenInputEditor> {
           ),
           const SizedBox(height: 14),
         ],
+        _AdditionalEntriesList(
+          sessionId: widget.sessionId,
+          repository: widget.repository,
+        ),
       ],
     );
   }
 
   Widget _itemRow(KitchenSessionItem item) {
-    final controller = _controllers[item.id]!;
-    final focusNode = _focusNodes[item.id]!;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: LayoutBuilder(
@@ -521,27 +485,15 @@ class _KitchenInputEditorState extends State<_KitchenInputEditor> {
             runSpacing: 6,
             children: [
               _QtyLabel('Anterior', item.previousRemainingQty, item.unit),
+              _QtyLabel('Inicial', item.todayInputQty, item.unit),
+              _QtyLabel('Entradas extra', item.additionalEntriesQty, item.unit),
               _QtyLabel('Disponible', item.availableQty, item.unit),
             ],
           );
-          final input = SizedBox(
-            width: compact ? double.infinity : 170,
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: InputDecoration(labelText: 'Entradas (${item.unit})'),
-              onSubmitted: (_) => _save(item),
-            ),
-          );
-          final button = IconButton(
-            tooltip: 'Guardar entrada',
-            onPressed: _savingId == item.id ? null : () => _save(item),
-            icon: Icon(
-              _savingId == item.id ? Icons.hourglass_top : Icons.save_outlined,
-            ),
+          final button = OutlinedButton.icon(
+            onPressed: () => _addEntry(item),
+            icon: const Icon(Icons.add_circle_outline),
+            label: const Text('Agregar entrada del dia'),
           );
 
           if (compact) {
@@ -555,12 +507,7 @@ class _KitchenInputEditorState extends State<_KitchenInputEditor> {
                 const SizedBox(height: 6),
                 info,
                 const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(child: input),
-                    button,
-                  ],
-                ),
+                Align(alignment: Alignment.centerLeft, child: button),
               ],
             );
           }
@@ -581,7 +528,6 @@ class _KitchenInputEditorState extends State<_KitchenInputEditor> {
                 ),
               ),
               const SizedBox(width: 12),
-              input,
               button,
             ],
           );
@@ -598,11 +544,184 @@ class _KitchenInputEditorState extends State<_KitchenInputEditor> {
       _ => 'Otros',
     };
   }
+}
 
-  String _formatQty(double value) {
-    return value == value.roundToDouble()
-        ? value.toStringAsFixed(0)
-        : value.toStringAsFixed(2);
+class _AdditionalEntriesList extends StatelessWidget {
+  const _AdditionalEntriesList({
+    required this.sessionId,
+    required this.repository,
+  });
+
+  final String sessionId;
+  final TacoPosRepository repository;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<KitchenAdditionalEntry>>(
+      stream: repository.watchKitchenAdditionalEntries(sessionId),
+      builder: (context, snapshot) {
+        final entries = snapshot.data ?? [];
+        if (entries.isEmpty) {
+          return const GlassPanel(
+            child: Text(
+              'Sin entradas adicionales registradas.',
+              style: TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          );
+        }
+        return GlassPanel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Entradas adicionales',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 10),
+              ...entries.map(
+                (entry) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.add_box_outlined),
+                  title: Text(
+                    '${entry.name}: ${formatKitchenQty(entry.qty)}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(
+                    '${entry.reason}${entry.notes.isEmpty ? '' : ' | ${entry.notes}'}',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AdditionalEntryDialog extends StatefulWidget {
+  const _AdditionalEntryDialog({
+    required this.repository,
+    required this.sessionId,
+    required this.item,
+  });
+
+  final TacoPosRepository repository;
+  final String sessionId;
+  final KitchenSessionItem item;
+
+  @override
+  State<_AdditionalEntryDialog> createState() => _AdditionalEntryDialogState();
+}
+
+class _AdditionalEntryDialogState extends State<_AdditionalEntryDialog> {
+  final _qtyController = TextEditingController();
+  final _reasonController = TextEditingController();
+  final _notesController = TextEditingController();
+  bool _saving = false;
+  String _error = '';
+
+  @override
+  void dispose() {
+    _qtyController.dispose();
+    _reasonController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final qty = double.tryParse(
+      _qtyController.text.trim().replaceAll(',', '.'),
+    );
+    if (qty == null || qty <= 0 || _reasonController.text.trim().isEmpty) {
+      setState(() => _error = 'Captura cantidad y motivo validos.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = '';
+    });
+    try {
+      await widget.repository.addKitchenAdditionalEntry(
+        kitchenSessionId: widget.sessionId,
+        item: widget.item,
+        qty: qty,
+        reason: _reasonController.text,
+        notes: _notesController.text,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text('Entrada del dia | ${widget.item.name}'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: _qtyController,
+                enabled: !_saving,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'Cantidad (${widget.item.unit})',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _reasonController,
+                enabled: !_saving,
+                decoration: const InputDecoration(labelText: 'Motivo'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _notesController,
+                enabled: !_saving,
+                minLines: 2,
+                maxLines: 3,
+                decoration: const InputDecoration(labelText: 'Notas'),
+              ),
+              if (_error.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error,
+                  style: const TextStyle(
+                    color: BrandColors.danger,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Guardando...' : 'Guardar'),
+        ),
+      ],
+    );
   }
 }
 

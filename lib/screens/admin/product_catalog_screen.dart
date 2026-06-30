@@ -689,6 +689,10 @@ class _QuickKitchenStockDialogState extends State<_QuickKitchenStockDialog> {
         unit: _unit,
         active: true,
         sortOrder: widget.sortOrder,
+        optimalConsumptionPerSaleQty: _unit == 'piece' ? 1 : 50,
+        optimalConsumptionUnit: _unit == 'piece'
+            ? 'piece_per_item'
+            : 'g_per_item',
       );
       final items = await widget.repository
           .watchKitchenStockItems(activeOnly: true)

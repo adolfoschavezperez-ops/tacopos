@@ -64,6 +64,7 @@ class KitchenSessionItem {
     required this.unit,
     required this.previousRemainingQty,
     required this.todayInputQty,
+    required this.additionalEntriesQty,
     required this.availableQty,
     required this.finalRemainingQty,
     required this.wasteQty,
@@ -81,6 +82,7 @@ class KitchenSessionItem {
   final String unit;
   final double previousRemainingQty;
   final double todayInputQty;
+  final double additionalEntriesQty;
   final double availableQty;
   final double finalRemainingQty;
   final double wasteQty;
@@ -102,6 +104,7 @@ class KitchenSessionItem {
       unit: data['unit'] as String? ?? 'kg',
       previousRemainingQty: _toDouble(data['previousRemainingQty']),
       todayInputQty: _toDouble(data['todayInputQty']),
+      additionalEntriesQty: _toDouble(data['additionalEntriesQty']),
       availableQty: _toDouble(data['availableQty']),
       finalRemainingQty: _toDouble(data['finalRemainingQty']),
       wasteQty: _toDouble(data['wasteQty']),
@@ -115,5 +118,52 @@ class KitchenSessionItem {
 
   static double _toDouble(Object? value) {
     return value is num ? value.toDouble() : 0;
+  }
+}
+
+class KitchenAdditionalEntry {
+  const KitchenAdditionalEntry({
+    required this.id,
+    required this.kitchenSessionId,
+    required this.businessDate,
+    required this.kitchenStockItemId,
+    required this.name,
+    required this.qty,
+    required this.reason,
+    required this.notes,
+    required this.createdByEmployeeId,
+    required this.createdByEmployeeName,
+    this.createdAt,
+  });
+
+  final String id;
+  final String kitchenSessionId;
+  final String businessDate;
+  final String kitchenStockItemId;
+  final String name;
+  final double qty;
+  final String reason;
+  final String notes;
+  final String createdByEmployeeId;
+  final String createdByEmployeeName;
+  final DateTime? createdAt;
+
+  factory KitchenAdditionalEntry.fromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data() ?? {};
+    return KitchenAdditionalEntry(
+      id: doc.id,
+      kitchenSessionId: data['kitchenSessionId'] as String? ?? '',
+      businessDate: data['businessDate'] as String? ?? '',
+      kitchenStockItemId: data['kitchenStockItemId'] as String? ?? '',
+      name: data['name'] as String? ?? '',
+      qty: KitchenSessionItem._toDouble(data['qty']),
+      reason: data['reason'] as String? ?? '',
+      notes: data['notes'] as String? ?? '',
+      createdByEmployeeId: data['createdByEmployeeId'] as String? ?? '',
+      createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
+      createdAt: KitchenSession._toDate(data['createdAt']),
+    );
   }
 }

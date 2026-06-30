@@ -86,6 +86,87 @@ class KitchenOpeningInput {
   final double todayInputQty;
 }
 
+class CashCloseBlockers {
+  const CashCloseBlockers({
+    required this.openTableCount,
+    required this.openTakeoutCount,
+    required this.pendingKitchenItemCount,
+    required this.pendingPaymentCount,
+    required this.kitchenNotClosed,
+    required this.kitchenCloseIncomplete,
+  });
+
+  final int openTableCount;
+  final int openTakeoutCount;
+  final int pendingKitchenItemCount;
+  final int pendingPaymentCount;
+  final bool kitchenNotClosed;
+  final bool kitchenCloseIncomplete;
+
+  bool get canClose =>
+      openTableCount == 0 &&
+      openTakeoutCount == 0 &&
+      pendingKitchenItemCount == 0 &&
+      pendingPaymentCount == 0 &&
+      !kitchenNotClosed &&
+      !kitchenCloseIncomplete;
+
+  String get message {
+    if (kitchenNotClosed) {
+      return 'No puedes cerrar caja. Primero debes cerrar cocina.';
+    }
+    if (kitchenCloseIncomplete) {
+      return 'No puedes cerrar caja. El cierre de cocina esta incompleto.';
+    }
+    return 'No puedes cerrar caja. Hay mesas, pedidos o cocina pendientes.';
+  }
+
+  String get detail {
+    return [
+      '$openTableCount mesas abiertas',
+      '$openTakeoutCount pedidos para llevar abiertos',
+      '$pendingKitchenItemCount productos pendientes en cocina',
+      '$pendingPaymentCount cuentas pendientes de cobrar',
+    ].join('\n');
+  }
+}
+
+class KitchenYieldReportRow {
+  const KitchenYieldReportRow({
+    required this.item,
+    required this.currentItem,
+    required this.previousRemainingQty,
+    required this.initialInputQty,
+    required this.additionalEntriesQty,
+    required this.availableQty,
+    required this.finalRemainingQty,
+    required this.wasteQty,
+    required this.usedQty,
+    required this.usefulConsumedQty,
+    required this.soldQty,
+    required this.currentYield,
+    required this.averageYield,
+  });
+
+  final KitchenStockItem item;
+  final KitchenSessionItem? currentItem;
+  final double previousRemainingQty;
+  final double initialInputQty;
+  final double additionalEntriesQty;
+  final double availableQty;
+  final double finalRemainingQty;
+  final double wasteQty;
+  final double usedQty;
+  final double usefulConsumedQty;
+  final double soldQty;
+  final double currentYield;
+  final double averageYield;
+
+  double get optimalYield => item.optimalConsumptionPerSaleQty;
+  bool get hasSales => soldQty > 0;
+  bool get hasConsumption => usefulConsumedQty > 0;
+}
+
 class TacoPosRepository {
   TacoPosRepository({FirebaseFirestore? firestore, FirebaseAuth? auth})
     : _db = firestore ?? FirebaseFirestore.instance,
@@ -651,6 +732,10 @@ class TacoPosRepository {
       batch.set(_kitchenStockItemsRef.doc(id), {
         ...item,
         'active': true,
+        'optimalConsumptionPerSaleQty': item['unit'] == 'piece' ? 1 : 50,
+        'optimalConsumptionUnit': item['unit'] == 'piece'
+            ? 'piece_per_item'
+            : 'g_per_item',
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -690,6 +775,9 @@ class TacoPosRepository {
           'unit': stockItem.unit,
           'active': true,
           'sortOrder': stockItem.sortOrder,
+          'optimalConsumptionPerSaleQty':
+              stockItem.optimalConsumptionPerSaleQty,
+          'optimalConsumptionUnit': stockItem.optimalConsumptionUnit,
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
@@ -745,6 +833,8 @@ class TacoPosRepository {
     required String unit,
     required bool active,
     required int sortOrder,
+    double optimalConsumptionPerSaleQty = 0,
+    String optimalConsumptionUnit = '',
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageKitchenStock == true,
@@ -760,6 +850,8 @@ class TacoPosRepository {
       'unit': unit,
       'active': active,
       'sortOrder': sortOrder,
+      'optimalConsumptionPerSaleQty': optimalConsumptionPerSaleQty,
+      'optimalConsumptionUnit': optimalConsumptionUnit,
       if (itemId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -819,6 +911,107 @@ class TacoPosRepository {
     return itemsSnapshot.docs.isNotEmpty;
   }
 
+  Future<List<KitchenYieldReportRow>> kitchenYieldReport({
+    required String startBusinessDate,
+    required String endBusinessDate,
+  }) async {
+    final sessionsSnapshot = await _kitchenSessionsRef.get();
+    final sessions =
+        sessionsSnapshot.docs
+            .map(KitchenSession.fromDoc)
+            .where(
+              (session) =>
+                  session.businessDate.compareTo(startBusinessDate) >= 0 &&
+                  session.businessDate.compareTo(endBusinessDate) <= 0,
+            )
+            .toList()
+          ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
+
+    final stockSnapshot = await _kitchenStockItemsRef.get();
+    final stockById = {
+      for (final item in stockSnapshot.docs.map(KitchenStockItem.fromDoc))
+        item.id: item,
+    };
+    final totalsConsumed = <String, double>{};
+    final totalsSold = <String, double>{};
+    final currentByStockId = <String, KitchenSessionItem>{};
+
+    for (final session in sessions) {
+      final itemsSnapshot = await _kitchenSessionsRef
+          .doc(session.id)
+          .collection('items')
+          .get();
+      final items = itemsSnapshot.docs.map(KitchenSessionItem.fromDoc).toList();
+      for (final item in items) {
+        currentByStockId.putIfAbsent(item.kitchenStockItemId, () => item);
+        totalsConsumed[item.kitchenStockItemId] =
+            (totalsConsumed[item.kitchenStockItemId] ?? 0) +
+            item.usefulConsumedQty;
+        totalsSold[item.kitchenStockItemId] =
+            (totalsSold[item.kitchenStockItemId] ?? 0) + item.soldQty;
+        stockById.putIfAbsent(
+          item.kitchenStockItemId,
+          () => KitchenStockItem(
+            id: item.kitchenStockItemId,
+            name: item.name,
+            category: item.category,
+            unit: item.unit,
+            active: true,
+            sortOrder: 999,
+            optimalConsumptionPerSaleQty: item.unit == 'piece' ? 1 : 50,
+            optimalConsumptionUnit: item.unit == 'piece'
+                ? 'piece_per_item'
+                : 'g_per_item',
+          ),
+        );
+      }
+    }
+
+    final rows = <KitchenYieldReportRow>[];
+    for (final entry in stockById.entries) {
+      final current = currentByStockId[entry.key];
+      if (current == null) {
+        continue;
+      }
+      final totalConsumed = totalsConsumed[entry.key] ?? 0;
+      final totalSold = totalsSold[entry.key] ?? 0;
+      rows.add(
+        KitchenYieldReportRow(
+          item: entry.value,
+          currentItem: current,
+          previousRemainingQty: current.previousRemainingQty,
+          initialInputQty: current.todayInputQty,
+          additionalEntriesQty: current.additionalEntriesQty,
+          availableQty: current.availableQty,
+          finalRemainingQty: current.finalRemainingQty,
+          wasteQty: current.wasteQty,
+          usedQty: current.usedQty,
+          usefulConsumedQty: current.usefulConsumedQty,
+          soldQty: current.soldQty,
+          currentYield: _yieldPerSale(
+            unit: current.unit,
+            usefulConsumedQty: current.usefulConsumedQty,
+            soldQty: current.soldQty,
+          ),
+          averageYield: _yieldPerSale(
+            unit: current.unit,
+            usefulConsumedQty: totalConsumed,
+            soldQty: totalSold,
+          ),
+        ),
+      );
+    }
+    rows.sort((a, b) {
+      final categoryCompare = a.item.category.compareTo(b.item.category);
+      if (categoryCompare != 0) return categoryCompare;
+      final sortCompare = a.item.sortOrder.compareTo(b.item.sortOrder);
+      return sortCompare != 0
+          ? sortCompare
+          : a.item.name.compareTo(b.item.name);
+    });
+    return rows;
+  }
+
   Stream<List<KitchenSession>> watchKitchenSessions({
     String? startBusinessDate,
     String? endBusinessDate,
@@ -856,6 +1049,27 @@ class TacoPosRepository {
                   : a.name.compareTo(b.name);
             });
           return items;
+        });
+  }
+
+  Stream<List<KitchenAdditionalEntry>> watchKitchenAdditionalEntries(
+    String kitchenSessionId,
+  ) {
+    return _kitchenSessionsRef
+        .doc(kitchenSessionId)
+        .collection('additionalEntries')
+        .snapshots()
+        .map((snapshot) {
+          final entries =
+              snapshot.docs.map(KitchenAdditionalEntry.fromDoc).toList()
+                ..sort((a, b) {
+                  final aDate =
+                      a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                  final bDate =
+                      b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                  return bDate.compareTo(aDate);
+                });
+          return entries;
         });
   }
 
@@ -969,6 +1183,7 @@ class TacoPosRepository {
         'unit': item.unit,
         'previousRemainingQty': previousQty,
         'todayInputQty': todayInputQty,
+        'additionalEntriesQty': 0.0,
         'availableQty': availableQty,
         'finalRemainingQty': null,
         'wasteQty': null,
@@ -993,25 +1208,65 @@ class TacoPosRepository {
     required KitchenSessionItem item,
     required double todayInputQty,
   }) async {
+    throw StateError(
+      'La apertura ya esta bloqueada. Usa Agregar entrada del dia.',
+    );
+  }
+
+  Future<void> addKitchenAdditionalEntry({
+    required String kitchenSessionId,
+    required KitchenSessionItem item,
+    required double qty,
+    required String reason,
+    required String notes,
+  }) async {
     _requireOpenKitchen();
-    if (todayInputQty < 0) {
-      throw ArgumentError('La entrada no puede ser negativa.');
+    if (qty <= 0) {
+      throw ArgumentError('La entrada adicional debe ser mayor a cero.');
     }
-    if (item.unit == 'piece' &&
-        todayInputQty != todayInputQty.roundToDouble()) {
+    if (item.unit == 'piece' && qty != qty.roundToDouble()) {
       throw ArgumentError('${item.name} debe capturarse en piezas enteras.');
     }
-    final availableQty = item.previousRemainingQty + todayInputQty;
-    await _kitchenSessionsRef
-        .doc(kitchenSessionId)
-        .collection('items')
-        .doc(item.id)
-        .update({
-          'todayInputQty': todayInputQty,
-          'availableQty': availableQty,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-    // TODO: Registrar kitchen_entry_added en activityLog.
+    if (reason.trim().isEmpty) {
+      throw ArgumentError('Captura el motivo de la entrada.');
+    }
+
+    final sessionRef = _kitchenSessionsRef.doc(kitchenSessionId);
+    final sessionDoc = await sessionRef.get();
+    if (!sessionDoc.exists) {
+      throw StateError('La cocina ya no existe.');
+    }
+    final session = KitchenSession.fromDoc(sessionDoc);
+    if (!session.isOpen) {
+      throw StateError('Solo puedes agregar entradas con cocina abierta.');
+    }
+
+    final employee = AppSession.instance.employee;
+    final entryRef = sessionRef.collection('additionalEntries').doc();
+    final newAdditionalQty = item.additionalEntriesQty + qty;
+    final newAvailableQty =
+        item.previousRemainingQty + item.todayInputQty + newAdditionalQty;
+    final batch = _db.batch();
+    batch.set(entryRef, {
+      'id': entryRef.id,
+      'kitchenSessionId': kitchenSessionId,
+      'businessDate': session.businessDate,
+      'kitchenStockItemId': item.kitchenStockItemId,
+      'name': item.name,
+      'qty': qty,
+      'reason': reason.trim(),
+      'notes': notes.trim(),
+      'createdByEmployeeId': employee?.id ?? '',
+      'createdByEmployeeName': employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    batch.update(sessionRef.collection('items').doc(item.id), {
+      'additionalEntriesQty': newAdditionalQty,
+      'availableQty': newAvailableQty,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    batch.update(sessionRef, {'updatedAt': FieldValue.serverTimestamp()});
+    await batch.commit();
   }
 
   Future<KitchenSession> closeKitchenSession({
@@ -1067,9 +1322,11 @@ class TacoPosRepository {
         );
       }
       final soldQty = soldByStockItem[item.kitchenStockItemId] ?? 0;
-      final yieldQtyPerUnit = usefulConsumedQty > 0
-          ? soldQty / usefulConsumedQty
-          : 0.0;
+      final yieldQtyPerUnit = _yieldPerSale(
+        unit: item.unit,
+        usefulConsumedQty: usefulConsumedQty,
+        soldQty: soldQty,
+      );
 
       batch.update(docRef.collection('items').doc(item.id), {
         'finalRemainingQty': input.finalRemainingQty,
@@ -1233,6 +1490,72 @@ class TacoPosRepository {
     });
   }
 
+  Future<CashCloseBlockers> cashCloseBlockers(String cashSessionId) async {
+    final sessionDoc = await _cashSessionsRef.doc(cashSessionId).get();
+    if (!sessionDoc.exists) {
+      throw StateError('La caja ya no existe.');
+    }
+    final session = CashSession.fromDoc(sessionDoc);
+    return _cashCloseBlockersForSession(session);
+  }
+
+  Future<CashCloseBlockers> _cashCloseBlockersForSession(
+    CashSession session,
+  ) async {
+    var openTableCount = 0;
+    var openTakeoutCount = 0;
+    var pendingKitchenItemCount = 0;
+    var pendingPaymentCount = 0;
+
+    final ordersSnapshot = await _ordersRef.get();
+    final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).where((order) {
+      return _orderBelongsToBusinessDate(order, session.businessDate);
+    }).toList();
+
+    for (final order in orders) {
+      final finalStatus = _isFinalOrderStatus(order.status);
+      final paymentPending =
+          ['pending', 'partial'].contains(order.paymentStatus) &&
+          !['paid', 'cancelled', 'voided'].contains(order.status);
+      final operationalOpen = !finalStatus || paymentPending;
+
+      if (operationalOpen && order.orderType == 'takeout') {
+        openTakeoutCount++;
+      } else if (operationalOpen && order.orderType != 'takeout') {
+        openTableCount++;
+      }
+      if (paymentPending) {
+        pendingPaymentCount++;
+      }
+
+      final itemsSnapshot = await _ordersRef
+          .doc(order.id)
+          .collection('items')
+          .get();
+      for (final item in itemsSnapshot.docs.map(OrderItem.fromDoc)) {
+        if (_isPendingKitchenStatus(item.kitchenStatus)) {
+          pendingKitchenItemCount += item.qty;
+        }
+      }
+    }
+
+    final kitchenSession = await getKitchenSessionForBusinessDate(
+      session.businessDate,
+    );
+    final kitchenNotClosed = kitchenSession?.isClosed != true;
+    final kitchenCloseIncomplete =
+        !kitchenNotClosed && !await _kitchenCloseIsComplete(kitchenSession!.id);
+
+    return CashCloseBlockers(
+      openTableCount: openTableCount,
+      openTakeoutCount: openTakeoutCount,
+      pendingKitchenItemCount: pendingKitchenItemCount,
+      pendingPaymentCount: pendingPaymentCount,
+      kitchenNotClosed: kitchenNotClosed,
+      kitchenCloseIncomplete: kitchenCloseIncomplete,
+    );
+  }
+
   Future<CashSession> closeCashSession({
     required String cashSessionId,
     required double countedCashAmount,
@@ -1253,6 +1576,11 @@ class TacoPosRepository {
     final session = CashSession.fromDoc(doc);
     if (session.status != 'open') {
       throw StateError('Esta caja ya esta cerrada.');
+    }
+
+    final blockers = await _cashCloseBlockersForSession(session);
+    if (!blockers.canClose) {
+      throw StateError('${blockers.message}\n${blockers.detail}');
     }
 
     final pendingWithdrawals = await _pendingCashWithdrawalRequestsForClose(
@@ -1449,7 +1777,11 @@ class TacoPosRepository {
   ) async {
     final ordersSnapshot = await _ordersRef.get();
     final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).where((order) {
-      if (order.status == 'cancelled') {
+      if (['cancelled', 'voided'].contains(order.status)) {
+        return false;
+      }
+      if (['pending', 'partial'].contains(order.paymentStatus) &&
+          order.status != 'paid') {
         return false;
       }
       final date = order.paidAt ?? order.createdAt;
@@ -1464,7 +1796,8 @@ class TacoPosRepository {
           .collection('items')
           .get();
       for (final item in itemsSnapshot.docs.map(OrderItem.fromDoc)) {
-        if (item.kitchenStatus == 'cancelled') {
+        if (['cancelled', 'voided'].contains(item.kitchenStatus) ||
+            ['cancelled', 'voided'].contains(item.paymentStatus)) {
           continue;
         }
         final stockItemId =
@@ -1519,6 +1852,8 @@ class TacoPosRepository {
       unit: isDrink ? 'piece' : 'kg',
       active: true,
       sortOrder: isDrink ? 50 : 20,
+      optimalConsumptionPerSaleQty: isDrink ? 1 : 50,
+      optimalConsumptionUnit: isDrink ? 'piece_per_item' : 'g_per_item',
     );
   }
 
@@ -1546,6 +1881,54 @@ class TacoPosRepository {
     final start = DateTime(startDate.year, startDate.month, startDate.day);
     final end = DateTime(endDate.year, endDate.month, endDate.day);
     return !day.isBefore(start) && !day.isAfter(end);
+  }
+
+  bool _orderBelongsToBusinessDate(PosOrder order, String businessDate) {
+    final candidates = [order.paidAt, order.createdAt, order.updatedAt];
+    return candidates.whereType<DateTime>().any(
+      (date) => _businessDateFor(date) == businessDate,
+    );
+  }
+
+  bool _isFinalOrderStatus(String status) {
+    return ['paid', 'cancelled', 'voided'].contains(status);
+  }
+
+  bool _isPendingKitchenStatus(String status) {
+    return ['pending', 'sent', 'cooking', 'cancel_requested'].contains(status);
+  }
+
+  Future<bool> _kitchenCloseIsComplete(String kitchenSessionId) async {
+    final itemsSnapshot = await _kitchenSessionsRef
+        .doc(kitchenSessionId)
+        .collection('items')
+        .get();
+    if (itemsSnapshot.docs.isEmpty) {
+      return false;
+    }
+    for (final doc in itemsSnapshot.docs) {
+      final data = doc.data();
+      if (data['finalRemainingQty'] == null ||
+          data['usedQty'] == null ||
+          data['usefulConsumedQty'] == null) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  double _yieldPerSale({
+    required String unit,
+    required double usefulConsumedQty,
+    required double soldQty,
+  }) {
+    if (soldQty <= 0 || usefulConsumedQty <= 0) {
+      return 0;
+    }
+    if (unit == 'kg') {
+      return (usefulConsumedQty * 1000) / soldQty;
+    }
+    return usefulConsumedQty / soldQty;
   }
 
   Future<PosOrder> createOrGetOpenOrder(PosTable table) async {
@@ -2654,6 +3037,10 @@ class TacoPosRepository {
         'unit': resolvedStockUnit,
         'active': true,
         'sortOrder': current.docs.length + 20,
+        'optimalConsumptionPerSaleQty': resolvedStockUnit == 'piece' ? 1 : 50,
+        'optimalConsumptionUnit': resolvedStockUnit == 'piece'
+            ? 'piece_per_item'
+            : 'g_per_item',
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));

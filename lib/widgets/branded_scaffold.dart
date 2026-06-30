@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
 import '../services/app_session.dart';
+import '../services/taco_pos_repository.dart';
 import 'glass.dart';
 
 class BrandedScaffold extends StatelessWidget {
@@ -67,6 +68,7 @@ class BrandedScaffold extends StatelessWidget {
                 ],
               ),
               actions: [
+                const _OperationDateBadge(),
                 const _SessionBadge(),
                 const _ConnectionStatusBadge(),
                 if (actions != null) ...actions!,
@@ -82,6 +84,61 @@ class BrandedScaffold extends StatelessWidget {
         ),
       ),
       bottomNavigationBar: bottomNavigationBar,
+    );
+  }
+}
+
+class _OperationDateBadge extends StatelessWidget {
+  const _OperationDateBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final repository = TacoPosRepository();
+    return StreamBuilder(
+      stream: repository.watchOpenCashSession(),
+      builder: (context, snapshot) {
+        final businessDate = snapshot.data?.businessDate;
+        final label = businessDate == null
+            ? 'Sin caja abierta'
+            : 'Operacion: $businessDate';
+        final color = businessDate == null
+            ? BrandColors.accentYellow
+            : BrandColors.textSecondary;
+        return Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: Tooltip(
+            message: label,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: BrandColors.glassFill,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: BrandColors.glassBorder),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.event_outlined, size: 16, color: color),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: color,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

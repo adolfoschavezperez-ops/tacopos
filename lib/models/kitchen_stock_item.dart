@@ -8,6 +8,8 @@ class KitchenStockItem {
     required this.unit,
     required this.active,
     required this.sortOrder,
+    required this.optimalConsumptionPerSaleQty,
+    required this.optimalConsumptionUnit,
   });
 
   final String id;
@@ -16,6 +18,8 @@ class KitchenStockItem {
   final String unit;
   final bool active;
   final int sortOrder;
+  final double optimalConsumptionPerSaleQty;
+  final String optimalConsumptionUnit;
 
   factory KitchenStockItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -26,6 +30,19 @@ class KitchenStockItem {
       unit: data['unit'] as String? ?? 'kg',
       active: data['active'] as bool? ?? true,
       sortOrder: (data['sortOrder'] as num?)?.toInt() ?? 0,
+      optimalConsumptionPerSaleQty:
+          (data['optimalConsumptionPerSaleQty'] as num?)?.toDouble() ?? 0,
+      optimalConsumptionUnit:
+          data['optimalConsumptionUnit'] as String? ??
+          _defaultOptimalUnit(data['unit'] as String? ?? 'kg'),
     );
+  }
+
+  static String _defaultOptimalUnit(String unit) {
+    return switch (unit) {
+      'piece' => 'piece_per_item',
+      'kg' => 'g_per_item',
+      _ => '',
+    };
   }
 }
