@@ -16,6 +16,7 @@ import '../../widgets/money_text.dart';
 import '../cash/cash_session_screen.dart';
 import 'cash_admin_screen.dart';
 import 'employee_catalog_screen.dart';
+import 'kitchen_admin_screen.dart';
 import 'order_platform_catalog_screen.dart';
 import 'product_catalog_screen.dart';
 import 'table_catalog_screen.dart';
@@ -167,6 +168,22 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           icon: const Icon(Icons.point_of_sale_outlined),
         ),
         IconButton(
+          tooltip: 'Control de cocina',
+          onPressed:
+              employee?.canViewKitchenReports == true ||
+                  employee?.canManageKitchenStock == true
+              ? () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const KitchenAdminScreen(),
+                    ),
+                  );
+                }
+              : null,
+          icon: const Icon(Icons.soup_kitchen_outlined),
+        ),
+        IconButton(
           tooltip: 'Empleados',
           onPressed: employee?.canManageEmployees == true
               ? () {
@@ -199,9 +216,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           final orders = ordersSnapshot.data ?? [];
 
           return StreamBuilder<List<Payment>>(
-            stream: repository.watchPayments(
-              startBusinessDate: _startBusinessDate,
-              endBusinessDate: _endBusinessDate,
+            stream: repository.watchDashboardPayments(
+              startDate: _startDate,
+              endDate: _endDate,
             ),
             builder: (context, paymentsSnapshot) {
               if (paymentsSnapshot.hasError) {
@@ -489,6 +506,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                               context,
                               MaterialPageRoute(
                                 builder: (_) => const CashAdminScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                      if (employee?.canViewKitchenReports == true ||
+                          employee?.canManageKitchenStock == true) ...[
+                        _AdminLinkPanel(
+                          icon: Icons.soup_kitchen_outlined,
+                          iconColor: BrandColors.info,
+                          title: 'Control de cocina',
+                          subtitle:
+                              'Reporte de consumo, rendimiento e insumos controlados.',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const KitchenAdminScreen(),
                               ),
                             );
                           },

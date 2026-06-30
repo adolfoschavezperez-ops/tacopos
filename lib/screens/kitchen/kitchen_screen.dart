@@ -12,6 +12,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
+import '../kitchen_control/kitchen_control_screen.dart';
 import 'kitchen_order_detail_screen.dart';
 
 class KitchenScreen extends StatefulWidget {
@@ -24,12 +25,16 @@ class KitchenScreen extends StatefulWidget {
 class _KitchenScreenState extends State<KitchenScreen> {
   late final TacoPosRepository _repository;
   late final Stream<List<KitchenOrderBundle>> _bundlesStream;
+  late final Future<bool> _kitchenIsOpenFuture;
 
   @override
   void initState() {
     super.initState();
     _repository = TacoPosRepository();
     _bundlesStream = _repository.watchKitchenOrderBundles();
+    _kitchenIsOpenFuture = _repository
+        .getOpenKitchenSessionForCurrentBusinessDate()
+        .then((session) => session != null);
   }
 
   @override
@@ -47,72 +52,152 @@ class _KitchenScreenState extends State<KitchenScreen> {
 
     return BrandedScaffold(
       title: 'Cocina',
-      body: StreamBuilder<List<KitchenOrderBundle>>(
-        stream: _bundlesStream,
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
+      body: FutureBuilder<bool>(
+        future: _kitchenIsOpenFuture,
+        builder: (context, kitchenSnapshot) {
+          if (kitchenSnapshot.connectionState == ConnectionState.waiting) {
+            return const LoadingPanel(message: 'Verificando apertura...');
+          }
+          if (kitchenSnapshot.hasError) {
             return EmptyState(
               icon: Icons.error_outline,
-              title: 'No se pudieron cargar comandas',
-              message: '${snapshot.error}',
+              title: 'No se pudo validar cocina',
+              message: '${kitchenSnapshot.error}',
+            );
+          }
+          if (kitchenSnapshot.data != true) {
+            return _KitchenNotOpenState(
+              canOpenKitchen:
+                  AppSession.instance.employee?.canOpenKitchen == true,
             );
           }
 
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const LoadingPanel(message: 'Cargando comandas...');
-          }
+          return StreamBuilder<List<KitchenOrderBundle>>(
+            stream: _bundlesStream,
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
+                return EmptyState(
+                  icon: Icons.error_outline,
+                  title: 'No se pudieron cargar comandas',
+                  message: '${snapshot.error}',
+                );
+              }
 
-          final bundles = snapshot.data ?? [];
-          if (bundles.isEmpty) {
-            return const EmptyState(
-              icon: Icons.room_service_outlined,
-              title: 'Sin comandas activas',
-              message: 'Solo apareceran tacos y gringas enviados a cocina.',
-            );
-          }
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const LoadingPanel(message: 'Cargando comandas...');
+              }
 
-          return LayoutBuilder(
-            builder: (context, constraints) {
-              final columns = constraints.maxWidth >= 1180
-                  ? 3
-                  : constraints.maxWidth >= 760
-                  ? 2
-                  : 1;
+              final bundles = snapshot.data ?? [];
+              if (bundles.isEmpty) {
+                return const EmptyState(
+                  icon: Icons.room_service_outlined,
+                  title: 'Sin comandas activas',
+                  message: 'Solo apareceran tacos y gringas enviados a cocina.',
+                );
+              }
 
-              return Padding(
-                padding: const EdgeInsets.all(22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    SectionHeader(
-                      title: 'Comandas',
-                      subtitle:
-                          '${bundles.length} activas · primero la mas vieja',
-                    ),
-                    const SizedBox(height: 18),
-                    Expanded(
-                      child: GridView.builder(
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: columns,
-                          crossAxisSpacing: 16,
-                          mainAxisSpacing: 16,
-                          childAspectRatio: columns == 1 ? 1.75 : 1.22,
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns = constraints.maxWidth >= 1180
+                      ? 3
+                      : constraints.maxWidth >= 760
+                      ? 2
+                      : 1;
+
+                  return Padding(
+                    padding: const EdgeInsets.all(22),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SectionHeader(
+                          title: 'Comandas',
+                          subtitle:
+                              '${bundles.length} activas | primero la mas vieja',
                         ),
-                        itemCount: bundles.length,
-                        itemBuilder: (context, index) {
-                          return _KitchenOrderCard(
-                            key: ValueKey('kitchen-${bundles[index].order.id}'),
-                            bundle: bundles[index],
-                          );
-                        },
-                      ),
+                        const SizedBox(height: 18),
+                        Expanded(
+                          child: GridView.builder(
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: columns,
+                                  crossAxisSpacing: 16,
+                                  mainAxisSpacing: 16,
+                                  childAspectRatio: columns == 1 ? 1.75 : 1.22,
+                                ),
+                            itemCount: bundles.length,
+                            itemBuilder: (context, index) {
+                              return _KitchenOrderCard(
+                                key: ValueKey(
+                                  'kitchen-${bundles[index].order.id}',
+                                ),
+                                bundle: bundles[index],
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  );
+                },
               );
             },
           );
         },
+      ),
+    );
+  }
+}
+
+class _KitchenNotOpenState extends StatelessWidget {
+  const _KitchenNotOpenState({required this.canOpenKitchen});
+
+  final bool canOpenKitchen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: GlassPanel(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.soup_kitchen_outlined,
+              size: 46,
+              color: BrandColors.accentOrange,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Debes abrir cocina antes de entrar a operacion.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              canOpenKitchen
+                  ? 'Abre cocina desde Control de cocina para ver comandas.'
+                  : 'No tienes permiso para abrir cocina. Solicita a un administrador.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: BrandColors.textMuted),
+            ),
+            if (canOpenKitchen) ...[
+              const SizedBox(height: 18),
+              GlassButton(
+                icon: Icons.soup_kitchen_outlined,
+                label: 'Abrir cocina',
+                prominent: true,
+                onTap: () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const KitchenControlScreen(),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

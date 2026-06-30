@@ -5,6 +5,8 @@ import '../core/constants/app_constants.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../models/employee.dart';
+import '../models/kitchen_session.dart';
+import '../models/kitchen_stock_item.dart';
 import '../models/order.dart';
 import '../models/order_item.dart';
 import '../models/order_platform.dart';
@@ -60,6 +62,18 @@ class PaymentResult {
   final bool allPaid;
 }
 
+class KitchenCloseInput {
+  const KitchenCloseInput({
+    required this.finalRemainingQty,
+    required this.wasteQty,
+    required this.notes,
+  });
+
+  final double finalRemainingQty;
+  final double wasteQty;
+  final String notes;
+}
+
 class TacoPosRepository {
   TacoPosRepository({FirebaseFirestore? firestore, FirebaseAuth? auth})
     : _db = firestore ?? FirebaseFirestore.instance,
@@ -93,6 +107,12 @@ class TacoPosRepository {
 
   CollectionReference<Map<String, dynamic>> get _cashWithdrawalRequestsRef =>
       _restaurantRef.collection('cashWithdrawalRequests');
+
+  CollectionReference<Map<String, dynamic>> get _kitchenStockItemsRef =>
+      _restaurantRef.collection('kitchenStockItems');
+
+  CollectionReference<Map<String, dynamic>> get _kitchenSessionsRef =>
+      _restaurantRef.collection('kitchenSessions');
 
   Stream<List<PosTable>> watchTables({bool activeOnly = true}) {
     return _tablesRef.snapshots().map((snapshot) {
@@ -172,10 +192,18 @@ class TacoPosRepository {
     if (doc.exists) {
       final data = doc.data() ?? {};
       if (data['canManageCash'] != true ||
-          data['canAuthorizeCashWithdrawals'] != true) {
+          data['canAuthorizeCashWithdrawals'] != true ||
+          data['canOpenKitchen'] != true ||
+          data['canCloseKitchen'] != true ||
+          data['canViewKitchenReports'] != true ||
+          data['canManageKitchenStock'] != true) {
         await adminRef.set({
           'canManageCash': true,
           'canAuthorizeCashWithdrawals': true,
+          'canOpenKitchen': true,
+          'canCloseKitchen': true,
+          'canViewKitchenReports': true,
+          'canManageKitchenStock': true,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
@@ -198,6 +226,10 @@ class TacoPosRepository {
       'canManageEmployees': true,
       'canManageCash': true,
       'canAuthorizeCashWithdrawals': true,
+      'canOpenKitchen': true,
+      'canCloseKitchen': true,
+      'canViewKitchenReports': true,
+      'canManageKitchenStock': true,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -388,6 +420,42 @@ class TacoPosRepository {
     });
   }
 
+  Stream<List<Payment>> watchDashboardPayments({
+    required DateTime startDate,
+    required DateTime endDate,
+  }) {
+    return watchAllOrders().asyncMap((orders) async {
+      final matchingOrders = orders.where((order) {
+        return _dateInRange(order.paidAt, startDate, endDate) ||
+            _dateInRange(order.createdAt, startDate, endDate) ||
+            _dateInRange(order.updatedAt, startDate, endDate);
+      });
+      final payments = <Payment>[];
+      for (final order in matchingOrders) {
+        final snapshot = await _ordersRef
+            .doc(order.id)
+            .collection('payments')
+            .get();
+        payments.addAll(
+          snapshot.docs.map(Payment.fromDoc).where((payment) {
+            final businessDate = payment.businessDate;
+            if (businessDate != null && businessDate.isNotEmpty) {
+              return businessDate.compareTo(_businessDateFor(startDate)) >= 0 &&
+                  businessDate.compareTo(_businessDateFor(endDate)) <= 0;
+            }
+            return _dateInRange(payment.createdAt, startDate, endDate);
+          }),
+        );
+      }
+      payments.sort((a, b) {
+        final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bDate.compareTo(aDate);
+      });
+      return payments;
+    });
+  }
+
   Stream<List<Payment>> watchOrderPayments(String orderId) {
     return _ordersRef.doc(orderId).collection('payments').snapshots().map((
       snapshot,
@@ -544,6 +612,341 @@ class TacoPosRepository {
           });
 
     return sessions.isEmpty ? null : sessions.first;
+  }
+
+  Stream<List<KitchenStockItem>> watchKitchenStockItems({
+    bool activeOnly = false,
+  }) {
+    return _kitchenStockItemsRef.snapshots().map((snapshot) {
+      final items = snapshot.docs.map(KitchenStockItem.fromDoc).toList()
+        ..sort((a, b) {
+          final orderCompare = a.sortOrder.compareTo(b.sortOrder);
+          return orderCompare != 0 ? orderCompare : a.name.compareTo(b.name);
+        });
+      return activeOnly ? items.where((item) => item.active).toList() : items;
+    });
+  }
+
+  Future<void> ensureDefaultKitchenStockItems() async {
+    final snapshot = await _kitchenStockItemsRef.limit(1).get();
+    if (snapshot.docs.isNotEmpty) {
+      return;
+    }
+
+    final batch = _db.batch();
+    for (final item in _defaultKitchenStockItems) {
+      final id = item['id']! as String;
+      batch.set(_kitchenStockItemsRef.doc(id), {
+        ...item,
+        'active': true,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
+  }
+
+  Future<void> saveKitchenStockItem({
+    String? itemId,
+    required String name,
+    required String category,
+    required String unit,
+    required bool active,
+    required int sortOrder,
+  }) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManageKitchenStock == true,
+      'No tienes permiso para administrar insumos de cocina.',
+    );
+    final docRef = itemId == null
+        ? _kitchenStockItemsRef.doc()
+        : _kitchenStockItemsRef.doc(itemId);
+    await docRef.set({
+      'id': docRef.id,
+      'name': name.trim(),
+      'category': category,
+      'unit': unit,
+      'active': active,
+      'sortOrder': sortOrder,
+      if (itemId == null) 'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    // TODO: Registrar kitchen_stock_item_created/updated en activityLog.
+  }
+
+  Future<void> toggleKitchenStockItem(KitchenStockItem item) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canManageKitchenStock == true,
+      'No tienes permiso para administrar insumos de cocina.',
+    );
+    await _kitchenStockItemsRef.doc(item.id).update({
+      'active': !item.active,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    // TODO: Registrar kitchen_stock_item_disabled en activityLog.
+  }
+
+  Stream<KitchenSession?> watchOpenKitchenSession() {
+    return _kitchenSessionsRef
+        .where('status', isEqualTo: 'open')
+        .snapshots()
+        .map((snapshot) {
+          final sessions = snapshot.docs.map(KitchenSession.fromDoc).toList()
+            ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
+          return sessions.isEmpty ? null : sessions.first;
+        });
+  }
+
+  Future<String> currentKitchenBusinessDate() async {
+    final openCash = await getOpenCashSession();
+    return openCash?.businessDate ?? _businessDateFor(DateTime.now());
+  }
+
+  Future<KitchenSession?> getOpenKitchenSessionForCurrentBusinessDate() async {
+    final businessDate = await currentKitchenBusinessDate();
+    final snapshot = await _kitchenSessionsRef
+        .where('businessDate', isEqualTo: businessDate)
+        .get();
+    final sessions = snapshot.docs
+        .map(KitchenSession.fromDoc)
+        .where((session) => session.isOpen)
+        .toList();
+    return sessions.isEmpty ? null : sessions.first;
+  }
+
+  Stream<List<KitchenSession>> watchKitchenSessions({
+    String? startBusinessDate,
+    String? endBusinessDate,
+  }) {
+    Query<Map<String, dynamic>> query = _kitchenSessionsRef;
+    if (startBusinessDate != null) {
+      query = query.where(
+        'businessDate',
+        isGreaterThanOrEqualTo: startBusinessDate,
+      );
+    }
+    if (endBusinessDate != null) {
+      query = query.where('businessDate', isLessThanOrEqualTo: endBusinessDate);
+    }
+    return query.snapshots().map((snapshot) {
+      final sessions = snapshot.docs.map(KitchenSession.fromDoc).toList()
+        ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
+      return sessions;
+    });
+  }
+
+  Stream<List<KitchenSessionItem>> watchKitchenSessionItems(
+    String kitchenSessionId,
+  ) {
+    return _kitchenSessionsRef
+        .doc(kitchenSessionId)
+        .collection('items')
+        .snapshots()
+        .map((snapshot) {
+          final items = snapshot.docs.map(KitchenSessionItem.fromDoc).toList()
+            ..sort((a, b) {
+              final categoryCompare = a.category.compareTo(b.category);
+              return categoryCompare != 0
+                  ? categoryCompare
+                  : a.name.compareTo(b.name);
+            });
+          return items;
+        });
+  }
+
+  Future<KitchenSession?> getKitchenSessionForBusinessDate(
+    String businessDate,
+  ) async {
+    final snapshot = await _kitchenSessionsRef
+        .where('businessDate', isEqualTo: businessDate)
+        .limit(1)
+        .get();
+    if (snapshot.docs.isEmpty) {
+      return null;
+    }
+    return KitchenSession.fromDoc(snapshot.docs.first);
+  }
+
+  Future<KitchenSession> openKitchenSession() async {
+    _requireOpenKitchen();
+    await ensureDefaultKitchenStockItems();
+    final openSnapshot = await _kitchenSessionsRef
+        .where('status', isEqualTo: 'open')
+        .limit(1)
+        .get();
+    if (openSnapshot.docs.isNotEmpty) {
+      return KitchenSession.fromDoc(openSnapshot.docs.first);
+    }
+    final openCash = await getOpenCashSession();
+    final businessDate =
+        openCash?.businessDate ?? _businessDateFor(DateTime.now());
+    final existing = await getKitchenSessionForBusinessDate(businessDate);
+    if (existing != null) {
+      if (existing.isOpen) {
+        return existing;
+      }
+      throw StateError('Ya existe cierre de cocina para $businessDate.');
+    }
+
+    final activeItemsSnapshot = await _kitchenStockItemsRef.get();
+    final activeItems =
+        activeItemsSnapshot.docs
+            .map(KitchenStockItem.fromDoc)
+            .where((item) => item.active)
+            .toList()
+          ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    if (activeItems.isEmpty) {
+      throw StateError('No hay insumos activos para abrir cocina.');
+    }
+
+    final previousRemaining = await _previousKitchenRemainingByItem(
+      businessDate,
+    );
+    final employee = AppSession.instance.employee;
+    final docRef = _kitchenSessionsRef.doc();
+    final batch = _db.batch();
+    batch.set(docRef, {
+      'id': docRef.id,
+      'businessDate': businessDate,
+      'cashSessionId': openCash?.id,
+      'status': 'open',
+      'openedAt': FieldValue.serverTimestamp(),
+      'openedByEmployeeId': employee?.id ?? '',
+      'openedByEmployeeName': employee?.name ?? '',
+      'closedAt': null,
+      'closedByEmployeeId': null,
+      'closedByEmployeeName': null,
+      'notes': '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    for (final item in activeItems) {
+      final previousQty = previousRemaining[item.id] ?? 0;
+      batch.set(docRef.collection('items').doc(item.id), {
+        'kitchenStockItemId': item.id,
+        'name': item.name,
+        'category': item.category,
+        'unit': item.unit,
+        'previousRemainingQty': previousQty,
+        'todayInputQty': 0.0,
+        'availableQty': previousQty,
+        'finalRemainingQty': null,
+        'wasteQty': null,
+        'usedQty': null,
+        'usefulConsumedQty': null,
+        'soldQty': null,
+        'yieldQtyPerUnit': null,
+        'notes': '',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    await batch.commit();
+    // TODO: Registrar kitchen_session_opened en activityLog.
+    final updated = await docRef.get();
+    return KitchenSession.fromDoc(updated);
+  }
+
+  Future<void> updateKitchenSessionItemInput({
+    required String kitchenSessionId,
+    required KitchenSessionItem item,
+    required double todayInputQty,
+  }) async {
+    _requireOpenKitchen();
+    if (todayInputQty < 0) {
+      throw ArgumentError('La entrada no puede ser negativa.');
+    }
+    final availableQty = item.previousRemainingQty + todayInputQty;
+    await _kitchenSessionsRef
+        .doc(kitchenSessionId)
+        .collection('items')
+        .doc(item.id)
+        .update({
+          'todayInputQty': todayInputQty,
+          'availableQty': availableQty,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+    // TODO: Registrar kitchen_entry_added en activityLog.
+  }
+
+  Future<KitchenSession> closeKitchenSession({
+    required String kitchenSessionId,
+    required Map<String, KitchenCloseInput> closeInputs,
+    required String notes,
+  }) async {
+    _requireCloseKitchen();
+    final docRef = _kitchenSessionsRef.doc(kitchenSessionId);
+    final doc = await docRef.get();
+    if (!doc.exists) {
+      throw StateError('La apertura de cocina ya no existe.');
+    }
+    final session = KitchenSession.fromDoc(doc);
+    if (!session.isOpen) {
+      throw StateError('Esta cocina ya esta cerrada.');
+    }
+    final existingForDate = await getKitchenSessionForBusinessDate(
+      session.businessDate,
+    );
+    if (existingForDate != null &&
+        existingForDate.id != session.id &&
+        existingForDate.isClosed) {
+      throw StateError('Ya existe cierre de cocina para esta fecha.');
+    }
+
+    final itemsSnapshot = await docRef.collection('items').get();
+    final items = itemsSnapshot.docs.map(KitchenSessionItem.fromDoc).toList();
+    final soldByStockItem = await _soldQtyByKitchenStockItem(
+      session.businessDate,
+    );
+    final employee = AppSession.instance.employee;
+    final batch = _db.batch();
+
+    for (final item in items) {
+      final input = closeInputs[item.id];
+      if (input == null) {
+        throw ArgumentError('Captura cierre para ${item.name}.');
+      }
+      if (input.finalRemainingQty < 0 || input.wasteQty < 0) {
+        throw ArgumentError('Los montos de cierre no pueden ser negativos.');
+      }
+      final usedQty = item.availableQty - input.finalRemainingQty;
+      final usefulConsumedQty = usedQty - input.wasteQty;
+      if (usefulConsumedQty < 0) {
+        throw ArgumentError(
+          'El consumo util de ${item.name} no puede ser negativo.',
+        );
+      }
+      final soldQty = soldByStockItem[item.kitchenStockItemId] ?? 0;
+      final yieldQtyPerUnit = usefulConsumedQty > 0
+          ? soldQty / usefulConsumedQty
+          : 0.0;
+
+      batch.update(docRef.collection('items').doc(item.id), {
+        'finalRemainingQty': input.finalRemainingQty,
+        'wasteQty': input.wasteQty,
+        'usedQty': usedQty,
+        'usefulConsumedQty': usefulConsumedQty,
+        'soldQty': soldQty,
+        'yieldQtyPerUnit': yieldQtyPerUnit,
+        'notes': input.notes.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    batch.update(docRef, {
+      'status': 'closed',
+      'closedAt': FieldValue.serverTimestamp(),
+      'closedByEmployeeId': employee?.id ?? '',
+      'closedByEmployeeName': employee?.name ?? '',
+      'notes': notes.trim(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await batch.commit();
+    // TODO: Registrar kitchen_session_closed en activityLog.
+    final updated = await docRef.get();
+    return KitchenSession.fromDoc(updated);
   }
 
   Future<void> openCashSession({
@@ -863,6 +1266,110 @@ class TacoPosRepository {
       pendingWithdrawalsTotal: pendingWithdrawals,
       withdrawalRequestCount: withdrawals.length,
     );
+  }
+
+  Future<Map<String, double>> _previousKitchenRemainingByItem(
+    String businessDate,
+  ) async {
+    final snapshot = await _kitchenSessionsRef
+        .where('status', isEqualTo: 'closed')
+        .get();
+    final previousSessions =
+        snapshot.docs
+            .map(KitchenSession.fromDoc)
+            .where(
+              (session) => session.businessDate.compareTo(businessDate) < 0,
+            )
+            .toList()
+          ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
+    if (previousSessions.isEmpty) {
+      return const {};
+    }
+
+    final itemsSnapshot = await _kitchenSessionsRef
+        .doc(previousSessions.first.id)
+        .collection('items')
+        .get();
+    return {
+      for (final item in itemsSnapshot.docs.map(KitchenSessionItem.fromDoc))
+        item.kitchenStockItemId: item.finalRemainingQty,
+    };
+  }
+
+  Future<Map<String, double>> _soldQtyByKitchenStockItem(
+    String businessDate,
+  ) async {
+    final ordersSnapshot = await _ordersRef.get();
+    final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).where((order) {
+      if (order.status == 'cancelled') {
+        return false;
+      }
+      final date = order.paidAt ?? order.createdAt;
+      return _businessDateFor(date ?? DateTime.fromMillisecondsSinceEpoch(0)) ==
+          businessDate;
+    }).toList();
+
+    final sold = <String, double>{};
+    for (final order in orders) {
+      final itemsSnapshot = await _ordersRef
+          .doc(order.id)
+          .collection('items')
+          .get();
+      for (final item in itemsSnapshot.docs.map(OrderItem.fromDoc)) {
+        if (item.kitchenStatus == 'cancelled') {
+          continue;
+        }
+        final stockItemId = _stockItemIdForProductName(item.productName);
+        if (stockItemId == null) {
+          continue;
+        }
+        sold[stockItemId] = (sold[stockItemId] ?? 0) + item.qty;
+      }
+    }
+    return sold;
+  }
+
+  String? _stockItemIdForProductName(String productName) {
+    final normalized = _normalizeName(productName);
+    if (normalized.contains('bistec')) return 'bistec';
+    if (normalized.contains('adobada')) return 'adobada';
+    if (normalized.contains('carnaza')) return 'carnaza';
+    if (normalized.contains('arrachera')) return 'arrachera';
+    if (normalized.contains('chorizo')) return 'chorizo';
+    if (normalized.contains('higado')) return 'higado';
+    if (normalized.contains('labio')) return 'labio';
+    if (normalized.contains('tripa')) return 'tripa';
+    if (normalized.contains('lengua')) return 'lengua';
+    if (normalized.contains('coca') || normalized.contains('refresco')) {
+      return 'refresco_coca_cola';
+    }
+    return null;
+  }
+
+  String _normalizeName(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('í', 'i')
+        .replaceAll('á', 'a')
+        .replaceAll('é', 'e')
+        .replaceAll('ó', 'o')
+        .replaceAll('ú', 'u');
+  }
+
+  String _businessDateFor(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '${date.year}-$month-$day';
+  }
+
+  bool _dateInRange(DateTime? date, DateTime startDate, DateTime endDate) {
+    if (date == null) {
+      return false;
+    }
+    final day = DateTime(date.year, date.month, date.day);
+    final start = DateTime(startDate.year, startDate.month, startDate.day);
+    final end = DateTime(endDate.year, endDate.month, endDate.day);
+    return !day.isBefore(start) && !day.isAfter(end);
   }
 
   Future<PosOrder> createOrGetOpenOrder(PosTable table) async {
@@ -1786,6 +2293,24 @@ class TacoPosRepository {
     throw StateError('No tienes permiso para autorizar retiros.');
   }
 
+  void _requireOpenKitchen() {
+    final employee = AppSession.instance.employee;
+    if (employee?.canOpenKitchen == true ||
+        employee?.canManageKitchenStock == true ||
+        employee?.canViewAdmin == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para abrir cocina.');
+  }
+
+  void _requireCloseKitchen() {
+    final employee = AppSession.instance.employee;
+    if (employee?.canCloseKitchen == true || employee?.canViewAdmin == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para cerrar cocina.');
+  }
+
   void _requireCashOpenPermission() {
     final employee = AppSession.instance.employee;
     if (employee?.canManageCash == true || employee?.canCharge == true) {
@@ -2034,6 +2559,10 @@ class TacoPosRepository {
     required bool canManageEmployees,
     required bool canManageCash,
     required bool canAuthorizeCashWithdrawals,
+    required bool canOpenKitchen,
+    required bool canCloseKitchen,
+    required bool canViewKitchenReports,
+    required bool canManageKitchenStock,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageEmployees == true,
@@ -2059,6 +2588,10 @@ class TacoPosRepository {
       'canManageEmployees': canManageEmployees,
       'canManageCash': canManageCash,
       'canAuthorizeCashWithdrawals': canAuthorizeCashWithdrawals,
+      'canOpenKitchen': canOpenKitchen,
+      'canCloseKitchen': canCloseKitchen,
+      'canViewKitchenReports': canViewKitchenReports,
+      'canManageKitchenStock': canManageKitchenStock,
       if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -2082,3 +2615,97 @@ class TacoPosRepository {
     throw StateError(message);
   }
 }
+
+const _defaultKitchenStockItems = [
+  {
+    'id': 'bistec',
+    'name': 'Bistec',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 1,
+  },
+  {
+    'id': 'adobada',
+    'name': 'Adobada',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 2,
+  },
+  {
+    'id': 'carnaza',
+    'name': 'Carnaza',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 3,
+  },
+  {
+    'id': 'arrachera',
+    'name': 'Arrachera',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 4,
+  },
+  {
+    'id': 'chorizo',
+    'name': 'Chorizo',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 5,
+  },
+  {
+    'id': 'higado',
+    'name': 'Higado',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 6,
+  },
+  {
+    'id': 'labio',
+    'name': 'Labio',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 7,
+  },
+  {
+    'id': 'tripa',
+    'name': 'Tripa',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 8,
+  },
+  {
+    'id': 'lengua',
+    'name': 'Lengua',
+    'category': 'meat',
+    'unit': 'kg',
+    'sortOrder': 9,
+  },
+  {
+    'id': 'tortilla_maiz',
+    'name': 'Tortilla de maiz',
+    'category': 'tortilla',
+    'unit': 'kg',
+    'sortOrder': 10,
+  },
+  {
+    'id': 'refresco_coca_cola',
+    'name': 'Refresco Coca Cola',
+    'category': 'drink',
+    'unit': 'piece',
+    'sortOrder': 11,
+  },
+  {
+    'id': 'refrescos_surtidos',
+    'name': 'Refrescos surtidos',
+    'category': 'drink',
+    'unit': 'piece',
+    'sortOrder': 12,
+  },
+  {
+    'id': 'agua_fresca',
+    'name': 'Agua fresca',
+    'category': 'water',
+    'unit': 'liter',
+    'sortOrder': 13,
+  },
+];

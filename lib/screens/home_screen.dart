@@ -10,10 +10,11 @@ import '../widgets/glass.dart';
 import 'admin/cash_admin_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'cash/cash_session_screen.dart';
+import 'kitchen_control/kitchen_control_screen.dart';
 import 'kitchen/kitchen_screen.dart';
 import 'waiter/tables_screen.dart';
 
-enum AppMode { waiterCashier, cash, kitchen, admin }
+enum AppMode { waiterCashier, cash, kitchenControl, kitchen, admin }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -47,15 +48,64 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _openMode(AppMode mode) {
+  Future<void> _openMode(AppMode mode) async {
+    if (mode == AppMode.kitchen) {
+      final repository = TacoPosRepository();
+      final kitchenSession = await repository
+          .getOpenKitchenSessionForCurrentBusinessDate();
+      if (!mounted) {
+        return;
+      }
+      if (kitchenSession == null) {
+        await _showKitchenNotOpenDialog();
+        return;
+      }
+    }
+
     final Widget screen = switch (mode) {
       AppMode.waiterCashier => const TablesScreen(),
       AppMode.cash => const CashSessionScreen(),
+      AppMode.kitchenControl => const KitchenControlScreen(),
       AppMode.kitchen => const KitchenScreen(),
       AppMode.admin => const AdminDashboardScreen(),
     };
 
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+  }
+
+  Future<void> _showKitchenNotOpenDialog() async {
+    final canOpenKitchen = AppSession.instance.employee?.canOpenKitchen == true;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cocina sin apertura'),
+        content: Text(
+          canOpenKitchen
+              ? 'Debes abrir cocina antes de entrar a operacion.'
+              : 'Debes abrir cocina antes de entrar a operacion.\n\nNo tienes permiso para abrir cocina. Solicita a un administrador.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cerrar'),
+          ),
+          if (canOpenKitchen)
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  this.context,
+                  MaterialPageRoute(
+                    builder: (_) => const KitchenControlScreen(),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.soup_kitchen_outlined),
+              label: const Text('Abrir cocina'),
+            ),
+        ],
+      ),
+    );
   }
 
   void _openWithdrawalRequests() {
@@ -265,6 +315,17 @@ class _ModePanel extends StatelessWidget {
             ),
             const SizedBox(height: 12),
           ],
+          if (employee?.canViewKitchen == true ||
+              employee?.canOpenKitchen == true ||
+              employee?.canCloseKitchen == true) ...[
+            _ModeTile(
+              icon: Icons.soup_kitchen_outlined,
+              title: 'Control de cocina',
+              subtitle: 'Apertura, entradas y cierre diario',
+              onTap: () => onOpenMode(AppMode.kitchenControl),
+            ),
+            const SizedBox(height: 12),
+          ],
           if (employee?.canViewKitchen == true) ...[
             _ModeTile(
               icon: Icons.room_service_outlined,
@@ -286,6 +347,10 @@ class _ModePanel extends StatelessWidget {
               !employee!.canCharge &&
               !employee!.canManageCash &&
               !employee!.canViewKitchen &&
+              !employee!.canOpenKitchen &&
+              !employee!.canCloseKitchen &&
+              !employee!.canViewKitchenReports &&
+              !employee!.canManageKitchenStock &&
               !employee!.canViewAdmin)
             const Text(
               'Este usuario no tiene permisos asignados.',

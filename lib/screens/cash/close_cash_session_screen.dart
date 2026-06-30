@@ -47,13 +47,22 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
 
     final countedCash = _amount(_countedCashController);
     final terminalReported = _amount(_terminalController);
+    final kitchenSession = await _repository.getKitchenSessionForBusinessDate(
+      widget.session.businessDate,
+    );
+    if (!mounted) {
+      return;
+    }
+    final kitchenWarning = kitchenSession?.isClosed != true
+        ? '\n\nNo se ha realizado cierre de cocina.'
+        : '';
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Cerrar caja'),
-        content: const Text(
-          'Se guardara el conteo fisico y el sistema calculara el corte.',
+        content: Text(
+          'Se guardara el conteo fisico y el sistema calculara el corte.$kitchenWarning',
         ),
         actions: [
           TextButton(

@@ -150,6 +150,10 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canManageEmployees;
   late bool _canManageCash;
   late bool _canAuthorizeCashWithdrawals;
+  late bool _canOpenKitchen;
+  late bool _canCloseKitchen;
+  late bool _canViewKitchenReports;
+  late bool _canManageKitchenStock;
   bool _saving = false;
   String _error = '';
 
@@ -170,6 +174,10 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canManageCash = widget.employee?.canManageCash ?? false;
     _canAuthorizeCashWithdrawals =
         widget.employee?.canAuthorizeCashWithdrawals ?? false;
+    _canOpenKitchen = widget.employee?.canOpenKitchen ?? false;
+    _canCloseKitchen = widget.employee?.canCloseKitchen ?? false;
+    _canViewKitchenReports = widget.employee?.canViewKitchenReports ?? false;
+    _canManageKitchenStock = widget.employee?.canManageKitchenStock ?? false;
   }
 
   @override
@@ -217,6 +225,10 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canManageEmployees: _canManageEmployees,
         canManageCash: _canManageCash,
         canAuthorizeCashWithdrawals: _canAuthorizeCashWithdrawals,
+        canOpenKitchen: _canOpenKitchen,
+        canCloseKitchen: _canCloseKitchen,
+        canViewKitchenReports: _canViewKitchenReports,
+        canManageKitchenStock: _canManageKitchenStock,
       );
     } catch (error) {
       if (!mounted) {
@@ -306,6 +318,18 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 enabled: !_saving,
                 onChanged: (value) => setState(() => _canViewKitchen = value),
               ),
+              _PermissionSwitch(
+                title: 'Puede abrir cocina',
+                value: _canOpenKitchen,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canOpenKitchen = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede cerrar cocina',
+                value: _canCloseKitchen,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canCloseKitchen = value),
+              ),
               const Divider(height: 20),
               const Align(
                 alignment: Alignment.centerLeft,
@@ -353,6 +377,20 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 enabled: !_saving,
                 onChanged: (value) =>
                     setState(() => _canAuthorizeCashWithdrawals = value),
+              ),
+              _PermissionSwitch(
+                title: 'Ver reportes de cocina',
+                value: _canViewKitchenReports,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canViewKitchenReports = value),
+              ),
+              _PermissionSwitch(
+                title: 'Administrar insumos de cocina',
+                value: _canManageKitchenStock,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canManageKitchenStock = value),
               ),
               if (_error.isNotEmpty) ...[
                 const SizedBox(height: 8),
@@ -489,6 +527,10 @@ class _EmployeeAdminTile extends StatelessWidget {
       if (employee.canManageCash) 'Caja',
       if (employee.canAuthorizeCashWithdrawals) 'Retiros',
       if (employee.canViewKitchen) 'Cocina',
+      if (employee.canOpenKitchen) 'Abrir cocina',
+      if (employee.canCloseKitchen) 'Cerrar cocina',
+      if (employee.canViewKitchenReports) 'Reporte cocina',
+      if (employee.canManageKitchenStock) 'Insumos cocina',
       if (employee.canViewAdmin) 'Admin',
     ];
     return permissions.isEmpty ? 'Sin permisos' : permissions.join(' · ');

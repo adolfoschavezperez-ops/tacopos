@@ -129,6 +129,10 @@ const _employees = [
     'canManageEmployees': true,
     'canManageCash': true,
     'canAuthorizeCashWithdrawals': true,
+    'canOpenKitchen': true,
+    'canCloseKitchen': true,
+    'canViewKitchenReports': true,
+    'canManageKitchenStock': true,
   },
   {
     'id': 'ricardo_bernal',
@@ -145,6 +149,10 @@ const _employees = [
     'canManageEmployees': false,
     'canManageCash': false,
     'canAuthorizeCashWithdrawals': false,
+    'canOpenKitchen': false,
+    'canCloseKitchen': false,
+    'canViewKitchenReports': false,
+    'canManageKitchenStock': false,
   },
   {
     'id': 'gael',
@@ -161,6 +169,10 @@ const _employees = [
     'canManageEmployees': false,
     'canManageCash': false,
     'canAuthorizeCashWithdrawals': false,
+    'canOpenKitchen': false,
+    'canCloseKitchen': false,
+    'canViewKitchenReports': false,
+    'canManageKitchenStock': false,
   },
 ];
 

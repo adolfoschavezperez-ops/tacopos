@@ -16,6 +16,10 @@ class Employee {
     required this.canManageEmployees,
     required this.canManageCash,
     required this.canAuthorizeCashWithdrawals,
+    required this.canOpenKitchen,
+    required this.canCloseKitchen,
+    required this.canViewKitchenReports,
+    required this.canManageKitchenStock,
   });
 
   final String id;
@@ -32,6 +36,10 @@ class Employee {
   final bool canManageEmployees;
   final bool canManageCash;
   final bool canAuthorizeCashWithdrawals;
+  final bool canOpenKitchen;
+  final bool canCloseKitchen;
+  final bool canViewKitchenReports;
+  final bool canManageKitchenStock;
 
   factory Employee.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -52,6 +60,10 @@ class Employee {
       canManageCash: data['canManageCash'] as bool? ?? false,
       canAuthorizeCashWithdrawals:
           data['canAuthorizeCashWithdrawals'] as bool? ?? false,
+      canOpenKitchen: data['canOpenKitchen'] as bool? ?? false,
+      canCloseKitchen: data['canCloseKitchen'] as bool? ?? false,
+      canViewKitchenReports: data['canViewKitchenReports'] as bool? ?? false,
+      canManageKitchenStock: data['canManageKitchenStock'] as bool? ?? false,
     );
   }
 }
