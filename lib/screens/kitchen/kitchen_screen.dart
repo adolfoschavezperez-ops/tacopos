@@ -33,8 +33,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
     _repository = TacoPosRepository();
     _bundlesStream = _repository.watchKitchenOrderBundles();
     _kitchenIsOpenFuture = _repository
-        .getOpenKitchenSessionForCurrentBusinessDate()
-        .then((session) => session != null);
+        .hasCompletedOpenKitchenForCurrentBusinessDate();
   }
 
   @override
@@ -168,7 +167,7 @@ class _KitchenNotOpenState extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             const Text(
-              'Debes abrir cocina antes de entrar a operacion.',
+              'Debes completar la apertura de cocina antes de entrar.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
             ),

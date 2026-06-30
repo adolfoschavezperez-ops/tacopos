@@ -51,12 +51,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openMode(AppMode mode) async {
     if (mode == AppMode.kitchen) {
       final repository = TacoPosRepository();
-      final kitchenSession = await repository
-          .getOpenKitchenSessionForCurrentBusinessDate();
+      final kitchenIsOpen = await repository
+          .hasCompletedOpenKitchenForCurrentBusinessDate();
       if (!mounted) {
         return;
       }
-      if (kitchenSession == null) {
+      if (!kitchenIsOpen) {
         await _showKitchenNotOpenDialog();
         return;
       }
@@ -81,8 +81,8 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Cocina sin apertura'),
         content: Text(
           canOpenKitchen
-              ? 'Debes abrir cocina antes de entrar a operacion.'
-              : 'Debes abrir cocina antes de entrar a operacion.\n\nNo tienes permiso para abrir cocina. Solicita a un administrador.',
+              ? 'Debes completar la apertura de cocina antes de entrar a operacion.'
+              : 'Debes completar la apertura de cocina antes de entrar a operacion.\n\nNo tienes permiso para abrir cocina. Solicita a un administrador.',
         ),
         actions: [
           TextButton(

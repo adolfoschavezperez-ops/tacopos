@@ -372,68 +372,85 @@ class _KitchenStockCatalogTabState extends State<_KitchenStockCatalogTab> {
           return const LoadingPanel(message: 'Cargando insumos...');
         }
         final items = snapshot.data ?? [];
-        return ListView(
-          padding: const EdgeInsets.all(22),
-          children: [
-            SectionHeader(
-              title: 'Insumos controlados',
-              subtitle: '${items.length} insumos configurados',
-              trailing: canManage
-                  ? IconButton(
-                      tooltip: 'Agregar insumo',
-                      onPressed: () => _showDialog(),
-                      icon: const Icon(Icons.add),
-                    )
-                  : null,
-            ),
-            const SizedBox(height: 18),
-            ...items.map(
-              (item) => Padding(
-                padding: const EdgeInsets.only(bottom: 10),
-                child: GlassCard(
-                  accent: item.active
-                      ? BrandColors.info
-                      : BrandColors.textMuted,
-                  child: ListTile(
-                    leading: Icon(
-                      item.active ? Icons.inventory_2_outlined : Icons.block,
-                      color: item.active
+        return StreamBuilder(
+          stream: _repository.watchProducts(activeOnly: false),
+          builder: (context, productsSnapshot) {
+            final products = productsSnapshot.data ?? [];
+            return ListView(
+              padding: const EdgeInsets.all(22),
+              children: [
+                SectionHeader(
+                  title: 'Insumos controlados',
+                  subtitle: '${items.length} insumos configurados',
+                  trailing: canManage
+                      ? IconButton(
+                          tooltip: 'Agregar insumo',
+                          onPressed: () => _showDialog(),
+                          icon: const Icon(Icons.add),
+                        )
+                      : null,
+                ),
+                const SizedBox(height: 18),
+                ...items.map((item) {
+                  final linkedProducts = products
+                      .where((product) => product.kitchenStockItemId == item.id)
+                      .map((product) => product.name)
+                      .toList();
+                  final linkedText = item.id == 'tortilla_maiz'
+                      ? 'Insumo fijo | productos: ${linkedProducts.isEmpty ? 'sin liga directa' : linkedProducts.join(', ')}'
+                      : 'Productos ligados: ${linkedProducts.isEmpty ? 'Sin productos ligados' : linkedProducts.join(', ')}';
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: GlassCard(
+                      accent: item.active
                           ? BrandColors.info
                           : BrandColors.textMuted,
+                      child: ListTile(
+                        leading: Icon(
+                          item.active
+                              ? Icons.inventory_2_outlined
+                              : Icons.block,
+                          color: item.active
+                              ? BrandColors.info
+                              : BrandColors.textMuted,
+                        ),
+                        title: Text(
+                          item.name,
+                          style: const TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                        subtitle: Text(
+                          '${_categoryLabel(item.category)} | ${_unitLabel(item.unit)} | orden ${item.sortOrder}\n$linkedText',
+                        ),
+                        trailing: canManage
+                            ? Wrap(
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Editar',
+                                    onPressed: () => _showDialog(item: item),
+                                    icon: const Icon(Icons.edit_outlined),
+                                  ),
+                                  IconButton(
+                                    tooltip: item.active
+                                        ? 'Desactivar'
+                                        : 'Activar',
+                                    onPressed: () => _repository
+                                        .toggleKitchenStockItem(item),
+                                    icon: Icon(
+                                      item.active
+                                          ? Icons.toggle_on
+                                          : Icons.toggle_off,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : null,
+                      ),
                     ),
-                    title: Text(
-                      item.name,
-                      style: const TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                    subtitle: Text(
-                      '${item.category} | ${item.unit} | orden ${item.sortOrder}',
-                    ),
-                    trailing: canManage
-                        ? Wrap(
-                            children: [
-                              IconButton(
-                                tooltip: 'Editar',
-                                onPressed: () => _showDialog(item: item),
-                                icon: const Icon(Icons.edit_outlined),
-                              ),
-                              IconButton(
-                                tooltip: item.active ? 'Desactivar' : 'Activar',
-                                onPressed: () =>
-                                    _repository.toggleKitchenStockItem(item),
-                                icon: Icon(
-                                  item.active
-                                      ? Icons.toggle_on
-                                      : Icons.toggle_off,
-                                ),
-                              ),
-                            ],
-                          )
-                        : null,
-                  ),
-                ),
-              ),
-            ),
-          ],
+                  );
+                }),
+              ],
+            );
+          },
         );
       },
     );
@@ -589,4 +606,22 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
       ],
     );
   }
+}
+
+String _categoryLabel(String category) {
+  return switch (category) {
+    'meat' => 'Carne',
+    'tortilla' => 'Tortilla',
+    'drink' => 'Bebida',
+    'water' => 'Agua',
+    _ => 'Otro',
+  };
+}
+
+String _unitLabel(String unit) {
+  return switch (unit) {
+    'piece' => 'pieza',
+    'liter' => 'litro',
+    _ => unit,
+  };
 }

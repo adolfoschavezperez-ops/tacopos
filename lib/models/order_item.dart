@@ -26,6 +26,10 @@ class OrderItem {
     this.appliedPlatformId,
     this.appliedPlatformName,
     this.priceSource,
+    this.kitchenStockItemId,
+    this.kitchenStockItemName,
+    this.affectsKitchenStock = false,
+    this.kitchenStockUnit,
   });
 
   final String id;
@@ -52,6 +56,10 @@ class OrderItem {
   final String? appliedPlatformId;
   final String? appliedPlatformName;
   final String? priceSource;
+  final String? kitchenStockItemId;
+  final String? kitchenStockItemName;
+  final bool affectsKitchenStock;
+  final String? kitchenStockUnit;
 
   factory OrderItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -82,6 +90,10 @@ class OrderItem {
       appliedPlatformId: data['appliedPlatformId'] as String?,
       appliedPlatformName: data['appliedPlatformName'] as String?,
       priceSource: data['priceSource'] as String?,
+      kitchenStockItemId: data['kitchenStockItemId'] as String?,
+      kitchenStockItemName: data['kitchenStockItemName'] as String?,
+      affectsKitchenStock: data['affectsKitchenStock'] as bool? ?? false,
+      kitchenStockUnit: data['kitchenStockUnit'] as String?,
     );
   }
 

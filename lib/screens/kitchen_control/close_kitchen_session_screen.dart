@@ -160,8 +160,24 @@ class _CloseKitchenFormState extends State<_CloseKitchenForm> {
       _finalControllers.putIfAbsent(item.id, () => TextEditingController());
       _wasteControllers.putIfAbsent(item.id, () => TextEditingController());
       _notesControllers.putIfAbsent(item.id, () => TextEditingController());
-      _focusNodes.putIfAbsent('${item.id}_final', FocusNode.new);
-      _focusNodes.putIfAbsent('${item.id}_waste', FocusNode.new);
+      _focusNodes.putIfAbsent('${item.id}_final', () {
+        final focusNode = FocusNode();
+        focusNode.addListener(() {
+          if (focusNode.hasFocus) {
+            _selectAll(_finalControllers[item.id]!);
+          }
+        });
+        return focusNode;
+      });
+      _focusNodes.putIfAbsent('${item.id}_waste', () {
+        final focusNode = FocusNode();
+        focusNode.addListener(() {
+          if (focusNode.hasFocus) {
+            _selectAll(_wasteControllers[item.id]!);
+          }
+        });
+        return focusNode;
+      });
       _focusNodes.putIfAbsent('${item.id}_notes', FocusNode.new);
     }
   }
@@ -351,4 +367,11 @@ class _CloseKitchenFormState extends State<_CloseKitchenForm> {
         ? value.toStringAsFixed(0)
         : value.toStringAsFixed(2);
   }
+}
+
+void _selectAll(TextEditingController controller) {
+  controller.selection = TextSelection(
+    baseOffset: 0,
+    extentOffset: controller.text.length,
+  );
 }

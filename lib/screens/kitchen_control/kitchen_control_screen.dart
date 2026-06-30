@@ -21,11 +21,13 @@ class _KitchenControlScreenState extends State<KitchenControlScreen> {
   final _repository = TacoPosRepository();
   bool _opening = false;
 
-  Future<void> _openKitchen() async {
+  Future<void> _openKitchen(Map<String, double> inputs) async {
     if (_opening) return;
     setState(() => _opening = true);
     try {
-      await _repository.openKitchenSession();
+      await _repository.openKitchenSessionWithInputs(
+        todayInputByItemId: inputs,
+      );
       if (!mounted) return;
       _showMessage('Cocina abierta.');
     } catch (error) {
@@ -91,37 +93,26 @@ class _KitchenControlScreenState extends State<KitchenControlScreen> {
 
           final session = snapshot.data;
           if (session == null) {
-            return ListView(
-              padding: const EdgeInsets.all(22),
-              children: [
-                const SectionHeader(
-                  title: 'Sin cocina abierta',
-                  subtitle:
-                      'Usa la fecha operativa de caja abierta o el dia actual.',
-                ),
-                const SizedBox(height: 18),
-                GlassPanel(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Abre cocina para capturar preparacion y compras del dia.',
-                        style: TextStyle(
-                          color: BrandColors.textMuted,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      GlassButton(
-                        icon: Icons.soup_kitchen_outlined,
-                        label: _opening ? 'Abriendo...' : 'Abrir cocina',
-                        prominent: true,
-                        onTap: _opening ? null : _openKitchen,
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            return FutureBuilder<List<KitchenOpeningInput>>(
+              future: _repository.buildKitchenOpeningInputs(),
+              builder: (context, openingSnapshot) {
+                if (openingSnapshot.hasError) {
+                  return EmptyState(
+                    icon: Icons.error_outline,
+                    title: 'No se pudo cargar apertura',
+                    message: '${openingSnapshot.error}',
+                  );
+                }
+                if (openingSnapshot.connectionState ==
+                    ConnectionState.waiting) {
+                  return const LoadingPanel(message: 'Preparando apertura...');
+                }
+                return _KitchenOpeningForm(
+                  inputs: openingSnapshot.data ?? [],
+                  opening: _opening,
+                  onOpen: _openKitchen,
+                );
+              },
             );
           }
 
@@ -134,6 +125,203 @@ class _KitchenControlScreenState extends State<KitchenControlScreen> {
         },
       ),
     );
+  }
+}
+
+class _KitchenOpeningForm extends StatefulWidget {
+  const _KitchenOpeningForm({
+    required this.inputs,
+    required this.opening,
+    required this.onOpen,
+  });
+
+  final List<KitchenOpeningInput> inputs;
+  final bool opening;
+  final ValueChanged<Map<String, double>> onOpen;
+
+  @override
+  State<_KitchenOpeningForm> createState() => _KitchenOpeningFormState();
+}
+
+class _KitchenOpeningFormState extends State<_KitchenOpeningForm> {
+  final _controllers = <String, TextEditingController>{};
+  final _focusNodes = <String, FocusNode>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _syncControllers();
+  }
+
+  @override
+  void didUpdateWidget(covariant _KitchenOpeningForm oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncControllers();
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _controllers.values) {
+      controller.dispose();
+    }
+    for (final focusNode in _focusNodes.values) {
+      focusNode.dispose();
+    }
+    super.dispose();
+  }
+
+  void _syncControllers() {
+    for (final input in widget.inputs) {
+      final item = input.item;
+      _controllers.putIfAbsent(item.id, () => TextEditingController());
+      _focusNodes.putIfAbsent(item.id, () {
+        final focusNode = FocusNode();
+        focusNode.addListener(() {
+          if (focusNode.hasFocus) {
+            _selectAll(_controllers[item.id]!);
+          }
+        });
+        return focusNode;
+      });
+    }
+  }
+
+  void _submit() {
+    final values = <String, double>{};
+    for (final input in widget.inputs) {
+      final raw = _controllers[input.item.id]?.text.trim() ?? '';
+      if (raw.isEmpty) {
+        _message('Captura las entradas del dia antes de abrir cocina.');
+        return;
+      }
+      final value = double.tryParse(raw.replaceAll(',', '.'));
+      if (value == null || value < 0) {
+        _message('Captura las entradas del dia antes de abrir cocina.');
+        return;
+      }
+      if (input.item.unit == 'piece' && value != value.roundToDouble()) {
+        _message('${input.item.name} debe capturarse en piezas enteras.');
+        return;
+      }
+      values[input.item.id] = value;
+    }
+    widget.onOpen(values);
+  }
+
+  void _message(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.inputs.isEmpty) {
+      return const EmptyState(
+        icon: Icons.inventory_2_outlined,
+        title: 'Sin insumos controlados',
+        message: 'Configura productos e insumos controlados desde Admin.',
+      );
+    }
+
+    final grouped = <String, List<KitchenOpeningInput>>{};
+    for (final input in widget.inputs) {
+      grouped.putIfAbsent(input.item.category, () => []).add(input);
+    }
+
+    return ListView(
+      padding: const EdgeInsets.all(22),
+      children: [
+        const SectionHeader(
+          title: 'Apertura de cocina',
+          subtitle: 'Captura todas las entradas antes de abrir operacion.',
+        ),
+        const SizedBox(height: 18),
+        for (final group in grouped.entries) ...[
+          GlassPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _categoryLabel(group.key),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ...group.value.map(_openingRow),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+        ],
+        Align(
+          alignment: Alignment.centerRight,
+          child: GlassButton(
+            icon: Icons.soup_kitchen_outlined,
+            label: widget.opening ? 'Abriendo...' : 'Abrir cocina',
+            prominent: true,
+            onTap: widget.opening ? null : _submit,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _openingRow(KitchenOpeningInput input) {
+    final item = input.item;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 680;
+          final inputField = TextField(
+            controller: _controllers[item.id],
+            focusNode: _focusNodes[item.id],
+            enabled: !widget.opening,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(labelText: 'Entrada (${item.unit})'),
+          );
+          final info = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                item.name,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Sobrante anterior: ${_formatQty(input.previousRemainingQty)} ${item.unit}',
+                style: const TextStyle(
+                  color: BrandColors.textMuted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          );
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [info, const SizedBox(height: 8), inputField],
+            );
+          }
+          return Row(
+            children: [
+              Expanded(child: info),
+              const SizedBox(width: 12),
+              SizedBox(width: 180, child: inputField),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  String _categoryLabel(String category) {
+    return kitchenCategoryLabel(category);
+  }
+
+  String _formatQty(double value) {
+    return formatKitchenQty(value);
   }
 }
 
@@ -247,7 +435,15 @@ class _KitchenInputEditorState extends State<_KitchenInputEditor> {
         item.id,
         () => TextEditingController(text: _formatQty(item.todayInputQty)),
       );
-      _focusNodes.putIfAbsent(item.id, FocusNode.new);
+      _focusNodes.putIfAbsent(item.id, () {
+        final focusNode = FocusNode();
+        focusNode.addListener(() {
+          if (focusNode.hasFocus) {
+            _selectAll(_controllers[item.id]!);
+          }
+        });
+        return focusNode;
+      });
     }
   }
 
@@ -427,4 +623,27 @@ class _QtyLabel extends StatelessWidget {
       ),
     );
   }
+}
+
+void _selectAll(TextEditingController controller) {
+  controller.selection = TextSelection(
+    baseOffset: 0,
+    extentOffset: controller.text.length,
+  );
+}
+
+String kitchenCategoryLabel(String category) {
+  return switch (category) {
+    'meat' => 'Carnes',
+    'tortilla' => 'Tortilla',
+    'drink' => 'Bebidas',
+    'water' => 'Aguas',
+    _ => 'Otros',
+  };
+}
+
+String formatKitchenQty(double value) {
+  return value == value.roundToDouble()
+      ? value.toStringAsFixed(0)
+      : value.toStringAsFixed(2);
 }

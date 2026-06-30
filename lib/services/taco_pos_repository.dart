@@ -74,6 +74,18 @@ class KitchenCloseInput {
   final String notes;
 }
 
+class KitchenOpeningInput {
+  const KitchenOpeningInput({
+    required this.item,
+    required this.previousRemainingQty,
+    required this.todayInputQty,
+  });
+
+  final KitchenStockItem item;
+  final double previousRemainingQty;
+  final double todayInputQty;
+}
+
 class TacoPosRepository {
   TacoPosRepository({FirebaseFirestore? firestore, FirebaseAuth? auth})
     : _db = firestore ?? FirebaseFirestore.instance,
@@ -646,6 +658,86 @@ class TacoPosRepository {
     await batch.commit();
   }
 
+  Future<void> ensureKitchenStockLinksForProducts() async {
+    await ensureDefaultKitchenStockItems();
+    final productsSnapshot = await _productsRef.get();
+    final stockItemsSnapshot = await _kitchenStockItemsRef.get();
+    final stockById = {
+      for (final item in stockItemsSnapshot.docs.map(KitchenStockItem.fromDoc))
+        item.id: item,
+    };
+    final batch = _db.batch();
+    var hasUpdates = false;
+
+    for (final doc in productsSnapshot.docs) {
+      final product = Product.fromDoc(doc);
+      if (product.kitchenStockItemId != null ||
+          !_defaultProductAffectsKitchenStock(product)) {
+        continue;
+      }
+      final stockItemId = _stockItemIdForProductName(product.name);
+      if (stockItemId == null) {
+        continue;
+      }
+      final stockItem =
+          stockById[stockItemId] ??
+          _fallbackStockItemForProduct(product, stockItemId);
+      if (!stockById.containsKey(stockItemId)) {
+        batch.set(_kitchenStockItemsRef.doc(stockItemId), {
+          'id': stockItemId,
+          'name': stockItem.name,
+          'category': stockItem.category,
+          'unit': stockItem.unit,
+          'active': true,
+          'sortOrder': stockItem.sortOrder,
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        stockById[stockItemId] = stockItem;
+      }
+      batch.set(doc.reference, {
+        'affectsKitchenStock': true,
+        'kitchenStockItemId': stockItemId,
+        'kitchenStockItemName': stockItem.name,
+        'kitchenStockUnit': stockItem.unit,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      hasUpdates = true;
+    }
+
+    if (hasUpdates) {
+      await batch.commit();
+    }
+  }
+
+  Future<List<KitchenStockItem>> _activeControlledKitchenStockItems() async {
+    final stockSnapshot = await _kitchenStockItemsRef.get();
+    final productSnapshot = await _productsRef.get();
+    final linkedStockIds = productSnapshot.docs
+        .map(Product.fromDoc)
+        .where((product) => product.active && product.affectsKitchenStock)
+        .map((product) => product.kitchenStockItemId)
+        .whereType<String>()
+        .toSet();
+
+    return stockSnapshot.docs
+        .map(KitchenStockItem.fromDoc)
+        .where(
+          (item) =>
+              item.active &&
+              (linkedStockIds.contains(item.id) || item.id == 'tortilla_maiz'),
+        )
+        .toList()
+      ..sort((a, b) {
+        final categoryCompare = a.category.compareTo(b.category);
+        if (categoryCompare != 0) {
+          return categoryCompare;
+        }
+        final sortCompare = a.sortOrder.compareTo(b.sortOrder);
+        return sortCompare != 0 ? sortCompare : a.name.compareTo(b.name);
+      });
+  }
+
   Future<void> saveKitchenStockItem({
     String? itemId,
     required String name,
@@ -714,6 +806,19 @@ class TacoPosRepository {
     return sessions.isEmpty ? null : sessions.first;
   }
 
+  Future<bool> hasCompletedOpenKitchenForCurrentBusinessDate() async {
+    final session = await getOpenKitchenSessionForCurrentBusinessDate();
+    if (session == null) {
+      return false;
+    }
+    final itemsSnapshot = await _kitchenSessionsRef
+        .doc(session.id)
+        .collection('items')
+        .limit(1)
+        .get();
+    return itemsSnapshot.docs.isNotEmpty;
+  }
+
   Stream<List<KitchenSession>> watchKitchenSessions({
     String? startBusinessDate,
     String? endBusinessDate,
@@ -767,9 +872,33 @@ class TacoPosRepository {
     return KitchenSession.fromDoc(snapshot.docs.first);
   }
 
-  Future<KitchenSession> openKitchenSession() async {
+  Future<List<KitchenOpeningInput>> buildKitchenOpeningInputs() async {
+    await ensureDefaultKitchenStockItems();
+    await ensureKitchenStockLinksForProducts();
+    final openCash = await getOpenCashSession();
+    final businessDate =
+        openCash?.businessDate ?? _businessDateFor(DateTime.now());
+    final previousRemaining = await _previousKitchenRemainingByItem(
+      businessDate,
+    );
+    final items = await _activeControlledKitchenStockItems();
+    return items
+        .map(
+          (item) => KitchenOpeningInput(
+            item: item,
+            previousRemainingQty: previousRemaining[item.id] ?? 0,
+            todayInputQty: 0,
+          ),
+        )
+        .toList();
+  }
+
+  Future<KitchenSession> openKitchenSessionWithInputs({
+    required Map<String, double> todayInputByItemId,
+  }) async {
     _requireOpenKitchen();
     await ensureDefaultKitchenStockItems();
+    await ensureKitchenStockLinksForProducts();
     final openSnapshot = await _kitchenSessionsRef
         .where('status', isEqualTo: 'open')
         .limit(1)
@@ -788,15 +917,14 @@ class TacoPosRepository {
       throw StateError('Ya existe cierre de cocina para $businessDate.');
     }
 
-    final activeItemsSnapshot = await _kitchenStockItemsRef.get();
-    final activeItems =
-        activeItemsSnapshot.docs
-            .map(KitchenStockItem.fromDoc)
-            .where((item) => item.active)
-            .toList()
-          ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    final activeItems = await _activeControlledKitchenStockItems();
     if (activeItems.isEmpty) {
       throw StateError('No hay insumos activos para abrir cocina.');
+    }
+    if (todayInputByItemId.length < activeItems.length) {
+      throw ArgumentError(
+        'Captura las entradas del dia antes de abrir cocina.',
+      );
     }
 
     final previousRemaining = await _previousKitchenRemainingByItem(
@@ -822,15 +950,26 @@ class TacoPosRepository {
     });
 
     for (final item in activeItems) {
+      final todayInputQty = todayInputByItemId[item.id];
+      if (todayInputQty == null || todayInputQty < 0) {
+        throw ArgumentError(
+          'Captura las entradas del dia antes de abrir cocina.',
+        );
+      }
+      if (item.unit == 'piece' &&
+          todayInputQty != todayInputQty.roundToDouble()) {
+        throw ArgumentError('${item.name} debe capturarse en piezas enteras.');
+      }
       final previousQty = previousRemaining[item.id] ?? 0;
+      final availableQty = previousQty + todayInputQty;
       batch.set(docRef.collection('items').doc(item.id), {
         'kitchenStockItemId': item.id,
         'name': item.name,
         'category': item.category,
         'unit': item.unit,
         'previousRemainingQty': previousQty,
-        'todayInputQty': 0.0,
-        'availableQty': previousQty,
+        'todayInputQty': todayInputQty,
+        'availableQty': availableQty,
         'finalRemainingQty': null,
         'wasteQty': null,
         'usedQty': null,
@@ -857,6 +996,10 @@ class TacoPosRepository {
     _requireOpenKitchen();
     if (todayInputQty < 0) {
       throw ArgumentError('La entrada no puede ser negativa.');
+    }
+    if (item.unit == 'piece' &&
+        todayInputQty != todayInputQty.roundToDouble()) {
+      throw ArgumentError('${item.name} debe capturarse en piezas enteras.');
     }
     final availableQty = item.previousRemainingQty + todayInputQty;
     await _kitchenSessionsRef
@@ -910,6 +1053,11 @@ class TacoPosRepository {
       }
       if (input.finalRemainingQty < 0 || input.wasteQty < 0) {
         throw ArgumentError('Los montos de cierre no pueden ser negativos.');
+      }
+      if (item.unit == 'piece' &&
+          (input.finalRemainingQty != input.finalRemainingQty.roundToDouble() ||
+              input.wasteQty != input.wasteQty.roundToDouble())) {
+        throw ArgumentError('${item.name} debe capturarse en piezas enteras.');
       }
       final usedQty = item.availableQty - input.finalRemainingQty;
       final usefulConsumedQty = usedQty - input.wasteQty;
@@ -1319,7 +1467,9 @@ class TacoPosRepository {
         if (item.kitchenStatus == 'cancelled') {
           continue;
         }
-        final stockItemId = _stockItemIdForProductName(item.productName);
+        final stockItemId =
+            item.kitchenStockItemId ??
+            _stockItemIdForProductName(item.productName);
         if (stockItemId == null) {
           continue;
         }
@@ -1344,6 +1494,32 @@ class TacoPosRepository {
       return 'refresco_coca_cola';
     }
     return null;
+  }
+
+  bool _defaultProductAffectsKitchenStock(Product product) {
+    final category = _normalizeName(product.category);
+    final name = _normalizeName(product.name);
+    if (category == 'tacos') {
+      return true;
+    }
+    if (category == 'bebidas' || name.contains('refresco')) {
+      return true;
+    }
+    return false;
+  }
+
+  KitchenStockItem _fallbackStockItemForProduct(Product product, String id) {
+    final category = _normalizeName(product.category);
+    final name = _normalizeName(product.name);
+    final isDrink = category == 'bebidas' || name.contains('refresco');
+    return KitchenStockItem(
+      id: id,
+      name: product.name,
+      category: isDrink ? 'drink' : 'meat',
+      unit: isDrink ? 'piece' : 'kg',
+      active: true,
+      sortOrder: isDrink ? 50 : 20,
+    );
   }
 
   String _normalizeName(String value) {
@@ -1527,6 +1703,16 @@ class TacoPosRepository {
       'notes': '',
       ..._employeeAuditFields(prefix: 'createdBy'),
       'sendToKitchen': product.sendToKitchen,
+      'affectsKitchenStock': product.affectsKitchenStock,
+      'kitchenStockItemId': product.affectsKitchenStock
+          ? product.kitchenStockItemId
+          : null,
+      'kitchenStockItemName': product.affectsKitchenStock
+          ? product.kitchenStockItemName
+          : null,
+      'kitchenStockUnit': product.affectsKitchenStock
+          ? product.kitchenStockUnit
+          : null,
       'kitchenStatus': product.sendToKitchen ? 'pending' : 'not_required',
       'kitchenBatchId': null,
       'paymentStatus': 'pending',
@@ -2439,6 +2625,10 @@ class TacoPosRepository {
     required Map<String, double> platformPrices,
     required bool active,
     required bool sendToKitchen,
+    required bool affectsKitchenStock,
+    String? kitchenStockItemId,
+    String? kitchenStockItemName,
+    String? kitchenStockUnit,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageProducts == true,
@@ -2448,6 +2638,26 @@ class TacoPosRepository {
         ? _productsRef.doc()
         : _productsRef.doc(productId);
     final current = await _productsRef.get();
+    String? resolvedStockItemId = kitchenStockItemId;
+    String? resolvedStockItemName = kitchenStockItemName;
+    String? resolvedStockUnit = kitchenStockUnit;
+    if (affectsKitchenStock &&
+        (resolvedStockItemId == null || resolvedStockItemId.trim().isEmpty)) {
+      resolvedStockItemId = _stockItemIdForProductName(name) ?? docRef.id;
+      resolvedStockItemName = name.trim();
+      final normalizedCategory = _normalizeName(category);
+      resolvedStockUnit = normalizedCategory == 'bebidas' ? 'piece' : 'kg';
+      await _kitchenStockItemsRef.doc(resolvedStockItemId).set({
+        'id': resolvedStockItemId,
+        'name': resolvedStockItemName,
+        'category': normalizedCategory == 'bebidas' ? 'drink' : 'meat',
+        'unit': resolvedStockUnit,
+        'active': true,
+        'sortOrder': current.docs.length + 20,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
 
     await docRef.set({
       'id': docRef.id,
@@ -2457,6 +2667,12 @@ class TacoPosRepository {
       'platformPrices': platformPrices,
       'active': active,
       'sendToKitchen': sendToKitchen,
+      'affectsKitchenStock': affectsKitchenStock,
+      'kitchenStockItemId': affectsKitchenStock ? resolvedStockItemId : null,
+      'kitchenStockItemName': affectsKitchenStock
+          ? resolvedStockItemName
+          : null,
+      'kitchenStockUnit': affectsKitchenStock ? resolvedStockUnit : null,
       'sortOrder': current.docs.length + 1,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

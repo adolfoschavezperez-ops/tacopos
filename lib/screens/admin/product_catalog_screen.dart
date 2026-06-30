@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
-import '../../models/product.dart';
+import '../../models/kitchen_stock_item.dart';
 import '../../models/order_platform.dart';
+import '../../models/product.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
@@ -37,42 +38,44 @@ class ProductCatalogScreen extends StatelessWidget {
           icon: const Icon(Icons.add_circle),
         ),
       ],
-      body: StreamBuilder<List<Product>>(
-        stream: repository.watchProducts(),
-        builder: (context, snapshot) {
-          if (snapshot.hasError) {
+      body: FutureBuilder<void>(
+        future: repository.ensureKitchenStockLinksForProducts(),
+        builder: (context, setupSnapshot) {
+          if (setupSnapshot.connectionState == ConnectionState.waiting) {
+            return const LoadingPanel(message: 'Preparando catalogo...');
+          }
+          if (setupSnapshot.hasError) {
             return EmptyState(
               icon: Icons.error_outline,
-              title: 'No se pudo cargar el catalogo',
-              message: '${snapshot.error}',
+              title: 'No se pudo preparar control de cocina',
+              message: '${setupSnapshot.error}',
             );
           }
-
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const LoadingPanel(message: 'Cargando catalogo...');
-          }
-
-          final products = snapshot.data ?? [];
-          if (products.isEmpty) {
-            return const EmptyState(
-              icon: Icons.restaurant_menu,
-              title: 'Catalogo vacio',
-              message: 'Agrega productos para que aparezcan en Mesero / Caja.',
-            );
-          }
-
-          return StreamBuilder<List<OrderPlatform>>(
-            stream: repository.watchOrderPlatforms(),
-            builder: (context, platformSnapshot) {
-              if (platformSnapshot.hasError) {
+          return StreamBuilder<List<Product>>(
+            stream: repository.watchProducts(),
+            builder: (context, snapshot) {
+              if (snapshot.hasError) {
                 return EmptyState(
                   icon: Icons.error_outline,
-                  title: 'No se pudieron cargar plataformas',
-                  message: '${platformSnapshot.error}',
+                  title: 'No se pudo cargar el catalogo',
+                  message: '${snapshot.error}',
                 );
               }
 
-              final platforms = platformSnapshot.data ?? [];
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const LoadingPanel(message: 'Cargando catalogo...');
+              }
+
+              final products = snapshot.data ?? [];
+              if (products.isEmpty) {
+                return const EmptyState(
+                  icon: Icons.restaurant_menu,
+                  title: 'Catalogo vacio',
+                  message:
+                      'Agrega productos para que aparezcan en Mesero / Caja.',
+                );
+              }
+
               return ListView(
                 padding: const EdgeInsets.all(22),
                 children: [
@@ -89,7 +92,6 @@ class ProductCatalogScreen extends StatelessWidget {
                         onEdit: () => _showProductDialog(
                           context,
                           repository,
-                          platforms: platforms,
                           product: product,
                         ),
                         onToggle: () => repository.toggleProduct(product),
@@ -117,181 +119,734 @@ class ProductCatalogScreen extends StatelessWidget {
   Future<void> _showProductDialog(
     BuildContext context,
     TacoPosRepository repository, {
-    List<OrderPlatform> platforms = const [],
     Product? product,
   }) async {
     await repository.ensureDefaultOrderPlatforms();
-    final availablePlatforms = platforms.isEmpty
-        ? await repository.watchOrderPlatforms().first
-        : platforms;
-    if (!context.mounted) {
-      return;
-    }
-    final nameController = TextEditingController(text: product?.name ?? '');
-    final categoryController = TextEditingController(
+    await repository.ensureKitchenStockLinksForProducts();
+    final platforms = await repository.watchOrderPlatforms().first;
+    final stockItems = await repository.watchKitchenStockItems().first;
+    if (!context.mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _ProductDialog(
+        repository: repository,
+        product: product,
+        platforms: platforms,
+        stockItems: stockItems,
+      ),
+    );
+  }
+}
+
+class _ProductDialog extends StatefulWidget {
+  const _ProductDialog({
+    required this.repository,
+    required this.platforms,
+    required this.stockItems,
+    this.product,
+  });
+
+  final TacoPosRepository repository;
+  final Product? product;
+  final List<OrderPlatform> platforms;
+  final List<KitchenStockItem> stockItems;
+
+  @override
+  State<_ProductDialog> createState() => _ProductDialogState();
+}
+
+class _ProductDialogState extends State<_ProductDialog> {
+  late final TextEditingController _nameController;
+  late final TextEditingController _categoryController;
+  late final TextEditingController _priceController;
+  late final Map<String, TextEditingController> _platformControllers;
+  late bool _active;
+  late bool _sendToKitchen;
+  late bool _affectsKitchenStock;
+  late List<KitchenStockItem> _stockItems;
+  String? _selectedKitchenStockItemId;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final product = widget.product;
+    _nameController = TextEditingController(text: product?.name ?? '');
+    _categoryController = TextEditingController(
       text: product?.category ?? 'Tacos',
     );
-    final priceController = TextEditingController(
+    _priceController = TextEditingController(
       text: product == null ? '' : product.price.toStringAsFixed(2),
     );
-    var active = product?.active ?? true;
-    var sendToKitchen = product?.sendToKitchen ?? true;
-    final platformControllers = <String, TextEditingController>{
-      for (final platform in availablePlatforms.where(
+    _platformControllers = {
+      for (final platform in widget.platforms.where(
         (platform) => platform.id != 'en_persona',
       ))
         platform.id: TextEditingController(
           text: product?.platformPrices[platform.id]?.toStringAsFixed(2) ?? '',
         ),
     };
+    _active = product?.active ?? true;
+    _sendToKitchen = product?.sendToKitchen ?? true;
+    _affectsKitchenStock =
+        product?.affectsKitchenStock ??
+        _defaultAffectsKitchenStock(
+          _categoryController.text,
+          _nameController.text,
+        );
+    _stockItems = [...widget.stockItems];
+    _selectedKitchenStockItemId =
+        product?.kitchenStockItemId ??
+        (_affectsKitchenStock ? _guessStockItemId(product?.name ?? '') : null);
+  }
 
-    await showDialog<void>(
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _categoryController.dispose();
+    _priceController.dispose();
+    for (final controller in _platformControllers.values) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _createKitchenStockItem() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) {
+      _message('Captura el nombre del producto primero.');
+      return;
+    }
+
+    final normalizedName = _normalize(name);
+    for (final item in _stockItems) {
+      if (_normalize(item.name) == normalizedName) {
+        setState(() => _selectedKitchenStockItemId = item.id);
+        _message('Insumo existente seleccionado.');
+        return;
+      }
+    }
+
+    final defaults = _kitchenDefaultsFor(
+      _categoryController.text,
+      _nameController.text,
+    );
+    final created = await showDialog<KitchenStockItem>(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: Text(
-                product == null ? 'Agregar producto' : 'Editar producto',
-              ),
-              content: SizedBox(
-                width: 420,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+      builder: (_) => _QuickKitchenStockDialog(
+        repository: widget.repository,
+        defaultName: name,
+        defaultCategory: defaults.category,
+        defaultUnit: defaults.unit,
+        sortOrder: _stockItems.length + 1,
+      ),
+    );
+    if (!mounted || created == null) return;
+    setState(() {
+      _stockItems = [..._stockItems, created]
+        ..sort((a, b) => a.name.compareTo(b.name));
+      _selectedKitchenStockItemId = created.id;
+    });
+  }
+
+  Future<void> _save() async {
+    final price = double.tryParse(_priceController.text.replaceAll(',', '.'));
+    if (_nameController.text.trim().isEmpty ||
+        _categoryController.text.trim().isEmpty ||
+        price == null) {
+      _message('Completa nombre, categoria y precio.');
+      return;
+    }
+
+    if (_affectsKitchenStock && _selectedKitchenStockItem == null) {
+      _message('Selecciona un insumo de cocina.');
+      return;
+    }
+
+    final platformPrices = <String, double>{};
+    for (final entry in _platformControllers.entries) {
+      final raw = entry.value.text.trim();
+      if (raw.isEmpty) continue;
+      final value = double.tryParse(raw.replaceAll(',', '.'));
+      if (value == null || value <= 0) {
+        _message('Revisa precios por plataforma.');
+        return;
+      }
+      platformPrices[entry.key] = value;
+    }
+
+    setState(() => _saving = true);
+    try {
+      final selectedStockItem = _selectedKitchenStockItem;
+      await widget.repository.saveProduct(
+        productId: widget.product?.id,
+        name: _nameController.text,
+        category: _categoryController.text,
+        price: price,
+        platformPrices: platformPrices,
+        active: _active,
+        sendToKitchen: _sendToKitchen,
+        affectsKitchenStock: _affectsKitchenStock,
+        kitchenStockItemId: _affectsKitchenStock ? selectedStockItem?.id : null,
+        kitchenStockItemName: _affectsKitchenStock
+            ? selectedStockItem?.name
+            : null,
+        kitchenStockUnit: _affectsKitchenStock ? selectedStockItem?.unit : null,
+      );
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) return;
+      _message(error.toString().replaceFirst('Bad state: ', ''));
+      setState(() => _saving = false);
+    }
+  }
+
+  KitchenStockItem? get _selectedKitchenStockItem =>
+      _stockItemById(_stockItems, _selectedKitchenStockItemId);
+
+  void _message(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedStockItem = _selectedKitchenStockItem;
+    return SafeArea(
+      child: Dialog(
+        insetPadding: const EdgeInsets.all(18),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 920, maxHeight: 720),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
                   children: [
-                    TextField(
-                      controller: nameController,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: const InputDecoration(labelText: 'Nombre'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: categoryController,
-                      textCapitalization: TextCapitalization.words,
-                      decoration: const InputDecoration(labelText: 'Categoria'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: priceController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: const InputDecoration(
-                        labelText: 'Precio en tienda',
-                      ),
-                    ),
-                    for (final platform in availablePlatforms.where(
-                      (platform) => platform.id != 'en_persona',
-                    )) ...[
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: platformControllers[platform.id],
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        decoration: InputDecoration(
-                          labelText: 'Precio ${platform.name}',
-                          helperText: 'Vacio usa precio en tienda',
+                    Expanded(
+                      child: Text(
+                        widget.product == null
+                            ? 'Agregar producto'
+                            : 'Editar producto',
+                        style: const TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
-                    ],
-                    const SizedBox(height: 12),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Activo'),
-                      value: active,
-                      onChanged: (value) {
-                        setDialogState(() {
-                          active = value;
-                        });
-                      },
                     ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('Enviar a cocina'),
-                      subtitle: const Text(
-                        'Desactivalo para bebidas u otros extras.',
-                      ),
-                      value: sendToKitchen,
-                      onChanged: (value) {
-                        setDialogState(() {
-                          sendToKitchen = value;
-                        });
-                      },
+                    IconButton(
+                      tooltip: 'Cerrar',
+                      onPressed: _saving ? null : () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
                     ),
                   ],
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Cancelar'),
-                ),
-                FilledButton(
-                  onPressed: () async {
-                    final price = double.tryParse(
-                      priceController.text.replaceAll(',', '.'),
-                    );
-
-                    if (nameController.text.trim().isEmpty ||
-                        categoryController.text.trim().isEmpty ||
-                        price == null) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('Completa nombre, categoria y precio.'),
-                        ),
-                      );
-                      return;
-                    }
-
-                    final platformPrices = <String, double>{};
-                    for (final entry in platformControllers.entries) {
-                      final raw = entry.value.text.trim();
-                      if (raw.isEmpty) {
-                        continue;
-                      }
-                      final value = double.tryParse(raw.replaceAll(',', '.'));
-                      if (value == null || value <= 0) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Revisa precios por plataforma.'),
-                          ),
+                const SizedBox(height: 14),
+                Expanded(
+                  child: SingleChildScrollView(
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final wide = constraints.maxWidth >= 720;
+                        final left = _MainProductFields(
+                          nameController: _nameController,
+                          categoryController: _categoryController,
+                          priceController: _priceController,
+                          active: _active,
+                          sendToKitchen: _sendToKitchen,
+                          saving: _saving,
+                          onActiveChanged: (value) {
+                            setState(() => _active = value);
+                          },
+                          onSendToKitchenChanged: (value) {
+                            setState(() => _sendToKitchen = value);
+                          },
                         );
-                        return;
-                      }
-                      platformPrices[entry.key] = value;
-                    }
-
-                    await repository.saveProduct(
-                      productId: product?.id,
-                      name: nameController.text,
-                      category: categoryController.text,
-                      price: price,
-                      platformPrices: platformPrices,
-                      active: active,
-                      sendToKitchen: sendToKitchen,
-                    );
-
-                    if (context.mounted) {
-                      Navigator.pop(context);
-                    }
-                  },
-                  child: const Text('Guardar'),
+                        final right = _ProductKitchenFields(
+                          platformControllers: _platformControllers,
+                          platforms: widget.platforms,
+                          saving: _saving,
+                          affectsKitchenStock: _affectsKitchenStock,
+                          selectedStockItemId: _selectedKitchenStockItemId,
+                          stockItems: _stockItems,
+                          selectedStockItem: selectedStockItem,
+                          onAffectsChanged: (value) {
+                            setState(() => _affectsKitchenStock = value);
+                          },
+                          onStockChanged: (value) {
+                            setState(() => _selectedKitchenStockItemId = value);
+                          },
+                          onCreateStockItem: _createKitchenStockItem,
+                        );
+                        if (!wide) {
+                          return Column(
+                            children: [left, const SizedBox(height: 16), right],
+                          );
+                        }
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: left),
+                            const SizedBox(width: 18),
+                            Expanded(child: right),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: _saving ? null : () => Navigator.pop(context),
+                      child: const Text('Cancelar'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      onPressed: _saving ? null : _save,
+                      child: Text(_saving ? 'Guardando...' : 'Guardar'),
+                    ),
+                  ],
                 ),
               ],
-            );
-          },
-        );
-      },
+            ),
+          ),
+        ),
+      ),
     );
+  }
+}
 
-    nameController.dispose();
-    categoryController.dispose();
-    priceController.dispose();
-    for (final controller in platformControllers.values) {
-      controller.dispose();
+class _MainProductFields extends StatelessWidget {
+  const _MainProductFields({
+    required this.nameController,
+    required this.categoryController,
+    required this.priceController,
+    required this.active,
+    required this.sendToKitchen,
+    required this.saving,
+    required this.onActiveChanged,
+    required this.onSendToKitchenChanged,
+  });
+
+  final TextEditingController nameController;
+  final TextEditingController categoryController;
+  final TextEditingController priceController;
+  final bool active;
+  final bool sendToKitchen;
+  final bool saving;
+  final ValueChanged<bool> onActiveChanged;
+  final ValueChanged<bool> onSendToKitchenChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Producto',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: nameController,
+            enabled: !saving,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(labelText: 'Nombre'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: categoryController,
+            enabled: !saving,
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(labelText: 'Categoria'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: priceController,
+            enabled: !saving,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(labelText: 'Precio tienda'),
+          ),
+          const SizedBox(height: 10),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Activo'),
+            value: active,
+            onChanged: saving ? null : onActiveChanged,
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Enviar a cocina'),
+            value: sendToKitchen,
+            onChanged: saving ? null : onSendToKitchenChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProductKitchenFields extends StatelessWidget {
+  const _ProductKitchenFields({
+    required this.platformControllers,
+    required this.platforms,
+    required this.saving,
+    required this.affectsKitchenStock,
+    required this.selectedStockItemId,
+    required this.stockItems,
+    required this.selectedStockItem,
+    required this.onAffectsChanged,
+    required this.onStockChanged,
+    required this.onCreateStockItem,
+  });
+
+  final Map<String, TextEditingController> platformControllers;
+  final List<OrderPlatform> platforms;
+  final bool saving;
+  final bool affectsKitchenStock;
+  final String? selectedStockItemId;
+  final List<KitchenStockItem> stockItems;
+  final KitchenStockItem? selectedStockItem;
+  final ValueChanged<bool> onAffectsChanged;
+  final ValueChanged<String?> onStockChanged;
+  final VoidCallback onCreateStockItem;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        GlassPanel(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Precios por plataforma',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 14),
+              for (final platform in platforms.where(
+                (platform) => platform.id != 'en_persona',
+              )) ...[
+                TextField(
+                  controller: platformControllers[platform.id],
+                  enabled: !saving,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: 'Precio ${platform.name}',
+                    helperText: 'Vacio usa precio tienda',
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        GlassPanel(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Control de cocina',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Afecta control de cocina'),
+                value: affectsKitchenStock,
+                onChanged: saving ? null : onAffectsChanged,
+              ),
+              if (affectsKitchenStock) ...[
+                const SizedBox(height: 8),
+                if (!stockItems.any((item) => item.active))
+                  const Text(
+                    'No hay insumos de cocina activos. Crea uno en Admin > Insumos de cocina.',
+                    style: TextStyle(
+                      color: BrandColors.danger,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                else
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedStockItemId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Insumo ligado',
+                    ),
+                    items: stockItems
+                        .where(
+                          (item) =>
+                              item.active || item.id == selectedStockItemId,
+                        )
+                        .map(
+                          (item) => DropdownMenuItem(
+                            value: item.id,
+                            child: Text(
+                              '${item.name} - ${_categoryLabel(item.category)} - ${_unitLabel(item.unit)}',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: saving ? null : onStockChanged,
+                  ),
+                const SizedBox(height: 10),
+                Text(
+                  selectedStockItem == null
+                      ? 'Unidad: sin insumo seleccionado'
+                      : 'Unidad: ${_unitLabel(selectedStockItem!.unit)}',
+                  style: const TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton.icon(
+                    onPressed: saving ? null : onCreateStockItem,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Crear insumo nuevo'),
+                  ),
+                ),
+              ] else
+                const Text(
+                  'No controla cocina',
+                  style: TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _QuickKitchenStockDialog extends StatefulWidget {
+  const _QuickKitchenStockDialog({
+    required this.repository,
+    required this.defaultName,
+    required this.defaultCategory,
+    required this.defaultUnit,
+    required this.sortOrder,
+  });
+
+  final TacoPosRepository repository;
+  final String defaultName;
+  final String defaultCategory;
+  final String defaultUnit;
+  final int sortOrder;
+
+  @override
+  State<_QuickKitchenStockDialog> createState() =>
+      _QuickKitchenStockDialogState();
+}
+
+class _QuickKitchenStockDialogState extends State<_QuickKitchenStockDialog> {
+  late final TextEditingController _nameController;
+  late String _category;
+  late String _unit;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.defaultName);
+    _category = widget.defaultCategory;
+    _unit = widget.defaultUnit;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      await widget.repository.saveKitchenStockItem(
+        name: name,
+        category: _category,
+        unit: _unit,
+        active: true,
+        sortOrder: widget.sortOrder,
+      );
+      final items = await widget.repository
+          .watchKitchenStockItems(activeOnly: true)
+          .first;
+      final created = items.firstWhere(
+        (item) => _normalize(item.name) == _normalize(name),
+        orElse: () => items.last,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, created);
+    } catch (_) {
+      if (mounted) setState(() => _saving = false);
     }
   }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Crear insumo nuevo'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nameController,
+              enabled: !_saving,
+              decoration: const InputDecoration(labelText: 'Nombre'),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _category,
+              decoration: const InputDecoration(labelText: 'Categoria'),
+              items: const [
+                DropdownMenuItem(value: 'meat', child: Text('Carne')),
+                DropdownMenuItem(value: 'tortilla', child: Text('Tortilla')),
+                DropdownMenuItem(value: 'drink', child: Text('Bebida')),
+                DropdownMenuItem(value: 'water', child: Text('Agua')),
+                DropdownMenuItem(value: 'other', child: Text('Otro')),
+              ],
+              onChanged: _saving
+                  ? null
+                  : (value) => setState(() => _category = value ?? 'other'),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: _unit,
+              decoration: const InputDecoration(labelText: 'Unidad'),
+              items: const [
+                DropdownMenuItem(value: 'kg', child: Text('kg')),
+                DropdownMenuItem(value: 'piece', child: Text('pieza')),
+                DropdownMenuItem(value: 'liter', child: Text('litro')),
+              ],
+              onChanged: _saving
+                  ? null
+                  : (value) => setState(() => _unit = value ?? 'kg'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: Text(_saving ? 'Guardando...' : 'Crear'),
+        ),
+      ],
+    );
+  }
+}
+
+class _KitchenDefaults {
+  const _KitchenDefaults({required this.category, required this.unit});
+
+  final String category;
+  final String unit;
+}
+
+_KitchenDefaults _kitchenDefaultsFor(String category, String name) {
+  final safeCategory = _normalize(category);
+  final safeName = _normalize(name);
+  if (safeCategory.contains('bebida') || safeName.contains('refresco')) {
+    return const _KitchenDefaults(category: 'drink', unit: 'piece');
+  }
+  if (safeCategory.contains('tortilla')) {
+    return const _KitchenDefaults(category: 'tortilla', unit: 'kg');
+  }
+  if (safeCategory.contains('taco')) {
+    return const _KitchenDefaults(category: 'meat', unit: 'kg');
+  }
+  return const _KitchenDefaults(category: 'other', unit: 'kg');
+}
+
+bool _defaultAffectsKitchenStock(String category, String name) {
+  final safeCategory = _normalize(category);
+  final safeName = _normalize(name);
+  if (safeCategory.contains('taco')) return true;
+  if (safeCategory.contains('bebida') || safeName.contains('refresco')) {
+    return true;
+  }
+  return false;
+}
+
+KitchenStockItem? _stockItemById(List<KitchenStockItem> items, String? id) {
+  if (id == null) return null;
+  for (final item in items) {
+    if (item.id == id) return item;
+  }
+  return null;
+}
+
+String _normalize(String value) {
+  return value
+      .toLowerCase()
+      .trim()
+      .replaceAll('á', 'a')
+      .replaceAll('é', 'e')
+      .replaceAll('í', 'i')
+      .replaceAll('ó', 'o')
+      .replaceAll('ú', 'u');
+}
+
+String? _guessStockItemId(String productName) {
+  final normalized = _normalize(productName);
+  if (normalized.contains('bistec')) return 'bistec';
+  if (normalized.contains('adobada')) return 'adobada';
+  if (normalized.contains('carnaza')) return 'carnaza';
+  if (normalized.contains('arrachera')) return 'arrachera';
+  if (normalized.contains('chorizo')) return 'chorizo';
+  if (normalized.contains('higado')) return 'higado';
+  if (normalized.contains('labio')) return 'labio';
+  if (normalized.contains('tripa')) return 'tripa';
+  if (normalized.contains('lengua')) return 'lengua';
+  if (normalized.contains('coca') || normalized.contains('refresco')) {
+    return 'refresco_coca_cola';
+  }
+  return null;
+}
+
+String _categoryLabel(String category) {
+  return switch (category) {
+    'meat' => 'Carne',
+    'tortilla' => 'Tortilla',
+    'drink' => 'Bebida',
+    'water' => 'Agua',
+    _ => 'Otro',
+  };
+}
+
+String _unitLabel(String unit) {
+  return switch (unit) {
+    'piece' => 'pieza',
+    'liter' => 'litro',
+    _ => unit,
+  };
 }
 
 class _ProductAdminTile extends StatelessWidget {
@@ -307,6 +862,10 @@ class _ProductAdminTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final kitchenText = product.affectsKitchenStock
+        ? 'Controla: ${product.kitchenStockItemName ?? 'Sin insumo'} - ${_unitLabel(product.kitchenStockUnit ?? '')}'
+        : 'No controla cocina';
+
     return GlassCard(
       accent: product.active ? BrandColors.accentOrange : BrandColors.textMuted,
       padding: const EdgeInsets.all(12),
@@ -344,10 +903,8 @@ class _ProductAdminTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  product.platformPrices.isEmpty
-                      ? product.category
-                      : '${product.category} · ${product.platformPrices.length} precios plataforma',
-                  maxLines: 1,
+                  '${product.category} | $kitchenText',
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: BrandColors.textMuted),
                 ),

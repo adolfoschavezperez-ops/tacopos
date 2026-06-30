@@ -10,6 +10,11 @@ class Product {
     required this.sendToKitchen,
     required this.sortOrder,
     required this.platformPrices,
+    required this.affectsKitchenStock,
+    this.kitchenStockItemId,
+    this.kitchenStockItemName,
+    this.kitchenStockUnit,
+    this.stockConsumptionQty,
   });
 
   final String id;
@@ -20,6 +25,11 @@ class Product {
   final bool sendToKitchen;
   final int sortOrder;
   final Map<String, double> platformPrices;
+  final bool affectsKitchenStock;
+  final String? kitchenStockItemId;
+  final String? kitchenStockItemName;
+  final String? kitchenStockUnit;
+  final double? stockConsumptionQty;
 
   factory Product.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -37,6 +47,19 @@ class Product {
       ),
       sortOrder: _readInt(data['sortOrder']),
       platformPrices: _readPlatformPrices(data['platformPrices']),
+      affectsKitchenStock: _readBool(
+        data['affectsKitchenStock'],
+        fallback: _defaultAffectsKitchenStock(
+          category,
+          data['name'] as String?,
+        ),
+      ),
+      kitchenStockItemId: data['kitchenStockItemId'] as String?,
+      kitchenStockItemName: data['kitchenStockItemName'] as String?,
+      kitchenStockUnit: data['kitchenStockUnit'] as String?,
+      stockConsumptionQty: data['stockConsumptionQty'] is num
+          ? (data['stockConsumptionQty'] as num).toDouble()
+          : null,
     );
   }
 
@@ -120,5 +143,18 @@ class Product {
   static bool _defaultSendToKitchen(String category) {
     category = category.toLowerCase().trim();
     return category != 'bebidas';
+  }
+
+  static bool _defaultAffectsKitchenStock(String category, String? name) {
+    final normalizedCategory = category.toLowerCase().trim();
+    final normalizedName = (name ?? '').toLowerCase().trim();
+    if (normalizedCategory == 'tacos') {
+      return true;
+    }
+    if (normalizedCategory == 'bebidas' ||
+        normalizedName.contains('refresco')) {
+      return true;
+    }
+    return false;
   }
 }
