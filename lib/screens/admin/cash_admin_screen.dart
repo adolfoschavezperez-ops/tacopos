@@ -12,13 +12,94 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 
-class CashAdminScreen extends StatelessWidget {
-  const CashAdminScreen({super.key});
+class CashAdminScreen extends StatefulWidget {
+  const CashAdminScreen({super.key, this.initialTabIndex = 0});
+
+  final int initialTabIndex;
+
+  @override
+  State<CashAdminScreen> createState() => _CashAdminScreenState();
+}
+
+class _CashAdminScreenState extends State<CashAdminScreen> {
+  late DateTime _startDate;
+  late DateTime _endDate;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _startDate = DateTime(now.year, now.month, now.day);
+    _endDate = _startDate;
+  }
+
+  String get _startBusinessDate => DateFormat('yyyy-MM-dd').format(_startDate);
+  String get _endBusinessDate => DateFormat('yyyy-MM-dd').format(_endDate);
+
+  String get _rangeLabel {
+    if (_startBusinessDate == _endBusinessDate) {
+      return _isToday(_startDate) ? 'Hoy' : _startBusinessDate;
+    }
+    return '$_startBusinessDate a $_endBusinessDate';
+  }
+
+  Future<void> _pickStartDate() async {
+    final picked = await _pickDate(_startDate);
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _startDate = picked;
+      if (_endDate.isBefore(_startDate)) {
+        _endDate = _startDate;
+      }
+    });
+  }
+
+  Future<void> _pickEndDate() async {
+    final picked = await _pickDate(_endDate);
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _endDate = picked;
+      if (_startDate.isAfter(_endDate)) {
+        _startDate = _endDate;
+      }
+    });
+  }
+
+  Future<DateTime?> _pickDate(DateTime initialDate) {
+    return showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+  }
+
+  void _resetToday() {
+    final now = DateTime.now();
+    setState(() {
+      _startDate = DateTime(now.year, now.month, now.day);
+      _endDate = _startDate;
+    });
+  }
+
+  bool _isToday(DateTime date) {
+    final now = DateTime.now();
+    return date.year == now.year &&
+        date.month == now.month &&
+        date.day == now.day;
+  }
 
   @override
   Widget build(BuildContext context) {
     final employee = AppSession.instance.employee;
-    if (employee?.canViewAdmin != true) {
+    final canOpenCashAdmin =
+        employee?.canViewAdmin == true ||
+        employee?.canAuthorizeCashWithdrawals == true;
+    if (!canOpenCashAdmin) {
       return const BrandedScaffold(
         title: 'Caja Admin',
         body: EmptyState(
@@ -31,11 +112,20 @@ class CashAdminScreen extends StatelessWidget {
 
     return DefaultTabController(
       length: 2,
+      initialIndex: widget.initialTabIndex,
       child: BrandedScaffold(
         title: 'Caja Admin',
-        body: const Column(
+        body: Column(
           children: [
-            TabBar(
+            _DateRangePanel(
+              label: _rangeLabel,
+              startBusinessDate: _startBusinessDate,
+              endBusinessDate: _endBusinessDate,
+              onPickStart: _pickStartDate,
+              onPickEnd: _pickEndDate,
+              onToday: _resetToday,
+            ),
+            const TabBar(
               tabs: [
                 Tab(icon: Icon(Icons.receipt_long), text: 'Cortes'),
                 Tab(icon: Icon(Icons.verified_user_outlined), text: 'Retiros'),
@@ -43,7 +133,16 @@ class CashAdminScreen extends StatelessWidget {
             ),
             Expanded(
               child: TabBarView(
-                children: [_CashSessionsTab(), _WithdrawalAuthorizationTab()],
+                children: [
+                  _CashSessionsTab(
+                    startBusinessDate: _startBusinessDate,
+                    endBusinessDate: _endBusinessDate,
+                  ),
+                  _WithdrawalAuthorizationTab(
+                    startBusinessDate: _startBusinessDate,
+                    endBusinessDate: _endBusinessDate,
+                  ),
+                ],
               ),
             ),
           ],
@@ -53,14 +152,80 @@ class CashAdminScreen extends StatelessWidget {
   }
 }
 
+class _DateRangePanel extends StatelessWidget {
+  const _DateRangePanel({
+    required this.label,
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+    required this.onPickStart,
+    required this.onPickEnd,
+    required this.onToday,
+  });
+
+  final String label;
+  final String startBusinessDate;
+  final String endBusinessDate;
+  final VoidCallback onPickStart;
+  final VoidCallback onPickEnd;
+  final VoidCallback onToday;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 16, 22, 8),
+      child: GlassPanel(
+        padding: const EdgeInsets.all(14),
+        child: Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 180),
+              child: Text(
+                'Viendo: $label',
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: onPickStart,
+              icon: const Icon(Icons.event_outlined),
+              label: Text('Inicial: $startBusinessDate'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onPickEnd,
+              icon: const Icon(Icons.event_available_outlined),
+              label: Text('Final: $endBusinessDate'),
+            ),
+            TextButton.icon(
+              onPressed: onToday,
+              icon: const Icon(Icons.today_outlined),
+              label: const Text('Hoy'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _CashSessionsTab extends StatelessWidget {
-  const _CashSessionsTab();
+  const _CashSessionsTab({
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+  });
+
+  final String startBusinessDate;
+  final String endBusinessDate;
 
   @override
   Widget build(BuildContext context) {
     final repository = TacoPosRepository();
     return StreamBuilder<List<CashSession>>(
-      stream: repository.watchCashSessions(),
+      stream: repository.watchCashSessions(
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+      ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return EmptyState(
@@ -205,7 +370,13 @@ class _CashSessionDetailCard extends StatelessWidget {
 }
 
 class _WithdrawalAuthorizationTab extends StatelessWidget {
-  const _WithdrawalAuthorizationTab();
+  const _WithdrawalAuthorizationTab({
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+  });
+
+  final String startBusinessDate;
+  final String endBusinessDate;
 
   @override
   Widget build(BuildContext context) {
@@ -214,7 +385,10 @@ class _WithdrawalAuthorizationTab extends StatelessWidget {
         AppSession.instance.employee?.canAuthorizeCashWithdrawals == true;
 
     return StreamBuilder<List<CashWithdrawalRequest>>(
-      stream: repository.watchCashWithdrawalRequests(),
+      stream: repository.watchCashWithdrawalRequests(
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+      ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return EmptyState(

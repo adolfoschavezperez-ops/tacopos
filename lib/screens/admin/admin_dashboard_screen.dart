@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
@@ -19,8 +20,77 @@ import 'order_platform_catalog_screen.dart';
 import 'product_catalog_screen.dart';
 import 'table_catalog_screen.dart';
 
-class AdminDashboardScreen extends StatelessWidget {
+class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
+
+  @override
+  State<AdminDashboardScreen> createState() => _AdminDashboardScreenState();
+}
+
+class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  late DateTime _startDate;
+  late DateTime _endDate;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _startDate = DateTime(now.year, now.month, now.day);
+    _endDate = _startDate;
+  }
+
+  String get _startBusinessDate => DateFormat('yyyy-MM-dd').format(_startDate);
+  String get _endBusinessDate => DateFormat('yyyy-MM-dd').format(_endDate);
+
+  String get _rangeLabel {
+    if (_startBusinessDate == _endBusinessDate) {
+      return _isTodayDate(_startDate) ? 'Hoy' : _startBusinessDate;
+    }
+    return '$_startBusinessDate a $_endBusinessDate';
+  }
+
+  Future<void> _pickStartDate() async {
+    final picked = await _pickDate(_startDate);
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _startDate = picked;
+      if (_endDate.isBefore(_startDate)) {
+        _endDate = _startDate;
+      }
+    });
+  }
+
+  Future<void> _pickEndDate() async {
+    final picked = await _pickDate(_endDate);
+    if (picked == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _endDate = picked;
+      if (_startDate.isAfter(_endDate)) {
+        _startDate = _endDate;
+      }
+    });
+  }
+
+  Future<DateTime?> _pickDate(DateTime initialDate) {
+    return showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+  }
+
+  void _resetToday() {
+    final now = DateTime.now();
+    setState(() {
+      _startDate = DateTime(now.year, now.month, now.day);
+      _endDate = _startDate;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -129,7 +199,10 @@ class AdminDashboardScreen extends StatelessWidget {
           final orders = ordersSnapshot.data ?? [];
 
           return StreamBuilder<List<Payment>>(
-            stream: repository.watchPayments(),
+            stream: repository.watchPayments(
+              startBusinessDate: _startBusinessDate,
+              endBusinessDate: _endBusinessDate,
+            ),
             builder: (context, paymentsSnapshot) {
               if (paymentsSnapshot.hasError) {
                 return EmptyState(
@@ -139,7 +212,7 @@ class AdminDashboardScreen extends StatelessWidget {
                 );
               }
 
-              final payments = _todayPayments(paymentsSnapshot.data ?? []);
+              final payments = _paymentsInRange(paymentsSnapshot.data ?? []);
               final baseSales = payments.fold<double>(
                 0,
                 (runningTotal, payment) => runningTotal + payment.baseAmount,
@@ -172,15 +245,19 @@ class AdminDashboardScreen extends StatelessWidget {
                 0,
                 (runningTotal, payment) => runningTotal + payment.chargedAmount,
               );
-              final paidOrders = orders
+              final ordersInRange = orders
+                  .where((order) => _orderTouchesRange(order))
+                  .toList();
+              final paidOrders = ordersInRange
                   .where(
-                    (order) => _isToday(order.paidAt) && order.status == 'paid',
+                    (order) =>
+                        order.status == 'paid' && _isInRange(order.paidAt),
                   )
                   .length;
-              final openOrders = orders
+              final openOrders = ordersInRange
                   .where((order) => order.status != 'paid')
                   .length;
-              final partialOrders = orders
+              final partialOrders = ordersInRange
                   .where((order) => order.paymentStatus == 'partial')
                   .length;
 
@@ -205,9 +282,18 @@ class AdminDashboardScreen extends StatelessWidget {
                     children: [
                       const SectionHeader(
                         title: 'Dashboard',
-                        subtitle: 'Operacion en tiempo real.',
+                        subtitle: 'Operacion por fecha seleccionada.',
                       ),
                       const SizedBox(height: 18),
+                      _DashboardDateFilter(
+                        label: _rangeLabel,
+                        startBusinessDate: _startBusinessDate,
+                        endBusinessDate: _endBusinessDate,
+                        onPickStart: _pickStartDate,
+                        onPickEnd: _pickEndDate,
+                        onToday: _resetToday,
+                      ),
+                      const SizedBox(height: 14),
                       _CashStatusPanel(repository: repository),
                       const SizedBox(height: 14),
                       LayoutBuilder(
@@ -583,7 +669,7 @@ class AdminDashboardScreen extends StatelessWidget {
                           ),
                         )
                       else
-                        ...orders
+                        ...ordersInRange
                             .take(8)
                             .map((order) => _RecentOrderTile(order: order)),
                     ],
@@ -597,8 +683,15 @@ class AdminDashboardScreen extends StatelessWidget {
     );
   }
 
-  List<Payment> _todayPayments(List<Payment> payments) {
-    return payments.where((payment) => _isToday(payment.createdAt)).toList();
+  List<Payment> _paymentsInRange(List<Payment> payments) {
+    return payments.where((payment) {
+      final businessDate = payment.businessDate;
+      if (businessDate != null && businessDate.isNotEmpty) {
+        return businessDate.compareTo(_startBusinessDate) >= 0 &&
+            businessDate.compareTo(_endBusinessDate) <= 0;
+      }
+      return _isInRange(payment.createdAt);
+    }).toList();
   }
 
   double _baseByMethod(List<Payment> payments, String method) {
@@ -623,15 +716,79 @@ class AdminDashboardScreen extends StatelessWidget {
         );
   }
 
-  bool _isToday(DateTime? date) {
+  bool _isInRange(DateTime? date) {
     if (date == null) {
       return false;
     }
+    final day = DateTime(date.year, date.month, date.day);
+    return !day.isBefore(_startDate) && !day.isAfter(_endDate);
+  }
 
+  bool _orderTouchesRange(PosOrder order) {
+    return _isInRange(order.paidAt) ||
+        _isInRange(order.createdAt) ||
+        _isInRange(order.updatedAt);
+  }
+
+  bool _isTodayDate(DateTime date) {
     final now = DateTime.now();
     return date.year == now.year &&
         date.month == now.month &&
         date.day == now.day;
+  }
+}
+
+class _DashboardDateFilter extends StatelessWidget {
+  const _DashboardDateFilter({
+    required this.label,
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+    required this.onPickStart,
+    required this.onPickEnd,
+    required this.onToday,
+  });
+
+  final String label;
+  final String startBusinessDate;
+  final String endBusinessDate;
+  final VoidCallback onPickStart;
+  final VoidCallback onPickEnd;
+  final VoidCallback onToday;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 180),
+            child: Text(
+              'Viendo: $label',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: onPickStart,
+            icon: const Icon(Icons.event_outlined),
+            label: Text('Inicial: $startBusinessDate'),
+          ),
+          OutlinedButton.icon(
+            onPressed: onPickEnd,
+            icon: const Icon(Icons.event_available_outlined),
+            label: Text('Final: $endBusinessDate'),
+          ),
+          TextButton.icon(
+            onPressed: onToday,
+            icon: const Icon(Icons.today_outlined),
+            label: const Text('Hoy'),
+          ),
+        ],
+      ),
+    );
   }
 }
 

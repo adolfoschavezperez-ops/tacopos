@@ -108,7 +108,7 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
 
     if (result.shortageAmount > 0) {
       _showMessage(
-        'Corte realizado con faltante de \$${result.shortageAmount.toStringAsFixed(2)}.',
+        'El corte se cerro con faltante de \$${result.shortageAmount.toStringAsFixed(2)}.',
       );
     } else {
       _showMessage('Corte realizado correctamente.');
@@ -203,7 +203,6 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
                   canRequestWithdrawal:
                       employee?.canCharge == true ||
                       employee?.canManageCash == true,
-                  currentEmployeeId: employee?.id ?? '',
                   repository: _repository,
                   onClose: () => _closeCashSession(session),
                   onRequestWithdrawal: () => _requestWithdrawal(session),
@@ -289,7 +288,6 @@ class _OpenSessionPanel extends StatelessWidget {
     required this.session,
     required this.canManageCash,
     required this.canRequestWithdrawal,
-    required this.currentEmployeeId,
     required this.repository,
     required this.onClose,
     required this.onRequestWithdrawal,
@@ -298,7 +296,6 @@ class _OpenSessionPanel extends StatelessWidget {
   final CashSession session;
   final bool canManageCash;
   final bool canRequestWithdrawal;
-  final String currentEmployeeId;
   final TacoPosRepository repository;
   final VoidCallback onClose;
   final VoidCallback onRequestWithdrawal;
@@ -306,12 +303,7 @@ class _OpenSessionPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<CashWithdrawalRequest>>(
-      stream: repository.watchCashWithdrawalRequests(
-        cashSessionId: session.id,
-        requestedByEmployeeId: currentEmployeeId.isEmpty
-            ? null
-            : currentEmployeeId,
-      ),
+      stream: repository.watchCashWithdrawalRequests(cashSessionId: session.id),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return EmptyState(
@@ -363,8 +355,8 @@ class _OpenSessionPanel extends StatelessWidget {
                   SectionHeader(
                     title: 'Retiros solicitados',
                     subtitle: hasPending
-                        ? 'Hay retiros pendientes de autorizacion.'
-                        : 'Solicitudes del dia para este usuario.',
+                        ? 'Hay solicitudes de gasto pendientes de autorizacion.'
+                        : 'Solicitudes registradas para esta caja.',
                     trailing: canRequestWithdrawal
                         ? IconButton(
                             tooltip: 'Solicitar retiro',
@@ -394,7 +386,7 @@ class _OpenSessionPanel extends StatelessWidget {
                   icon: Icons.lock_outline,
                   label: 'Cerrar caja',
                   prominent: true,
-                  onTap: onClose,
+                  onTap: hasPending ? null : onClose,
                 ),
               )
             else

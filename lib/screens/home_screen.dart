@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
 import '../models/employee.dart';
+import '../models/cash_withdrawal_request.dart';
 import '../services/app_session.dart';
+import '../services/taco_pos_repository.dart';
 import '../widgets/glass.dart';
+import 'admin/cash_admin_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'cash/cash_session_screen.dart';
 import 'kitchen/kitchen_screen.dart';
@@ -55,6 +58,15 @@ class _HomeScreenState extends State<HomeScreen> {
     Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
   }
 
+  void _openWithdrawalRequests() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const CashAdminScreen(initialTabIndex: 1),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final employee = AppSession.instance.employee;
@@ -94,6 +106,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   child: _ModePanel(
                                     employee: employee,
                                     onOpenMode: _openMode,
+                                    onReviewWithdrawals:
+                                        _openWithdrawalRequests,
                                   ),
                                 ),
                               ],
@@ -109,6 +123,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 _ModePanel(
                                   employee: employee,
                                   onOpenMode: _openMode,
+                                  onReviewWithdrawals: _openWithdrawalRequests,
                                 ),
                               ],
                             ),
@@ -202,10 +217,15 @@ class _HeroBlock extends StatelessWidget {
 }
 
 class _ModePanel extends StatelessWidget {
-  const _ModePanel({required this.employee, required this.onOpenMode});
+  const _ModePanel({
+    required this.employee,
+    required this.onOpenMode,
+    required this.onReviewWithdrawals,
+  });
 
   final Employee? employee;
   final ValueChanged<AppMode> onOpenMode;
+  final VoidCallback onReviewWithdrawals;
 
   @override
   Widget build(BuildContext context) {
@@ -221,6 +241,10 @@ class _ModePanel extends StatelessWidget {
             subtitle: 'Elige el flujo de trabajo.',
           ),
           const SizedBox(height: 18),
+          if (employee?.canAuthorizeCashWithdrawals == true) ...[
+            _PendingWithdrawalsAlert(onReview: onReviewWithdrawals),
+            const SizedBox(height: 14),
+          ],
           if (employee?.canTakeOrders == true ||
               employee?.canCharge == true) ...[
             _ModeTile(
@@ -269,6 +293,95 @@ class _ModePanel extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _PendingWithdrawalsAlert extends StatelessWidget {
+  const _PendingWithdrawalsAlert({required this.onReview});
+
+  final VoidCallback onReview;
+
+  @override
+  Widget build(BuildContext context) {
+    final repository = TacoPosRepository();
+    return StreamBuilder<List<CashWithdrawalRequest>>(
+      stream: repository.watchCashWithdrawalRequests(status: 'pending'),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return GlassCard(
+            accent: BrandColors.danger,
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'No se pudieron cargar solicitudes: ${snapshot.error}',
+              style: const TextStyle(
+                color: BrandColors.danger,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          );
+        }
+
+        final pendingCount = snapshot.data?.length ?? 0;
+        if (pendingCount == 0) {
+          return const GlassCard(
+            padding: EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Icon(Icons.verified_outlined, color: BrandColors.success),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Sin solicitudes pendientes',
+                    style: TextStyle(
+                      color: BrandColors.textMuted,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return GlassCard(
+          accent: BrandColors.accentYellow,
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.notification_important_outlined,
+                    color: BrandColors.accentYellow,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Tienes $pendingCount solicitudes de gasto pendientes',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        color: BrandColors.textPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: GlassButton(
+                  icon: Icons.verified_user_outlined,
+                  label: 'Revisar solicitudes',
+                  prominent: true,
+                  onTap: onReview,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

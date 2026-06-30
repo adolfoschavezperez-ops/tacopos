@@ -362,8 +362,22 @@ class TacoPosRepository {
       });
   }
 
-  Stream<List<Payment>> watchPayments() {
-    return _db.collectionGroup('payments').snapshots().map((snapshot) {
+  Stream<List<Payment>> watchPayments({
+    String? startBusinessDate,
+    String? endBusinessDate,
+  }) {
+    Query<Map<String, dynamic>> query = _db.collectionGroup('payments');
+    if (startBusinessDate != null) {
+      query = query.where(
+        'businessDate',
+        isGreaterThanOrEqualTo: startBusinessDate,
+      );
+    }
+    if (endBusinessDate != null) {
+      query = query.where('businessDate', isLessThanOrEqualTo: endBusinessDate);
+    }
+
+    return query.snapshots().map((snapshot) {
       final payments = snapshot.docs.map(Payment.fromDoc).toList()
         ..sort((a, b) {
           final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -388,8 +402,22 @@ class TacoPosRepository {
     });
   }
 
-  Stream<List<CashSession>> watchCashSessions() {
-    return _cashSessionsRef.snapshots().map((snapshot) {
+  Stream<List<CashSession>> watchCashSessions({
+    String? startBusinessDate,
+    String? endBusinessDate,
+  }) {
+    Query<Map<String, dynamic>> query = _cashSessionsRef;
+    if (startBusinessDate != null) {
+      query = query.where(
+        'businessDate',
+        isGreaterThanOrEqualTo: startBusinessDate,
+      );
+    }
+    if (endBusinessDate != null) {
+      query = query.where('businessDate', isLessThanOrEqualTo: endBusinessDate);
+    }
+
+    return query.snapshots().map((snapshot) {
       final sessions = snapshot.docs.map(CashSession.fromDoc).toList()
         ..sort((a, b) {
           final aDate = a.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -434,10 +462,38 @@ class TacoPosRepository {
   Stream<List<CashWithdrawalRequest>> watchCashWithdrawalRequests({
     String? cashSessionId,
     String? businessDate,
+    String? startBusinessDate,
+    String? endBusinessDate,
     String? status,
     String? requestedByEmployeeId,
   }) {
-    return _cashWithdrawalRequestsRef.snapshots().map((snapshot) {
+    Query<Map<String, dynamic>> query = _cashWithdrawalRequestsRef;
+    if (cashSessionId != null) {
+      query = query.where('cashSessionId', isEqualTo: cashSessionId);
+    }
+    if (businessDate != null) {
+      query = query.where('businessDate', isEqualTo: businessDate);
+    }
+    if (startBusinessDate != null) {
+      query = query.where(
+        'businessDate',
+        isGreaterThanOrEqualTo: startBusinessDate,
+      );
+    }
+    if (endBusinessDate != null) {
+      query = query.where('businessDate', isLessThanOrEqualTo: endBusinessDate);
+    }
+    if (status != null) {
+      query = query.where('status', isEqualTo: status);
+    }
+    if (requestedByEmployeeId != null) {
+      query = query.where(
+        'requestedByEmployeeId',
+        isEqualTo: requestedByEmployeeId,
+      );
+    }
+
+    return query.snapshots().map((snapshot) {
       final requests =
           snapshot.docs.map(CashWithdrawalRequest.fromDoc).where((request) {
             if (cashSessionId != null &&
@@ -445,6 +501,14 @@ class TacoPosRepository {
               return false;
             }
             if (businessDate != null && request.businessDate != businessDate) {
+              return false;
+            }
+            if (startBusinessDate != null &&
+                request.businessDate.compareTo(startBusinessDate) < 0) {
+              return false;
+            }
+            if (endBusinessDate != null &&
+                request.businessDate.compareTo(endBusinessDate) > 0) {
               return false;
             }
             if (status != null && request.status != status) {
@@ -640,11 +704,14 @@ class TacoPosRepository {
       throw StateError('Esta caja ya esta cerrada.');
     }
 
-    final withdrawals = await _cashWithdrawalRequestsForSessionOnce(
-      cashSessionId,
+    final pendingWithdrawals = await _pendingCashWithdrawalRequestsForClose(
+      cashSessionId: cashSessionId,
+      businessDate: session.businessDate,
     );
-    if (withdrawals.any((request) => request.isPending)) {
-      throw StateError('Hay retiros pendientes de autorizacion.');
+    if (pendingWithdrawals.isNotEmpty) {
+      throw StateError(
+        'No puedes cerrar caja. Hay solicitudes de gasto pendientes de autorizacion.',
+      );
     }
 
     final totals = await _cashSessionTotalsOnce(cashSessionId);
@@ -724,6 +791,27 @@ class TacoPosRepository {
         .where('cashSessionId', isEqualTo: cashSessionId)
         .get();
     return snapshot.docs.map(CashWithdrawalRequest.fromDoc).toList();
+  }
+
+  Future<List<CashWithdrawalRequest>> _pendingCashWithdrawalRequestsForClose({
+    required String cashSessionId,
+    required String businessDate,
+  }) async {
+    final bySession = await _cashWithdrawalRequestsRef
+        .where('cashSessionId', isEqualTo: cashSessionId)
+        .get();
+    final byDate = await _cashWithdrawalRequestsRef
+        .where('businessDate', isEqualTo: businessDate)
+        .get();
+
+    final requestsById = <String, CashWithdrawalRequest>{};
+    for (final doc in [...bySession.docs, ...byDate.docs]) {
+      final request = CashWithdrawalRequest.fromDoc(doc);
+      if (request.isPending) {
+        requestsById[doc.id] = request;
+      }
+    }
+    return requestsById.values.toList();
   }
 
   CashSessionTotals _totalsForPayments(
