@@ -472,6 +472,18 @@ class TacoPosRepository {
     });
   }
 
+  Future<List<OrderItem>> getOrderItemsOnce(String orderId) async {
+    final snapshot = await _ordersRef.doc(orderId).collection('items').get();
+    final items = snapshot.docs.map(OrderItem.fromDoc).toList()
+      ..sort((a, b) {
+        final personCompare = a.personNumber.compareTo(b.personNumber);
+        return personCompare != 0
+            ? personCompare
+            : a.productName.compareTo(b.productName);
+      });
+    return items;
+  }
+
   Stream<List<OrderItem>> watchKitchenItems(String orderId) {
     return watchOrderItems(orderId).map(_activeKitchenItems);
   }
@@ -571,6 +583,17 @@ class TacoPosRepository {
         });
       return payments;
     });
+  }
+
+  Future<List<Payment>> getOrderPaymentsOnce(String orderId) async {
+    final snapshot = await _ordersRef.doc(orderId).collection('payments').get();
+    final payments = snapshot.docs.map(Payment.fromDoc).toList()
+      ..sort((a, b) {
+        final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bDate.compareTo(aDate);
+      });
+    return payments;
   }
 
   Stream<List<CashSession>> watchCashSessions({
