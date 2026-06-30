@@ -20,6 +20,8 @@ class Payment {
     this.platformName,
     this.cashSessionId,
     this.businessDate,
+    this.cashReceivedAmount,
+    this.cashChangeAmount,
     this.createdAt,
     this.createdBy,
   });
@@ -42,6 +44,8 @@ class Payment {
   final String? platformName;
   final String? cashSessionId;
   final String? businessDate;
+  final double? cashReceivedAmount;
+  final double? cashChangeAmount;
   final DateTime? createdAt;
   final String? createdBy;
 
@@ -76,6 +80,8 @@ class Payment {
       platformName: data['platformName'] as String?,
       cashSessionId: data['cashSessionId'] as String?,
       businessDate: data['businessDate'] as String?,
+      cashReceivedAmount: (data['cashReceivedAmount'] as num?)?.toDouble(),
+      cashChangeAmount: (data['cashChangeAmount'] as num?)?.toDouble(),
       createdAt: _toDate(data['createdAt']),
       createdBy: data['createdBy'] as String?,
     );

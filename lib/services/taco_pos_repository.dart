@@ -62,6 +62,16 @@ class PaymentResult {
   final bool allPaid;
 }
 
+class CashPaymentDetails {
+  const CashPaymentDetails({
+    required this.receivedAmount,
+    required this.changeAmount,
+  });
+
+  final double receivedAmount;
+  final double changeAmount;
+}
+
 class KitchenCloseInput {
   const KitchenCloseInput({
     required this.finalRemainingQty,
@@ -1076,14 +1086,49 @@ class TacoPosRepository {
   Future<KitchenSession?> getKitchenSessionForBusinessDate(
     String businessDate,
   ) async {
-    final snapshot = await _kitchenSessionsRef
-        .where('businessDate', isEqualTo: businessDate)
-        .limit(1)
-        .get();
-    if (snapshot.docs.isEmpty) {
+    final sessions = await _kitchenSessionsForBusinessDate(businessDate);
+    if (sessions.isEmpty) {
       return null;
     }
-    return KitchenSession.fromDoc(snapshot.docs.first);
+    final validClosed = <KitchenSession>[];
+    for (final session in sessions.where((session) => session.isClosed)) {
+      if (await _kitchenCloseIsComplete(session.id)) {
+        validClosed.add(session);
+      }
+    }
+    if (validClosed.isNotEmpty) {
+      return validClosed.first;
+    }
+    final openSessions = sessions.where((session) => session.isOpen).toList();
+    if (openSessions.isNotEmpty) {
+      return openSessions.first;
+    }
+    return sessions.first;
+  }
+
+  Future<List<KitchenSession>> _kitchenSessionsForBusinessDate(
+    String businessDate,
+  ) async {
+    final snapshot = await _kitchenSessionsRef
+        .where('businessDate', isEqualTo: businessDate)
+        .get();
+    final sessions = snapshot.docs.map(KitchenSession.fromDoc).toList()
+      ..sort((a, b) {
+        final statusCompare = _kitchenSessionStatusRank(
+          a,
+        ).compareTo(_kitchenSessionStatusRank(b));
+        if (statusCompare != 0) return statusCompare;
+        final aDate = a.closedAt ?? a.openedAt ?? DateTime(0);
+        final bDate = b.closedAt ?? b.openedAt ?? DateTime(0);
+        return bDate.compareTo(aDate);
+      });
+    return sessions;
+  }
+
+  int _kitchenSessionStatusRank(KitchenSession session) {
+    if (session.isClosed) return 0;
+    if (session.isOpen) return 1;
+    return 2;
   }
 
   Future<List<KitchenOpeningInput>> buildKitchenOpeningInputs() async {
@@ -1092,6 +1137,19 @@ class TacoPosRepository {
     final openCash = await getOpenCashSession();
     final businessDate =
         openCash?.businessDate ?? _businessDateFor(DateTime.now());
+    final existingSessions = await _kitchenSessionsForBusinessDate(
+      businessDate,
+    );
+    if (existingSessions.any((session) => session.isOpen)) {
+      throw StateError(
+        'La cocina ya fue abierta para esta fecha de operacion.',
+      );
+    }
+    if (existingSessions.any((session) => session.isClosed)) {
+      throw StateError(
+        'La cocina ya fue cerrada para esta fecha. Abre una nueva caja con otra fecha de operacion.',
+      );
+    }
     final previousRemaining = await _previousKitchenRemainingByItem(
       businessDate,
     );
@@ -1113,22 +1171,21 @@ class TacoPosRepository {
     _requireOpenKitchen();
     await ensureDefaultKitchenStockItems();
     await ensureKitchenStockLinksForProducts();
-    final openSnapshot = await _kitchenSessionsRef
-        .where('status', isEqualTo: 'open')
-        .limit(1)
-        .get();
-    if (openSnapshot.docs.isNotEmpty) {
-      return KitchenSession.fromDoc(openSnapshot.docs.first);
-    }
     final openCash = await getOpenCashSession();
     final businessDate =
         openCash?.businessDate ?? _businessDateFor(DateTime.now());
-    final existing = await getKitchenSessionForBusinessDate(businessDate);
-    if (existing != null) {
-      if (existing.isOpen) {
-        return existing;
-      }
-      throw StateError('Ya existe cierre de cocina para $businessDate.');
+    final existingSessions = await _kitchenSessionsForBusinessDate(
+      businessDate,
+    );
+    if (existingSessions.any((session) => session.isOpen)) {
+      throw StateError(
+        'La cocina ya fue abierta para esta fecha de operacion.',
+      );
+    }
+    if (existingSessions.any((session) => session.isClosed)) {
+      throw StateError(
+        'La cocina ya fue cerrada para esta fecha. Abre una nueva caja con otra fecha de operacion.',
+      );
     }
 
     final activeItems = await _activeControlledKitchenStockItems();
@@ -1284,12 +1341,12 @@ class TacoPosRepository {
     if (!session.isOpen) {
       throw StateError('Esta cocina ya esta cerrada.');
     }
-    final existingForDate = await getKitchenSessionForBusinessDate(
+    final existingForDate = await _kitchenSessionsForBusinessDate(
       session.businessDate,
     );
-    if (existingForDate != null &&
-        existingForDate.id != session.id &&
-        existingForDate.isClosed) {
+    if (existingForDate.any(
+      (existing) => existing.id != session.id && existing.isClosed,
+    )) {
       throw StateError('Ya existe cierre de cocina para esta fecha.');
     }
 
@@ -1539,12 +1596,25 @@ class TacoPosRepository {
       }
     }
 
-    final kitchenSession = await getKitchenSessionForBusinessDate(
+    final kitchenSessions = await _kitchenSessionsForBusinessDate(
       session.businessDate,
     );
-    final kitchenNotClosed = kitchenSession?.isClosed != true;
+    var hasValidClosedKitchen = false;
+    var hasIncompleteClosedKitchen = false;
+    for (final kitchenSession in kitchenSessions) {
+      if (!kitchenSession.isClosed) {
+        continue;
+      }
+      if (await _kitchenCloseIsComplete(kitchenSession.id)) {
+        hasValidClosedKitchen = true;
+        break;
+      }
+      hasIncompleteClosedKitchen = true;
+    }
+    final kitchenNotClosed =
+        !hasValidClosedKitchen && !hasIncompleteClosedKitchen;
     final kitchenCloseIncomplete =
-        !kitchenNotClosed && !await _kitchenCloseIsComplete(kitchenSession!.id);
+        !hasValidClosedKitchen && hasIncompleteClosedKitchen;
 
     return CashCloseBlockers(
       openTableCount: openTableCount,
@@ -2472,6 +2542,7 @@ class TacoPosRepository {
     required String method,
     String? employeeId,
     String? employeeName,
+    CashPaymentDetails? cashDetails,
   }) async {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
@@ -2509,6 +2580,7 @@ class TacoPosRepository {
       baseAmount: baseAmount,
       employeeId: employeeId,
       employeeName: employeeName,
+      cashDetails: cashDetails,
     );
 
     for (final doc in itemsSnapshot.docs) {
@@ -2534,6 +2606,7 @@ class TacoPosRepository {
     required String method,
     String? employeeId,
     String? employeeName,
+    CashPaymentDetails? cashDetails,
   }) async {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
@@ -2579,6 +2652,7 @@ class TacoPosRepository {
       personName: personName,
       employeeId: employeeId,
       employeeName: employeeName,
+      cashDetails: cashDetails,
     );
 
     for (final doc in itemsSnapshot.docs) {
@@ -2609,6 +2683,7 @@ class TacoPosRepository {
     required String method,
     String? employeeId,
     String? employeeName,
+    CashPaymentDetails? cashDetails,
   }) async {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
@@ -2638,6 +2713,7 @@ class TacoPosRepository {
       baseAmount: baseAmount,
       employeeId: employeeId,
       employeeName: employeeName,
+      cashDetails: cashDetails,
     );
 
     final allPaid = _updateOrderPaymentTotalsInBatch(
@@ -2780,6 +2856,7 @@ class TacoPosRepository {
     String? employeeName,
     String? platformId,
     String? platformName,
+    CashPaymentDetails? cashDetails,
   }) {
     if (method == 'employee_consumption' &&
         (employeeId == null || employeeName == null)) {
@@ -2789,6 +2866,11 @@ class TacoPosRepository {
     final surchargeRate = method == 'card' ? cardSurchargeRate : 0.0;
     final surchargeAmount = baseAmount * surchargeRate;
     final chargedAmount = baseAmount + surchargeAmount;
+    if (method == 'cash' &&
+        cashDetails != null &&
+        cashDetails.receivedAmount + 0.01 < chargedAmount) {
+      throw ArgumentError('El efectivo recibido no cubre el total.');
+    }
 
     batch.set(paymentRef, {
       'orderId': order.id,
@@ -2807,6 +2889,10 @@ class TacoPosRepository {
       'employeeName': employeeName,
       'platformId': platformId,
       'platformName': platformName,
+      if (method == 'cash' && cashDetails != null) ...{
+        'cashReceivedAmount': cashDetails.receivedAmount,
+        'cashChangeAmount': cashDetails.changeAmount,
+      },
       'cashSessionId': cashSession.id,
       'businessDate': cashSession.businessDate,
       'createdAt': FieldValue.serverTimestamp(),

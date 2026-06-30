@@ -42,11 +42,24 @@ class _PaymentScreenState extends State<PaymentScreen> {
       return;
     }
 
-    final confirmed = await _confirm(
-      title: 'Cobrar mesa completa',
-      message: 'Se cubrira todo el pendiente de ${order.displayName}.',
+    final cashDetails = await _cashDetailsIfNeeded(
+      method: method,
+      total: order.pendingTotal,
     );
-    if (!confirmed) {
+    if (cashDetails == null && method == 'cash') {
+      return;
+    }
+    if (method != 'cash') {
+      final confirmed = await _confirm(
+        title: 'Cobrar mesa completa',
+        message: 'Se cubrira todo el pendiente de ${order.displayName}.',
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    if (!mounted) {
       return;
     }
 
@@ -56,6 +69,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
+        cashDetails: cashDetails,
       ),
     );
   }
@@ -64,16 +78,30 @@ class _PaymentScreenState extends State<PaymentScreen> {
     int personNumber,
     String personName, {
     required String method,
+    required double total,
   }) async {
     if (!_validateEmployee(method)) {
       return;
     }
 
-    final confirmed = await _confirm(
-      title: 'Cobrar $personName',
-      message: 'Solo se marcaran pagados los items de esta persona.',
+    final cashDetails = await _cashDetailsIfNeeded(
+      method: method,
+      total: total,
     );
-    if (!confirmed) {
+    if (cashDetails == null && method == 'cash') {
+      return;
+    }
+    if (method != 'cash') {
+      final confirmed = await _confirm(
+        title: 'Cobrar $personName',
+        message: 'Solo se marcaran pagados los items de esta persona.',
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    if (!mounted) {
       return;
     }
 
@@ -84,6 +112,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
+        cashDetails: cashDetails,
       ),
     );
   }
@@ -101,11 +130,24 @@ class _PaymentScreenState extends State<PaymentScreen> {
       return;
     }
 
-    final confirmed = await _confirm(
-      title: 'Agregar pago parcial',
-      message: 'Se abonara este monto a la cuenta de ${order.displayName}.',
+    final cashDetails = await _cashDetailsIfNeeded(
+      method: method,
+      total: amount,
     );
-    if (!confirmed) {
+    if (cashDetails == null && method == 'cash') {
+      return;
+    }
+    if (method != 'cash') {
+      final confirmed = await _confirm(
+        title: 'Agregar pago parcial',
+        message: 'Se abonara este monto a la cuenta de ${order.displayName}.',
+      );
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    if (!mounted) {
       return;
     }
 
@@ -116,6 +158,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
+        cashDetails: cashDetails,
       ),
       afterSuccess: () => _partialController.clear(),
     );
@@ -165,6 +208,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
           ),
         ) ??
         false;
+  }
+
+  Future<CashPaymentDetails?> _cashDetailsIfNeeded({
+    required String method,
+    required double total,
+  }) {
+    if (method != 'cash') {
+      return Future.value(null);
+    }
+    return showDialog<CashPaymentDetails>(
+      context: context,
+      builder: (_) => _CashPaymentDialog(total: total),
+    );
   }
 
   Future<void> _runPayment(
@@ -416,6 +472,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                 person,
                                 personName,
                                 method: selectedMethod,
+                                total: personItems
+                                    .where(
+                                      (item) => item.paymentStatus != 'paid',
+                                    )
+                                    .fold<double>(
+                                      0,
+                                      (runningTotal, item) =>
+                                          runningTotal + item.total,
+                                    ),
                               ),
                             );
                           }),
@@ -780,6 +845,151 @@ class _PreviewRow extends StatelessWidget {
   }
 }
 
+class _CashPaymentDialog extends StatefulWidget {
+  const _CashPaymentDialog({required this.total});
+
+  final double total;
+
+  @override
+  State<_CashPaymentDialog> createState() => _CashPaymentDialogState();
+}
+
+class _CashPaymentDialogState extends State<_CashPaymentDialog> {
+  late final TextEditingController _receivedController;
+  late final FocusNode _receivedFocusNode;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _receivedController = TextEditingController(
+      text: widget.total.toStringAsFixed(2),
+    );
+    _receivedFocusNode = FocusNode();
+    _receivedFocusNode.addListener(() {
+      if (_receivedFocusNode.hasFocus) {
+        _receivedController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _receivedController.text.length,
+        );
+      }
+    });
+    _receivedController.addListener(_handleReceivedChanged);
+  }
+
+  @override
+  void dispose() {
+    _receivedController.removeListener(_handleReceivedChanged);
+    _receivedController.dispose();
+    _receivedFocusNode.dispose();
+    super.dispose();
+  }
+
+  double get _received =>
+      double.tryParse(_receivedController.text.trim().replaceAll(',', '.')) ??
+      0;
+
+  double get _change => (_received - widget.total).clamp(0, double.infinity);
+
+  void _handleReceivedChanged() {
+    if (_error.isNotEmpty && _received + 0.01 >= widget.total) {
+      setState(() => _error = '');
+      return;
+    }
+    setState(() {});
+  }
+
+  void _confirm() {
+    final received = _received;
+    if (received + 0.01 < widget.total) {
+      setState(() {
+        _error = 'El efectivo recibido no cubre el total.';
+      });
+      return;
+    }
+    Navigator.pop(
+      context,
+      CashPaymentDetails(
+        receivedAmount: received,
+        changeAmount: received - widget.total,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canConfirm = _received + 0.01 >= widget.total;
+    return SafeArea(
+      child: Dialog(
+        insetPadding: const EdgeInsets.all(18),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 460),
+          child: SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Pago en efectivo',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 16),
+                _PreviewRow(
+                  label: 'Total a pagar',
+                  value: widget.total,
+                  highlight: true,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _receivedController,
+                  focusNode: _receivedFocusNode,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Recibido',
+                    prefixText: '\$ ',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _PreviewRow(label: 'Cambio', value: _change, highlight: true),
+                if (_error.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Text(
+                    _error,
+                    style: const TextStyle(
+                      color: BrandColors.danger,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 18),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Cancelar'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      onPressed: canConfirm ? _confirm : null,
+                      child: const Text('Confirmar pago'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PartialPaymentPanel extends StatefulWidget {
   const _PartialPaymentPanel({
     required this.controller,
@@ -1102,6 +1312,10 @@ class _PaymentsHistory extends StatelessWidget {
     final fee = payment.surchargeAmount <= 0
         ? ''
         : ' · Comision \$${payment.surchargeAmount.toStringAsFixed(2)}';
-    return 'Base \$${payment.baseAmount.toStringAsFixed(2)}$fee$employee';
+    final cashChange =
+        payment.method == 'cash' && payment.cashReceivedAmount != null
+        ? ' · Recibido \$${payment.cashReceivedAmount!.toStringAsFixed(2)} · Cambio \$${(payment.cashChangeAmount ?? 0).toStringAsFixed(2)}'
+        : '';
+    return 'Base \$${payment.baseAmount.toStringAsFixed(2)}$fee$cashChange$employee';
   }
 }
