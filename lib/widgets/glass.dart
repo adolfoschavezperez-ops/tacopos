@@ -217,6 +217,7 @@ class SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 700;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
@@ -228,15 +229,22 @@ class SectionHeader extends StatelessWidget {
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.headlineMedium,
+                style: compact
+                    ? Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      )
+                    : Theme.of(context).textTheme.headlineMedium,
               ),
               if (subtitle != null) ...[
-                const SizedBox(height: 4),
+                SizedBox(height: compact ? 2 : 4),
                 Text(
                   subtitle!,
-                  maxLines: 2,
+                  maxLines: compact ? 1 : 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: BrandColors.textMuted),
+                  style: TextStyle(
+                    color: BrandColors.textMuted,
+                    fontSize: compact ? 12 : 14,
+                  ),
                 ),
               ],
             ],

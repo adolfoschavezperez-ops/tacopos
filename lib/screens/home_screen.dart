@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
@@ -9,6 +10,11 @@ import '../services/taco_pos_repository.dart';
 import '../widgets/glass.dart';
 import 'admin/cash_admin_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
+import 'admin/employee_catalog_screen.dart';
+import 'admin/kitchen_admin_screen.dart';
+import 'admin/order_platform_catalog_screen.dart';
+import 'admin/product_catalog_screen.dart';
+import 'admin/table_catalog_screen.dart';
 import 'cash/cash_session_screen.dart';
 import 'kitchen_control/kitchen_control_screen.dart';
 import 'kitchen/kitchen_screen.dart';
@@ -49,6 +55,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openMode(AppMode mode) async {
+    if (kIsWeb && mode != AppMode.admin) {
+      return;
+    }
     if (mode == AppMode.kitchen) {
       final repository = TacoPosRepository();
       final kitchenIsOpen = await repository
@@ -120,6 +129,13 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final employee = AppSession.instance.employee;
+    if (kIsWeb) {
+      return _BackofficeHome(
+        employee: employee,
+        onSignOut: _confirmSignOut,
+        onReviewWithdrawals: _openWithdrawalRequests,
+      );
+    }
     return Scaffold(
       body: PremiumBackground(
         child: SafeArea(
@@ -185,6 +201,302 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _BackofficeHome extends StatelessWidget {
+  const _BackofficeHome({
+    required this.employee,
+    required this.onSignOut,
+    required this.onReviewWithdrawals,
+  });
+
+  final Employee? employee;
+  final VoidCallback onSignOut;
+  final VoidCallback onReviewWithdrawals;
+
+  bool get _canAccess =>
+      employee?.canViewAdmin == true ||
+      employee?.canManageCash == true ||
+      employee?.canViewKitchenReports == true ||
+      employee?.canAuthorizeCashWithdrawals == true;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_canAccess) {
+      return Scaffold(
+        body: PremiumBackground(
+          child: Center(
+            child: GlassPanel(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.lock_outline, size: 42),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'No tienes acceso al backoffice.',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                  ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: onSignOut,
+                    icon: const Icon(Icons.logout),
+                    label: const Text('Salir'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Scaffold(
+      body: PremiumBackground(
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 920;
+              final padding = constraints.maxWidth < 700 ? 18.0 : 34.0;
+              return ListView(
+                padding: EdgeInsets.all(padding),
+                children: [
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1180),
+                    child: wide
+                        ? Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Expanded(
+                                flex: 9,
+                                child: _BackofficeHero(
+                                  employee: employee,
+                                  onSignOut: onSignOut,
+                                ),
+                              ),
+                              const SizedBox(width: 28),
+                              Expanded(
+                                flex: 11,
+                                child: _BackofficeAccessPanel(
+                                  employee: employee,
+                                  onReviewWithdrawals: onReviewWithdrawals,
+                                ),
+                              ),
+                            ],
+                          )
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _BackofficeHero(
+                                employee: employee,
+                                onSignOut: onSignOut,
+                              ),
+                              const SizedBox(height: 20),
+                              _BackofficeAccessPanel(
+                                employee: employee,
+                                onReviewWithdrawals: onReviewWithdrawals,
+                              ),
+                            ],
+                          ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BackofficeHero extends StatelessWidget {
+  const _BackofficeHero({required this.employee, required this.onSignOut});
+
+  final Employee? employee;
+  final VoidCallback onSignOut;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      borderRadius: 28,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 92,
+            height: 92,
+            child: Image.asset(AppConstants.logoAsset, fit: BoxFit.contain),
+          ),
+          const SizedBox(height: 18),
+          Text(
+            'TacoPOS Backoffice',
+            style: Theme.of(context).textTheme.headlineMedium,
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Dashboard, cortes, reportes y catalogos administrativos.',
+            style: TextStyle(color: BrandColors.textSecondary),
+          ),
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Text(
+                employee == null ? 'Sesion administrativa' : employee!.name,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              OutlinedButton.icon(
+                onPressed: onSignOut,
+                icon: const Icon(Icons.logout),
+                label: const Text('Salir'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BackofficeAccessPanel extends StatelessWidget {
+  const _BackofficeAccessPanel({
+    required this.employee,
+    required this.onReviewWithdrawals,
+  });
+
+  final Employee? employee;
+  final VoidCallback onReviewWithdrawals;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(20),
+      borderRadius: 28,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SectionHeader(
+            title: 'Backoffice',
+            subtitle: 'Accesos administrativos disponibles.',
+          ),
+          const SizedBox(height: 18),
+          if (employee?.canAuthorizeCashWithdrawals == true) ...[
+            _PendingWithdrawalsAlert(onReview: onReviewWithdrawals),
+            const SizedBox(height: 14),
+          ],
+          if (employee?.canViewAdmin == true)
+            _ModeTile(
+              icon: Icons.insights_outlined,
+              title: 'Dashboard admin',
+              subtitle: 'Metricas, ventas y actividad reciente',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AdminDashboardScreen()),
+              ),
+            ),
+          if (employee?.canViewAdmin == true) const SizedBox(height: 12),
+          if (employee?.canManageCash == true ||
+              employee?.canAuthorizeCashWithdrawals == true) ...[
+            _ModeTile(
+              icon: Icons.point_of_sale_outlined,
+              title: 'Cortes y retiros',
+              subtitle: 'Cortes de caja y autorizacion de gastos',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CashAdminScreen()),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (employee?.canViewKitchenReports == true ||
+              employee?.canManageKitchenStock == true) ...[
+            _ModeTile(
+              icon: Icons.soup_kitchen_outlined,
+              title: 'Control y reportes de cocina',
+              subtitle: 'Rendimiento, cierres e insumos de cocina',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const KitchenAdminScreen()),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (employee?.canViewAdmin == true) const _BackofficeCatalogLinks(),
+        ],
+      ),
+    );
+  }
+}
+
+class _BackofficeCatalogLinks extends StatelessWidget {
+  const _BackofficeCatalogLinks();
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      children: [
+        _MiniBackofficeButton(
+          icon: Icons.restaurant_menu,
+          label: 'Productos',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ProductCatalogScreen()),
+          ),
+        ),
+        _MiniBackofficeButton(
+          icon: Icons.table_restaurant,
+          label: 'Mesas',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const TableCatalogScreen()),
+          ),
+        ),
+        _MiniBackofficeButton(
+          icon: Icons.delivery_dining,
+          label: 'Plataformas',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const OrderPlatformCatalogScreen(),
+            ),
+          ),
+        ),
+        _MiniBackofficeButton(
+          icon: Icons.badge_outlined,
+          label: 'Empleados',
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const EmployeeCatalogScreen()),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MiniBackofficeButton extends StatelessWidget {
+  const _MiniBackofficeButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon),
+      label: Text(label),
     );
   }
 }

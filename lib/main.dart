@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'core/theme/app_theme.dart';
@@ -29,7 +30,7 @@ class TacoPosApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'TacoPOS',
+      title: kIsWeb ? 'TacoPOS Backoffice' : 'TacoPOS',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
       home: const LoginGate(),

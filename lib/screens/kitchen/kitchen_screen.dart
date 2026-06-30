@@ -97,14 +97,17 @@ class _KitchenScreenState extends State<KitchenScreen> {
 
               return LayoutBuilder(
                 builder: (context, constraints) {
-                  final columns = constraints.maxWidth >= 1180
-                      ? 3
-                      : constraints.maxWidth >= 760
-                      ? 2
-                      : 1;
+                  final compact = constraints.maxWidth < 700;
+                  final medium = constraints.maxWidth < 950;
+                  final padding = compact
+                      ? 12.0
+                      : medium
+                      ? 16.0
+                      : 22.0;
+                  final gap = compact ? 10.0 : 14.0;
 
                   return Padding(
-                    padding: const EdgeInsets.all(22),
+                    padding: EdgeInsets.all(padding),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -113,15 +116,23 @@ class _KitchenScreenState extends State<KitchenScreen> {
                           subtitle:
                               '${bundles.length} activas | primero la mas vieja',
                         ),
-                        const SizedBox(height: 18),
+                        SizedBox(height: compact ? 10 : 18),
                         Expanded(
                           child: GridView.builder(
                             gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: columns,
-                                  crossAxisSpacing: 16,
-                                  mainAxisSpacing: 16,
-                                  childAspectRatio: columns == 1 ? 1.75 : 1.22,
+                                SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: compact
+                                      ? 330
+                                      : medium
+                                      ? 420
+                                      : 460,
+                                  mainAxisExtent: compact
+                                      ? 178
+                                      : medium
+                                      ? 214
+                                      : 246,
+                                  crossAxisSpacing: gap,
+                                  mainAxisSpacing: gap,
                                 ),
                             itemCount: bundles.length,
                             itemBuilder: (context, index) {
@@ -130,6 +141,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
                                   'kitchen-${bundles[index].order.id}',
                                 ),
                                 bundle: bundles[index],
+                                compact: compact,
                               );
                             },
                           ),
@@ -203,9 +215,14 @@ class _KitchenNotOpenState extends StatelessWidget {
 }
 
 class _KitchenOrderCard extends StatelessWidget {
-  const _KitchenOrderCard({super.key, required this.bundle});
+  const _KitchenOrderCard({
+    super.key,
+    required this.bundle,
+    required this.compact,
+  });
 
   final KitchenOrderBundle bundle;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -217,6 +234,7 @@ class _KitchenOrderCard extends StatelessWidget {
     return GlassCard(
       accent: _elapsedColorForStart(waitingSince),
       selected: order.kitchenStatus == 'cooking',
+      padding: EdgeInsets.all(compact ? 10 : 16),
       onTap: () {
         Navigator.push(
           context,
@@ -236,8 +254,8 @@ class _KitchenOrderCard extends StatelessWidget {
                   order.displayName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 26,
+                  style: TextStyle(
+                    fontSize: compact ? 18 : 26,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -245,55 +263,65 @@ class _KitchenOrderCard extends StatelessWidget {
               StatusBadge(style: style),
             ],
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: compact ? 4 : 8),
           Row(
             children: [
               Expanded(
                 child: Text(
                   _formatTime(waitingSince),
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: BrandColors.textMuted,
                     fontWeight: FontWeight.w600,
+                    fontSize: compact ? 12 : 14,
                   ),
                 ),
               ),
-              KitchenElapsedBadge(startTime: waitingSince),
+              KitchenElapsedBadge(startTime: waitingSince, compact: compact),
             ],
           ),
           const Spacer(),
           Text(
-            bundle.personLabel.isEmpty
+            compact
+                ? '${bundle.items.fold<int>(0, (total, item) => total + item.qty)} productos | ${bundle.personCount} pers.'
+                : bundle.personLabel.isEmpty
                 ? '${bundle.personCount} personas'
                 : bundle.personLabel,
-            style: const TextStyle(
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
               color: BrandColors.accentYellow,
-              fontSize: 18,
+              fontSize: compact ? 14 : 18,
               fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: compact ? 4 : 8),
           Text(
             bundle.shortSummary,
-            maxLines: 2,
+            maxLines: compact ? 1 : 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: BrandColors.textSecondary,
-              fontSize: 15,
+              fontSize: compact ? 12 : 15,
               height: 1.25,
             ),
           ),
-          const SizedBox(height: 14),
-          const Row(
+          SizedBox(height: compact ? 8 : 14),
+          Row(
             children: [
               Text(
                 'Abrir comanda',
                 style: TextStyle(
                   color: BrandColors.textMuted,
                   fontWeight: FontWeight.w700,
+                  fontSize: compact ? 12 : 14,
                 ),
               ),
-              SizedBox(width: 8),
-              Icon(Icons.open_in_full, size: 16, color: BrandColors.textMuted),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.open_in_full,
+                size: compact ? 14 : 16,
+                color: BrandColors.textMuted,
+              ),
             ],
           ),
         ],
@@ -311,9 +339,14 @@ class _KitchenOrderCard extends StatelessWidget {
 }
 
 class KitchenElapsedBadge extends StatefulWidget {
-  const KitchenElapsedBadge({super.key, required this.startTime});
+  const KitchenElapsedBadge({
+    super.key,
+    required this.startTime,
+    this.compact = false,
+  });
 
   final DateTime? startTime;
+  final bool compact;
 
   @override
   State<KitchenElapsedBadge> createState() => _KitchenElapsedBadgeState();
@@ -349,7 +382,10 @@ class _KitchenElapsedBadgeState extends State<KitchenElapsedBadge> {
     final color = _elapsedColor(elapsed);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: EdgeInsets.symmetric(
+        horizontal: widget.compact ? 7 : 10,
+        vertical: widget.compact ? 4 : 6,
+      ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.16),
         borderRadius: BorderRadius.circular(12),
@@ -357,7 +393,11 @@ class _KitchenElapsedBadgeState extends State<KitchenElapsedBadge> {
       ),
       child: Text(
         _formatElapsed(elapsed),
-        style: TextStyle(color: color, fontWeight: FontWeight.w900),
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w900,
+          fontSize: widget.compact ? 12 : 14,
+        ),
       ),
     );
   }

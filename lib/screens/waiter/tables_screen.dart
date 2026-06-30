@@ -162,14 +162,17 @@ class _TablesScreenState extends State<TablesScreen> {
               return LayoutBuilder(
                 builder: (context, constraints) {
                   final width = constraints.maxWidth;
-                  final columns = width >= 1100
-                      ? 4
-                      : width >= 760
-                      ? 3
-                      : 2;
+                  final compact = width < 700;
+                  final medium = width < 950;
+                  final padding = compact
+                      ? 12.0
+                      : medium
+                      ? 16.0
+                      : 22.0;
+                  final gap = compact ? 10.0 : 16.0;
 
                   return Padding(
-                    padding: const EdgeInsets.all(22),
+                    padding: EdgeInsets.all(padding),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -178,15 +181,23 @@ class _TablesScreenState extends State<TablesScreen> {
                           subtitle:
                               '${tables.length} puntos de servicio activos',
                         ),
-                        const SizedBox(height: 18),
+                        SizedBox(height: compact ? 10 : 18),
                         Expanded(
                           child: GridView.builder(
                             gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: columns,
-                                  crossAxisSpacing: 16,
-                                  mainAxisSpacing: 16,
-                                  childAspectRatio: width >= 760 ? 1.5 : 1.18,
+                                SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: compact
+                                      ? 300
+                                      : medium
+                                      ? 340
+                                      : 360,
+                                  mainAxisExtent: compact
+                                      ? 138
+                                      : medium
+                                      ? 158
+                                      : 178,
+                                  crossAxisSpacing: gap,
+                                  mainAxisSpacing: gap,
                                 ),
                             itemCount: tables.length,
                             itemBuilder: (context, index) {
@@ -194,6 +205,7 @@ class _TablesScreenState extends State<TablesScreen> {
                               return _TableCard(
                                 table: table,
                                 takeoutCount: takeoutCount,
+                                compact: compact,
                                 onTap: () => _openTable(table),
                               );
                             },
@@ -216,11 +228,13 @@ class _TableCard extends StatelessWidget {
   const _TableCard({
     required this.table,
     required this.takeoutCount,
+    required this.compact,
     required this.onTap,
   });
 
   final PosTable table;
   final int takeoutCount;
+  final bool compact;
   final VoidCallback onTap;
 
   @override
@@ -237,23 +251,23 @@ class _TableCard extends StatelessWidget {
       onTap: onTap,
       accent: accent,
       selected: hasOrder || takeoutActive,
-      padding: const EdgeInsets.all(18),
+      padding: EdgeInsets.all(compact ? 10 : 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Container(
-                width: 50,
-                height: 50,
+                width: compact ? 38 : 50,
+                height: compact ? 38 : 50,
                 decoration: BoxDecoration(
                   color: status.background,
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(compact ? 12 : 16),
                 ),
                 child: Icon(
                   isTakeout ? Icons.shopping_bag_outlined : Icons.table_bar,
                   color: status.color,
-                  size: 28,
+                  size: compact ? 22 : 28,
                 ),
               ),
               const Spacer(),
@@ -265,13 +279,13 @@ class _TableCard extends StatelessWidget {
             table.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 26,
+            style: TextStyle(
+              fontSize: compact ? 20 : 26,
               fontWeight: FontWeight.w800,
               color: BrandColors.textPrimary,
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: compact ? 4 : 8),
           Row(
             children: [
               Expanded(
@@ -287,17 +301,17 @@ class _TableCard extends StatelessWidget {
                       : 'Lista para tomar orden',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: BrandColors.textMuted,
-                    fontSize: 14,
+                    fontSize: compact ? 12 : 14,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              const Icon(
+              SizedBox(width: compact ? 4 : 8),
+              Icon(
                 Icons.arrow_forward_ios_rounded,
-                size: 14,
+                size: compact ? 12 : 14,
                 color: BrandColors.textMuted,
               ),
             ],

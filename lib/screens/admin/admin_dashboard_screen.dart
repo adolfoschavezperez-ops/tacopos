@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
@@ -98,105 +99,101 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final repository = TacoPosRepository();
     final employee = AppSession.instance.employee;
 
-    if (employee?.canViewAdmin != true) {
-      return const BrandedScaffold(
-        title: 'Socio / Admin',
+    final canAccessBackoffice =
+        employee?.canViewAdmin == true ||
+        employee?.canManageCash == true ||
+        employee?.canViewKitchenReports == true ||
+        employee?.canAuthorizeCashWithdrawals == true;
+
+    if (!canAccessBackoffice) {
+      return BrandedScaffold(
+        title: kIsWeb ? 'TacoPOS Backoffice' : 'Socio / Admin',
         body: EmptyState(
           icon: Icons.lock_outline,
           title: 'Sin permiso',
-          message: 'No tienes permiso para ver admin.',
+          message: kIsWeb
+              ? 'No tienes acceso al backoffice.'
+              : 'No tienes permiso para ver admin.',
         ),
       );
     }
 
     return BrandedScaffold(
-      title: 'Socio / Admin',
+      title: kIsWeb ? 'TacoPOS Backoffice' : 'Socio / Admin',
       actions: [
-        IconButton(
-          tooltip: 'Mesas',
-          onPressed: employee?.canManageTables == true
-              ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const TableCatalogScreen(),
-                    ),
-                  );
-                }
-              : null,
-          icon: const Icon(Icons.table_restaurant),
-        ),
-        IconButton(
-          tooltip: 'Plataformas',
-          onPressed: employee?.canManagePlatforms == true
-              ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const OrderPlatformCatalogScreen(),
-                    ),
-                  );
-                }
-              : null,
-          icon: const Icon(Icons.delivery_dining),
-        ),
-        IconButton(
-          tooltip: 'Productos',
-          onPressed: employee?.canManageProducts == true
-              ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const ProductCatalogScreen(),
-                    ),
-                  );
-                }
-              : null,
-          icon: const Icon(Icons.restaurant_menu),
-        ),
-        IconButton(
-          tooltip: 'Caja Admin',
-          onPressed:
-              employee?.canManageCash == true || employee?.canViewAdmin == true
-              ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const CashAdminScreen()),
-                  );
-                }
-              : null,
-          icon: const Icon(Icons.point_of_sale_outlined),
-        ),
-        IconButton(
-          tooltip: 'Control de cocina',
-          onPressed:
-              employee?.canViewKitchenReports == true ||
-                  employee?.canManageKitchenStock == true
-              ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const KitchenAdminScreen(),
-                    ),
-                  );
-                }
-              : null,
-          icon: const Icon(Icons.soup_kitchen_outlined),
-        ),
-        IconButton(
-          tooltip: 'Empleados',
-          onPressed: employee?.canManageEmployees == true
-              ? () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => const EmployeeCatalogScreen(),
-                    ),
-                  );
-                }
-              : null,
-          icon: const Icon(Icons.badge_outlined),
-        ),
+        if (employee?.canManageTables == true)
+          IconButton(
+            tooltip: 'Mesas',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const TableCatalogScreen()),
+              );
+            },
+            icon: const Icon(Icons.table_restaurant),
+          ),
+        if (employee?.canManagePlatforms == true)
+          IconButton(
+            tooltip: 'Plataformas',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const OrderPlatformCatalogScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.delivery_dining),
+          ),
+        if (employee?.canManageProducts == true)
+          IconButton(
+            tooltip: 'Productos',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProductCatalogScreen()),
+              );
+            },
+            icon: const Icon(Icons.restaurant_menu),
+          ),
+        if (employee?.canManageCash == true ||
+            employee?.canViewAdmin == true ||
+            employee?.canAuthorizeCashWithdrawals == true)
+          IconButton(
+            tooltip: 'Caja Admin',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const CashAdminScreen()),
+              );
+            },
+            icon: const Icon(Icons.point_of_sale_outlined),
+          ),
+        if (employee?.canViewKitchenReports == true ||
+            employee?.canManageKitchenStock == true)
+          IconButton(
+            tooltip: 'Control de cocina',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const KitchenAdminScreen()),
+              );
+            },
+            icon: const Icon(Icons.soup_kitchen_outlined),
+          ),
+        if (employee?.canManageEmployees == true)
+          IconButton(
+            tooltip: 'Empleados',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const EmployeeCatalogScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.badge_outlined),
+          ),
       ],
       body: StreamBuilder<List<PosOrder>>(
         stream: repository.watchAllOrders(),
@@ -315,7 +312,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       const SizedBox(height: 14),
                       LayoutBuilder(
                         builder: (context, constraints) {
-                          final columns = constraints.maxWidth >= 900 ? 4 : 2;
+                          final columns = constraints.maxWidth >= 900
+                              ? 4
+                              : constraints.maxWidth >= 560
+                              ? 2
+                              : 1;
                           return GridView.count(
                             crossAxisCount: columns,
                             crossAxisSpacing: 14,
@@ -357,7 +358,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       const SizedBox(height: 14),
                       LayoutBuilder(
                         builder: (context, constraints) {
-                          final columns = constraints.maxWidth >= 900 ? 4 : 2;
+                          final columns = constraints.maxWidth >= 900
+                              ? 4
+                              : constraints.maxWidth >= 560
+                              ? 2
+                              : 1;
                           return GridView.count(
                             crossAxisCount: columns,
                             crossAxisSpacing: 14,
@@ -399,7 +404,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       const SizedBox(height: 14),
                       LayoutBuilder(
                         builder: (context, constraints) {
-                          final columns = constraints.maxWidth >= 900 ? 4 : 2;
+                          final columns = constraints.maxWidth >= 900
+                              ? 4
+                              : constraints.maxWidth >= 560
+                              ? 2
+                              : 1;
                           return GridView.count(
                             crossAxisCount: columns,
                             crossAxisSpacing: 14,
@@ -441,7 +450,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       const SizedBox(height: 14),
                       LayoutBuilder(
                         builder: (context, constraints) {
-                          final columns = constraints.maxWidth >= 900 ? 2 : 2;
+                          final columns = constraints.maxWidth >= 900
+                              ? 2
+                              : constraints.maxWidth >= 560
+                              ? 2
+                              : 1;
                           return GridView.count(
                             crossAxisCount: columns,
                             crossAxisSpacing: 14,
@@ -475,8 +488,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         },
                       ),
                       const SizedBox(height: 20),
-                      if (employee?.canManageCash == true ||
-                          employee?.canCharge == true) ...[
+                      if (!kIsWeb &&
+                          (employee?.canManageCash == true ||
+                              employee?.canCharge == true)) ...[
                         _AdminLinkPanel(
                           icon: Icons.point_of_sale_outlined,
                           iconColor: BrandColors.accentYellow,
@@ -494,7 +508,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         ),
                         const SizedBox(height: 20),
                       ],
-                      if (employee?.canViewAdmin == true) ...[
+                      if (employee?.canViewAdmin == true ||
+                          employee?.canManageCash == true ||
+                          employee?.canAuthorizeCashWithdrawals == true) ...[
                         _AdminLinkPanel(
                           icon: Icons.receipt_long,
                           iconColor: BrandColors.success,

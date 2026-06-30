@@ -159,135 +159,95 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                   final isLastPerson = _personIndex >= people.length - 1;
                   final elapsedSince = _elapsedStart(items);
 
-                  return Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        _Header(
-                          order: order,
-                          onClose: () => Navigator.pop(context),
-                        ),
-                        const SizedBox(height: 18),
-                        Expanded(
-                          child: GlassPanel(
-                            blur: 8,
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Text(
-                                  personName,
-                                  style: const TextStyle(
-                                    fontSize: 36,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                Text(
-                                  '${_personIndex + 1} de ${people.length}',
-                                  style: const TextStyle(
-                                    color: BrandColors.textMuted,
-                                    fontSize: 18,
-                                  ),
-                                ),
-                                const SizedBox(height: 24),
-                                Expanded(
-                                  child: ListView.separated(
-                                    itemCount: personItems.length,
-                                    separatorBuilder: (_, _) =>
-                                        const Divider(height: 24),
-                                    itemBuilder: (context, index) {
-                                      final item = personItems[index];
-                                      return Row(
-                                        children: [
-                                          Container(
-                                            width: 58,
-                                            height: 58,
-                                            alignment: Alignment.center,
-                                            decoration: BoxDecoration(
-                                              color: BrandColors.accentGlow,
-                                              borderRadius:
-                                                  BorderRadius.circular(18),
-                                            ),
-                                            child: Text(
-                                              '${item.qty}',
-                                              style: const TextStyle(
-                                                fontSize: 24,
-                                                fontWeight: FontWeight.w800,
-                                                color: BrandColors.accentYellow,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 18),
-                                          Expanded(
-                                            child: Text(
-                                              item.productName,
-                                              style: const TextStyle(
-                                                fontSize: 28,
-                                                fontWeight: FontWeight.w800,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 18),
-                        Row(
+                  return LayoutBuilder(
+                    builder: (context, constraints) {
+                      final compact = constraints.maxWidth < 700;
+                      final medium = constraints.maxWidth < 950;
+                      final padding = compact
+                          ? 12.0
+                          : medium
+                          ? 16.0
+                          : 24.0;
+                      final gap = compact ? 10.0 : 18.0;
+
+                      return Padding(
+                        padding: EdgeInsets.all(padding),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Expanded(
-                              child: _PreparationTimer(startTime: elapsedSince),
+                            _Header(
+                              order: order,
+                              compact: compact,
+                              onClose: () => Navigator.pop(context),
                             ),
-                            if (people.length > 1 && _personIndex > 0) ...[
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  onPressed: _busy
-                                      ? null
-                                      : () {
-                                          setState(() {
-                                            _personIndex -= 1;
-                                          });
+                            SizedBox(height: gap),
+                            Expanded(
+                              child: GlassPanel(
+                                blur: 8,
+                                padding: EdgeInsets.all(compact ? 14 : 24),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Text(
+                                      personName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: compact ? 24 : 36,
+                                        fontWeight: FontWeight.w800,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${_personIndex + 1} de ${people.length}',
+                                      style: TextStyle(
+                                        color: BrandColors.textMuted,
+                                        fontSize: compact ? 14 : 18,
+                                      ),
+                                    ),
+                                    SizedBox(height: compact ? 12 : 24),
+                                    Expanded(
+                                      child: ListView.separated(
+                                        itemCount: personItems.length,
+                                        separatorBuilder: (_, _) =>
+                                            Divider(height: compact ? 14 : 24),
+                                        itemBuilder: (context, index) {
+                                          final item = personItems[index];
+                                          return _KitchenItemRow(
+                                            item: item,
+                                            compact: compact,
+                                          );
                                         },
-                                  icon: const Icon(Icons.chevron_left),
-                                  label: const Text('Anterior'),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ],
-                            const SizedBox(width: 12),
-                            Expanded(
-                              flex: 2,
-                              child: isLastPerson
-                                  ? FilledButton.icon(
-                                      onPressed: _busy
-                                          ? null
-                                          : () => _markReady(items),
-                                      icon: const Icon(
-                                        Icons.check_circle_outline,
-                                      ),
-                                      label: const Text('Listo'),
-                                    )
-                                  : FilledButton.icon(
-                                      onPressed: _busy
-                                          ? null
-                                          : () {
-                                              setState(() {
-                                                _personIndex += 1;
-                                              });
-                                            },
-                                      icon: const Icon(Icons.chevron_right),
-                                      label: const Text('Siguiente plato'),
-                                    ),
+                            ),
+                            SizedBox(height: gap),
+                            _KitchenDetailActions(
+                              compact: compact,
+                              busy: _busy,
+                              isLastPerson: isLastPerson,
+                              showPrevious:
+                                  people.length > 1 && _personIndex > 0,
+                              elapsedSince: elapsedSince,
+                              onPrevious: () {
+                                setState(() {
+                                  _personIndex -= 1;
+                                });
+                              },
+                              onNext: () {
+                                setState(() {
+                                  _personIndex += 1;
+                                });
+                              },
+                              onReady: () => _markReady(items),
                             ),
                           ],
                         ),
-                      ],
-                    ),
+                      );
+                    },
                   );
                 },
               );
@@ -309,6 +269,123 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
   }
 }
 
+class _KitchenItemRow extends StatelessWidget {
+  const _KitchenItemRow({required this.item, required this.compact});
+
+  final OrderItem item;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: compact ? 42 : 58,
+          height: compact ? 42 : 58,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: BrandColors.accentGlow,
+            borderRadius: BorderRadius.circular(compact ? 14 : 18),
+          ),
+          child: Text(
+            '${item.qty}',
+            style: TextStyle(
+              fontSize: compact ? 18 : 24,
+              fontWeight: FontWeight.w800,
+              color: BrandColors.accentYellow,
+            ),
+          ),
+        ),
+        SizedBox(width: compact ? 12 : 18),
+        Expanded(
+          child: Text(
+            item.productName,
+            maxLines: compact ? 2 : 3,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: compact ? 20 : 28,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _KitchenDetailActions extends StatelessWidget {
+  const _KitchenDetailActions({
+    required this.compact,
+    required this.busy,
+    required this.isLastPerson,
+    required this.showPrevious,
+    required this.elapsedSince,
+    required this.onPrevious,
+    required this.onNext,
+    required this.onReady,
+  });
+
+  final bool compact;
+  final bool busy;
+  final bool isLastPerson;
+  final bool showPrevious;
+  final DateTime? elapsedSince;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+  final VoidCallback onReady;
+
+  @override
+  Widget build(BuildContext context) {
+    final primaryButton = isLastPerson
+        ? FilledButton.icon(
+            onPressed: busy ? null : onReady,
+            icon: const Icon(Icons.check_circle_outline),
+            label: const Text('Listo'),
+          )
+        : FilledButton.icon(
+            onPressed: busy ? null : onNext,
+            icon: const Icon(Icons.chevron_right),
+            label: Text(compact ? 'Siguiente' : 'Siguiente plato'),
+          );
+    final previousButton = OutlinedButton.icon(
+      onPressed: busy ? null : onPrevious,
+      icon: const Icon(Icons.chevron_left),
+      label: const Text('Anterior'),
+    );
+
+    if (compact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _PreparationTimer(startTime: elapsedSince, compact: true),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              if (showPrevious) ...[
+                Expanded(child: previousButton),
+                const SizedBox(width: 8),
+              ],
+              Expanded(flex: 2, child: primaryButton),
+            ],
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(child: _PreparationTimer(startTime: elapsedSince)),
+        if (showPrevious) ...[
+          const SizedBox(width: 12),
+          Expanded(child: previousButton),
+        ],
+        const SizedBox(width: 12),
+        Expanded(flex: 2, child: primaryButton),
+      ],
+    );
+  }
+}
+
 String _personDisplayName(int personNumber, List<OrderItem> items) {
   for (final item in items) {
     final name = item.personName.trim();
@@ -320,16 +397,17 @@ String _personDisplayName(int personNumber, List<OrderItem> items) {
 }
 
 class _PreparationTimer extends StatelessWidget {
-  const _PreparationTimer({required this.startTime});
+  const _PreparationTimer({required this.startTime, this.compact = false});
 
   final DateTime? startTime;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return KitchenElapsedBadge(
       startTime: startTime,
       prefix: 'En preparacion',
-      height: 48,
+      height: compact ? 42 : 48,
     );
   }
 }
@@ -409,9 +487,14 @@ class _KitchenElapsedBadgeState extends State<KitchenElapsedBadge> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.order, required this.onClose});
+  const _Header({
+    required this.order,
+    required this.compact,
+    required this.onClose,
+  });
 
   final PosOrder order;
+  final bool compact;
   final VoidCallback onClose;
 
   @override
@@ -428,14 +511,17 @@ class _Header extends StatelessWidget {
                 order.displayName,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontSize: 34,
+                style: TextStyle(
+                  fontSize: compact ? 24 : 34,
                   fontWeight: FontWeight.w800,
                 ),
               ),
               Text(
                 _formatTime(order.sentToKitchenAt ?? order.updatedAt),
-                style: const TextStyle(color: BrandColors.textMuted),
+                style: TextStyle(
+                  color: BrandColors.textMuted,
+                  fontSize: compact ? 12 : 14,
+                ),
               ),
             ],
           ),

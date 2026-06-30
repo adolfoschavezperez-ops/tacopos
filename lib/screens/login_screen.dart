@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
@@ -83,6 +84,14 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() {
           _busy = false;
           _error = 'PIN incorrecto o empleado inactivo.';
+        });
+        return;
+      }
+
+      if (kIsWeb && !_canAccessBackoffice(employee)) {
+        setState(() {
+          _busy = false;
+          _error = 'No tienes acceso al backoffice.';
         });
         return;
       }
@@ -172,15 +181,19 @@ class _LoginScreenState extends State<LoginScreen> {
                                 ),
                                 const SizedBox(height: 22),
                                 Text(
-                                  AppConstants.brandName,
+                                  kIsWeb
+                                      ? 'TacoPOS Backoffice'
+                                      : AppConstants.brandName,
                                   textAlign: TextAlign.center,
                                   style: Theme.of(
                                     context,
                                   ).textTheme.headlineMedium,
                                 ),
                                 const SizedBox(height: 6),
-                                const Text(
-                                  'Inicio de sesion operativo',
+                                Text(
+                                  kIsWeb
+                                      ? 'Acceso administrativo'
+                                      : 'Inicio de sesion operativo',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: BrandColors.textMuted,
@@ -254,4 +267,14 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+}
+
+bool _canAccessBackoffice(Employee employee) {
+  // TODO: Antes de produccion real, migrar backoffice web a Firebase Auth
+  // con email/password y reglas de Firestore mas estrictas. El PIN operativo
+  // sirve para piloto, pero no debe ser la seguridad final de una app publica.
+  return employee.canViewAdmin ||
+      employee.canManageCash ||
+      employee.canViewKitchenReports ||
+      employee.canAuthorizeCashWithdrawals;
 }
