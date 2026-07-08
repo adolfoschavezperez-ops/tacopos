@@ -154,6 +154,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canCloseKitchen;
   late bool _canViewKitchenReports;
   late bool _canManageKitchenStock;
+  late bool _canCancelOrders;
+  late bool _canCancelPayments;
   bool _saving = false;
   String _error = '';
 
@@ -178,6 +180,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canCloseKitchen = widget.employee?.canCloseKitchen ?? false;
     _canViewKitchenReports = widget.employee?.canViewKitchenReports ?? false;
     _canManageKitchenStock = widget.employee?.canManageKitchenStock ?? false;
+    _canCancelOrders = widget.employee?.canCancelOrders ?? false;
+    _canCancelPayments = widget.employee?.canCancelPayments ?? false;
   }
 
   @override
@@ -229,6 +233,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canCloseKitchen: _canCloseKitchen,
         canViewKitchenReports: _canViewKitchenReports,
         canManageKitchenStock: _canManageKitchenStock,
+        canCancelOrders: _canCancelOrders,
+        canCancelPayments: _canCancelPayments,
       );
     } catch (error) {
       if (!mounted) {
@@ -305,6 +311,19 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 value: _canCharge,
                 enabled: !_saving,
                 onChanged: (value) => setState(() => _canCharge = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede cancelar tickets',
+                value: _canCancelOrders,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canCancelOrders = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede cancelar pagos',
+                value: _canCancelPayments,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canCancelPayments = value),
               ),
               _PermissionSwitch(
                 title: 'Puede abrir/cerrar caja',
@@ -524,6 +543,8 @@ class _EmployeeAdminTile extends StatelessWidget {
     final permissions = <String>[
       if (employee.canTakeOrders) 'Pedidos',
       if (employee.canCharge) 'Cobro',
+      if (employee.canCancelOrders) 'Cancela tickets',
+      if (employee.canCancelPayments) 'Cancela pagos',
       if (employee.canManageCash) 'Caja',
       if (employee.canAuthorizeCashWithdrawals) 'Retiros',
       if (employee.canViewKitchen) 'Cocina',

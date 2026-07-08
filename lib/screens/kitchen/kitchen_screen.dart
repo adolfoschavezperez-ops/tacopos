@@ -127,10 +127,10 @@ class _KitchenScreenState extends State<KitchenScreen> {
                                       ? 420
                                       : 460,
                                   mainAxisExtent: compact
-                                      ? 178
+                                      ? 196
                                       : medium
-                                      ? 214
-                                      : 246,
+                                      ? 242
+                                      : 278,
                                   crossAxisSpacing: gap,
                                   mainAxisSpacing: gap,
                                 ),
@@ -280,6 +280,8 @@ class _KitchenOrderCard extends StatelessWidget {
             ],
           ),
           const Spacer(),
+          _IngredientSummary(bundle: bundle, compact: compact),
+          SizedBox(height: compact ? 6 : 10),
           Text(
             compact
                 ? '${bundle.items.fold<int>(0, (total, item) => total + item.qty)} productos | ${bundle.personCount} pers.'
@@ -335,6 +337,50 @@ class _KitchenOrderCard extends StatelessWidget {
     }
 
     return DateFormat('HH:mm').format(date);
+  }
+}
+
+class _IngredientSummary extends StatelessWidget {
+  const _IngredientSummary({required this.bundle, required this.compact});
+
+  final KitchenOrderBundle bundle;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = bundle.ingredientSummary.take(compact ? 3 : 5).toList();
+    if (summary.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: summary.map((entry) {
+        return Container(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 8 : 10,
+            vertical: compact ? 5 : 7,
+          ),
+          decoration: BoxDecoration(
+            color: BrandColors.accentYellow.withValues(alpha: 0.14),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: BrandColors.accentYellow.withValues(alpha: 0.34),
+            ),
+          ),
+          child: Text(
+            '${entry.key} x ${entry.value}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: BrandColors.accentYellow,
+              fontSize: compact ? 14 : 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        );
+      }).toList(),
+    );
   }
 }
 

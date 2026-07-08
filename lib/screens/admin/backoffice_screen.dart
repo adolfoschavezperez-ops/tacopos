@@ -37,6 +37,8 @@ enum _ReportKind {
   cashHistory,
   withdrawals,
   kitchenYield,
+  cancellations,
+  cancelledPayments,
 }
 
 class BackofficeScreen extends StatefulWidget {
@@ -435,6 +437,9 @@ class _BackofficeBody extends StatelessWidget {
               return _FriendlyError(message: 'No se pudieron cargar pagos.');
             }
             final payments = _paymentsInRange(paymentsSnapshot.data ?? []);
+            final activePayments = payments
+                .where((payment) => payment.isActive)
+                .toList();
 
             return ListView(
               padding: const EdgeInsets.all(22),
@@ -460,7 +465,7 @@ class _BackofficeBody extends StatelessWidget {
                   _BackofficeSection.dashboard => _DashboardSection(
                     repository: repository,
                     orders: orders,
-                    payments: payments,
+                    payments: activePayments,
                     startBusinessDate: startBusinessDate,
                     endBusinessDate: endBusinessDate,
                     onPickStart: onPickStart,
@@ -472,12 +477,14 @@ class _BackofficeBody extends StatelessWidget {
                   _BackofficeSection.sales => _SalesSection(
                     repository: repository,
                     orders: orders,
-                    payments: payments,
+                    payments: activePayments,
                   ),
                   _BackofficeSection.reports => _ReportsSection(
                     repository: repository,
                     orders: orders,
-                    payments: payments,
+                    payments: reportKind == _ReportKind.cancelledPayments
+                        ? payments
+                        : activePayments,
                     reportKind: reportKind,
                     startBusinessDate: startBusinessDate,
                     endBusinessDate: endBusinessDate,
@@ -1690,6 +1697,8 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.cashHistory => 'Corte de caja historico',
     _ReportKind.withdrawals => 'Gastos / retiros',
     _ReportKind.kitchenYield => 'Rendimiento de cocina',
+    _ReportKind.cancellations => 'Cancelaciones de tickets',
+    _ReportKind.cancelledPayments => 'Pagos cancelados',
   };
 }
 
@@ -1785,6 +1794,26 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Actual',
       'Promedio',
       'Diferencia',
+    ],
+    _ReportKind.cancellations => [
+      'Fecha',
+      'Folio',
+      'Mesa / pedido',
+      'Importe',
+      'Motivo',
+      'Usuario',
+      'Hora',
+    ],
+    _ReportKind.cancelledPayments => [
+      'Fecha',
+      'Folio',
+      'Mesa / pedido',
+      'Metodo',
+      'Base',
+      'Cobrado',
+      'Motivo',
+      'Cancelado por',
+      'Hora',
     ],
   };
 }
@@ -1985,6 +2014,32 @@ Future<List<List<String>>> _reportRows(
             ],
           )
           .toList();
+    case _ReportKind.cancellations:
+      return orders.where((order) => order.status == 'cancelled').map((order) {
+        return [
+          _businessDateFor(order.cancelledAt ?? order.updatedAt) ?? '-',
+          _shortId(order.id),
+          order.displayName,
+          _money(order.total),
+          order.cancelReason ?? '-',
+          order.cancelledByEmployeeName ?? '-',
+          _dateTimeText(order.cancelledAt),
+        ];
+      }).toList();
+    case _ReportKind.cancelledPayments:
+      return payments.where((payment) => payment.isCancelled).map((payment) {
+        return [
+          payment.businessDate ?? _businessDateFor(payment.cancelledAt) ?? '-',
+          _shortId(payment.orderId),
+          payment.tableName,
+          _paymentMethodLabel(payment.method),
+          _money(payment.baseAmount),
+          _money(payment.chargedAmount),
+          payment.cancelReason ?? '-',
+          payment.cancelledByEmployeeName ?? '-',
+          _dateTimeText(payment.cancelledAt),
+        ];
+      }).toList();
   }
 }
 

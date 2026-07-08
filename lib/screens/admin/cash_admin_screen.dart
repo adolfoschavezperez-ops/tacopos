@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
+import '../../models/order.dart';
+import '../../models/payment.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
@@ -359,6 +361,8 @@ class _CashSessionDetailCard extends StatelessWidget {
             label: 'Notas',
             value: session.notes.isEmpty ? 'Sin notas' : session.notes,
           ),
+          const Divider(height: 24),
+          _CashCancellationSummary(session: session),
         ],
       ),
     );
@@ -367,6 +371,113 @@ class _CashSessionDetailCard extends StatelessWidget {
   String _employeeName(String? name) {
     return name == null || name.isEmpty ? 'Empleado' : name;
   }
+}
+
+class _CashCancellationSummary extends StatelessWidget {
+  const _CashCancellationSummary({required this.session});
+
+  final CashSession session;
+
+  @override
+  Widget build(BuildContext context) {
+    final repository = TacoPosRepository();
+    return StreamBuilder<List<PosOrder>>(
+      stream: repository.watchAllOrders(),
+      builder: (context, orderSnapshot) {
+        final orders = (orderSnapshot.data ?? const <PosOrder>[])
+            .where(
+              (order) =>
+                  order.status == 'cancelled' &&
+                  _businessDate(order.cancelledAt ?? order.updatedAt) ==
+                      session.businessDate,
+            )
+            .toList();
+        return StreamBuilder<List<Payment>>(
+          stream: repository.watchPayments(
+            startBusinessDate: session.businessDate,
+            endBusinessDate: session.businessDate,
+          ),
+          builder: (context, paymentSnapshot) {
+            final payments = (paymentSnapshot.data ?? const <Payment>[])
+                .where((payment) => payment.isCancelled)
+                .toList();
+            final cancelledTotal = orders.fold<double>(
+              0,
+              (total, order) => total + order.total,
+            );
+            final cancelledPaymentsTotal = payments.fold<double>(
+              0,
+              (total, payment) => total + payment.chargedAmount,
+            );
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Cancelaciones del dia',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    _MoneyChip(
+                      label: '${orders.length} tickets cancelados',
+                      value: cancelledTotal,
+                    ),
+                    _MoneyChip(
+                      label: '${payments.length} pagos cancelados',
+                      value: cancelledPaymentsTotal,
+                    ),
+                  ],
+                ),
+                if (orders.isNotEmpty || payments.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  ...orders
+                      .take(6)
+                      .map(
+                        (order) => _InfoLine(
+                          label:
+                              '${_shortId(order.id)} | ${_time(order.cancelledAt)}',
+                          value:
+                              '${order.displayName} | ${order.cancelledByEmployeeName ?? '-'} | ${order.cancelReason ?? '-'}',
+                        ),
+                      ),
+                  ...payments
+                      .take(6)
+                      .map(
+                        (payment) => _InfoLine(
+                          label:
+                              'Pago ${_shortId(payment.id)} | ${_time(payment.cancelledAt)}',
+                          value:
+                              '${payment.tableName} | ${payment.cancelledByEmployeeName ?? '-'} | ${payment.cancelReason ?? '-'}',
+                        ),
+                      ),
+                ],
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  String? _businessDate(DateTime? date) {
+    if (date == null) {
+      return null;
+    }
+    return DateFormat('yyyy-MM-dd').format(date);
+  }
+
+  String _time(DateTime? date) {
+    if (date == null) {
+      return '--:--';
+    }
+    return DateFormat('HH:mm').format(date);
+  }
+
+  String _shortId(String id) => id.length <= 6 ? id : id.substring(0, 6);
 }
 
 class _WithdrawalAuthorizationTab extends StatelessWidget {

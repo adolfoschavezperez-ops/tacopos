@@ -106,12 +106,62 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
       return;
     }
 
-    if (result.shortageAmount > 0) {
-      _showMessage(
-        'El corte se cerro con faltante de \$${result.shortageAmount.toStringAsFixed(2)}.',
+    if (result.netDifference < 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Corte con diferencias'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'El corte cuenta con diferencias. Hizo falta \$${result.shortageAmount.toStringAsFixed(2)} en caja.',
+              ),
+              const SizedBox(height: 12),
+              _CashCloseDiffRow(
+                label: 'Efectivo esperado',
+                value: result.expectedCashAmount,
+              ),
+              _CashCloseDiffRow(
+                label: 'Efectivo contado',
+                value: result.countedCashAmount,
+              ),
+              _CashCloseDiffRow(
+                label: 'Diferencia efectivo',
+                value: result.cashDifference,
+              ),
+              _CashCloseDiffRow(
+                label: 'Tarjeta esperada',
+                value: result.expectedCardChargedAmount,
+              ),
+              _CashCloseDiffRow(
+                label: 'Terminal reportada',
+                value: result.terminalReportedAmount,
+              ),
+              _CashCloseDiffRow(
+                label: 'Diferencia tarjeta',
+                value: result.cardDifference,
+              ),
+              _CashCloseDiffRow(
+                label: 'Retiros aprobados',
+                value: result.approvedWithdrawalsTotal,
+              ),
+              _CashCloseDiffRow(
+                label: 'Faltante neto',
+                value: result.netDifference,
+              ),
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
       );
     } else {
-      _showMessage('Corte realizado correctamente.');
+      _showMessage('Corte grabado con exito.');
     }
   }
 
@@ -210,6 +260,32 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _CashCloseDiffRow extends StatelessWidget {
+  const _CashCloseDiffRow({required this.label, required this.value});
+
+  final String label;
+  final double value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          MoneyText(
+            value: value,
+            style: TextStyle(
+              color: value < 0 ? BrandColors.danger : BrandColors.textPrimary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
       ),
     );
   }

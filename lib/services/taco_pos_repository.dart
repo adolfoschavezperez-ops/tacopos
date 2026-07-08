@@ -54,6 +54,21 @@ class KitchenOrderBundle {
         .map((entry) => '${entry.value} ${entry.key}')
         .join(' · ');
   }
+
+  List<MapEntry<String, int>> get ingredientSummary {
+    final counts = <String, int>{};
+    for (final item in items) {
+      final key =
+          (item.kitchenStockItemName?.trim().isNotEmpty == true
+                  ? item.kitchenStockItemName
+                  : item.productName)!
+              .trim();
+      counts[key] = (counts[key] ?? 0) + item.qty;
+    }
+    final entries = counts.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    return entries;
+  }
 }
 
 class PaymentResult {
@@ -299,7 +314,9 @@ class TacoPosRepository {
           data['canOpenKitchen'] != true ||
           data['canCloseKitchen'] != true ||
           data['canViewKitchenReports'] != true ||
-          data['canManageKitchenStock'] != true) {
+          data['canManageKitchenStock'] != true ||
+          data['canCancelOrders'] != true ||
+          data['canCancelPayments'] != true) {
         await adminRef.set({
           'canManageCash': true,
           'canAuthorizeCashWithdrawals': true,
@@ -307,6 +324,8 @@ class TacoPosRepository {
           'canCloseKitchen': true,
           'canViewKitchenReports': true,
           'canManageKitchenStock': true,
+          'canCancelOrders': true,
+          'canCancelPayments': true,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
@@ -333,6 +352,8 @@ class TacoPosRepository {
       'canCloseKitchen': true,
       'canViewKitchenReports': true,
       'canManageKitchenStock': true,
+      'canCancelOrders': true,
+      'canCancelPayments': true,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -646,6 +667,7 @@ class TacoPosRepository {
       return _totalsForPayments(
         payments
             .where((payment) => payment.cashSessionId == cashSessionId)
+            .where((payment) => payment.isActive)
             .toList(),
         openingCashAmount: session?.openingCashAmount ?? 0,
         withdrawals: withdrawals,
@@ -1734,6 +1756,18 @@ class TacoPosRepository {
       'notes': notes.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    if (netDifference < 0) {
+      await _restaurantRef.collection('activityLog').add({
+        'type': 'cash_close_shortage',
+        'cashSessionId': cashSessionId,
+        'businessDate': session.businessDate,
+        'shortageAmount': shortageAmount,
+        'netDifference': netDifference,
+        ..._employeeAuditFields(prefix: 'createdBy'),
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      });
+    }
 
     final updatedDoc = await docRef.get();
     return CashSession.fromDoc(updatedDoc);
@@ -1750,6 +1784,7 @@ class TacoPosRepository {
       snapshot.docs
           .map(Payment.fromDoc)
           .where((payment) => payment.cashSessionId == cashSessionId)
+          .where((payment) => payment.isActive)
           .toList(),
       openingCashAmount: session?.openingCashAmount ?? 0,
       withdrawals: withdrawals,
@@ -1798,7 +1833,7 @@ class TacoPosRepository {
     double platform = 0;
     double employeeConsumption = 0;
 
-    for (final payment in payments) {
+    for (final payment in payments.where((payment) => payment.isActive)) {
       switch (payment.method) {
         case 'cash':
           cash += payment.chargedAmount;
@@ -2257,6 +2292,7 @@ class TacoPosRepository {
     required int qty,
   }) async {
     _requireTakeOrders();
+    _ensureItemEditable(item);
     if (qty <= 0) {
       await deleteItem(orderId: orderId, itemId: item.id);
       return;
@@ -2275,8 +2311,108 @@ class TacoPosRepository {
     required String itemId,
   }) async {
     _requireTakeOrders();
+    final itemDoc = await _ordersRef
+        .doc(orderId)
+        .collection('items')
+        .doc(itemId)
+        .get();
+    if (itemDoc.exists) {
+      _ensureItemEditable(OrderItem.fromDoc(itemDoc));
+    }
     await _ordersRef.doc(orderId).collection('items').doc(itemId).delete();
     await recalculateOrderTotal(orderId);
+  }
+
+  Future<void> cancelOrder({
+    required String orderId,
+    required String reason,
+  }) async {
+    _requireCancelOrders();
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de cancelacion.');
+    }
+
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) {
+      throw StateError('La orden ya no existe.');
+    }
+    final order = PosOrder.fromDoc(orderDoc);
+    if (order.status == 'paid' || order.paymentStatus == 'paid') {
+      throw StateError('No se puede cancelar una orden pagada al 100%.');
+    }
+
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    if (items.any((item) => item.kitchenStatus == 'ready')) {
+      throw StateError(
+        'No se puede cancelar: hay productos servidos por cocina.',
+      );
+    }
+
+    final paymentsSnapshot = await orderRef.collection('payments').get();
+    final activePaidTotal = paymentsSnapshot.docs
+        .map(Payment.fromDoc)
+        .where((payment) => payment.isActive)
+        .fold<double>(0, (total, payment) => total + payment.baseAmount);
+    if (activePaidTotal >= order.total - 0.01) {
+      throw StateError('No se puede cancelar: los pagos cierran la orden.');
+    }
+
+    final batch = _db.batch();
+    final audit = _employeeAuditFields(prefix: 'cancelledBy');
+    batch.update(orderRef, {
+      'status': 'cancelled',
+      'kitchenStatus': 'cancelled',
+      'paymentStatus': 'cancelled',
+      'cancelledAt': FieldValue.serverTimestamp(),
+      'cancelReason': cleanReason,
+      ...audit,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    for (final doc in itemsSnapshot.docs) {
+      final item = OrderItem.fromDoc(doc);
+      if (item.isCancelled) {
+        continue;
+      }
+      batch.update(doc.reference, {
+        'kitchenStatus': 'cancelled',
+        'paymentStatus': 'cancelled',
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'cancelReason': cleanReason,
+        ...audit,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      _logActivityInBatch(
+        batch,
+        type: 'order_item_cancelled',
+        orderId: order.id,
+        data: {
+          'itemId': item.id,
+          'productName': item.productName,
+          'qty': item.qty,
+          'reason': cleanReason,
+        },
+      );
+    }
+
+    if (order.orderType != 'takeout') {
+      batch.set(_tablesRef.doc(order.tableId), {
+        'status': 'available',
+        'currentOrderId': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
+    _logActivityInBatch(
+      batch,
+      type: 'order_cancelled',
+      orderId: order.id,
+      data: {'reason': cleanReason, 'total': order.total},
+    );
+    await batch.commit();
   }
 
   Future<void> cancelEmptyOrder(String orderId) async {
@@ -2427,13 +2563,23 @@ class TacoPosRepository {
     final orderData = orderDoc.data();
     final tableId = orderData?['tableId'] as String?;
     final orderType = orderData?['orderType'] as String? ?? 'dine_in';
-    final orderStatus = normalizedStatus == 'ready' ? 'ready' : 'sent';
+    final orderStatus = normalizedStatus == 'ready'
+        ? 'ready'
+        : normalizedStatus == 'cooking'
+        ? 'cooking'
+        : 'sent';
 
     batch.update(_ordersRef.doc(orderId), {
       'status': orderStatus,
       'kitchenStatus': normalizedStatus,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    _logActivityInBatch(
+      batch,
+      type: 'kitchen_status_changed',
+      orderId: orderId,
+      data: {'kitchenStatus': normalizedStatus},
+    );
 
     if (tableId != null && orderType != 'takeout') {
       batch.set(_tablesRef.doc(tableId), {
@@ -2496,6 +2642,8 @@ class TacoPosRepository {
     );
     final orderStatus = ['ready', 'not_required'].contains(kitchenStatus)
         ? 'ready'
+        : kitchenStatus == 'cooking'
+        ? 'cooking'
         : 'sent';
 
     batch.update(_ordersRef.doc(orderId), {
@@ -2503,6 +2651,12 @@ class TacoPosRepository {
       'kitchenStatus': kitchenStatus,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    _logActivityInBatch(
+      batch,
+      type: 'kitchen_status_changed',
+      orderId: orderId,
+      data: {'kitchenStatus': kitchenStatus},
+    );
 
     if (tableId != null && orderType != 'takeout') {
       batch.set(_tablesRef.doc(tableId), {
@@ -2580,7 +2734,7 @@ class TacoPosRepository {
         .get();
     final pendingItems = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
-        .where((item) => item.paymentStatus != 'paid')
+        .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
         .toList();
     final baseAmount = pendingItems.fold<double>(
       0,
@@ -2608,7 +2762,7 @@ class TacoPosRepository {
 
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
-      if (item.paymentStatus != 'paid') {
+      if (item.paymentStatus != 'paid' && !item.isCancelled) {
         batch.update(doc.reference, {
           'paymentStatus': 'paid',
           'paidAt': FieldValue.serverTimestamp(),
@@ -2646,7 +2800,9 @@ class TacoPosRepository {
     final personItems = items
         .where(
           (item) =>
-              item.personNumber == personNumber && item.paymentStatus != 'paid',
+              item.personNumber == personNumber &&
+              item.paymentStatus != 'paid' &&
+              !item.isCancelled,
         )
         .toList();
     final personName = personItems.isEmpty
@@ -2680,7 +2836,9 @@ class TacoPosRepository {
 
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
-      if (item.personNumber == personNumber && item.paymentStatus != 'paid') {
+      if (item.personNumber == personNumber &&
+          item.paymentStatus != 'paid' &&
+          !item.isCancelled) {
         batch.update(doc.reference, {
           'paymentStatus': 'paid',
           'paidAt': FieldValue.serverTimestamp(),
@@ -2766,7 +2924,7 @@ class TacoPosRepository {
         .get();
     final pendingItems = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
-        .where((item) => item.paymentStatus != 'paid')
+        .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
         .toList();
     final baseAmount = pendingItems.fold<double>(
       0,
@@ -2793,7 +2951,7 @@ class TacoPosRepository {
 
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
-      if (item.paymentStatus != 'paid') {
+      if (item.paymentStatus != 'paid' && !item.isCancelled) {
         batch.update(doc.reference, {
           'paymentStatus': 'paid',
           'paidAt': FieldValue.serverTimestamp(),
@@ -2903,6 +3061,7 @@ class TacoPosRepository {
       'personNumber': personNumber,
       'personName': personName,
       'method': method,
+      'status': 'active',
       'baseAmount': baseAmount,
       'amount': baseAmount,
       'surchargeRate': surchargeRate,
@@ -2922,6 +3081,86 @@ class TacoPosRepository {
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
     });
+  }
+
+  Future<void> cancelPayment({
+    required String orderId,
+    required String paymentId,
+    required String reason,
+  }) async {
+    _requireCancelPayments();
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de cancelacion.');
+    }
+
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) {
+      throw StateError('La orden ya no existe.');
+    }
+    final order = PosOrder.fromDoc(orderDoc);
+    if (order.status == 'paid' || order.paymentStatus == 'paid') {
+      throw StateError('No se puede cancelar pagos de una orden cerrada.');
+    }
+
+    final paymentRef = orderRef.collection('payments').doc(paymentId);
+    final paymentDoc = await paymentRef.get();
+    if (!paymentDoc.exists) {
+      throw StateError('El pago ya no existe.');
+    }
+    final payment = Payment.fromDoc(paymentDoc);
+    if (!payment.isActive) {
+      throw StateError('El pago ya esta cancelado.');
+    }
+
+    final paymentsSnapshot = await orderRef.collection('payments').get();
+    final paidTotal = paymentsSnapshot.docs
+        .map(Payment.fromDoc)
+        .where((item) => item.isActive && item.id != paymentId)
+        .fold<double>(0, (total, item) => total + item.baseAmount);
+    final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
+    final paymentStatus = paidTotal <= 0.01 ? 'pending' : 'partial';
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final batch = _db.batch();
+
+    batch.update(paymentRef, {
+      'status': 'cancelled',
+      'cancelledAt': FieldValue.serverTimestamp(),
+      'cancelReason': cleanReason,
+      ..._employeeAuditFields(prefix: 'cancelledBy'),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    for (final doc in itemsSnapshot.docs) {
+      final item = OrderItem.fromDoc(doc);
+      if (item.paymentId == paymentId) {
+        batch.update(doc.reference, {
+          'paymentStatus': 'pending',
+          'paymentId': FieldValue.delete(),
+          'paidAt': FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    }
+    batch.update(orderRef, {
+      'paymentStatus': paymentStatus,
+      'paidTotal': paidTotal,
+      'pendingTotal': pendingTotal,
+      'paidAt': FieldValue.delete(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    _logActivityInBatch(
+      batch,
+      type: 'payment_cancelled',
+      orderId: order.id,
+      data: {
+        'paymentId': paymentId,
+        'reason': cleanReason,
+        'baseAmount': payment.baseAmount,
+        'chargedAmount': payment.chargedAmount,
+      },
+    );
+    await batch.commit();
   }
 
   Map<String, Object> _employeeAuditFields({required String prefix}) {
@@ -2947,6 +3186,38 @@ class TacoPosRepository {
       return;
     }
     throw StateError('No tienes permiso para cobrar');
+  }
+
+  void _requireCancelOrders() {
+    final employee = AppSession.instance.employee;
+    if (employee?.canCancelOrders == true || employee?.canViewAdmin == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para cancelar tickets.');
+  }
+
+  void _requireCancelPayments() {
+    final employee = AppSession.instance.employee;
+    if (employee?.canCancelPayments == true || employee?.canViewAdmin == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para cancelar pagos.');
+  }
+
+  void _ensureItemEditable(OrderItem item) {
+    if (item.kitchenStatus == 'ready') {
+      throw StateError(
+        'Este producto ya fue servido por cocina y no puede modificarse.',
+      );
+    }
+    if (['sent', 'cooking'].contains(item.kitchenStatus)) {
+      throw StateError(
+        'Este producto ya esta en cocina y no puede modificarse libremente.',
+      );
+    }
+    if (item.paymentStatus == 'paid') {
+      throw StateError('Este producto ya fue pagado y no puede modificarse.');
+    }
   }
 
   void _requireCashManager() {
@@ -3005,6 +3276,27 @@ class TacoPosRepository {
     return session;
   }
 
+  void _logActivityInBatch(
+    WriteBatch batch, {
+    required String type,
+    String? orderId,
+    Map<String, Object?> data = const {},
+  }) {
+    final employee = AppSession.instance.employee;
+    final logData = <String, Object?>{
+      'type': type,
+      ...data,
+      'employeeId': employee?.id ?? '',
+      'employeeName': employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+    };
+    if (orderId != null) {
+      logData['orderId'] = orderId;
+    }
+    batch.set(_restaurantRef.collection('activityLog').doc(), logData);
+  }
+
   void _requireAnyPermission({
     required bool takeOrders,
     required bool charge,
@@ -3049,7 +3341,7 @@ class TacoPosRepository {
         .get();
     final hasBlockedType = paymentsSnapshot.docs
         .map(Payment.fromDoc)
-        .any((payment) => payment.type == blockedType);
+        .any((payment) => payment.isActive && payment.type == blockedType);
 
     if (hasBlockedType) {
       final message = blockedType == 'partial'
@@ -3073,7 +3365,10 @@ class TacoPosRepository {
         .get();
     final hasClientPayment = paymentsSnapshot.docs
         .map(Payment.fromDoc)
-        .any((payment) => ['cash', 'card'].contains(payment.method));
+        .any(
+          (payment) =>
+              payment.isActive && ['cash', 'card'].contains(payment.method),
+        );
 
     if (hasClientPayment) {
       throw StateError(
@@ -3088,23 +3383,27 @@ class TacoPosRepository {
         .collection('items')
         .get();
     final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
-    final total = items.fold<double>(
-      0,
-      (runningTotal, item) => runningTotal + item.total,
-    );
+    final total = items
+        .where((item) => !item.isCancelled)
+        .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
-    final paidTotal = order?.paidTotal ?? 0;
+    final payments = await getOrderPaymentsOnce(orderId);
+    final paidTotal = payments
+        .where((payment) => payment.isActive)
+        .fold<double>(0, (total, payment) => total + payment.baseAmount);
     final adjustedPending = (total - paidTotal).clamp(0, double.infinity);
 
     await _ordersRef.doc(orderId).update({
       'total': total,
+      'paidTotal': paidTotal,
       'pendingTotal': adjustedPending,
       'paymentStatus': paidTotal <= 0
           ? 'pending'
           : adjustedPending <= 0.01
           ? 'paid'
           : 'partial',
+      if (order?.status == 'paid' && adjustedPending > 0.01) 'status': 'ready',
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
@@ -3275,6 +3574,8 @@ class TacoPosRepository {
     required bool canCloseKitchen,
     required bool canViewKitchenReports,
     required bool canManageKitchenStock,
+    required bool canCancelOrders,
+    required bool canCancelPayments,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageEmployees == true,
@@ -3304,6 +3605,8 @@ class TacoPosRepository {
       'canCloseKitchen': canCloseKitchen,
       'canViewKitchenReports': canViewKitchenReports,
       'canManageKitchenStock': canManageKitchenStock,
+      'canCancelOrders': canCancelOrders,
+      'canCancelPayments': canCancelPayments,
       if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

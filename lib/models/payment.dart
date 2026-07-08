@@ -24,6 +24,11 @@ class Payment {
     this.cashChangeAmount,
     this.createdAt,
     this.createdBy,
+    this.status = 'active',
+    this.cancelledAt,
+    this.cancelledByEmployeeId,
+    this.cancelledByEmployeeName,
+    this.cancelReason,
   });
 
   final String id;
@@ -48,8 +53,15 @@ class Payment {
   final double? cashChangeAmount;
   final DateTime? createdAt;
   final String? createdBy;
+  final String status;
+  final DateTime? cancelledAt;
+  final String? cancelledByEmployeeId;
+  final String? cancelledByEmployeeName;
+  final String? cancelReason;
 
   double get amount => baseAmount;
+  bool get isActive => status == 'active';
+  bool get isCancelled => status == 'cancelled';
 
   factory Payment.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -84,6 +96,11 @@ class Payment {
       cashChangeAmount: (data['cashChangeAmount'] as num?)?.toDouble(),
       createdAt: _toDate(data['createdAt']),
       createdBy: data['createdBy'] as String?,
+      status: data['status'] as String? ?? 'active',
+      cancelledAt: _toDate(data['cancelledAt']),
+      cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
+      cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
+      cancelReason: data['cancelReason'] as String?,
     );
   }
 

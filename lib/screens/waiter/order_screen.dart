@@ -178,6 +178,36 @@ class _OrderScreenState extends State<OrderScreen> {
     }
   }
 
+  Future<void> _cancelOrder() async {
+    if (AppSession.instance.employee?.canCancelOrders != true &&
+        AppSession.instance.employee?.canViewAdmin != true) {
+      _showMessage('No tienes permiso para cancelar tickets.');
+      return;
+    }
+
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => const _ReasonDialog(title: 'Cancelar ticket'),
+    );
+    if (!mounted || reason == null) {
+      return;
+    }
+
+    try {
+      await _repository.cancelOrder(orderId: widget.orderId, reason: reason);
+      if (!mounted) {
+        return;
+      }
+      _showMessage('Ticket cancelado.');
+      Navigator.pop(context);
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showMessage('$error'.replaceFirst('Bad state: ', ''));
+    }
+  }
+
   void _addPerson() {
     if (AppSession.instance.employee?.canTakeOrders != true) {
       _showMessage('No tienes permiso para levantar pedidos');
@@ -254,8 +284,12 @@ class _OrderScreenState extends State<OrderScreen> {
                   onOpenPayment: _openPayment,
                   onBlockedPayment: _showKitchenPendingDialog,
                   onCloseEmptyOrder: _closeEmptyOrder,
+                  onCancelOrder: _cancelOrder,
                   canTakeOrders: canTakeOrders,
                   canCharge: canCharge,
+                  canCancelOrders:
+                      AppSession.instance.employee?.canCancelOrders == true ||
+                      AppSession.instance.employee?.canViewAdmin == true,
                 );
               },
             ),
@@ -295,13 +329,12 @@ class _OrderScreenState extends State<OrderScreen> {
           },
           onAddPerson: _addPerson,
           onRenamePerson: _renamePerson,
-          onQtyChanged: (item, qty) => _repository.updateItemQty(
-            orderId: widget.orderId,
-            item: item,
-            qty: qty,
-          ),
-          onDelete: (item) =>
-              _repository.deleteItem(orderId: widget.orderId, itemId: item.id),
+          onQtyChanged: (item, qty) => _repository
+              .updateItemQty(orderId: widget.orderId, item: item, qty: qty)
+              .catchError((error) => _showMessage(_editErrorText(error))),
+          onDelete: (item) => _repository
+              .deleteItem(orderId: widget.orderId, itemId: item.id)
+              .catchError((error) => _showMessage(_editErrorText(error))),
           canEditOrder: canTakeOrders,
         );
         final menu = _ProductMenu(
@@ -371,6 +404,70 @@ class _OrderScreenState extends State<OrderScreen> {
           ],
         );
       },
+    );
+  }
+
+  String _editErrorText(Object error) {
+    return error.toString().replaceFirst('Bad state: ', '');
+  }
+}
+
+class _ReasonDialog extends StatefulWidget {
+  const _ReasonDialog({required this.title});
+
+  final String title;
+
+  @override
+  State<_ReasonDialog> createState() => _ReasonDialogState();
+}
+
+class _ReasonDialogState extends State<_ReasonDialog> {
+  final _controller = TextEditingController();
+  String _error = '';
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final reason = _controller.text.trim();
+    if (reason.isEmpty) {
+      setState(() => _error = 'Captura el motivo.');
+      return;
+    }
+    Navigator.pop(context, reason);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(labelText: 'Motivo obligatorio'),
+            onSubmitted: (_) => _submit(),
+          ),
+          if (_error.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(_error, style: const TextStyle(color: BrandColors.danger)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Confirmar')),
+      ],
     );
   }
 }
@@ -483,7 +580,6 @@ class _OrderSummaryLoader extends StatelessWidget {
 
     return StreamBuilder<List<OrderItem>>(
       stream: itemsStream,
-      initialData: const [],
       builder: (context, itemsSnapshot) {
         if (itemsSnapshot.hasError) {
           return EmptyState(
@@ -491,6 +587,9 @@ class _OrderSummaryLoader extends StatelessWidget {
             title: 'No se pudieron cargar los articulos',
             message: '${itemsSnapshot.error}',
           );
+        }
+        if (!itemsSnapshot.hasData && order.total > 0) {
+          return const LoadingPanel(message: 'Cargando articulos...');
         }
 
         final items = itemsSnapshot.data ?? [];
@@ -1035,8 +1134,10 @@ class _TopOrderActions extends StatelessWidget {
     required this.onOpenPayment,
     required this.onBlockedPayment,
     required this.onCloseEmptyOrder,
+    required this.onCancelOrder,
     required this.canTakeOrders,
     required this.canCharge,
+    required this.canCancelOrders,
   });
 
   final PosOrder? order;
@@ -1047,8 +1148,10 @@ class _TopOrderActions extends StatelessWidget {
   final VoidCallback onOpenPayment;
   final VoidCallback onBlockedPayment;
   final VoidCallback onCloseEmptyOrder;
+  final VoidCallback onCancelOrder;
   final bool canTakeOrders;
   final bool canCharge;
+  final bool canCancelOrders;
 
   @override
   Widget build(BuildContext context) {
@@ -1089,6 +1192,13 @@ class _TopOrderActions extends StatelessWidget {
         : !canCharge
         ? 'No tienes permiso para cobrar'
         : 'Cobrar';
+    final canCancelOrder =
+        canCancelOrders &&
+        currentOrder != null &&
+        currentOrder.paymentStatus != 'paid' &&
+        currentOrder.status != 'paid' &&
+        items.isNotEmpty &&
+        !items.any((item) => item.kitchenStatus == 'ready');
 
     return Padding(
       padding: const EdgeInsets.only(right: 2),
@@ -1110,6 +1220,14 @@ class _TopOrderActions extends StatelessWidget {
               onPressed: busy ? null : onCloseEmptyOrder,
               icon: const Icon(Icons.close),
               label: const Text('Cerrar mesa vacia'),
+            ),
+          ],
+          if (canCancelOrder) ...[
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: busy ? null : onCancelOrder,
+              icon: const Icon(Icons.cancel_outlined),
+              label: const Text('Cancelar ticket'),
             ),
           ],
           const SizedBox(width: 8),
@@ -1146,6 +1264,22 @@ class _OrderItemRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final locked = item.kitchenStatus == 'ready';
+    final editable =
+        canEditOrder &&
+        !locked &&
+        !['sent', 'cooking'].contains(item.kitchenStatus) &&
+        item.paymentStatus != 'paid';
+    void blockedEdit() {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Este producto ya fue servido por cocina y no puede modificarse.',
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
@@ -1162,7 +1296,9 @@ class _OrderItemRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${item.category} | ${item.kitchenStatus}',
+                  locked
+                      ? '${item.category} | Servido'
+                      : '${item.category} | ${item.kitchenStatus}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -1170,13 +1306,28 @@ class _OrderItemRow extends StatelessWidget {
                     fontSize: 12,
                   ),
                 ),
+                if (locked)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: StatusBadge(
+                      style: StatusStyle(
+                        label: 'Servido',
+                        color: BrandColors.success,
+                        background: Color(0x1F55D98B),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
           const SizedBox(width: 8),
           IconButton.filledTonal(
             tooltip: 'Menos',
-            onPressed: canEditOrder ? () => onQtyChanged(item.qty - 1) : null,
+            onPressed: editable
+                ? () => onQtyChanged(item.qty - 1)
+                : locked
+                ? blockedEdit
+                : null,
             icon: const Icon(Icons.remove),
           ),
           SizedBox(
@@ -1189,7 +1340,11 @@ class _OrderItemRow extends StatelessWidget {
           ),
           IconButton.filledTonal(
             tooltip: 'Mas',
-            onPressed: canEditOrder ? () => onQtyChanged(item.qty + 1) : null,
+            onPressed: editable
+                ? () => onQtyChanged(item.qty + 1)
+                : locked
+                ? blockedEdit
+                : null,
             icon: const Icon(Icons.add),
           ),
           const SizedBox(width: 8),
@@ -1203,7 +1358,11 @@ class _OrderItemRow extends StatelessWidget {
           ),
           IconButton(
             tooltip: 'Eliminar',
-            onPressed: canEditOrder ? onDelete : null,
+            onPressed: editable
+                ? onDelete
+                : locked
+                ? blockedEdit
+                : null,
             icon: const Icon(Icons.delete_outline, color: BrandColors.danger),
           ),
         ],

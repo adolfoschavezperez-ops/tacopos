@@ -21,6 +21,10 @@ class PosOrder {
     this.updatedAt,
     this.sentToKitchenAt,
     this.paidAt,
+    this.cancelledAt,
+    this.cancelledByEmployeeId,
+    this.cancelledByEmployeeName,
+    this.cancelReason,
   });
 
   final String id;
@@ -42,6 +46,10 @@ class PosOrder {
   final DateTime? updatedAt;
   final DateTime? sentToKitchenAt;
   final DateTime? paidAt;
+  final DateTime? cancelledAt;
+  final String? cancelledByEmployeeId;
+  final String? cancelledByEmployeeName;
+  final String? cancelReason;
 
   factory PosOrder.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -66,6 +74,10 @@ class PosOrder {
       updatedAt: _toDate(data['updatedAt']),
       sentToKitchenAt: _toDate(data['sentToKitchenAt']),
       paidAt: _toDate(data['paidAt']),
+      cancelledAt: _toDate(data['cancelledAt']),
+      cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
+      cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
+      cancelReason: data['cancelReason'] as String?,
     );
   }
 

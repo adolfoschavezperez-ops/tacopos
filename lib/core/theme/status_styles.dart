@@ -28,11 +28,29 @@ StatusStyle tableStatusStyle(String status) {
         color: BrandColors.accentOrange,
         background: Color(0x1FF59A23),
       );
+    case 'cooking':
+      return const StatusStyle(
+        label: 'En preparacion',
+        color: BrandColors.accentOrange,
+        background: Color(0x1FF59A23),
+      );
+    case 'pending':
+      return const StatusStyle(
+        label: 'Pendiente de enviar',
+        color: BrandColors.accentYellow,
+        background: Color(0x1FFFD54A),
+      );
     case 'ready':
       return const StatusStyle(
-        label: 'Lista',
+        label: 'Listo para cobrar',
         color: BrandColors.success,
         background: Color(0x1F55D98B),
+      );
+    case 'cancelled':
+      return const StatusStyle(
+        label: 'Cancelada',
+        color: BrandColors.danger,
+        background: Color(0x1FFF5A5A),
       );
     case 'paid':
       return const StatusStyle(

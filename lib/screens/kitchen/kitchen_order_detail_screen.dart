@@ -339,16 +339,35 @@ class _KitchenDetailActions extends StatelessWidget {
     final primaryButton = isLastPerson
         ? FilledButton.icon(
             onPressed: busy ? null : onReady,
+            style: FilledButton.styleFrom(
+              minimumSize: Size.fromHeight(compact ? 72 : 84),
+              textStyle: TextStyle(
+                fontSize: compact ? 20 : 24,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
             icon: const Icon(Icons.check_circle_outline),
             label: const Text('Listo'),
           )
         : FilledButton.icon(
             onPressed: busy ? null : onNext,
-            icon: const Icon(Icons.chevron_right),
-            label: Text(compact ? 'Siguiente' : 'Siguiente plato'),
+            style: FilledButton.styleFrom(
+              minimumSize: Size.fromHeight(compact ? 78 : 90),
+              textStyle: TextStyle(
+                fontSize: compact ? 22 : 28,
+                fontWeight: FontWeight.w900,
+              ),
+              backgroundColor: BrandColors.accentOrange,
+              foregroundColor: Colors.black,
+            ),
+            icon: const Icon(Icons.chevron_right, size: 34),
+            label: const Text('Siguiente plato'),
           );
     final previousButton = OutlinedButton.icon(
       onPressed: busy ? null : onPrevious,
+      style: OutlinedButton.styleFrom(
+        minimumSize: Size.fromHeight(compact ? 52 : 60),
+      ),
       icon: const Icon(Icons.chevron_left),
       label: const Text('Anterior'),
     );
@@ -365,7 +384,7 @@ class _KitchenDetailActions extends StatelessWidget {
                 Expanded(child: previousButton),
                 const SizedBox(width: 8),
               ],
-              Expanded(flex: 2, child: primaryButton),
+              Expanded(flex: 3, child: primaryButton),
             ],
           ),
         ],
@@ -380,7 +399,7 @@ class _KitchenDetailActions extends StatelessWidget {
           Expanded(child: previousButton),
         ],
         const SizedBox(width: 12),
-        Expanded(flex: 2, child: primaryButton),
+        Expanded(flex: 3, child: primaryButton),
       ],
     );
   }

@@ -30,6 +30,10 @@ class OrderItem {
     this.kitchenStockItemName,
     this.affectsKitchenStock = false,
     this.kitchenStockUnit,
+    this.cancelledAt,
+    this.cancelledByEmployeeId,
+    this.cancelledByEmployeeName,
+    this.cancelReason,
   });
 
   final String id;
@@ -60,6 +64,14 @@ class OrderItem {
   final String? kitchenStockItemName;
   final bool affectsKitchenStock;
   final String? kitchenStockUnit;
+  final DateTime? cancelledAt;
+  final String? cancelledByEmployeeId;
+  final String? cancelledByEmployeeName;
+  final String? cancelReason;
+
+  bool get isServed => kitchenStatus == 'ready';
+  bool get isCancelled =>
+      kitchenStatus == 'cancelled' || paymentStatus == 'cancelled';
 
   factory OrderItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -94,6 +106,10 @@ class OrderItem {
       kitchenStockItemName: data['kitchenStockItemName'] as String?,
       affectsKitchenStock: data['affectsKitchenStock'] as bool? ?? false,
       kitchenStockUnit: data['kitchenStockUnit'] as String?,
+      cancelledAt: _toDate(data['cancelledAt']),
+      cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
+      cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
+      cancelReason: data['cancelReason'] as String?,
     );
   }
 

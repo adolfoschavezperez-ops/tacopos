@@ -262,6 +262,38 @@ class _PaymentScreenState extends State<PaymentScreen> {
     }
   }
 
+  Future<void> _cancelPayment(Payment payment) async {
+    if (AppSession.instance.employee?.canCancelPayments != true &&
+        AppSession.instance.employee?.canViewAdmin != true) {
+      _showMessage('No tienes permiso para cancelar pagos.');
+      return;
+    }
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => const _ReasonDialog(title: 'Cancelar pago'),
+    );
+    if (!mounted || reason == null) {
+      return;
+    }
+
+    try {
+      await _repository.cancelPayment(
+        orderId: widget.orderId,
+        paymentId: payment.id,
+        reason: reason,
+      );
+      if (!mounted) {
+        return;
+      }
+      _showMessage('Pago cancelado.');
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      _showMessage('$error'.replaceFirst('Bad state: ', ''));
+    }
+  }
+
   void _showMessage(String message) {
     ScaffoldMessenger.of(
       context,
@@ -344,13 +376,16 @@ class _PaymentScreenState extends State<PaymentScreen> {
                       }
 
                       final payments = paymentSnapshot.data ?? [];
-                      final hasPartialPayments = payments.any(
+                      final activePayments = payments
+                          .where((payment) => payment.isActive)
+                          .toList();
+                      final hasPartialPayments = activePayments.any(
                         (payment) => payment.type == 'partial',
                       );
-                      final hasPersonPayments = payments.any(
+                      final hasPersonPayments = activePayments.any(
                         (payment) => payment.type == 'person',
                       );
-                      final hasClientPayment = payments.any(
+                      final hasClientPayment = activePayments.any(
                         (payment) =>
                             payment.method == 'cash' ||
                             payment.method == 'card',
@@ -474,7 +509,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                 method: selectedMethod,
                                 total: personItems
                                     .where(
-                                      (item) => item.paymentStatus != 'paid',
+                                      (item) =>
+                                          item.paymentStatus != 'paid' &&
+                                          !item.isCancelled,
                                     )
                                     .fold<double>(
                                       0,
@@ -485,7 +522,23 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             );
                           }),
                           const SizedBox(height: 20),
-                          _PaymentsHistory(payments: payments),
+                          _PaymentsHistory(
+                            payments: payments,
+                            canCancel:
+                                order.paymentStatus != 'paid' &&
+                                order.status != 'paid' &&
+                                (AppSession
+                                            .instance
+                                            .employee
+                                            ?.canCancelPayments ==
+                                        true ||
+                                    AppSession
+                                            .instance
+                                            .employee
+                                            ?.canViewAdmin ==
+                                        true),
+                            onCancel: _cancelPayment,
+                          ),
                         ],
                       );
                     },
@@ -564,6 +617,65 @@ class _TotalsPanel extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ReasonDialog extends StatefulWidget {
+  const _ReasonDialog({required this.title});
+
+  final String title;
+
+  @override
+  State<_ReasonDialog> createState() => _ReasonDialogState();
+}
+
+class _ReasonDialogState extends State<_ReasonDialog> {
+  final _controller = TextEditingController();
+  String _error = '';
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final reason = _controller.text.trim();
+    if (reason.isEmpty) {
+      setState(() => _error = 'Captura el motivo.');
+      return;
+    }
+    Navigator.pop(context, reason);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            minLines: 2,
+            maxLines: 4,
+            decoration: const InputDecoration(labelText: 'Motivo obligatorio'),
+          ),
+          if (_error.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(_error, style: const TextStyle(color: BrandColors.danger)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Confirmar')),
+      ],
     );
   }
 }
@@ -1249,9 +1361,15 @@ class _PersonChargeRow extends StatelessWidget {
 }
 
 class _PaymentsHistory extends StatelessWidget {
-  const _PaymentsHistory({required this.payments});
+  const _PaymentsHistory({
+    required this.payments,
+    required this.canCancel,
+    required this.onCancel,
+  });
 
   final List<Payment> payments;
+  final bool canCancel;
+  final ValueChanged<Payment> onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -1273,14 +1391,35 @@ class _PaymentsHistory extends StatelessWidget {
             ...payments.map(
               (payment) => ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text(_paymentTitle(payment)),
+                title: Text(
+                  payment.isCancelled
+                      ? '${_paymentTitle(payment)} | Anulado'
+                      : _paymentTitle(payment),
+                ),
                 subtitle: Text(_paymentSubtitle(payment)),
-                trailing: MoneyText(
-                  value: payment.chargedAmount,
-                  style: const TextStyle(
-                    color: BrandColors.accentYellow,
-                    fontWeight: FontWeight.w800,
-                  ),
+                trailing: Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    MoneyText(
+                      value: payment.chargedAmount,
+                      style: TextStyle(
+                        color: payment.isCancelled
+                            ? BrandColors.textMuted
+                            : BrandColors.accentYellow,
+                        decoration: payment.isCancelled
+                            ? TextDecoration.lineThrough
+                            : null,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (canCancel && payment.isActive)
+                      OutlinedButton.icon(
+                        onPressed: () => onCancel(payment),
+                        icon: const Icon(Icons.cancel_outlined),
+                        label: const Text('Cancelar pago'),
+                      ),
+                  ],
                 ),
               ),
             ),
@@ -1316,6 +1455,9 @@ class _PaymentsHistory extends StatelessWidget {
         payment.method == 'cash' && payment.cashReceivedAmount != null
         ? ' · Recibido \$${payment.cashReceivedAmount!.toStringAsFixed(2)} · Cambio \$${(payment.cashChangeAmount ?? 0).toStringAsFixed(2)}'
         : '';
-    return 'Base \$${payment.baseAmount.toStringAsFixed(2)}$fee$cashChange$employee';
+    final cancelled = payment.isCancelled
+        ? ' | Anulado: ${payment.cancelReason ?? 'Sin motivo'}'
+        : '';
+    return 'Base \$${payment.baseAmount.toStringAsFixed(2)}$fee$cashChange$employee$cancelled';
   }
 }
