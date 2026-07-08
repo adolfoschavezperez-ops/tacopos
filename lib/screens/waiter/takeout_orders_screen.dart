@@ -74,8 +74,11 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) =>
-              OrderScreen(orderId: order.id, tableName: order.displayName),
+          builder: (_) => OrderScreen(
+            orderId: order.id,
+            tableId: order.tableId,
+            tableName: order.displayName,
+          ),
         ),
       );
     } catch (error) {
@@ -98,8 +101,11 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) =>
-            OrderScreen(orderId: order.id, tableName: order.displayName),
+        builder: (_) => OrderScreen(
+          orderId: order.id,
+          tableId: order.tableId,
+          tableName: order.displayName,
+        ),
       ),
     );
   }

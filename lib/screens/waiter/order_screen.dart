@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/constants/app_constants.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
@@ -21,10 +24,12 @@ class OrderScreen extends StatefulWidget {
     super.key,
     required this.orderId,
     required this.tableName,
+    this.tableId,
   });
 
   final String orderId;
   final String tableName;
+  final String? tableId;
 
   @override
   State<OrderScreen> createState() => _OrderScreenState();
@@ -33,17 +38,23 @@ class OrderScreen extends StatefulWidget {
 class _OrderScreenState extends State<OrderScreen> {
   final _repository = TacoPosRepository();
   late Stream<PosOrder?> _orderStream;
-  late Stream<List<OrderItem>> _itemsStream;
   late final Stream<List<Product>> _productsStream;
+  late String _boundOrderId;
+  StreamSubscription<List<OrderItem>>? _itemsSubscription;
+  List<OrderItem> _loadedItems = const [];
+  bool _itemsLoading = true;
+  Object? _itemsError;
   int _selectedPerson = 1;
   int _personCount = 1;
   String _selectedCategory = 'Todos';
   bool _busy = false;
+  String? _lastOrderDebugSignature;
+  String? _lastItemsDebugSignature;
 
   @override
   void initState() {
     super.initState();
-    _bindOrderStreams();
+    _bindOrderStreams(widget.orderId);
     _productsStream = _repository.watchProducts(activeOnly: true);
   }
 
@@ -51,13 +62,107 @@ class _OrderScreenState extends State<OrderScreen> {
   void didUpdateWidget(covariant OrderScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.orderId != widget.orderId) {
-      _bindOrderStreams();
+      _bindOrderStreams(widget.orderId);
     }
   }
 
-  void _bindOrderStreams() {
-    _orderStream = _repository.watchOrder(widget.orderId);
-    _itemsStream = _repository.watchOrderItems(widget.orderId);
+  @override
+  void dispose() {
+    _itemsSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _bindOrderStreams(String orderId) {
+    _boundOrderId = orderId.trim();
+    debugPrint(
+      '[TacoPOS][OrderScreen.bind] tableId=${widget.tableId ?? '-'} '
+      'tableName=${widget.tableName} receivedOrderId=${widget.orderId} '
+      'boundOrderId=$_boundOrderId itemsPath=restaurants/${AppConstants.restaurantId}/orders/$_boundOrderId/items',
+    );
+    _orderStream = _repository.watchOrder(_boundOrderId);
+    _bindOrderItems(_boundOrderId, clearItems: true);
+  }
+
+  Future<void> _bindOrderItems(
+    String orderId, {
+    bool clearItems = false,
+  }) async {
+    await _itemsSubscription?.cancel();
+    final cleanOrderId = orderId.trim();
+    final path =
+        'restaurants/${AppConstants.restaurantId}/orders/$cleanOrderId/items';
+    debugPrint('[TacoPOS][OrderItems.load] orderId=$cleanOrderId');
+    debugPrint('[TacoPOS][OrderItems.path] $path');
+
+    if (mounted) {
+      setState(() {
+        if (clearItems) {
+          _loadedItems = const [];
+        }
+        _itemsLoading = cleanOrderId.isNotEmpty && _loadedItems.isEmpty;
+        _itemsError = cleanOrderId.isEmpty
+            ? StateError('OrderId vacio al cargar articulos.')
+            : null;
+      });
+    }
+
+    if (cleanOrderId.isEmpty) {
+      debugPrint(
+        '[TacoPOS][OrderItems.error] orderId=$cleanOrderId path=$path error=OrderId vacio',
+      );
+      return;
+    }
+
+    try {
+      final initialItems = await _repository.getOrderItemsOnce(cleanOrderId);
+      debugPrint('[TacoPOS][OrderItems.initialCount] ${initialItems.length}');
+      if (!mounted || cleanOrderId != _boundOrderId) {
+        return;
+      }
+      setState(() {
+        _loadedItems = initialItems;
+        _itemsLoading = false;
+        _itemsError = null;
+      });
+      _itemsSubscription = _repository
+          .watchOrderItems(cleanOrderId)
+          .listen(
+            (items) {
+              debugPrint('[TacoPOS][OrderItems.streamCount] ${items.length}');
+              if (!mounted || cleanOrderId != _boundOrderId) {
+                return;
+              }
+              setState(() {
+                _loadedItems = items;
+                _itemsLoading = false;
+                _itemsError = null;
+              });
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              debugPrint(
+                '[TacoPOS][OrderItems.error] orderId=$cleanOrderId path=$path error=$error',
+              );
+              if (!mounted || cleanOrderId != _boundOrderId) {
+                return;
+              }
+              setState(() {
+                _itemsLoading = false;
+                _itemsError = error;
+              });
+            },
+          );
+    } catch (error) {
+      debugPrint(
+        '[TacoPOS][OrderItems.error] orderId=$cleanOrderId path=$path error=$error',
+      );
+      if (!mounted || cleanOrderId != _boundOrderId) {
+        return;
+      }
+      setState(() {
+        _itemsLoading = false;
+        _itemsError = error;
+      });
+    }
   }
 
   Future<void> _sendToKitchen() async {
@@ -74,7 +179,7 @@ class _OrderScreenState extends State<OrderScreen> {
     });
 
     try {
-      final sentCount = await _repository.sendOrderToKitchen(widget.orderId);
+      final sentCount = await _repository.sendOrderToKitchen(_boundOrderId);
       if (!mounted) {
         return;
       }
@@ -117,7 +222,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => PaymentScreen(orderId: widget.orderId)),
+      MaterialPageRoute(builder: (_) => PaymentScreen(orderId: _boundOrderId)),
     );
   }
 
@@ -165,7 +270,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
 
     try {
-      await _repository.cancelEmptyOrder(widget.orderId);
+      await _repository.cancelEmptyOrder(_boundOrderId);
       if (!mounted) {
         return;
       }
@@ -194,7 +299,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
 
     try {
-      await _repository.cancelOrder(orderId: widget.orderId, reason: reason);
+      await _repository.cancelOrder(orderId: _boundOrderId, reason: reason);
       if (!mounted) {
         return;
       }
@@ -238,7 +343,7 @@ class _OrderScreenState extends State<OrderScreen> {
 
     try {
       await _repository.renamePerson(
-        orderId: widget.orderId,
+        orderId: _boundOrderId,
         personNumber: personNumber,
         name: newName,
       );
@@ -264,6 +369,9 @@ class _OrderScreenState extends State<OrderScreen> {
       stream: _orderStream,
       builder: (context, orderSnapshot) {
         final order = orderSnapshot.data;
+        if (order != null) {
+          _logOrderDebug(order);
+        }
         final canTakeOrders =
             AppSession.instance.employee?.canTakeOrders == true;
         final canCharge = AppSession.instance.employee?.canCharge == true;
@@ -271,15 +379,16 @@ class _OrderScreenState extends State<OrderScreen> {
         return BrandedScaffold(
           title: order?.displayName ?? widget.tableName,
           actions: [
-            StreamBuilder<List<OrderItem>>(
-              stream: _itemsStream,
-              initialData: const [],
-              builder: (context, itemSnapshot) {
+            Builder(
+              builder: (context) {
+                if (order != null) {
+                  _logItemsDebug(order, _loadedItems);
+                }
                 return _TopOrderActions(
                   order: order,
-                  items: itemSnapshot.data ?? const [],
+                  items: _loadedItems,
                   busy: _busy,
-                  itemsLoaded: itemSnapshot.hasData,
+                  itemsLoaded: !_itemsLoading,
                   onSendToKitchen: _sendToKitchen,
                   onOpenPayment: _openPayment,
                   onBlockedPayment: _showKitchenPendingDialog,
@@ -301,6 +410,48 @@ class _OrderScreenState extends State<OrderScreen> {
     );
   }
 
+  void _logOrderDebug(PosOrder order) {
+    final signature =
+        '${order.id}:${order.total}:${order.status}:${order.paymentStatus}:${order.updatedAt?.millisecondsSinceEpoch}';
+    if (_lastOrderDebugSignature == signature) {
+      return;
+    }
+    _lastOrderDebugSignature = signature;
+    debugPrint(
+      '[TacoPOS][OrderScreen.order] tableId=${widget.tableId ?? order.tableId} '
+      'tableName=${widget.tableName} receivedOrderId=${widget.orderId} '
+      'boundOrderId=$_boundOrderId loadedOrderId=${order.id} '
+      'total=${order.total} status=${order.status} paymentStatus=${order.paymentStatus} '
+      'itemsPath=restaurants/${AppConstants.restaurantId}/orders/$_boundOrderId/items',
+    );
+  }
+
+  void _logItemsDebug(PosOrder order, List<OrderItem> items) {
+    final preview = items
+        .take(5)
+        .map((item) => '${item.id}:${item.productName}')
+        .join(', ');
+    final signature =
+        '${order.id}:${items.length}:${items.map((item) => item.id).take(5).join('|')}';
+    if (_lastItemsDebugSignature == signature) {
+      return;
+    }
+    _lastItemsDebugSignature = signature;
+    debugPrint(
+      '[TacoPOS][OrderScreen.items] tableId=${widget.tableId ?? order.tableId} '
+      'tableName=${widget.tableName} orderId=$_boundOrderId total=${order.total} '
+      'path=restaurants/${AppConstants.restaurantId}/orders/$_boundOrderId/items '
+      'itemCount=${items.length} firstItems=[$preview]',
+    );
+    if (order.total > 0 && items.isEmpty) {
+      debugPrint(
+        '[TacoPOS][OrderItems.warning] orderId=$_boundOrderId '
+        'path=restaurants/${AppConstants.restaurantId}/orders/$_boundOrderId/items '
+        'total=${order.total} itemCount=0',
+      );
+    }
+  }
+
   Widget _buildBody(AsyncSnapshot<PosOrder?> orderSnapshot) {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -310,8 +461,14 @@ class _OrderScreenState extends State<OrderScreen> {
         final canTakeOrders =
             AppSession.instance.employee?.canTakeOrders == true;
         final summary = _OrderSummaryLoader(
+          key: ValueKey('summary-$_boundOrderId'),
+          orderId: _boundOrderId,
+          onDiagnostic: (message) => debugPrint(message),
           orderSnapshot: orderSnapshot,
-          itemsStream: _itemsStream,
+          items: _loadedItems,
+          itemsLoading: _itemsLoading,
+          itemsError: _itemsError,
+          onRetryItems: () => _bindOrderItems(_boundOrderId),
           personCount: _personCount,
           selectedPerson: selectedPerson,
           onPersonCountChanged: (personCount) {
@@ -330,10 +487,10 @@ class _OrderScreenState extends State<OrderScreen> {
           onAddPerson: _addPerson,
           onRenamePerson: _renamePerson,
           onQtyChanged: (item, qty) => _repository
-              .updateItemQty(orderId: widget.orderId, item: item, qty: qty)
+              .updateItemQty(orderId: _boundOrderId, item: item, qty: qty)
               .catchError((error) => _showMessage(_editErrorText(error))),
           onDelete: (item) => _repository
-              .deleteItem(orderId: widget.orderId, itemId: item.id)
+              .deleteItem(orderId: _boundOrderId, itemId: item.id)
               .catchError((error) => _showMessage(_editErrorText(error))),
           canEditOrder: canTakeOrders,
         );
@@ -347,7 +504,7 @@ class _OrderScreenState extends State<OrderScreen> {
             });
           },
           onAddProduct: (product) => _repository.addProductToOrder(
-            orderId: widget.orderId,
+            orderId: _boundOrderId,
             product: product,
             personNumber: selectedPerson,
           ),
@@ -530,8 +687,14 @@ class _RenamePersonDialogState extends State<_RenamePersonDialog> {
 
 class _OrderSummaryLoader extends StatelessWidget {
   const _OrderSummaryLoader({
+    super.key,
+    required this.orderId,
+    required this.onDiagnostic,
     required this.orderSnapshot,
-    required this.itemsStream,
+    required this.items,
+    required this.itemsLoading,
+    required this.itemsError,
+    required this.onRetryItems,
     required this.personCount,
     required this.selectedPerson,
     required this.onPersonCountChanged,
@@ -543,8 +706,13 @@ class _OrderSummaryLoader extends StatelessWidget {
     required this.canEditOrder,
   });
 
+  final String orderId;
+  final ValueChanged<String> onDiagnostic;
   final AsyncSnapshot<PosOrder?> orderSnapshot;
-  final Stream<List<OrderItem>> itemsStream;
+  final List<OrderItem> items;
+  final bool itemsLoading;
+  final Object? itemsError;
+  final VoidCallback onRetryItems;
   final int personCount;
   final int selectedPerson;
   final ValueChanged<int> onPersonCountChanged;
@@ -578,61 +746,120 @@ class _OrderSummaryLoader extends StatelessWidget {
       );
     }
 
-    return StreamBuilder<List<OrderItem>>(
-      stream: itemsStream,
-      builder: (context, itemsSnapshot) {
-        if (itemsSnapshot.hasError) {
-          return EmptyState(
-            icon: Icons.error_outline,
-            title: 'No se pudieron cargar los articulos',
-            message: '${itemsSnapshot.error}',
-          );
-        }
-        if (!itemsSnapshot.hasData && order.total > 0) {
-          return const LoadingPanel(message: 'Cargando articulos...');
-        }
+    if (itemsError != null && items.isEmpty) {
+      return _ItemsLoadIssue(
+        title: 'No se pudieron cargar los articulos de la orden.',
+        message: '$itemsError',
+        onRetry: onRetryItems,
+      );
+    }
 
-        final items = itemsSnapshot.data ?? [];
-        final maxPersonFromItems = items.fold<int>(
-          1,
-          (max, item) => item.personNumber > max ? item.personNumber : max,
-        );
-        final maxPersonFromNames = order.personNames.keys.fold<int>(
-          1,
-          (max, person) => person > max ? person : max,
-        );
-        final nextPersonCount = [
-          personCount,
-          maxPersonFromItems,
-          maxPersonFromNames,
-        ].reduce((max, value) => value > max ? value : max);
-        final nextSelectedPerson = selectedPerson
-            .clamp(1, nextPersonCount)
-            .toInt();
+    if (itemsLoading && items.isEmpty) {
+      return const LoadingPanel(message: 'Cargando articulos...');
+    }
 
-        if (nextPersonCount != personCount ||
-            nextSelectedPerson != selectedPerson) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!context.mounted) {
-              return;
-            }
-            onPersonCountChanged(nextPersonCount);
-          });
+    if (items.isEmpty && order.total > 0) {
+      onDiagnostic(
+        '[TacoPOS][OrderItems.warning] orderId=$orderId '
+        'path=restaurants/${AppConstants.restaurantId}/orders/$orderId/items '
+        'total=${order.total} itemCount=0',
+      );
+      return _ItemsLoadIssue(
+        title: 'La orden tiene total, pero no se encontraron articulos.',
+        message: 'Reintentar.',
+        onRetry: onRetryItems,
+        icon: Icons.warning_amber_rounded,
+      );
+    }
+
+    final maxPersonFromItems = items.fold<int>(
+      1,
+      (max, item) => item.personNumber > max ? item.personNumber : max,
+    );
+    final maxPersonFromNames = order.personNames.keys.fold<int>(
+      1,
+      (max, person) => person > max ? person : max,
+    );
+    final nextPersonCount = [
+      personCount,
+      maxPersonFromItems,
+      maxPersonFromNames,
+    ].reduce((max, value) => value > max ? value : max);
+    final nextSelectedPerson = selectedPerson.clamp(1, nextPersonCount).toInt();
+
+    if (nextPersonCount != personCount ||
+        nextSelectedPerson != selectedPerson) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) {
+          return;
         }
+        onPersonCountChanged(nextPersonCount);
+      });
+    }
 
-        return _OrderSummary(
-          order: order,
-          items: items,
-          personCount: nextPersonCount,
-          selectedPerson: nextSelectedPerson,
-          onSelectPerson: onSelectPerson,
-          onAddPerson: onAddPerson,
-          onRenamePerson: onRenamePerson,
-          onQtyChanged: onQtyChanged,
-          onDelete: onDelete,
-          canEditOrder: canEditOrder,
-        );
-      },
+    return _OrderSummary(
+      order: order,
+      items: items,
+      personCount: nextPersonCount,
+      selectedPerson: nextSelectedPerson,
+      onSelectPerson: onSelectPerson,
+      onAddPerson: onAddPerson,
+      onRenamePerson: onRenamePerson,
+      onQtyChanged: onQtyChanged,
+      onDelete: onDelete,
+      canEditOrder: canEditOrder,
+    );
+  }
+}
+
+class _ItemsLoadIssue extends StatelessWidget {
+  const _ItemsLoadIssue({
+    required this.title,
+    required this.message,
+    required this.onRetry,
+    this.icon = Icons.error_outline,
+  });
+
+  final String title;
+  final String message;
+  final VoidCallback onRetry;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: GlassPanel(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: BrandColors.danger, size: 42),
+              const SizedBox(height: 12),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: BrandColors.textMuted),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Reintentar'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

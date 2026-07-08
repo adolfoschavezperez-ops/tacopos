@@ -283,9 +283,7 @@ class _KitchenOrderCard extends StatelessWidget {
           _IngredientSummary(bundle: bundle, compact: compact),
           SizedBox(height: compact ? 6 : 10),
           Text(
-            compact
-                ? '${bundle.items.fold<int>(0, (total, item) => total + item.qty)} productos | ${bundle.personCount} pers.'
-                : bundle.personLabel.isEmpty
+            bundle.personLabel.isEmpty
                 ? '${bundle.personCount} personas'
                 : bundle.personLabel,
             maxLines: 1,
@@ -294,17 +292,6 @@ class _KitchenOrderCard extends StatelessWidget {
               color: BrandColors.accentYellow,
               fontSize: compact ? 14 : 18,
               fontWeight: FontWeight.w800,
-            ),
-          ),
-          SizedBox(height: compact ? 4 : 8),
-          Text(
-            bundle.shortSummary,
-            maxLines: compact ? 1 : 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: BrandColors.textSecondary,
-              fontSize: compact ? 12 : 15,
-              height: 1.25,
             ),
           ),
           SizedBox(height: compact ? 8 : 14),

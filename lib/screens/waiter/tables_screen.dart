@@ -59,6 +59,10 @@ class _TablesScreenState extends State<TablesScreen> {
 
     try {
       final order = await _repository.createOrGetOpenOrder(table);
+      debugPrint(
+        '[TacoPOS][TablesScreen.open] tableId=${table.id} '
+        'tableName=${table.name} orderId=${order.id} total=${order.total}',
+      );
 
       if (!mounted) {
         return;
@@ -67,7 +71,11 @@ class _TablesScreenState extends State<TablesScreen> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => OrderScreen(orderId: order.id, tableName: table.name),
+          builder: (_) => OrderScreen(
+            orderId: order.id,
+            tableId: table.id,
+            tableName: table.name,
+          ),
         ),
       );
     } catch (error) {

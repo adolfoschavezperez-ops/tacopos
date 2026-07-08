@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -479,30 +481,60 @@ class TacoPosRepository {
   }
 
   Stream<List<OrderItem>> watchOrderItems(String orderId) {
-    return _ordersRef.doc(orderId).collection('items').snapshots().map((
+    final cleanOrderId = orderId.trim();
+    if (cleanOrderId.isEmpty) {
+      return Stream.error(StateError('OrderId vacio al cargar articulos.'));
+    }
+    final path =
+        'restaurants/${AppConstants.restaurantId}/orders/$cleanOrderId/items';
+    developer.log(
+      '[TacoPOS][itemsStream] watch path=$path orderId=$cleanOrderId',
+    );
+
+    return _ordersRef.doc(cleanOrderId).collection('items').snapshots().map((
       snapshot,
     ) {
-      final items = snapshot.docs.map(OrderItem.fromDoc).toList()
-        ..sort((a, b) {
-          final personCompare = a.personNumber.compareTo(b.personNumber);
-          return personCompare != 0
-              ? personCompare
-              : a.productName.compareTo(b.productName);
-        });
+      final items = _sortedOrderItems(snapshot.docs.map(OrderItem.fromDoc));
+      final preview = items
+          .take(5)
+          .map((item) => '${item.id}:${item.productName}')
+          .join(', ');
+      developer.log(
+        '[TacoPOS][itemsStream] orderId=$cleanOrderId path=$path '
+        'itemCount=${items.length} firstItems=[$preview]',
+      );
       return items;
     });
   }
 
   Future<List<OrderItem>> getOrderItemsOnce(String orderId) async {
-    final snapshot = await _ordersRef.doc(orderId).collection('items').get();
-    final items = snapshot.docs.map(OrderItem.fromDoc).toList()
-      ..sort((a, b) {
-        final personCompare = a.personNumber.compareTo(b.personNumber);
-        return personCompare != 0
-            ? personCompare
-            : a.productName.compareTo(b.productName);
-      });
-    return items;
+    final cleanOrderId = orderId.trim();
+    if (cleanOrderId.isEmpty) {
+      throw StateError('OrderId vacio al cargar articulos.');
+    }
+    final snapshot = await _ordersRef
+        .doc(cleanOrderId)
+        .collection('items')
+        .get();
+    return _sortedOrderItems(snapshot.docs.map(OrderItem.fromDoc));
+  }
+
+  List<OrderItem> _sortedOrderItems(Iterable<OrderItem> source) {
+    return source.toList()..sort((a, b) {
+      final aDate =
+          a.createdAt ?? a.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bDate =
+          b.createdAt ?? b.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final dateCompare = aDate.compareTo(bDate);
+      if (dateCompare != 0) {
+        return dateCompare;
+      }
+      final personCompare = a.personNumber.compareTo(b.personNumber);
+      if (personCompare != 0) {
+        return personCompare;
+      }
+      return a.productName.compareTo(b.productName);
+    });
   }
 
   Stream<List<OrderItem>> watchKitchenItems(String orderId) {
@@ -2060,29 +2092,63 @@ class TacoPosRepository {
   }
 
   Future<PosOrder> createOrGetOpenOrder(PosTable table) async {
-    final snapshot = await _ordersRef.get();
-    final existing =
-        snapshot.docs
-            .map(PosOrder.fromDoc)
-            .where(
-              (order) =>
-                  order.tableId == table.id &&
-                  ['open', 'sent', 'ready'].contains(order.status),
-            )
-            .toList()
-          ..sort((a, b) {
-            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            return bDate.compareTo(aDate);
-          });
+    developer.log(
+      '[TacoPOS][openTable] tableId=${table.id} tableName=${table.name} '
+      'currentOrderId=${table.currentOrderId ?? '-'} tableStatus=${table.status}',
+    );
 
-    if (existing.isNotEmpty) {
+    final activeOrdersById = <String, PosOrder>{};
+    final currentOrderId = table.currentOrderId?.trim();
+    if (currentOrderId != null && currentOrderId.isNotEmpty) {
+      final currentDoc = await _ordersRef.doc(currentOrderId).get();
+      if (currentDoc.exists) {
+        final currentOrder = PosOrder.fromDoc(currentDoc);
+        if (_isActiveDineInOrderForTable(currentOrder, table.id)) {
+          activeOrdersById[currentOrder.id] = currentOrder;
+        } else {
+          developer.log(
+            '[TacoPOS][openTable] currentOrderId stale: $currentOrderId '
+            'orderStatus=${currentOrder.status} paymentStatus=${currentOrder.paymentStatus} '
+            'orderTableId=${currentOrder.tableId}',
+          );
+        }
+      } else {
+        developer.log(
+          '[TacoPOS][openTable] currentOrderId missing in Firestore: '
+          '$currentOrderId',
+        );
+      }
+    }
+
+    final snapshot = await _ordersRef
+        .where('tableId', isEqualTo: table.id)
+        .get();
+    for (final doc in snapshot.docs) {
+      final order = PosOrder.fromDoc(doc);
+      if (_isActiveDineInOrderForTable(order, table.id)) {
+        activeOrdersById[order.id] = order;
+      }
+    }
+
+    if (activeOrdersById.isNotEmpty) {
       _requireAnyPermission(
         takeOrders: true,
         charge: true,
         message: 'No tienes permiso para abrir ordenes.',
       );
-      return existing.first;
+      final order = await _bestActiveOrder(activeOrdersById.values.toList());
+      await _tablesRef.doc(table.id).set({
+        'status': order.status == 'open' ? 'occupied' : order.status,
+        'currentOrderId': order.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      final itemCount = await _orderItemCount(order.id);
+      developer.log(
+        '[TacoPOS][openTable] using existing orderId=${order.id} '
+        'tableId=${order.tableId} total=${order.total} itemCount=$itemCount '
+        'status=${order.status} paymentStatus=${order.paymentStatus}',
+      );
+      return order;
     }
 
     _requireTakeOrders();
@@ -2114,7 +2180,54 @@ class TacoPosRepository {
     await batch.commit();
 
     final doc = await orderRef.get();
-    return PosOrder.fromDoc(doc);
+    final order = PosOrder.fromDoc(doc);
+    developer.log(
+      '[TacoPOS][openTable] created new orderId=${order.id} '
+      'tableId=${order.tableId} path=restaurants/${AppConstants.restaurantId}/orders/${order.id}',
+    );
+    return order;
+  }
+
+  bool _isActiveDineInOrderForTable(PosOrder order, String tableId) {
+    return order.tableId == tableId &&
+        order.orderType == 'dine_in' &&
+        ['open', 'sent', 'ready', 'cooking'].contains(order.status) &&
+        ['pending', 'partial'].contains(order.paymentStatus);
+  }
+
+  Future<PosOrder> _bestActiveOrder(List<PosOrder> orders) async {
+    final scored = <({PosOrder order, int itemCount})>[];
+    for (final order in orders) {
+      scored.add((order: order, itemCount: await _orderItemCount(order.id)));
+    }
+    scored.sort((a, b) {
+      final aHasContent = a.itemCount > 0 || a.order.total > 0;
+      final bHasContent = b.itemCount > 0 || b.order.total > 0;
+      if (aHasContent != bHasContent) {
+        return bHasContent ? 1 : -1;
+      }
+      if (a.itemCount != b.itemCount) {
+        return b.itemCount.compareTo(a.itemCount);
+      }
+      if (a.order.total != b.order.total) {
+        return b.order.total.compareTo(a.order.total);
+      }
+      final aDate =
+          a.order.updatedAt ??
+          a.order.createdAt ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final bDate =
+          b.order.updatedAt ??
+          b.order.createdAt ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return bDate.compareTo(aDate);
+    });
+    return scored.first.order;
+  }
+
+  Future<int> _orderItemCount(String orderId) async {
+    final snapshot = await _ordersRef.doc(orderId).collection('items').get();
+    return snapshot.docs.length;
   }
 
   Future<PosOrder> createTakeoutOrder({
@@ -2170,7 +2283,14 @@ class TacoPosRepository {
     required int personNumber,
   }) async {
     _requireTakeOrders();
-    final orderDoc = await _ordersRef.doc(orderId).get();
+    final cleanOrderId = orderId.trim();
+    final itemsPath =
+        'restaurants/${AppConstants.restaurantId}/orders/$cleanOrderId/items';
+    developer.log(
+      '[TacoPOS][addProduct] orderId=$cleanOrderId path=$itemsPath '
+      'productName=${product.name} qty=1',
+    );
+    final orderDoc = await _ordersRef.doc(cleanOrderId).get();
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
     final personName =
         order?.personName(personNumber) ?? 'Persona $personNumber';
@@ -2183,22 +2303,27 @@ class TacoPosRepository {
         ? product.priceForPlatform(platformId)
         : product.price;
     final existingItem = await _findMatchingPendingItem(
-      orderId: orderId,
+      orderId: cleanOrderId,
       productId: product.id,
       personNumber: personNumber,
       appliedPlatformId: usePlatformPrice ? platformId : null,
     );
 
     if (existingItem != null) {
+      developer.log(
+        '[TacoPOS][addProduct] updating existing itemId=${existingItem.id} '
+        'path=$itemsPath/${existingItem.id} productName=${product.name} '
+        'qty=${existingItem.qty + 1}',
+      );
       await updateItemQty(
-        orderId: orderId,
+        orderId: cleanOrderId,
         item: existingItem,
         qty: existingItem.qty + 1,
       );
       return;
     }
 
-    final itemRef = _ordersRef.doc(orderId).collection('items').doc();
+    final itemRef = _ordersRef.doc(cleanOrderId).collection('items').doc();
     await itemRef.set({
       'personNumber': personNumber,
       'personName': personName,
@@ -2231,7 +2356,11 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    await recalculateOrderTotal(orderId);
+    developer.log(
+      '[TacoPOS][addProduct] saved itemId=${itemRef.id} '
+      'path=$itemsPath/${itemRef.id} productName=${product.name} qty=1',
+    );
+    await recalculateOrderTotal(cleanOrderId);
   }
 
   Future<void> renamePerson({
