@@ -318,7 +318,9 @@ class TacoPosRepository {
           data['canViewKitchenReports'] != true ||
           data['canManageKitchenStock'] != true ||
           data['canCancelOrders'] != true ||
-          data['canCancelPayments'] != true) {
+          data['canCancelPayments'] != true ||
+          data['canCancelItems'] != true ||
+          data['canApproveKitchenCancellations'] != true) {
         await adminRef.set({
           'canManageCash': true,
           'canAuthorizeCashWithdrawals': true,
@@ -328,6 +330,8 @@ class TacoPosRepository {
           'canManageKitchenStock': true,
           'canCancelOrders': true,
           'canCancelPayments': true,
+          'canCancelItems': true,
+          'canApproveKitchenCancellations': true,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
@@ -356,6 +360,8 @@ class TacoPosRepository {
       'canManageKitchenStock': true,
       'canCancelOrders': true,
       'canCancelPayments': true,
+      'canCancelItems': true,
+      'canApproveKitchenCancellations': true,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -551,7 +557,12 @@ class TacoPosRepository {
         .where(
           (item) =>
               item.sendToKitchen &&
-              ['sent', 'cooking'].contains(item.kitchenStatus),
+              [
+                'sent',
+                'cooking',
+                'cancel_requested',
+              ].contains(item.kitchenStatus) &&
+              !item.isCancelled,
         )
         .toList()
       ..sort((a, b) {
@@ -2352,6 +2363,8 @@ class TacoPosRepository {
       'kitchenStatus': product.sendToKitchen ? 'pending' : 'not_required',
       'kitchenBatchId': null,
       'paymentStatus': 'pending',
+      'status': 'active',
+      'cancelStatus': 'none',
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
@@ -2438,18 +2451,142 @@ class TacoPosRepository {
   Future<void> deleteItem({
     required String orderId,
     required String itemId,
+    String reason = 'Cancelado desde orden',
   }) async {
-    _requireTakeOrders();
+    await cancelOrderItem(orderId: orderId, itemId: itemId, reason: reason);
+  }
+
+  Future<void> cancelOrderItem({
+    required String orderId,
+    required String itemId,
+    required String reason,
+  }) async {
+    _requireCancelItems();
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de cancelacion.');
+    }
     final itemDoc = await _ordersRef
         .doc(orderId)
         .collection('items')
         .doc(itemId)
         .get();
-    if (itemDoc.exists) {
-      _ensureItemEditable(OrderItem.fromDoc(itemDoc));
+    if (!itemDoc.exists) {
+      throw StateError('El articulo ya no existe.');
     }
-    await _ordersRef.doc(orderId).collection('items').doc(itemId).delete();
+    final item = OrderItem.fromDoc(itemDoc);
+    if (item.kitchenStatus == 'ready') {
+      throw StateError(
+        'Este producto ya fue servido por cocina y no puede cancelarse.',
+      );
+    }
+    if (['sent', 'cooking', 'cancel_requested'].contains(item.kitchenStatus)) {
+      throw StateError(
+        'Este producto ya esta en cocina. Solicita cancelacion a cocina.',
+      );
+    }
+    if (item.paymentStatus == 'paid') {
+      throw StateError('Este producto ya fue pagado y no puede cancelarse.');
+    }
+    await _ensureCancellationKeepsPaymentsValid(orderId, item);
+    await itemDoc.reference.update({
+      'status': 'cancelled',
+      'kitchenStatus': 'cancelled',
+      'paymentStatus': 'cancelled',
+      'cancelStatus': 'accepted',
+      'cancelReason': cleanReason,
+      'cancelledAt': FieldValue.serverTimestamp(),
+      ..._employeeAuditFields(prefix: 'cancelledBy'),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
     await recalculateOrderTotal(orderId);
+  }
+
+  Future<void> requestOrderItemCancellation({
+    required String orderId,
+    required String itemId,
+    required String reason,
+  }) async {
+    _requireCancelItems();
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de cancelacion.');
+    }
+    final itemRef = _ordersRef.doc(orderId).collection('items').doc(itemId);
+    final itemDoc = await itemRef.get();
+    if (!itemDoc.exists) {
+      throw StateError('El articulo ya no existe.');
+    }
+    final item = OrderItem.fromDoc(itemDoc);
+    if (item.kitchenStatus == 'ready') {
+      throw StateError(
+        'Este producto ya fue servido por cocina y no puede cancelarse.',
+      );
+    }
+    if (!['sent', 'cooking', 'cancel_requested'].contains(item.kitchenStatus)) {
+      throw StateError('Solo se solicita cancelacion de articulos en cocina.');
+    }
+    if (item.hasCancellationRequested) {
+      throw StateError('La cancelacion ya fue solicitada a cocina.');
+    }
+    await itemRef.update({
+      'cancelStatus': 'requested',
+      'kitchenStatus': 'cancel_requested',
+      'cancelReason': cleanReason,
+      'cancelRequestedAt': FieldValue.serverTimestamp(),
+      ..._employeeAuditFields(prefix: 'cancelRequestedBy'),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await _ordersRef.doc(orderId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> resolveKitchenCancellation({
+    required String orderId,
+    required String itemId,
+    required bool accepted,
+    String rejectReason = '',
+  }) async {
+    _requireKitchenCancellationApprover();
+    final itemRef = _ordersRef.doc(orderId).collection('items').doc(itemId);
+    final itemDoc = await itemRef.get();
+    if (!itemDoc.exists) {
+      throw StateError('El articulo ya no existe.');
+    }
+    final item = OrderItem.fromDoc(itemDoc);
+    if (!item.hasCancellationRequested) {
+      throw StateError('Este articulo no tiene cancelacion solicitada.');
+    }
+    if (accepted) {
+      await _ensureCancellationKeepsPaymentsValid(orderId, item);
+      await itemRef.update({
+        'status': 'cancelled',
+        'kitchenStatus': 'cancelled',
+        'paymentStatus': 'cancelled',
+        'cancelStatus': 'accepted',
+        'cancelAcceptedAt': FieldValue.serverTimestamp(),
+        'cancelledAt': FieldValue.serverTimestamp(),
+        ..._employeeAuditFields(prefix: 'cancelAcceptedBy'),
+        ..._employeeAuditFields(prefix: 'cancelledBy'),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      await recalculateOrderTotal(orderId);
+      return;
+    }
+
+    final restoredKitchenStatus = item.cookingAt != null ? 'cooking' : 'sent';
+    await itemRef.update({
+      'cancelStatus': 'rejected',
+      'kitchenStatus': restoredKitchenStatus,
+      'cancelRejectedAt': FieldValue.serverTimestamp(),
+      'cancelRejectReason': rejectReason.trim(),
+      ..._employeeAuditFields(prefix: 'cancelRejectedBy'),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    await _ordersRef.doc(orderId).update({
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
   }
 
   Future<void> cancelOrder({
@@ -3333,6 +3470,26 @@ class TacoPosRepository {
     throw StateError('No tienes permiso para cancelar pagos.');
   }
 
+  void _requireCancelItems() {
+    final employee = AppSession.instance.employee;
+    if (employee?.canCancelItems == true ||
+        employee?.canCancelOrders == true ||
+        employee?.canViewAdmin == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para cancelar articulos.');
+  }
+
+  void _requireKitchenCancellationApprover() {
+    final employee = AppSession.instance.employee;
+    if (employee?.canApproveKitchenCancellations == true ||
+        employee?.canViewKitchen == true ||
+        employee?.canViewAdmin == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para resolver cancelaciones.');
+  }
+
   void _ensureItemEditable(OrderItem item) {
     if (item.kitchenStatus == 'ready') {
       throw StateError(
@@ -3346,6 +3503,30 @@ class TacoPosRepository {
     }
     if (item.paymentStatus == 'paid') {
       throw StateError('Este producto ya fue pagado y no puede modificarse.');
+    }
+  }
+
+  Future<void> _ensureCancellationKeepsPaymentsValid(
+    String orderId,
+    OrderItem cancellingItem,
+  ) async {
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
+    if (order == null) {
+      return;
+    }
+    final newTotal = (order.total - cancellingItem.total).clamp(
+      0,
+      double.infinity,
+    );
+    final payments = await getOrderPaymentsOnce(orderId);
+    final paidTotal = payments
+        .where((payment) => payment.isActive)
+        .fold<double>(0, (total, payment) => total + payment.baseAmount);
+    if (newTotal + 0.01 < paidTotal) {
+      throw StateError(
+        'No se puede cancelar porque la orden ya tiene pagos que superan el nuevo total.',
+      );
     }
   }
 
@@ -3705,6 +3886,8 @@ class TacoPosRepository {
     required bool canManageKitchenStock,
     required bool canCancelOrders,
     required bool canCancelPayments,
+    required bool canCancelItems,
+    required bool canApproveKitchenCancellations,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageEmployees == true,
@@ -3736,6 +3919,8 @@ class TacoPosRepository {
       'canManageKitchenStock': canManageKitchenStock,
       'canCancelOrders': canCancelOrders,
       'canCancelPayments': canCancelPayments,
+      'canCancelItems': canCancelItems,
+      'canApproveKitchenCancellations': canApproveKitchenCancellations,
       if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

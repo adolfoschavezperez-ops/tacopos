@@ -8,6 +8,7 @@ import '../../models/order_item.dart';
 import '../../models/payment.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/formatters.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -1237,10 +1238,11 @@ class _PersonPaymentCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final subtotal = items.fold<double>(
       0,
-      (runningTotal, item) => runningTotal + item.total,
+      (runningTotal, item) =>
+          item.isCancelled ? runningTotal : runningTotal + item.total,
     );
     final pending = items
-        .where((item) => item.paymentStatus != 'paid')
+        .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
         .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
     final paid = pending <= 0.01;
     final surcharge = method == 'card'
@@ -1429,12 +1431,7 @@ class _PaymentsHistory extends StatelessWidget {
   }
 
   String _paymentTitle(Payment payment) {
-    final method = switch (payment.method) {
-      'card' => 'Tarjeta',
-      'employee_consumption' => 'Consumo empleado',
-      'platform_paid' => 'Pagado en plataforma',
-      _ => 'Efectivo',
-    };
+    final method = formatPaymentMethod(payment.method);
     final type = switch (payment.type) {
       'person' => payment.personName ?? 'Persona',
       'platform' => payment.platformName ?? 'Plataforma',

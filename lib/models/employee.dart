@@ -22,6 +22,8 @@ class Employee {
     required this.canManageKitchenStock,
     required this.canCancelOrders,
     required this.canCancelPayments,
+    required this.canCancelItems,
+    required this.canApproveKitchenCancellations,
   });
 
   final String id;
@@ -44,6 +46,8 @@ class Employee {
   final bool canManageKitchenStock;
   final bool canCancelOrders;
   final bool canCancelPayments;
+  final bool canCancelItems;
+  final bool canApproveKitchenCancellations;
 
   factory Employee.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -74,6 +78,16 @@ class Employee {
           false,
       canCancelPayments:
           data['canCancelPayments'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canCancelItems:
+          data['canCancelItems'] as bool? ??
+          data['canCancelOrders'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canApproveKitchenCancellations:
+          data['canApproveKitchenCancellations'] as bool? ??
+          data['canViewKitchen'] as bool? ??
           data['canViewAdmin'] as bool? ??
           false,
     );

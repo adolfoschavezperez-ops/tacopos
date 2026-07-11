@@ -156,6 +156,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canManageKitchenStock;
   late bool _canCancelOrders;
   late bool _canCancelPayments;
+  late bool _canCancelItems;
+  late bool _canApproveKitchenCancellations;
   bool _saving = false;
   String _error = '';
 
@@ -182,6 +184,9 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canManageKitchenStock = widget.employee?.canManageKitchenStock ?? false;
     _canCancelOrders = widget.employee?.canCancelOrders ?? false;
     _canCancelPayments = widget.employee?.canCancelPayments ?? false;
+    _canCancelItems = widget.employee?.canCancelItems ?? false;
+    _canApproveKitchenCancellations =
+        widget.employee?.canApproveKitchenCancellations ?? false;
   }
 
   @override
@@ -235,6 +240,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canManageKitchenStock: _canManageKitchenStock,
         canCancelOrders: _canCancelOrders,
         canCancelPayments: _canCancelPayments,
+        canCancelItems: _canCancelItems,
+        canApproveKitchenCancellations: _canApproveKitchenCancellations,
       );
     } catch (error) {
       if (!mounted) {
@@ -326,6 +333,12 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                     setState(() => _canCancelPayments = value),
               ),
               _PermissionSwitch(
+                title: 'Puede cancelar articulos',
+                value: _canCancelItems,
+                enabled: !_saving,
+                onChanged: (value) => setState(() => _canCancelItems = value),
+              ),
+              _PermissionSwitch(
                 title: 'Puede abrir/cerrar caja',
                 value: _canManageCash,
                 enabled: !_saving,
@@ -348,6 +361,13 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 value: _canCloseKitchen,
                 enabled: !_saving,
                 onChanged: (value) => setState(() => _canCloseKitchen = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede aprobar cancelaciones cocina',
+                value: _canApproveKitchenCancellations,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canApproveKitchenCancellations = value),
               ),
               const Divider(height: 20),
               const Align(
@@ -545,6 +565,7 @@ class _EmployeeAdminTile extends StatelessWidget {
       if (employee.canCharge) 'Cobro',
       if (employee.canCancelOrders) 'Cancela tickets',
       if (employee.canCancelPayments) 'Cancela pagos',
+      if (employee.canCancelItems) 'Cancela articulos',
       if (employee.canManageCash) 'Caja',
       if (employee.canAuthorizeCashWithdrawals) 'Retiros',
       if (employee.canViewKitchen) 'Cocina',
@@ -552,6 +573,7 @@ class _EmployeeAdminTile extends StatelessWidget {
       if (employee.canCloseKitchen) 'Cerrar cocina',
       if (employee.canViewKitchenReports) 'Reporte cocina',
       if (employee.canManageKitchenStock) 'Insumos cocina',
+      if (employee.canApproveKitchenCancellations) 'Aprueba cancelaciones',
       if (employee.canViewAdmin) 'Admin',
     ];
     return permissions.isEmpty ? 'Sin permisos' : permissions.join(' · ');

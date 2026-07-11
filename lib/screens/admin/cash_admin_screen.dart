@@ -410,52 +410,76 @@ class _CashCancellationSummary extends StatelessWidget {
               (total, payment) => total + payment.chargedAmount,
             );
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Cancelaciones del dia',
-                  style: TextStyle(fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
+            return FutureBuilder<List<_CancelledItemLine>>(
+              future: _cancelledItemLines(repository, orderSnapshot.data ?? []),
+              builder: (context, itemSnapshot) {
+                final itemLines = itemSnapshot.data ?? const [];
+                final itemTotal = itemLines.fold<double>(
+                  0,
+                  (total, line) => total + line.amount,
+                );
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _MoneyChip(
-                      label: '${orders.length} tickets cancelados',
-                      value: cancelledTotal,
+                    const Text(
+                      'Cancelaciones del dia',
+                      style: TextStyle(fontWeight: FontWeight.w900),
                     ),
-                    _MoneyChip(
-                      label: '${payments.length} pagos cancelados',
-                      value: cancelledPaymentsTotal,
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        _MoneyChip(
+                          label: '${orders.length} tickets cancelados',
+                          value: cancelledTotal,
+                        ),
+                        _MoneyChip(
+                          label: '${itemLines.length} articulos cancelados',
+                          value: itemTotal,
+                        ),
+                        _MoneyChip(
+                          label: '${payments.length} pagos cancelados',
+                          value: cancelledPaymentsTotal,
+                        ),
+                      ],
                     ),
+                    if (orders.isNotEmpty ||
+                        payments.isNotEmpty ||
+                        itemLines.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      ...orders
+                          .take(4)
+                          .map(
+                            (order) => _InfoLine(
+                              label:
+                                  '${_shortId(order.id)} | ${_time(order.cancelledAt)}',
+                              value:
+                                  '${order.displayName} | ${order.cancelledByEmployeeName ?? '-'} | ${order.cancelReason ?? '-'}',
+                            ),
+                          ),
+                      ...itemLines
+                          .take(6)
+                          .map(
+                            (line) => _InfoLine(
+                              label: '${line.folio} | ${line.time}',
+                              value: line.description,
+                            ),
+                          ),
+                      ...payments
+                          .take(4)
+                          .map(
+                            (payment) => _InfoLine(
+                              label:
+                                  'Pago ${_shortId(payment.id)} | ${_time(payment.cancelledAt)}',
+                              value:
+                                  '${payment.tableName} | ${payment.cancelledByEmployeeName ?? '-'} | ${payment.cancelReason ?? '-'}',
+                            ),
+                          ),
+                    ],
                   ],
-                ),
-                if (orders.isNotEmpty || payments.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  ...orders
-                      .take(6)
-                      .map(
-                        (order) => _InfoLine(
-                          label:
-                              '${_shortId(order.id)} | ${_time(order.cancelledAt)}',
-                          value:
-                              '${order.displayName} | ${order.cancelledByEmployeeName ?? '-'} | ${order.cancelReason ?? '-'}',
-                        ),
-                      ),
-                  ...payments
-                      .take(6)
-                      .map(
-                        (payment) => _InfoLine(
-                          label:
-                              'Pago ${_shortId(payment.id)} | ${_time(payment.cancelledAt)}',
-                          value:
-                              '${payment.tableName} | ${payment.cancelledByEmployeeName ?? '-'} | ${payment.cancelReason ?? '-'}',
-                        ),
-                      ),
-                ],
-              ],
+                );
+              },
             );
           },
         );
@@ -478,6 +502,52 @@ class _CashCancellationSummary extends StatelessWidget {
   }
 
   String _shortId(String id) => id.length <= 6 ? id : id.substring(0, 6);
+
+  Future<List<_CancelledItemLine>> _cancelledItemLines(
+    TacoPosRepository repository,
+    List<PosOrder> orders,
+  ) async {
+    final lines = <_CancelledItemLine>[];
+    for (final order in orders) {
+      final items = await repository.getOrderItemsOnce(order.id);
+      for (final item in items.where(
+        (item) => item.isCancelled || item.wasCancellationRejected,
+      )) {
+        final date =
+            item.cancelledAt ??
+            item.cancelRejectedAt ??
+            item.cancelRequestedAt ??
+            order.updatedAt;
+        if (_businessDate(date) != session.businessDate) {
+          continue;
+        }
+        lines.add(
+          _CancelledItemLine(
+            folio: _shortId(order.id),
+            time: _time(date),
+            amount: item.isCancelled ? item.total : 0,
+            description:
+                '${order.displayName} | ${item.productName} x${item.qty} | ${item.isCancelled ? 'Aceptada' : 'Rechazada'} | ${item.cancelReason ?? '-'}',
+          ),
+        );
+      }
+    }
+    return lines;
+  }
+}
+
+class _CancelledItemLine {
+  const _CancelledItemLine({
+    required this.folio,
+    required this.time,
+    required this.description,
+    required this.amount,
+  });
+
+  final String folio;
+  final String time;
+  final String description;
+  final double amount;
 }
 
 class _WithdrawalAuthorizationTab extends StatelessWidget {

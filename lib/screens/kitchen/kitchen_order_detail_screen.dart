@@ -74,6 +74,16 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     }, popAfter: true);
   }
 
+  Future<void> _resolveCancellation(OrderItem item, bool accepted) async {
+    await _run(() {
+      return _repository.resolveKitchenCancellation(
+        orderId: widget.orderId,
+        itemId: item.id,
+        accepted: accepted,
+      );
+    });
+  }
+
   Future<void> _run(
     Future<void> Function() action, {
     bool popAfter = false,
@@ -216,6 +226,17 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                                           return _KitchenItemRow(
                                             item: item,
                                             compact: compact,
+                                            busy: _busy,
+                                            onAcceptCancellation: () =>
+                                                _resolveCancellation(
+                                                  item,
+                                                  true,
+                                                ),
+                                            onRejectCancellation: () =>
+                                                _resolveCancellation(
+                                                  item,
+                                                  false,
+                                                ),
                                           );
                                         },
                                       ),
@@ -270,45 +291,144 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
 }
 
 class _KitchenItemRow extends StatelessWidget {
-  const _KitchenItemRow({required this.item, required this.compact});
+  const _KitchenItemRow({
+    required this.item,
+    required this.compact,
+    required this.busy,
+    required this.onAcceptCancellation,
+    required this.onRejectCancellation,
+  });
 
   final OrderItem item;
   final bool compact;
+  final bool busy;
+  final VoidCallback onAcceptCancellation;
+  final VoidCallback onRejectCancellation;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: compact ? 42 : 58,
-          height: compact ? 42 : 58,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: BrandColors.accentGlow,
-            borderRadius: BorderRadius.circular(compact ? 14 : 18),
+    final cancelled = item.isCancelled;
+    final textDecoration = cancelled ? TextDecoration.lineThrough : null;
+    final titleColor = cancelled
+        ? BrandColors.textMuted.withValues(alpha: 0.72)
+        : BrandColors.textPrimary;
+
+    return Opacity(
+      opacity: cancelled ? 0.58 : 1,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: compact ? 42 : 58,
+                height: compact ? 42 : 58,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: cancelled
+                      ? BrandColors.textMuted.withValues(alpha: 0.12)
+                      : item.hasCancellationRequested
+                      ? BrandColors.danger.withValues(alpha: 0.16)
+                      : BrandColors.accentGlow,
+                  borderRadius: BorderRadius.circular(compact ? 14 : 18),
+                ),
+                child: Text(
+                  '${item.qty}',
+                  style: TextStyle(
+                    fontSize: compact ? 18 : 24,
+                    fontWeight: FontWeight.w800,
+                    decoration: textDecoration,
+                    color: cancelled
+                        ? BrandColors.textMuted
+                        : item.hasCancellationRequested
+                        ? BrandColors.danger
+                        : BrandColors.accentYellow,
+                  ),
+                ),
+              ),
+              SizedBox(width: compact ? 12 : 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.productName,
+                      maxLines: compact ? 2 : 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: titleColor,
+                        decoration: textDecoration,
+                        decorationThickness: 2,
+                        fontSize: compact ? 20 : 28,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    if (cancelled) ...[
+                      const SizedBox(height: 6),
+                      const StatusBadge(
+                        style: StatusStyle(
+                          label: 'Cancelado',
+                          color: BrandColors.danger,
+                          background: Color(0x1FFF5A5A),
+                        ),
+                      ),
+                      if ((item.cancelReason ?? '').isNotEmpty)
+                        Text(
+                          'Motivo: ${item.cancelReason}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: BrandColors.textMuted),
+                        ),
+                    ],
+                    if (item.hasCancellationRequested) ...[
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Cancelacion solicitada',
+                        style: TextStyle(
+                          color: BrandColors.danger,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      if ((item.cancelReason ?? '').isNotEmpty)
+                        Text(
+                          item.cancelReason!,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: BrandColors.textMuted),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           ),
-          child: Text(
-            '${item.qty}',
-            style: TextStyle(
-              fontSize: compact ? 18 : 24,
-              fontWeight: FontWeight.w800,
-              color: BrandColors.accentYellow,
+          if (item.hasCancellationRequested && !cancelled) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                FilledButton.icon(
+                  onPressed: busy ? null : onAcceptCancellation,
+                  icon: const Icon(Icons.check_circle_outline),
+                  label: const Text('Aceptar cancelacion'),
+                  style: FilledButton.styleFrom(
+                    minimumSize: Size(compact ? 190 : 230, compact ? 54 : 64),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onRejectCancellation,
+                  icon: const Icon(Icons.cancel_outlined),
+                  label: const Text('Rechazar'),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: Size(compact ? 140 : 170, compact ? 54 : 64),
+                  ),
+                ),
+              ],
             ),
-          ),
-        ),
-        SizedBox(width: compact ? 12 : 18),
-        Expanded(
-          child: Text(
-            item.productName,
-            maxLines: compact ? 2 : 3,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: compact ? 20 : 28,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ),
-      ],
+          ],
+        ],
+      ),
     );
   }
 }

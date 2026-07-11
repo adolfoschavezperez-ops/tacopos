@@ -230,6 +230,9 @@ class _KitchenOrderCard extends StatelessWidget {
     final style = kitchenStatusStyle(order.kitchenStatus);
     final waitingSince =
         bundle.firstSentToKitchenAt ?? order.sentToKitchenAt ?? order.updatedAt;
+    final hasCancellationRequest = bundle.items.any(
+      (item) => item.hasCancellationRequested,
+    );
 
     return GlassCard(
       accent: _elapsedColorForStart(waitingSince),
@@ -280,6 +283,29 @@ class _KitchenOrderCard extends StatelessWidget {
             ],
           ),
           const Spacer(),
+          if (hasCancellationRequest) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: BrandColors.danger.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: BrandColors.danger.withValues(alpha: 0.35),
+                ),
+              ),
+              child: Text(
+                'Cancelacion solicitada',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: BrandColors.danger,
+                  fontSize: compact ? 13 : 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            SizedBox(height: compact ? 6 : 8),
+          ],
           _IngredientSummary(bundle: bundle, compact: compact),
           SizedBox(height: compact ? 6 : 10),
           Text(

@@ -30,10 +30,22 @@ class OrderItem {
     this.kitchenStockItemName,
     this.affectsKitchenStock = false,
     this.kitchenStockUnit,
+    this.status = 'active',
+    this.cancelStatus = 'none',
+    this.cancelRequestedAt,
+    this.cancelRequestedByEmployeeId,
+    this.cancelRequestedByEmployeeName,
     this.cancelledAt,
     this.cancelledByEmployeeId,
     this.cancelledByEmployeeName,
     this.cancelReason,
+    this.cancelAcceptedAt,
+    this.cancelAcceptedByEmployeeId,
+    this.cancelAcceptedByEmployeeName,
+    this.cancelRejectedAt,
+    this.cancelRejectedByEmployeeId,
+    this.cancelRejectedByEmployeeName,
+    this.cancelRejectReason,
   });
 
   final String id;
@@ -64,14 +76,32 @@ class OrderItem {
   final String? kitchenStockItemName;
   final bool affectsKitchenStock;
   final String? kitchenStockUnit;
+  final String status;
+  final String cancelStatus;
+  final DateTime? cancelRequestedAt;
+  final String? cancelRequestedByEmployeeId;
+  final String? cancelRequestedByEmployeeName;
   final DateTime? cancelledAt;
   final String? cancelledByEmployeeId;
   final String? cancelledByEmployeeName;
   final String? cancelReason;
+  final DateTime? cancelAcceptedAt;
+  final String? cancelAcceptedByEmployeeId;
+  final String? cancelAcceptedByEmployeeName;
+  final DateTime? cancelRejectedAt;
+  final String? cancelRejectedByEmployeeId;
+  final String? cancelRejectedByEmployeeName;
+  final String? cancelRejectReason;
 
   bool get isServed => kitchenStatus == 'ready';
   bool get isCancelled =>
-      kitchenStatus == 'cancelled' || paymentStatus == 'cancelled';
+      status == 'cancelled' ||
+      kitchenStatus == 'cancelled' ||
+      paymentStatus == 'cancelled' ||
+      cancelStatus == 'accepted';
+  bool get hasCancellationRequested =>
+      cancelStatus == 'requested' || kitchenStatus == 'cancel_requested';
+  bool get wasCancellationRejected => cancelStatus == 'rejected';
 
   factory OrderItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -106,10 +136,26 @@ class OrderItem {
       kitchenStockItemName: data['kitchenStockItemName'] as String?,
       affectsKitchenStock: data['affectsKitchenStock'] as bool? ?? false,
       kitchenStockUnit: data['kitchenStockUnit'] as String?,
+      status: data['status'] as String? ?? 'active',
+      cancelStatus: data['cancelStatus'] as String? ?? 'none',
+      cancelRequestedAt: _toDate(data['cancelRequestedAt']),
+      cancelRequestedByEmployeeId:
+          data['cancelRequestedByEmployeeId'] as String?,
+      cancelRequestedByEmployeeName:
+          data['cancelRequestedByEmployeeName'] as String?,
       cancelledAt: _toDate(data['cancelledAt']),
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
       cancelReason: data['cancelReason'] as String?,
+      cancelAcceptedAt: _toDate(data['cancelAcceptedAt']),
+      cancelAcceptedByEmployeeId: data['cancelAcceptedByEmployeeId'] as String?,
+      cancelAcceptedByEmployeeName:
+          data['cancelAcceptedByEmployeeName'] as String?,
+      cancelRejectedAt: _toDate(data['cancelRejectedAt']),
+      cancelRejectedByEmployeeId: data['cancelRejectedByEmployeeId'] as String?,
+      cancelRejectedByEmployeeName:
+          data['cancelRejectedByEmployeeName'] as String?,
+      cancelRejectReason: data['cancelRejectReason'] as String?,
     );
   }
 

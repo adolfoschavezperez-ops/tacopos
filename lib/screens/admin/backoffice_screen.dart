@@ -12,6 +12,7 @@ import '../../models/payment.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/csv_exporter.dart';
+import '../../utils/formatters.dart';
 import '../../widgets/backoffice_dashboard_widgets.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -1046,7 +1047,10 @@ class _SaleTile extends StatelessWidget {
                 _InfoText('Origen', order.displayName),
                 _InfoText('Plataforma', order.platformName ?? '-'),
                 _InfoText('Total', _money(order.total)),
-                _InfoText('Estado', '${order.status} / ${order.paymentStatus}'),
+                _InfoText(
+                  'Estado',
+                  '${formatOrderStatus(order.status)} / ${formatPaymentStatus(order.paymentStatus)}',
+                ),
                 _InfoText('Pago', methods.isEmpty ? '-' : methods),
                 _InfoText(
                   'Atencion',
@@ -1801,7 +1805,9 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Mesa / pedido',
       'Importe',
       'Motivo',
-      'Usuario',
+      'Solicito',
+      'Cocina',
+      'Estado',
       'Hora',
     ],
     _ReportKind.cancelledPayments => [
@@ -2015,17 +2021,62 @@ Future<List<List<String>>> _reportRows(
           )
           .toList();
     case _ReportKind.cancellations:
-      return orders.where((order) => order.status == 'cancelled').map((order) {
-        return [
+      final rows = <List<String>>[];
+      for (final order in orders.where(
+        (order) => order.status == 'cancelled',
+      )) {
+        rows.add([
           _businessDateFor(order.cancelledAt ?? order.updatedAt) ?? '-',
           _shortId(order.id),
           order.displayName,
           _money(order.total),
           order.cancelReason ?? '-',
           order.cancelledByEmployeeName ?? '-',
+          '-',
+          'Ticket cancelado',
           _dateTimeText(order.cancelledAt),
-        ];
-      }).toList();
+        ]);
+      }
+      for (final order in orders) {
+        final items = await repository.getOrderItemsOnce(order.id);
+        for (final item in items.where(
+          (item) =>
+              item.isCancelled ||
+              item.hasCancellationRequested ||
+              item.wasCancellationRejected,
+        )) {
+          rows.add([
+            _businessDateFor(
+                  item.cancelledAt ??
+                      item.cancelRequestedAt ??
+                      item.cancelRejectedAt ??
+                      order.updatedAt,
+                ) ??
+                '-',
+            _shortId(order.id),
+            '${order.displayName} | ${item.productName} x${item.qty}',
+            _money(item.total),
+            item.cancelReason ?? '-',
+            item.cancelRequestedByEmployeeName ??
+                item.cancelledByEmployeeName ??
+                '-',
+            item.cancelAcceptedByEmployeeName ??
+                item.cancelRejectedByEmployeeName ??
+                '-',
+            item.isCancelled
+                ? 'Aceptada'
+                : item.wasCancellationRejected
+                ? 'Rechazada'
+                : 'Solicitada',
+            _dateTimeText(
+              item.cancelledAt ??
+                  item.cancelRequestedAt ??
+                  item.cancelRejectedAt,
+            ),
+          ]);
+        }
+      }
+      return rows;
     case _ReportKind.cancelledPayments:
       return payments.where((payment) => payment.isCancelled).map((payment) {
         return [
@@ -2174,8 +2225,11 @@ class _SaleDetailDialog extends StatelessWidget {
                     runSpacing: 10,
                     children: [
                       _InfoText('Folio', _shortId(order.id)),
-                      _InfoText('Estado', order.status),
-                      _InfoText('Pago', order.paymentStatus),
+                      _InfoText('Estado', formatOrderStatus(order.status)),
+                      _InfoText(
+                        'Pago',
+                        formatPaymentStatus(order.paymentStatus),
+                      ),
                       _InfoText('Plataforma', order.platformName ?? '-'),
                       _InfoText('Cliente', order.customerName ?? '-'),
                       _InfoText('Total', _money(order.total)),
@@ -2215,12 +2269,17 @@ class _SaleDetailDialog extends StatelessWidget {
                         .map(
                           (item) => [
                             item.personName,
-                            item.productName,
+                            item.isCancelled
+                                ? '~~${item.productName}~~ Cancelado'
+                                : item.productName,
                             '${item.qty}',
                             _money(item.unitPrice),
                             _money(item.total),
-                            item.notes,
-                            item.kitchenStatus,
+                            item.isCancelled &&
+                                    (item.cancelReason ?? '').trim().isNotEmpty
+                                ? '${item.notes.trim().isEmpty ? '' : '${item.notes} | '}Motivo: ${item.cancelReason}'
+                                : item.notes,
+                            formatKitchenStatus(item.kitchenStatus),
                             item.kitchenStockItemName ?? '-',
                           ],
                         )
@@ -2437,12 +2496,7 @@ String _qty(double value) {
 }
 
 String _paymentMethodLabel(String method) {
-  return switch (method) {
-    'card' => 'Tarjeta',
-    'platform_paid' => 'Pagado plataforma',
-    'employee_consumption' => 'Consumo empleado',
-    _ => 'Efectivo',
-  };
+  return formatPaymentMethod(method);
 }
 
 String _topLabel(Iterable<String> values) {

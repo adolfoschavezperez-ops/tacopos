@@ -9,6 +9,7 @@ import '../../models/payment.dart';
 import '../../models/product.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/formatters.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -1142,7 +1143,9 @@ class _RecentOrderTile extends StatelessWidget {
             order.displayName,
             style: const TextStyle(fontWeight: FontWeight.w800),
           ),
-          subtitle: Text('${order.status} | ${order.kitchenStatus}'),
+          subtitle: Text(
+            '${formatOrderStatus(order.status)} | ${formatKitchenStatus(order.kitchenStatus)}',
+          ),
           trailing: MoneyText(
             value: order.total,
             style: const TextStyle(

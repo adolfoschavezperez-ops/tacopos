@@ -11,6 +11,7 @@ import '../../models/order_item.dart';
 import '../../models/product.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/formatters.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -313,6 +314,55 @@ class _OrderScreenState extends State<OrderScreen> {
     }
   }
 
+  Future<void> _cancelOrRequestItem(OrderItem item) async {
+    final employee = AppSession.instance.employee;
+    final canCancelItem =
+        employee?.canCancelItems == true ||
+        employee?.canCancelOrders == true ||
+        employee?.canViewAdmin == true;
+    if (!canCancelItem) {
+      _showMessage('No tienes permiso para cancelar articulos.');
+      return;
+    }
+    if (item.kitchenStatus == 'ready') {
+      _showMessage(
+        'Este producto ya fue servido por cocina y no puede cancelarse.',
+      );
+      return;
+    }
+    final title = item.kitchenStatus == 'pending'
+        ? 'Cancelar articulo'
+        : 'Solicitar cancelacion';
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (_) => _ReasonDialog(title: title),
+    );
+    if (!mounted || reason == null) {
+      return;
+    }
+    try {
+      if (item.kitchenStatus == 'pending' ||
+          item.kitchenStatus == 'not_required') {
+        await _repository.cancelOrderItem(
+          orderId: _boundOrderId,
+          itemId: item.id,
+          reason: reason,
+        );
+        _showMessage('Articulo cancelado.');
+      } else {
+        await _repository.requestOrderItemCancellation(
+          orderId: _boundOrderId,
+          itemId: item.id,
+          reason: reason,
+        );
+        _showMessage('Cancelacion solicitada a cocina.');
+      }
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage(error.toString().replaceFirst('Bad state: ', ''));
+    }
+  }
+
   void _addPerson() {
     if (AppSession.instance.employee?.canTakeOrders != true) {
       _showMessage('No tienes permiso para levantar pedidos');
@@ -489,9 +539,7 @@ class _OrderScreenState extends State<OrderScreen> {
           onQtyChanged: (item, qty) => _repository
               .updateItemQty(orderId: _boundOrderId, item: item, qty: qty)
               .catchError((error) => _showMessage(_editErrorText(error))),
-          onDelete: (item) => _repository
-              .deleteItem(orderId: _boundOrderId, itemId: item.id)
-              .catchError((error) => _showMessage(_editErrorText(error))),
+          onCancelItem: _cancelOrRequestItem,
           canEditOrder: canTakeOrders,
         );
         final menu = _ProductMenu(
@@ -702,7 +750,7 @@ class _OrderSummaryLoader extends StatelessWidget {
     required this.onAddPerson,
     required this.onRenamePerson,
     required this.onQtyChanged,
-    required this.onDelete,
+    required this.onCancelItem,
     required this.canEditOrder,
   });
 
@@ -720,7 +768,7 @@ class _OrderSummaryLoader extends StatelessWidget {
   final VoidCallback onAddPerson;
   final void Function(int personNumber, String currentName) onRenamePerson;
   final void Function(OrderItem item, int qty) onQtyChanged;
-  final ValueChanged<OrderItem> onDelete;
+  final ValueChanged<OrderItem> onCancelItem;
   final bool canEditOrder;
 
   @override
@@ -806,7 +854,7 @@ class _OrderSummaryLoader extends StatelessWidget {
       onAddPerson: onAddPerson,
       onRenamePerson: onRenamePerson,
       onQtyChanged: onQtyChanged,
-      onDelete: onDelete,
+      onCancelItem: onCancelItem,
       canEditOrder: canEditOrder,
     );
   }
@@ -874,7 +922,7 @@ class _OrderSummary extends StatefulWidget {
     required this.onAddPerson,
     required this.onRenamePerson,
     required this.onQtyChanged,
-    required this.onDelete,
+    required this.onCancelItem,
     required this.canEditOrder,
   });
 
@@ -886,7 +934,7 @@ class _OrderSummary extends StatefulWidget {
   final VoidCallback onAddPerson;
   final void Function(int personNumber, String currentName) onRenamePerson;
   final void Function(OrderItem item, int qty) onQtyChanged;
-  final ValueChanged<OrderItem> onDelete;
+  final ValueChanged<OrderItem> onCancelItem;
   final bool canEditOrder;
 
   @override
@@ -1048,7 +1096,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
                     final personItems = grouped[person] ?? [];
                     final subtotal = personItems.fold<double>(
                       0,
-                      (sum, item) => sum + item.total,
+                      (sum, item) => item.isCancelled ? sum : sum + item.total,
                     );
                     final personName = _personDisplayName(
                       order: widget.order,
@@ -1067,7 +1115,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
                       onSelect: () => widget.onSelectPerson(person),
                       onRename: () => widget.onRenamePerson(person, personName),
                       onQtyChanged: widget.onQtyChanged,
-                      onDelete: widget.onDelete,
+                      onCancelItem: widget.onCancelItem,
                       canEditOrder: widget.canEditOrder,
                     );
                   },
@@ -1090,7 +1138,7 @@ class _PersonItemsCard extends StatelessWidget {
     required this.onSelect,
     required this.onRename,
     required this.onQtyChanged,
-    required this.onDelete,
+    required this.onCancelItem,
     required this.canEditOrder,
   });
 
@@ -1103,7 +1151,7 @@ class _PersonItemsCard extends StatelessWidget {
   final VoidCallback onSelect;
   final VoidCallback onRename;
   final void Function(OrderItem item, int qty) onQtyChanged;
-  final ValueChanged<OrderItem> onDelete;
+  final ValueChanged<OrderItem> onCancelItem;
   final bool canEditOrder;
 
   @override
@@ -1159,7 +1207,7 @@ class _PersonItemsCard extends StatelessWidget {
                     (item) => _OrderItemRow(
                       item: item,
                       onQtyChanged: (qty) => onQtyChanged(item, qty),
-                      onDelete: () => onDelete(item),
+                      onCancel: () => onCancelItem(item),
                       canEditOrder: canEditOrder,
                     ),
                   ),
@@ -1480,119 +1528,218 @@ class _OrderItemRow extends StatelessWidget {
   const _OrderItemRow({
     required this.item,
     required this.onQtyChanged,
-    required this.onDelete,
+    required this.onCancel,
     required this.canEditOrder,
   });
 
   final OrderItem item;
   final ValueChanged<int> onQtyChanged;
-  final VoidCallback onDelete;
+  final VoidCallback onCancel;
   final bool canEditOrder;
 
   @override
   Widget build(BuildContext context) {
+    final cancelled = item.isCancelled;
     final locked = item.kitchenStatus == 'ready';
+    final canRequestCancel = [
+      'sent',
+      'cooking',
+      'cancel_requested',
+    ].contains(item.kitchenStatus);
+    final cancelButtonLabel = item.kitchenStatus == 'pending'
+        ? 'Cancelar'
+        : canRequestCancel
+        ? 'Solicitar cancelacion'
+        : 'Cancelar';
     final editable =
         canEditOrder &&
+        !cancelled &&
         !locked &&
         !['sent', 'cooking'].contains(item.kitchenStatus) &&
         item.paymentStatus != 'paid';
+    final cancellable =
+        canEditOrder &&
+        !cancelled &&
+        item.paymentStatus != 'paid' &&
+        !item.hasCancellationRequested &&
+        (editable || canRequestCancel);
     void blockedEdit() {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Este producto ya fue servido por cocina y no puede modificarse.',
+            'Este producto ya fue servido por cocina y no puede cancelarse.',
           ),
         ),
       );
     }
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.productName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  locked
-                      ? '${item.category} | Servido'
-                      : '${item.category} | ${item.kitchenStatus}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: BrandColors.textMuted,
-                    fontSize: 12,
-                  ),
-                ),
-                if (locked)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 4),
-                    child: StatusBadge(
-                      style: StatusStyle(
-                        label: 'Servido',
-                        color: BrandColors.success,
-                        background: Color(0x1F55D98B),
-                      ),
+    final textDecoration = cancelled ? TextDecoration.lineThrough : null;
+    final contentColor = cancelled
+        ? BrandColors.textMuted.withValues(alpha: 0.72)
+        : BrandColors.textPrimary;
+
+    return Opacity(
+      opacity: cancelled ? 0.58 : 1,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${item.qty} ${item.productName}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: contentColor,
+                      decoration: textDecoration,
+                      decorationThickness: 2,
+                      fontWeight: FontWeight.w900,
                     ),
                   ),
-              ],
+                  const SizedBox(height: 2),
+                  Text(
+                    '${item.category} | ${formatKitchenStatus(item.kitchenStatus)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: BrandColors.textMuted.withValues(
+                        alpha: cancelled ? 0.75 : 1,
+                      ),
+                      fontSize: 12,
+                      decoration: textDecoration,
+                    ),
+                  ),
+                  if (cancelled)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        children: [
+                          const StatusBadge(
+                            style: StatusStyle(
+                              label: 'Cancelado',
+                              color: BrandColors.danger,
+                              background: Color(0x1FFF5A5A),
+                            ),
+                          ),
+                          if ((item.cancelReason ?? '').isNotEmpty)
+                            Text(
+                              'Motivo: ${item.cancelReason}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: BrandColors.textMuted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  if (locked && !cancelled)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: StatusBadge(
+                        style: StatusStyle(
+                          label: 'Servido',
+                          color: BrandColors.success,
+                          background: Color(0x1F55D98B),
+                        ),
+                      ),
+                    ),
+                  if (item.hasCancellationRequested)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: StatusBadge(
+                        style: StatusStyle(
+                          label: 'Cancelacion solicitada',
+                          color: BrandColors.accentYellow,
+                          background: Color(0x1FFFD54A),
+                        ),
+                      ),
+                    ),
+                  if (item.wasCancellationRejected)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: StatusBadge(
+                        style: StatusStyle(
+                          label: 'Cancelacion rechazada por cocina',
+                          color: BrandColors.danger,
+                          background: Color(0x1FFF5A5A),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          IconButton.filledTonal(
-            tooltip: 'Menos',
-            onPressed: editable
-                ? () => onQtyChanged(item.qty - 1)
-                : locked
-                ? blockedEdit
-                : null,
-            icon: const Icon(Icons.remove),
-          ),
-          SizedBox(
-            width: 34,
-            child: Text(
-              '${item.qty}',
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontWeight: FontWeight.w900),
+            const SizedBox(width: 8),
+            IconButton.filledTonal(
+              tooltip: 'Menos',
+              onPressed: cancelled
+                  ? null
+                  : editable
+                  ? () => onQtyChanged(item.qty - 1)
+                  : locked
+                  ? blockedEdit
+                  : null,
+              icon: const Icon(Icons.remove),
             ),
-          ),
-          IconButton.filledTonal(
-            tooltip: 'Mas',
-            onPressed: editable
-                ? () => onQtyChanged(item.qty + 1)
-                : locked
-                ? blockedEdit
-                : null,
-            icon: const Icon(Icons.add),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 86,
-            child: MoneyText(
-              value: item.total,
-              textAlign: TextAlign.end,
-              style: const TextStyle(fontWeight: FontWeight.w900),
+            SizedBox(
+              width: 34,
+              child: Text(
+                '${item.qty}',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: contentColor,
+                  decoration: textDecoration,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
             ),
-          ),
-          IconButton(
-            tooltip: 'Eliminar',
-            onPressed: editable
-                ? onDelete
-                : locked
-                ? blockedEdit
-                : null,
-            icon: const Icon(Icons.delete_outline, color: BrandColors.danger),
-          ),
-        ],
+            IconButton.filledTonal(
+              tooltip: 'Mas',
+              onPressed: cancelled
+                  ? null
+                  : editable
+                  ? () => onQtyChanged(item.qty + 1)
+                  : locked
+                  ? blockedEdit
+                  : null,
+              icon: const Icon(Icons.add),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 86,
+              child: MoneyText(
+                value: item.total,
+                textAlign: TextAlign.end,
+                style: TextStyle(
+                  color: cancelled ? BrandColors.textMuted : null,
+                  decoration: textDecoration,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: cancelButtonLabel,
+              onPressed: cancellable
+                  ? onCancel
+                  : locked
+                  ? blockedEdit
+                  : null,
+              icon: Icon(
+                canRequestCancel
+                    ? Icons.assignment_late_outlined
+                    : Icons.cancel_outlined,
+                color: BrandColors.danger,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
