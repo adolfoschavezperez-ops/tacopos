@@ -5,6 +5,7 @@ import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/pos_table.dart';
 import '../../services/app_session.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -29,6 +30,11 @@ class _TablesScreenState extends State<TablesScreen> {
   @override
   void initState() {
     super.initState();
+    LivePresenceService.instance.update(
+      appMode: 'waiter',
+      currentScreen: 'Mesas',
+      currentAction: 'Viendo mesas',
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
   }
 

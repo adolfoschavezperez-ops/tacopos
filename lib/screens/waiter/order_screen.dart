@@ -10,6 +10,7 @@ import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/product.dart';
 import '../../services/app_session.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/category_utils.dart';
 import '../../utils/formatters.dart';
@@ -58,6 +59,15 @@ class _OrderScreenState extends State<OrderScreen> {
     super.initState();
     _bindOrderStreams(widget.orderId);
     _productsStream = _repository.watchProducts(activeOnly: true);
+    LivePresenceService.instance.update(
+      appMode: 'waiter',
+      currentScreen: 'Orden',
+      currentTableId: widget.tableId,
+      currentTableName: widget.tableName,
+      currentOrderId: widget.orderId,
+      currentPersonNumber: _selectedPerson,
+      currentAction: 'Levantando orden',
+    );
   }
 
   @override
@@ -65,6 +75,15 @@ class _OrderScreenState extends State<OrderScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.orderId != widget.orderId) {
       _bindOrderStreams(widget.orderId);
+      LivePresenceService.instance.update(
+        appMode: 'waiter',
+        currentScreen: 'Orden',
+        currentTableId: widget.tableId,
+        currentTableName: widget.tableName,
+        currentOrderId: widget.orderId,
+        currentPersonNumber: _selectedPerson,
+        currentAction: 'Levantando orden',
+      );
     }
   }
 
@@ -181,6 +200,7 @@ class _OrderScreenState extends State<OrderScreen> {
     });
 
     try {
+      LivePresenceService.instance.update(currentAction: 'Enviando cocina');
       final sentCount = await _repository.sendOrderToKitchen(_boundOrderId);
       if (!mounted) {
         return;
@@ -536,6 +556,10 @@ class _OrderScreenState extends State<OrderScreen> {
             setState(() {
               _selectedPerson = person;
             });
+            LivePresenceService.instance.update(
+              currentPersonNumber: person,
+              currentAction: 'Agregando productos',
+            );
           },
           onAddPerson: _addPerson,
           onRenamePerson: _renamePerson,

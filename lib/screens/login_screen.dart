@@ -276,5 +276,6 @@ bool _canAccessBackoffice(Employee employee) {
   return employee.canViewAdmin ||
       employee.canManageCash ||
       employee.canViewKitchenReports ||
-      employee.canAuthorizeCashWithdrawals;
+      employee.canAuthorizeCashWithdrawals ||
+      employee.canViewLiveOperations;
 }

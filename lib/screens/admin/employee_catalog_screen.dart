@@ -158,6 +158,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canCancelPayments;
   late bool _canCancelItems;
   late bool _canApproveKitchenCancellations;
+  late bool _canViewLiveOperations;
+  late bool _canControlLiveOperations;
   bool _saving = false;
   String _error = '';
 
@@ -187,6 +189,9 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canCancelItems = widget.employee?.canCancelItems ?? false;
     _canApproveKitchenCancellations =
         widget.employee?.canApproveKitchenCancellations ?? false;
+    _canViewLiveOperations = widget.employee?.canViewLiveOperations ?? false;
+    _canControlLiveOperations =
+        widget.employee?.canControlLiveOperations ?? false;
   }
 
   @override
@@ -242,6 +247,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canCancelPayments: _canCancelPayments,
         canCancelItems: _canCancelItems,
         canApproveKitchenCancellations: _canApproveKitchenCancellations,
+        canViewLiveOperations: _canViewLiveOperations,
+        canControlLiveOperations: _canControlLiveOperations,
       );
     } catch (error) {
       if (!mounted) {
@@ -431,6 +438,20 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 onChanged: (value) =>
                     setState(() => _canManageKitchenStock = value),
               ),
+              _PermissionSwitch(
+                title: 'Puede ver visor operativo',
+                value: _canViewLiveOperations,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canViewLiveOperations = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede controlar desde visor operativo',
+                value: _canControlLiveOperations,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canControlLiveOperations = value),
+              ),
               if (_error.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Text(
@@ -574,6 +595,8 @@ class _EmployeeAdminTile extends StatelessWidget {
       if (employee.canViewKitchenReports) 'Reporte cocina',
       if (employee.canManageKitchenStock) 'Insumos cocina',
       if (employee.canApproveKitchenCancellations) 'Aprueba cancelaciones',
+      if (employee.canViewLiveOperations) 'Visor operativo',
+      if (employee.canControlLiveOperations) 'Control visor',
       if (employee.canViewAdmin) 'Admin',
     ];
     return permissions.isEmpty ? 'Sin permisos' : permissions.join(' · ');

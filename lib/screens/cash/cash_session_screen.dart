@@ -5,6 +5,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
 import '../../services/app_session.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -30,6 +31,11 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
   void initState() {
     super.initState();
     _selectedDate = DateTime.now();
+    LivePresenceService.instance.update(
+      appMode: 'cash',
+      currentScreen: 'Caja',
+      currentAction: 'Administrando caja',
+    );
   }
 
   @override

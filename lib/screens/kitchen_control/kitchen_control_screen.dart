@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/kitchen_session.dart';
 import '../../services/app_session.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -20,6 +21,16 @@ class KitchenControlScreen extends StatefulWidget {
 class _KitchenControlScreenState extends State<KitchenControlScreen> {
   final _repository = TacoPosRepository();
   bool _opening = false;
+
+  @override
+  void initState() {
+    super.initState();
+    LivePresenceService.instance.update(
+      appMode: 'admin',
+      currentScreen: 'Control cocina',
+      currentAction: 'Controlando cocina',
+    );
+  }
 
   Future<void> _openKitchen(Map<String, double> inputs) async {
     if (_opening) return;

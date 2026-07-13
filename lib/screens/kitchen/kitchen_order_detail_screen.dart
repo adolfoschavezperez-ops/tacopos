@@ -7,6 +7,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -35,6 +36,13 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     super.initState();
     _orderStream = _repository.watchOrder(widget.orderId);
     _itemsStream = _repository.watchKitchenItems(widget.orderId);
+    LivePresenceService.instance.update(
+      appMode: 'kitchen',
+      currentScreen: 'Cocina detalle',
+      currentOrderId: widget.orderId,
+      currentKitchenBundleId: widget.orderId,
+      currentAction: 'Surtiendo comanda',
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _repository.markActiveKitchenItemsCooking(widget.orderId);
     });

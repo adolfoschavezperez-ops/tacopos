@@ -7,6 +7,7 @@ import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
 import '../../services/app_session.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/formatters.dart';
 import '../../widgets/branded_scaffold.dart';
@@ -31,6 +32,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
   String _method = 'cash';
   Employee? _selectedEmployee;
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    LivePresenceService.instance.update(
+      appMode: 'cash',
+      currentScreen: 'Cobro',
+      currentOrderId: widget.orderId,
+      currentAction: 'Cobrando',
+    );
+  }
 
   @override
   void dispose() {
@@ -425,6 +437,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                   _selectedEmployee = null;
                                 }
                               });
+                              LivePresenceService.instance.update(
+                                currentAction:
+                                    'Cobrando con ${formatPaymentMethod(value)}',
+                              );
                             },
                             onEmployeeChanged: (employee) {
                               setState(() {

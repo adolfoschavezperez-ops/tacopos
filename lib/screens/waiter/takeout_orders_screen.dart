@@ -5,6 +5,7 @@ import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/order_platform.dart';
 import '../../services/app_session.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -33,6 +34,11 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
     _ordersStream = _repository.watchOpenTakeoutOrders();
     _platformsStream = _repository.watchOrderPlatforms();
     _repository.ensureDefaultOrderPlatforms();
+    LivePresenceService.instance.update(
+      appMode: 'waiter',
+      currentScreen: 'Para llevar',
+      currentAction: 'Viendo pedidos para llevar',
+    );
   }
 
   Future<void> _newOrder(List<OrderPlatform> platforms) async {

@@ -10,6 +10,7 @@ import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
 import '../../services/app_session.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/csv_exporter.dart';
 import '../../utils/formatters.dart';
@@ -20,11 +21,20 @@ import '../../widgets/loading_panel.dart';
 import 'cash_admin_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'kitchen_admin_screen.dart';
+import 'live_operations_screen.dart';
 import 'order_platform_catalog_screen.dart';
 import 'product_catalog_screen.dart';
 import 'table_catalog_screen.dart';
 
-enum _BackofficeSection { dashboard, sales, reports, cash, kitchen, settings }
+enum _BackofficeSection {
+  dashboard,
+  live,
+  sales,
+  reports,
+  cash,
+  kitchen,
+  settings,
+}
 
 enum _ReportKind {
   products,
@@ -62,6 +72,11 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
     final now = DateTime.now();
     _startDate = DateTime(now.year, now.month, now.day);
     _endDate = _startDate;
+    LivePresenceService.instance.update(
+      appMode: 'admin',
+      currentScreen: 'Admin',
+      currentAction: 'Viendo backoffice',
+    );
   }
 
   String get _startBusinessDate => DateFormat('yyyy-MM-dd').format(_startDate);
@@ -136,6 +151,14 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
       );
     }
 
+    final navItems = _navItems(employee);
+    final effectiveSection = navItems.any((item) => item.section == _section)
+        ? _section
+        : navItems.first.section;
+    if (effectiveSection != _section) {
+      _section = effectiveSection;
+    }
+
     return Scaffold(
       body: PremiumBackground(
         child: SafeArea(
@@ -143,7 +166,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
             builder: (context, constraints) {
               final compact = constraints.maxWidth < 760;
               final body = _BackofficeBody(
-                section: _section,
+                section: effectiveSection,
                 reportKind: _reportKind,
                 repository: _repository,
                 startDate: _startDate,
@@ -162,7 +185,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                 return Column(
                   children: [
                     _MobileTopBar(
-                      section: _section,
+                      section: effectiveSection,
                       employee: employee,
                       onSectionChanged: (value) =>
                           setState(() => _section = value),
@@ -175,7 +198,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
               return Row(
                 children: [
                   _SideNav(
-                    section: _section,
+                    section: effectiveSection,
                     employee: employee,
                     onSectionChanged: (value) =>
                         setState(() => _section = value),
@@ -401,6 +424,17 @@ class _BackofficeBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (section == _BackofficeSection.live) {
+      final employee = AppSession.instance.employee;
+      if (employee == null) {
+        return const EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin sesion',
+          message: 'Inicia sesion para ver el visor operativo.',
+        );
+      }
+      return LiveOperationsScreen(employee: employee);
+    }
     if (section == _BackofficeSection.cash) {
       return const CashAdminScreen();
     }
@@ -491,7 +525,10 @@ class _BackofficeBody extends StatelessWidget {
                     endBusinessDate: endBusinessDate,
                     onReportChanged: onReportChanged,
                   ),
-                  _ => const SizedBox.shrink(),
+                  _BackofficeSection.live => const SizedBox.shrink(),
+                  _BackofficeSection.cash => const SizedBox.shrink(),
+                  _BackofficeSection.kitchen => const SizedBox.shrink(),
+                  _BackofficeSection.settings => const SizedBox.shrink(),
                 },
               ],
             );
@@ -1646,6 +1683,12 @@ List<_NavItem> _navItems(Employee? employee) {
         Icons.dashboard_outlined,
         'Dashboard',
       ),
+    if (employee?.canViewLiveOperations == true)
+      const _NavItem(
+        _BackofficeSection.live,
+        Icons.monitor_heart_outlined,
+        'Visor operativo',
+      ),
     if (employee?.canViewAdmin == true)
       const _NavItem(_BackofficeSection.sales, Icons.receipt_long, 'Ventas'),
     if (employee?.canViewAdmin == true ||
@@ -1687,12 +1730,14 @@ bool _canUseBackoffice(Employee? employee) {
   return employee?.canViewAdmin == true ||
       employee?.canManageCash == true ||
       employee?.canViewKitchenReports == true ||
-      employee?.canAuthorizeCashWithdrawals == true;
+      employee?.canAuthorizeCashWithdrawals == true ||
+      employee?.canViewLiveOperations == true;
 }
 
 String _sectionTitle(_BackofficeSection section) {
   return switch (section) {
     _BackofficeSection.dashboard => 'Dashboard',
+    _BackofficeSection.live => 'Visor operativo',
     _BackofficeSection.sales => 'Ventas',
     _BackofficeSection.reports => 'Reportes',
     _BackofficeSection.cash => 'Caja',

@@ -6,6 +6,7 @@ import '../core/theme/brand_colors.dart';
 import '../models/employee.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../services/app_session.dart';
+import '../services/live_presence_service.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/glass.dart';
 import 'admin/cash_admin_screen.dart';
@@ -26,6 +27,16 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    LivePresenceService.instance.update(
+      appMode: 'home',
+      currentScreen: 'Inicio',
+      currentAction: 'Seleccionando modulo',
+    );
+  }
+
   Future<void> _confirmSignOut() async {
     final confirmed = await showDialog<bool>(
       context: context,

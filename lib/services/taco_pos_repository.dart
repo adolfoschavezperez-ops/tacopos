@@ -6,6 +6,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../core/constants/app_constants.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
+import '../models/active_session.dart';
+import '../models/activity_event.dart';
 import '../models/employee.dart';
 import '../models/kitchen_session.dart';
 import '../models/kitchen_stock_item.dart';
@@ -225,6 +227,8 @@ class TacoPosRepository {
 
   CollectionReference<Map<String, dynamic>> get _employeesRef =>
       _restaurantRef.collection('employees');
+  CollectionReference<Map<String, dynamic>> get _activeSessionsRef =>
+      _restaurantRef.collection('activeSessions');
 
   CollectionReference<Map<String, dynamic>> get _platformsRef =>
       _restaurantRef.collection('orderPlatforms');
@@ -316,6 +320,52 @@ class TacoPosRepository {
     });
   }
 
+  Stream<List<ActiveSession>> watchActiveSessions() {
+    return _activeSessionsRef
+        .orderBy('lastSeenAt', descending: true)
+        .limit(60)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map(ActiveSession.fromDoc).toList()..sort((a, b) {
+                final aSeen = a.lastSeenAt ?? DateTime(1970);
+                final bSeen = b.lastSeenAt ?? DateTime(1970);
+                return bSeen.compareTo(aSeen);
+              }),
+        );
+  }
+
+  Stream<List<ActivityEvent>> watchRecentActivityEvents({int limit = 40}) {
+    return _restaurantRef
+        .collection('activityLog')
+        .orderBy('createdAt', descending: true)
+        .limit(limit)
+        .snapshots()
+        .map((snapshot) => snapshot.docs.map(ActivityEvent.fromDoc).toList());
+  }
+
+  Future<void> logBackofficeIntervention({
+    required String type,
+    String? orderId,
+    String? targetId,
+    String? note,
+  }) async {
+    final employee = AppSession.instance.employee;
+    await _restaurantRef.collection('activityLog').add({
+      'type': type,
+      'orderId': orderId,
+      'targetId': targetId,
+      'note': note,
+      'adminEmployeeId': employee?.id,
+      'adminEmployeeName': employee?.name,
+      'employeeId': employee?.id,
+      'employeeName': employee?.name,
+      'actionSource': 'backoffice_live_viewer',
+      'createdAt': FieldValue.serverTimestamp(),
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
   Future<void> ensureInitialAdminEmployee() async {
     final adminRef = _employeesRef.doc('admin');
     final doc = await adminRef.get();
@@ -330,7 +380,9 @@ class TacoPosRepository {
           data['canCancelOrders'] != true ||
           data['canCancelPayments'] != true ||
           data['canCancelItems'] != true ||
-          data['canApproveKitchenCancellations'] != true) {
+          data['canApproveKitchenCancellations'] != true ||
+          data['canViewLiveOperations'] != true ||
+          data['canControlLiveOperations'] != true) {
         await adminRef.set({
           'canManageCash': true,
           'canAuthorizeCashWithdrawals': true,
@@ -342,6 +394,8 @@ class TacoPosRepository {
           'canCancelPayments': true,
           'canCancelItems': true,
           'canApproveKitchenCancellations': true,
+          'canViewLiveOperations': true,
+          'canControlLiveOperations': true,
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
@@ -372,6 +426,8 @@ class TacoPosRepository {
       'canCancelPayments': true,
       'canCancelItems': true,
       'canApproveKitchenCancellations': true,
+      'canViewLiveOperations': true,
+      'canControlLiveOperations': true,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -3619,14 +3675,18 @@ class TacoPosRepository {
   }
 
   void _requireTakeOrders() {
-    if (AppSession.instance.employee?.canTakeOrders == true) {
+    final employee = AppSession.instance.employee;
+    if (employee?.canTakeOrders == true ||
+        employee?.canControlLiveOperations == true) {
       return;
     }
     throw StateError('No tienes permiso para levantar pedidos');
   }
 
   void _requireCharge() {
-    if (AppSession.instance.employee?.canCharge == true) {
+    final employee = AppSession.instance.employee;
+    if (employee?.canCharge == true ||
+        employee?.canControlLiveOperations == true) {
       return;
     }
     throw StateError('No tienes permiso para cobrar');
@@ -3634,7 +3694,9 @@ class TacoPosRepository {
 
   void _requireCancelOrders() {
     final employee = AppSession.instance.employee;
-    if (employee?.canCancelOrders == true || employee?.canViewAdmin == true) {
+    if (employee?.canCancelOrders == true ||
+        employee?.canViewAdmin == true ||
+        employee?.canControlLiveOperations == true) {
       return;
     }
     throw StateError('No tienes permiso para cancelar tickets.');
@@ -3642,7 +3704,9 @@ class TacoPosRepository {
 
   void _requireCancelPayments() {
     final employee = AppSession.instance.employee;
-    if (employee?.canCancelPayments == true || employee?.canViewAdmin == true) {
+    if (employee?.canCancelPayments == true ||
+        employee?.canViewAdmin == true ||
+        employee?.canControlLiveOperations == true) {
       return;
     }
     throw StateError('No tienes permiso para cancelar pagos.');
@@ -3652,7 +3716,8 @@ class TacoPosRepository {
     final employee = AppSession.instance.employee;
     if (employee?.canCancelItems == true ||
         employee?.canCancelOrders == true ||
-        employee?.canViewAdmin == true) {
+        employee?.canViewAdmin == true ||
+        employee?.canControlLiveOperations == true) {
       return;
     }
     throw StateError('No tienes permiso para cancelar articulos.');
@@ -3662,7 +3727,8 @@ class TacoPosRepository {
     final employee = AppSession.instance.employee;
     if (employee?.canApproveKitchenCancellations == true ||
         employee?.canViewKitchen == true ||
-        employee?.canViewAdmin == true) {
+        employee?.canViewAdmin == true ||
+        employee?.canControlLiveOperations == true) {
       return;
     }
     throw StateError('No tienes permiso para resolver cancelaciones.');
@@ -4057,6 +4123,8 @@ class TacoPosRepository {
     required bool canCancelPayments,
     required bool canCancelItems,
     required bool canApproveKitchenCancellations,
+    required bool canViewLiveOperations,
+    required bool canControlLiveOperations,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageEmployees == true,
@@ -4090,6 +4158,8 @@ class TacoPosRepository {
       'canCancelPayments': canCancelPayments,
       'canCancelItems': canCancelItems,
       'canApproveKitchenCancellations': canApproveKitchenCancellations,
+      'canViewLiveOperations': canViewLiveOperations,
+      'canControlLiveOperations': canControlLiveOperations,
       if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

@@ -23,6 +23,9 @@ class ProductCatalogScreen extends StatefulWidget {
 
 class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
   final _searchController = TextEditingController();
+  final _minPriceController = TextEditingController();
+  final _maxPriceController = TextEditingController();
+  final _factorController = TextEditingController();
   String _categoryFilter = _allFilter;
   String _statusFilter = _allFilter;
   String _kitchenFilter = _allFilter;
@@ -33,12 +36,18 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _minPriceController.dispose();
+    _maxPriceController.dispose();
+    _factorController.dispose();
     super.dispose();
   }
 
   void _clearFilters() {
     setState(() {
       _searchController.clear();
+      _minPriceController.clear();
+      _maxPriceController.clear();
+      _factorController.clear();
       _categoryFilter = _allFilter;
       _statusFilter = _allFilter;
       _kitchenFilter = _allFilter;
@@ -130,6 +139,9 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                         stockFilter: _stockFilter,
                         platformFilter: _platformFilter,
                         sortMode: _sortMode,
+                        minPriceController: _minPriceController,
+                        maxPriceController: _maxPriceController,
+                        factorController: _factorController,
                         onSearchChanged: (_) => setState(() {}),
                         onCategoryChanged: (value) => setState(
                           () => _categoryFilter = value ?? _allFilter,
@@ -200,7 +212,15 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
 
 const _allFilter = '__all__';
 
-enum _ProductSortMode { sortOrder, name, category, price, activeFirst }
+enum _ProductSortMode {
+  sortOrder,
+  name,
+  category,
+  priceAsc,
+  priceDesc,
+  activeFirst,
+  kitchenFirst,
+}
 
 class _ProductCatalogView extends StatelessWidget {
   const _ProductCatalogView({
@@ -214,6 +234,9 @@ class _ProductCatalogView extends StatelessWidget {
     required this.stockFilter,
     required this.platformFilter,
     required this.sortMode,
+    required this.minPriceController,
+    required this.maxPriceController,
+    required this.factorController,
     required this.onSearchChanged,
     required this.onCategoryChanged,
     required this.onStatusChanged,
@@ -236,6 +259,9 @@ class _ProductCatalogView extends StatelessWidget {
   final String stockFilter;
   final String platformFilter;
   final _ProductSortMode sortMode;
+  final TextEditingController minPriceController;
+  final TextEditingController maxPriceController;
+  final TextEditingController factorController;
   final ValueChanged<String> onSearchChanged;
   final ValueChanged<String?> onCategoryChanged;
   final ValueChanged<String?> onStatusChanged;
@@ -278,6 +304,9 @@ class _ProductCatalogView extends StatelessWidget {
           stockFilter: stockFilter,
           platformFilter: platformFilter,
           sortMode: sortMode,
+          minPriceController: minPriceController,
+          maxPriceController: maxPriceController,
+          factorController: factorController,
           onSearchChanged: onSearchChanged,
           onCategoryChanged: onCategoryChanged,
           onStatusChanged: onStatusChanged,
@@ -301,7 +330,7 @@ class _ProductCatalogView extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         Text(
-          '${filteredProducts.length} resultados',
+          '${filteredProducts.length} productos encontrados de ${products.length}',
           style: const TextStyle(
             color: BrandColors.textMuted,
             fontWeight: FontWeight.w800,
@@ -312,7 +341,7 @@ class _ProductCatalogView extends StatelessWidget {
           const EmptyState(
             icon: Icons.search_off,
             title: 'Sin resultados',
-            message: 'Ajusta busqueda o filtros para ver productos.',
+            message: 'No se encontraron productos con estos filtros.',
           )
         else
           ...filteredProducts.map(
@@ -332,6 +361,9 @@ class _ProductCatalogView extends StatelessWidget {
 
   List<Product> _filterProducts(List<Product> source) {
     final query = _normalizeSearch(searchController.text);
+    final minPrice = _readDoubleFilter(minPriceController.text);
+    final maxPrice = _readDoubleFilter(maxPriceController.text);
+    final factor = _readDoubleFilter(factorController.text);
     return source.where((product) {
       if (query.isNotEmpty &&
           !_normalizeSearch(product.name).contains(query) &&
@@ -370,6 +402,20 @@ class _ProductCatalogView extends StatelessWidget {
           return false;
         }
       }
+      if (minPrice != null && product.price < minPrice) {
+        return false;
+      }
+      if (maxPrice != null && product.price > maxPrice) {
+        return false;
+      }
+      if (factor != null) {
+        final productFactor = product.recipeItems.isNotEmpty
+            ? product.recipeItems.first.consumptionFactor
+            : product.stockConsumptionQty;
+        if (productFactor == null || (productFactor - factor).abs() > 0.001) {
+          return false;
+        }
+      }
       return true;
     }).toList();
   }
@@ -388,6 +434,9 @@ class _ProductCatalogFilters extends StatelessWidget {
     required this.stockFilter,
     required this.platformFilter,
     required this.sortMode,
+    required this.minPriceController,
+    required this.maxPriceController,
+    required this.factorController,
     required this.onSearchChanged,
     required this.onCategoryChanged,
     required this.onStatusChanged,
@@ -409,6 +458,9 @@ class _ProductCatalogFilters extends StatelessWidget {
   final String stockFilter;
   final String platformFilter;
   final _ProductSortMode sortMode;
+  final TextEditingController minPriceController;
+  final TextEditingController maxPriceController;
+  final TextEditingController factorController;
   final ValueChanged<String> onSearchChanged;
   final ValueChanged<String?> onCategoryChanged;
   final ValueChanged<String?> onStatusChanged;
@@ -602,15 +654,38 @@ class _ProductCatalogFilters extends StatelessWidget {
                     child: Text('Categoria'),
                   ),
                   DropdownMenuItem(
-                    value: _ProductSortMode.price,
-                    child: Text('Precio'),
+                    value: _ProductSortMode.priceAsc,
+                    child: Text('Precio menor a mayor'),
+                  ),
+                  DropdownMenuItem(
+                    value: _ProductSortMode.priceDesc,
+                    child: Text('Precio mayor a menor'),
                   ),
                   DropdownMenuItem(
                     value: _ProductSortMode.activeFirst,
                     child: Text('Activos primero'),
                   ),
+                  DropdownMenuItem(
+                    value: _ProductSortMode.kitchenFirst,
+                    child: Text('Con rendimiento primero'),
+                  ),
                 ],
                 onChanged: onSortChanged,
+              ),
+              _SmallFilterField(
+                label: 'Precio min',
+                controller: minPriceController,
+                onChanged: onSearchChanged,
+              ),
+              _SmallFilterField(
+                label: 'Precio max',
+                controller: maxPriceController,
+                onChanged: onSearchChanged,
+              ),
+              _SmallFilterField(
+                label: 'Factor equiv.',
+                controller: factorController,
+                onChanged: onSearchChanged,
               ),
               OutlinedButton.icon(
                 onPressed: onClearFilters,
@@ -631,7 +706,35 @@ class _ProductCatalogFilters extends StatelessWidget {
       kitchenFilter == _allFilter &&
       stockFilter == _allFilter &&
       platformFilter == _allFilter &&
+      minPriceController.text.isEmpty &&
+      maxPriceController.text.isEmpty &&
+      factorController.text.isEmpty &&
       sortMode == _ProductSortMode.sortOrder;
+}
+
+class _SmallFilterField extends StatelessWidget {
+  const _SmallFilterField({
+    required this.label,
+    required this.controller,
+    required this.onChanged,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 132,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        decoration: InputDecoration(labelText: label),
+      ),
+    );
+  }
 }
 
 class _FilterDropdown<T> extends StatelessWidget {
@@ -765,12 +868,22 @@ int _compareProducts(Product a, Product b, _ProductSortMode sortMode) {
       return categoryCompare != 0
           ? categoryCompare
           : _compareText(a.name, b.name);
-    case _ProductSortMode.price:
+    case _ProductSortMode.priceAsc:
       final priceCompare = a.price.compareTo(b.price);
+      return priceCompare != 0 ? priceCompare : _compareText(a.name, b.name);
+    case _ProductSortMode.priceDesc:
+      final priceCompare = b.price.compareTo(a.price);
       return priceCompare != 0 ? priceCompare : _compareText(a.name, b.name);
     case _ProductSortMode.activeFirst:
       final activeCompare = (b.active ? 1 : 0).compareTo(a.active ? 1 : 0);
       return activeCompare != 0 ? activeCompare : _compareText(a.name, b.name);
+    case _ProductSortMode.kitchenFirst:
+      final aKitchen = a.affectsKitchenStock && a.recipeItems.isNotEmpty;
+      final bKitchen = b.affectsKitchenStock && b.recipeItems.isNotEmpty;
+      final kitchenCompare = (bKitchen ? 1 : 0).compareTo(aKitchen ? 1 : 0);
+      return kitchenCompare != 0
+          ? kitchenCompare
+          : _compareText(a.name, b.name);
     case _ProductSortMode.sortOrder:
       final categoryCompare = compareCategories(a.category, b.category);
       if (categoryCompare != 0) return categoryCompare;
@@ -785,6 +898,12 @@ int _compareText(String a, String b) {
 
 String _normalizeSearch(String value) {
   return normalizeCategory(value);
+}
+
+double? _readDoubleFilter(String value) {
+  final clean = value.trim();
+  if (clean.isEmpty) return null;
+  return double.tryParse(clean.replaceAll(',', '.'));
 }
 
 class _ProductDialog extends StatefulWidget {

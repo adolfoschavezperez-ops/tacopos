@@ -133,6 +133,8 @@ const _employees = [
     'canCloseKitchen': true,
     'canViewKitchenReports': true,
     'canManageKitchenStock': true,
+    'canViewLiveOperations': true,
+    'canControlLiveOperations': true,
   },
   {
     'id': 'ricardo_bernal',
@@ -153,6 +155,8 @@ const _employees = [
     'canCloseKitchen': false,
     'canViewKitchenReports': false,
     'canManageKitchenStock': false,
+    'canViewLiveOperations': false,
+    'canControlLiveOperations': false,
   },
   {
     'id': 'gael',
@@ -173,6 +177,8 @@ const _employees = [
     'canCloseKitchen': false,
     'canViewKitchenReports': false,
     'canManageKitchenStock': false,
+    'canViewLiveOperations': false,
+    'canControlLiveOperations': false,
   },
 ];
 
