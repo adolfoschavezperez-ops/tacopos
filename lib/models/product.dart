@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'product_recipe_item.dart';
+
 class Product {
   const Product({
     required this.id,
@@ -15,6 +17,7 @@ class Product {
     this.kitchenStockItemName,
     this.kitchenStockUnit,
     this.stockConsumptionQty,
+    this.recipeItems = const [],
   });
 
   final String id;
@@ -30,10 +33,36 @@ class Product {
   final String? kitchenStockItemName;
   final String? kitchenStockUnit;
   final double? stockConsumptionQty;
+  final List<ProductRecipeItem> recipeItems;
+
+  List<Map<String, dynamic>> get recipeItemsMap =>
+      ProductRecipeItem.toMapList(recipeItems);
 
   factory Product.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
     final category = _readString(data['category'], 'General');
+    final stockConsumptionQty = data['stockConsumptionQty'] is num
+        ? (data['stockConsumptionQty'] as num).toDouble()
+        : null;
+    final kitchenStockItemId = data['kitchenStockItemId'] as String?;
+    final kitchenStockItemName = data['kitchenStockItemName'] as String?;
+    final kitchenStockUnit = data['kitchenStockUnit'] as String?;
+    final recipeItems = ProductRecipeItem.readList(
+      data['recipeItems'],
+      legacyStockItemId: kitchenStockItemId,
+      legacyStockItemName: kitchenStockItemName,
+      legacyStockUnit: kitchenStockUnit,
+      legacyConsumptionFactor: stockConsumptionQty,
+    );
+    final affectsKitchenStock =
+        _readBool(
+          data['affectsKitchenStock'],
+          fallback: _defaultAffectsKitchenStock(
+            category,
+            data['name'] as String?,
+          ),
+        ) ||
+        recipeItems.isNotEmpty;
 
     return Product(
       id: doc.id,
@@ -47,19 +76,12 @@ class Product {
       ),
       sortOrder: _readInt(data['sortOrder']),
       platformPrices: _readPlatformPrices(data['platformPrices']),
-      affectsKitchenStock: _readBool(
-        data['affectsKitchenStock'],
-        fallback: _defaultAffectsKitchenStock(
-          category,
-          data['name'] as String?,
-        ),
-      ),
-      kitchenStockItemId: data['kitchenStockItemId'] as String?,
-      kitchenStockItemName: data['kitchenStockItemName'] as String?,
-      kitchenStockUnit: data['kitchenStockUnit'] as String?,
-      stockConsumptionQty: data['stockConsumptionQty'] is num
-          ? (data['stockConsumptionQty'] as num).toDouble()
-          : null,
+      affectsKitchenStock: affectsKitchenStock,
+      kitchenStockItemId: kitchenStockItemId,
+      kitchenStockItemName: kitchenStockItemName,
+      kitchenStockUnit: kitchenStockUnit,
+      stockConsumptionQty: stockConsumptionQty,
+      recipeItems: recipeItems,
     );
   }
 
@@ -148,7 +170,9 @@ class Product {
   static bool _defaultAffectsKitchenStock(String category, String? name) {
     final normalizedCategory = category.toLowerCase().trim();
     final normalizedName = (name ?? '').toLowerCase().trim();
-    if (normalizedCategory == 'tacos') {
+    if (normalizedCategory == 'tacos' ||
+        normalizedName.contains('taco') ||
+        normalizedName.contains('gringa')) {
       return true;
     }
     if (normalizedCategory == 'bebidas' ||

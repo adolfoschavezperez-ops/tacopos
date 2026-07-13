@@ -15,6 +15,7 @@ import '../models/order_platform.dart';
 import '../models/payment.dart';
 import '../models/pos_table.dart';
 import '../models/product.dart';
+import '../models/product_recipe_item.dart';
 import 'app_session.dart';
 
 class KitchenOrderBundle {
@@ -57,9 +58,19 @@ class KitchenOrderBundle {
         .join(' · ');
   }
 
-  List<MapEntry<String, int>> get ingredientSummary {
-    final counts = <String, int>{};
+  List<MapEntry<String, double>> get ingredientSummary {
+    final counts = <String, double>{};
     for (final item in items) {
+      if (item.recipeItems.isNotEmpty) {
+        for (final recipeItem in item.recipeItems) {
+          final key = recipeItem.kitchenStockItemName.trim().isNotEmpty
+              ? recipeItem.kitchenStockItemName.trim()
+              : recipeItem.kitchenStockItemId;
+          counts[key] =
+              (counts[key] ?? 0) + item.qty * recipeItem.consumptionFactor;
+        }
+        continue;
+      }
       final key =
           (item.kitchenStockItemName?.trim().isNotEmpty == true
                   ? item.kitchenStockItemName
@@ -819,14 +830,16 @@ class TacoPosRepository {
   }
 
   Future<void> ensureDefaultKitchenStockItems() async {
-    final snapshot = await _kitchenStockItemsRef.limit(1).get();
-    if (snapshot.docs.isNotEmpty) {
-      return;
-    }
+    final snapshot = await _kitchenStockItemsRef.get();
+    final existingIds = snapshot.docs.map((doc) => doc.id).toSet();
 
     final batch = _db.batch();
+    var hasUpdates = false;
     for (final item in _defaultKitchenStockItems) {
       final id = item['id']! as String;
+      if (existingIds.contains(id)) {
+        continue;
+      }
       batch.set(_kitchenStockItemsRef.doc(id), {
         ...item,
         'active': true,
@@ -837,8 +850,11 @@ class TacoPosRepository {
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      hasUpdates = true;
     }
-    await batch.commit();
+    if (hasUpdates) {
+      await batch.commit();
+    }
   }
 
   Future<void> ensureKitchenStockLinksForProducts() async {
@@ -853,21 +869,30 @@ class TacoPosRepository {
     var hasUpdates = false;
 
     for (final doc in productsSnapshot.docs) {
+      final data = doc.data();
+      final hasExplicitRecipe = ProductRecipeItem.readList(
+        data['recipeItems'],
+      ).isNotEmpty;
       final product = Product.fromDoc(doc);
-      if (product.kitchenStockItemId != null ||
-          !_defaultProductAffectsKitchenStock(product)) {
+      if (hasExplicitRecipe ||
+          (!_defaultProductAffectsKitchenStock(product) &&
+              product.recipeItems.isEmpty)) {
         continue;
       }
-      final stockItemId = _stockItemIdForProductName(product.name);
-      if (stockItemId == null) {
+      var recipeItems = _defaultRecipeItemsForProduct(product, stockById);
+      if (recipeItems.isEmpty && product.recipeItems.isNotEmpty) {
+        recipeItems = product.recipeItems;
+      }
+      if (recipeItems.isEmpty) {
         continue;
       }
-      final stockItem =
-          stockById[stockItemId] ??
-          _fallbackStockItemForProduct(product, stockItemId);
-      if (!stockById.containsKey(stockItemId)) {
-        batch.set(_kitchenStockItemsRef.doc(stockItemId), {
-          'id': stockItemId,
+      for (final recipeItem in recipeItems) {
+        if (stockById.containsKey(recipeItem.kitchenStockItemId)) {
+          continue;
+        }
+        final stockItem = _fallbackStockItemForRecipeItem(recipeItem, product);
+        batch.set(_kitchenStockItemsRef.doc(stockItem.id), {
+          'id': stockItem.id,
           'name': stockItem.name,
           'category': stockItem.category,
           'unit': stockItem.unit,
@@ -879,13 +904,16 @@ class TacoPosRepository {
           'createdAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
-        stockById[stockItemId] = stockItem;
+        stockById[stockItem.id] = stockItem;
       }
+      final primary = recipeItems.first;
       batch.set(doc.reference, {
         'affectsKitchenStock': true,
-        'kitchenStockItemId': stockItemId,
-        'kitchenStockItemName': stockItem.name,
-        'kitchenStockUnit': stockItem.unit,
+        'recipeItems': ProductRecipeItem.toMapList(recipeItems),
+        'kitchenStockItemId': primary.kitchenStockItemId,
+        'kitchenStockItemName': primary.kitchenStockItemName,
+        'kitchenStockUnit': primary.kitchenStockUnit,
+        'stockConsumptionQty': primary.consumptionFactor,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       hasUpdates = true;
@@ -899,12 +927,19 @@ class TacoPosRepository {
   Future<List<KitchenStockItem>> _activeControlledKitchenStockItems() async {
     final stockSnapshot = await _kitchenStockItemsRef.get();
     final productSnapshot = await _productsRef.get();
-    final linkedStockIds = productSnapshot.docs
-        .map(Product.fromDoc)
-        .where((product) => product.active && product.affectsKitchenStock)
-        .map((product) => product.kitchenStockItemId)
-        .whereType<String>()
-        .toSet();
+    final linkedStockIds = <String>{};
+    for (final product in productSnapshot.docs.map(Product.fromDoc)) {
+      if (!product.active || !product.affectsKitchenStock) {
+        continue;
+      }
+      for (final recipeItem in product.recipeItems) {
+        linkedStockIds.add(recipeItem.kitchenStockItemId);
+      }
+      final legacyId = product.kitchenStockItemId;
+      if (legacyId != null && legacyId.trim().isNotEmpty) {
+        linkedStockIds.add(legacyId);
+      }
+    }
 
     return stockSnapshot.docs
         .map(KitchenStockItem.fromDoc)
@@ -1547,6 +1582,7 @@ class TacoPosRepository {
       'expectedCardChargedAmount': 0.0,
       'expectedCardBaseAmount': 0.0,
       'expectedCardSurchargeAmount': 0.0,
+      'expectedCardFeeAbsorbedAmount': 0.0,
       'expectedPlatformAmount': 0.0,
       'expectedEmployeeConsumptionAmount': 0.0,
       'totalExpectedRealMoney': 0.0,
@@ -1783,6 +1819,7 @@ class TacoPosRepository {
       'expectedCardChargedAmount': totals.expectedCardChargedAmount,
       'expectedCardBaseAmount': totals.expectedCardBaseAmount,
       'expectedCardSurchargeAmount': totals.expectedCardSurchargeAmount,
+      'expectedCardFeeAbsorbedAmount': totals.expectedCardFeeAbsorbedAmount,
       'expectedPlatformAmount': totals.expectedPlatformAmount,
       'expectedEmployeeConsumptionAmount':
           totals.expectedEmployeeConsumptionAmount,
@@ -1873,6 +1910,7 @@ class TacoPosRepository {
     double cardCharged = 0;
     double cardBase = 0;
     double cardSurcharge = 0;
+    double cardFeeAbsorbed = 0;
     double platform = 0;
     double employeeConsumption = 0;
 
@@ -1885,6 +1923,7 @@ class TacoPosRepository {
           cardCharged += payment.chargedAmount;
           cardBase += payment.baseAmount;
           cardSurcharge += payment.surchargeAmount;
+          cardFeeAbsorbed += payment.cardFeeAbsorbedAmount;
           break;
         case 'platform_paid':
           platform += payment.baseAmount;
@@ -1907,6 +1946,7 @@ class TacoPosRepository {
       expectedCardChargedAmount: cardCharged,
       expectedCardBaseAmount: cardBase,
       expectedCardSurchargeAmount: cardSurcharge,
+      expectedCardFeeAbsorbedAmount: cardFeeAbsorbed,
       expectedPlatformAmount: platform,
       expectedEmployeeConsumptionAmount: employeeConsumption,
       approvedWithdrawalsTotal: approvedWithdrawals,
@@ -1971,6 +2011,14 @@ class TacoPosRepository {
             ['cancelled', 'voided'].contains(item.paymentStatus)) {
           continue;
         }
+        if (item.recipeItems.isNotEmpty) {
+          for (final recipeItem in item.recipeItems) {
+            sold[recipeItem.kitchenStockItemId] =
+                (sold[recipeItem.kitchenStockItemId] ?? 0) +
+                item.qty * recipeItem.consumptionFactor;
+          }
+          continue;
+        }
         final stockItemId =
             item.kitchenStockItemId ??
             _stockItemIdForProductName(item.productName);
@@ -2000,10 +2048,123 @@ class TacoPosRepository {
     return null;
   }
 
+  List<ProductRecipeItem> _defaultRecipeItemsForProduct(
+    Product product,
+    Map<String, KitchenStockItem> stockById,
+  ) {
+    final normalizedName = _normalizeName(product.name);
+    final normalizedCategory = _normalizeName(product.category);
+    final meatId = _stockItemIdForProductName(product.name);
+    final isDrink =
+        normalizedCategory == 'bebidas' ||
+        normalizedName.contains('refresco') ||
+        normalizedName.contains('coca');
+    if (isDrink) {
+      return [
+        _recipeItemForStockId(
+          'refresco_coca_cola',
+          stockById,
+          fallbackName: 'Refresco Coca Cola',
+          fallbackUnit: 'piece',
+          factor: 1,
+        ),
+      ];
+    }
+
+    if (meatId == null) {
+      return const [];
+    }
+
+    if (normalizedName.contains('gringa')) {
+      final isGrande =
+          normalizedName.contains('grande') ||
+          normalizedName.contains('gde') ||
+          normalizedName.contains('gringa grande');
+      return [
+        _recipeItemForStockId(
+          meatId,
+          stockById,
+          fallbackName: _titleFromId(meatId),
+          fallbackUnit: 'kg',
+          factor: isGrande ? 3 : 2,
+        ),
+        _recipeItemForStockId(
+          'queso',
+          stockById,
+          fallbackName: 'Queso',
+          fallbackUnit: 'kg',
+          factor: isGrande ? 2 : 1,
+        ),
+        _recipeItemForStockId(
+          'tortilla_harina',
+          stockById,
+          fallbackName: 'Tortilla de harina',
+          fallbackUnit: 'kg',
+          factor: 1,
+        ),
+      ];
+    }
+
+    if (normalizedCategory == 'tacos' || normalizedName.contains('taco')) {
+      return [
+        _recipeItemForStockId(
+          meatId,
+          stockById,
+          fallbackName: _titleFromId(meatId),
+          fallbackUnit: 'kg',
+          factor: 1,
+        ),
+        _recipeItemForStockId(
+          'tortilla_maiz',
+          stockById,
+          fallbackName: 'Tortilla de maiz',
+          fallbackUnit: 'kg',
+          factor: 1,
+        ),
+      ];
+    }
+
+    return [
+      _recipeItemForStockId(
+        meatId,
+        stockById,
+        fallbackName: _titleFromId(meatId),
+        fallbackUnit: 'kg',
+        factor: 1,
+      ),
+    ];
+  }
+
+  ProductRecipeItem _recipeItemForStockId(
+    String stockItemId,
+    Map<String, KitchenStockItem> stockById, {
+    required String fallbackName,
+    required String fallbackUnit,
+    required double factor,
+  }) {
+    final stockItem = stockById[stockItemId];
+    return ProductRecipeItem(
+      kitchenStockItemId: stockItemId,
+      kitchenStockItemName: stockItem?.name ?? fallbackName,
+      kitchenStockUnit: stockItem?.unit ?? fallbackUnit,
+      consumptionFactor: factor,
+    );
+  }
+
+  String _titleFromId(String id) {
+    return id
+        .split('_')
+        .where((part) => part.isNotEmpty)
+        .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
+        .join(' ');
+  }
+
   bool _defaultProductAffectsKitchenStock(Product product) {
     final category = _normalizeName(product.category);
     final name = _normalizeName(product.name);
-    if (category == 'tacos') {
+    if (category == 'tacos' ||
+        name.contains('taco') ||
+        name.contains('gringa')) {
       return true;
     }
     if (category == 'bebidas' || name.contains('refresco')) {
@@ -2012,19 +2173,42 @@ class TacoPosRepository {
     return false;
   }
 
-  KitchenStockItem _fallbackStockItemForProduct(Product product, String id) {
+  KitchenStockItem _fallbackStockItemForRecipeItem(
+    ProductRecipeItem recipeItem,
+    Product product,
+  ) {
+    final id = recipeItem.kitchenStockItemId;
     final category = _normalizeName(product.category);
-    final name = _normalizeName(product.name);
-    final isDrink = category == 'bebidas' || name.contains('refresco');
+    final isDrink =
+        recipeItem.kitchenStockUnit == 'piece' ||
+        category == 'bebidas' ||
+        id.contains('refresco');
+    final isTortilla = id.contains('tortilla');
     return KitchenStockItem(
       id: id,
-      name: product.name,
-      category: isDrink ? 'drink' : 'meat',
-      unit: isDrink ? 'piece' : 'kg',
+      name: recipeItem.kitchenStockItemName,
+      category: isDrink
+          ? 'drink'
+          : isTortilla
+          ? 'tortilla'
+          : id == 'queso'
+          ? 'dairy'
+          : 'meat',
+      unit: recipeItem.kitchenStockUnit,
       active: true,
-      sortOrder: isDrink ? 50 : 20,
-      optimalConsumptionPerSaleQty: isDrink ? 1 : 50,
-      optimalConsumptionUnit: isDrink ? 'piece_per_item' : 'g_per_item',
+      sortOrder: isDrink
+          ? 50
+          : isTortilla
+          ? 15
+          : id == 'queso'
+          ? 14
+          : 20,
+      optimalConsumptionPerSaleQty: recipeItem.kitchenStockUnit == 'piece'
+          ? 1
+          : 50,
+      optimalConsumptionUnit: recipeItem.kitchenStockUnit == 'piece'
+          ? 'piece_per_item'
+          : 'g_per_item',
     );
   }
 
@@ -2351,6 +2535,9 @@ class TacoPosRepository {
       ..._employeeAuditFields(prefix: 'createdBy'),
       'sendToKitchen': product.sendToKitchen,
       'affectsKitchenStock': product.affectsKitchenStock,
+      'recipeItems': product.affectsKitchenStock
+          ? ProductRecipeItem.toMapList(product.recipeItems)
+          : const [],
       'kitchenStockItemId': product.affectsKitchenStock
           ? product.kitchenStockItemId
           : null,
@@ -3310,9 +3497,11 @@ class TacoPosRepository {
       throw ArgumentError('Selecciona un empleado.');
     }
 
-    final surchargeRate = method == 'card' ? cardSurchargeRate : 0.0;
-    final surchargeAmount = baseAmount * surchargeRate;
-    final chargedAmount = baseAmount + surchargeAmount;
+    final cardFeeRate = method == 'card' ? cardSurchargeRate : 0.0;
+    final cardFeeAbsorbedAmount = baseAmount * cardFeeRate;
+    final surchargeRate = 0.0;
+    final surchargeAmount = 0.0;
+    final chargedAmount = baseAmount;
     if (method == 'cash' &&
         cashDetails != null &&
         cashDetails.receivedAmount + 0.01 < chargedAmount) {
@@ -3333,6 +3522,8 @@ class TacoPosRepository {
       'surchargeRate': surchargeRate,
       'surchargeAmount': surchargeAmount,
       'chargedAmount': chargedAmount,
+      'cardFeeRate': cardFeeRate,
+      'cardFeeAbsorbedAmount': cardFeeAbsorbedAmount,
       'employeeId': employeeId,
       'employeeName': employeeName,
       'platformId': platformId,
@@ -3727,9 +3918,7 @@ class TacoPosRepository {
     required bool active,
     required bool sendToKitchen,
     required bool affectsKitchenStock,
-    String? kitchenStockItemId,
-    String? kitchenStockItemName,
-    String? kitchenStockUnit,
+    required List<ProductRecipeItem> recipeItems,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageProducts == true,
@@ -3739,30 +3928,22 @@ class TacoPosRepository {
         ? _productsRef.doc()
         : _productsRef.doc(productId);
     final current = await _productsRef.get();
-    String? resolvedStockItemId = kitchenStockItemId;
-    String? resolvedStockItemName = kitchenStockItemName;
-    String? resolvedStockUnit = kitchenStockUnit;
-    if (affectsKitchenStock &&
-        (resolvedStockItemId == null || resolvedStockItemId.trim().isEmpty)) {
-      resolvedStockItemId = _stockItemIdForProductName(name) ?? docRef.id;
-      resolvedStockItemName = name.trim();
-      final normalizedCategory = _normalizeName(category);
-      resolvedStockUnit = normalizedCategory == 'bebidas' ? 'piece' : 'kg';
-      await _kitchenStockItemsRef.doc(resolvedStockItemId).set({
-        'id': resolvedStockItemId,
-        'name': resolvedStockItemName,
-        'category': normalizedCategory == 'bebidas' ? 'drink' : 'meat',
-        'unit': resolvedStockUnit,
-        'active': true,
-        'sortOrder': current.docs.length + 20,
-        'optimalConsumptionPerSaleQty': resolvedStockUnit == 'piece' ? 1 : 50,
-        'optimalConsumptionUnit': resolvedStockUnit == 'piece'
-            ? 'piece_per_item'
-            : 'g_per_item',
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    final cleanRecipeItems = affectsKitchenStock
+        ? recipeItems.where((item) => item.isValid).toList()
+        : <ProductRecipeItem>[];
+    if (affectsKitchenStock && cleanRecipeItems.isEmpty) {
+      throw ArgumentError('Agrega al menos un insumo a la receta.');
     }
+    final recipeIds = <String>{};
+    for (final item in cleanRecipeItems) {
+      if (item.consumptionFactor <= 0) {
+        throw ArgumentError('Cada factor de receta debe ser mayor a cero.');
+      }
+      if (!recipeIds.add(item.kitchenStockItemId)) {
+        throw ArgumentError('No repitas insumos dentro de la receta.');
+      }
+    }
+    final primary = cleanRecipeItems.isEmpty ? null : cleanRecipeItems.first;
 
     await docRef.set({
       'id': docRef.id,
@@ -3773,11 +3954,11 @@ class TacoPosRepository {
       'active': active,
       'sendToKitchen': sendToKitchen,
       'affectsKitchenStock': affectsKitchenStock,
-      'kitchenStockItemId': affectsKitchenStock ? resolvedStockItemId : null,
-      'kitchenStockItemName': affectsKitchenStock
-          ? resolvedStockItemName
-          : null,
-      'kitchenStockUnit': affectsKitchenStock ? resolvedStockUnit : null,
+      'recipeItems': ProductRecipeItem.toMapList(cleanRecipeItems),
+      'kitchenStockItemId': primary?.kitchenStockItemId,
+      'kitchenStockItemName': primary?.kitchenStockItemName,
+      'kitchenStockUnit': primary?.kitchenStockUnit,
+      'stockConsumptionQty': primary?.consumptionFactor,
       'sortOrder': current.docs.length + 1,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -4017,24 +4198,38 @@ const _defaultKitchenStockItems = [
     'sortOrder': 10,
   },
   {
+    'id': 'tortilla_harina',
+    'name': 'Tortilla de harina',
+    'category': 'tortilla',
+    'unit': 'kg',
+    'sortOrder': 11,
+  },
+  {
+    'id': 'queso',
+    'name': 'Queso',
+    'category': 'dairy',
+    'unit': 'kg',
+    'sortOrder': 12,
+  },
+  {
     'id': 'refresco_coca_cola',
     'name': 'Refresco Coca Cola',
     'category': 'drink',
     'unit': 'piece',
-    'sortOrder': 11,
+    'sortOrder': 13,
   },
   {
     'id': 'refrescos_surtidos',
     'name': 'Refrescos surtidos',
     'category': 'drink',
     'unit': 'piece',
-    'sortOrder': 12,
+    'sortOrder': 14,
   },
   {
     'id': 'agua_fresca',
     'name': 'Agua fresca',
     'category': 'water',
     'unit': 'liter',
-    'sortOrder': 13,
+    'sortOrder': 15,
   },
 ];

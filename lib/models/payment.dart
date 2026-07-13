@@ -12,6 +12,8 @@ class Payment {
     required this.surchargeRate,
     required this.surchargeAmount,
     required this.chargedAmount,
+    this.cardFeeRate = 0,
+    this.cardFeeAbsorbedAmount = 0,
     this.personNumber,
     this.personName,
     this.employeeId,
@@ -41,6 +43,8 @@ class Payment {
   final double surchargeRate;
   final double surchargeAmount;
   final double chargedAmount;
+  final double cardFeeRate;
+  final double cardFeeAbsorbedAmount;
   final int? personNumber;
   final String? personName;
   final String? employeeId;
@@ -69,6 +73,10 @@ class Payment {
     final baseAmount =
         (data['baseAmount'] as num?)?.toDouble() ?? legacyAmount ?? 0;
     final surchargeAmount = (data['surchargeAmount'] as num?)?.toDouble() ?? 0;
+    final method = data['method'] as String? ?? 'cash';
+    final cardFeeAbsorbedAmount =
+        (data['cardFeeAbsorbedAmount'] as num?)?.toDouble() ??
+        (method == 'card' && surchargeAmount > 0 ? surchargeAmount : 0);
 
     return Payment(
       id: doc.id,
@@ -76,7 +84,7 @@ class Payment {
       tableId: data['tableId'] as String? ?? '',
       tableName: data['tableName'] as String? ?? '',
       type: data['type'] as String? ?? 'full_table',
-      method: data['method'] as String? ?? 'cash',
+      method: method,
       baseAmount: baseAmount,
       surchargeRate: (data['surchargeRate'] as num?)?.toDouble() ?? 0,
       surchargeAmount: surchargeAmount,
@@ -84,6 +92,12 @@ class Payment {
           (data['chargedAmount'] as num?)?.toDouble() ??
           legacyAmount ??
           baseAmount + surchargeAmount,
+      cardFeeRate:
+          (data['cardFeeRate'] as num?)?.toDouble() ??
+          (cardFeeAbsorbedAmount > 0 && baseAmount > 0
+              ? cardFeeAbsorbedAmount / baseAmount
+              : 0),
+      cardFeeAbsorbedAmount: cardFeeAbsorbedAmount,
       personNumber: (data['personNumber'] as num?)?.toInt(),
       personName: data['personName'] as String?,
       employeeId: data['employeeId'] as String?,

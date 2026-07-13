@@ -217,7 +217,8 @@ class SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 700;
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 650 || size.height < 750;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [

@@ -14,6 +14,7 @@ class CashSession {
     required this.expectedCardChargedAmount,
     required this.expectedCardBaseAmount,
     required this.expectedCardSurchargeAmount,
+    required this.expectedCardFeeAbsorbedAmount,
     required this.expectedPlatformAmount,
     required this.expectedEmployeeConsumptionAmount,
     required this.totalExpectedRealMoney,
@@ -49,6 +50,7 @@ class CashSession {
   final double expectedCardChargedAmount;
   final double expectedCardBaseAmount;
   final double expectedCardSurchargeAmount;
+  final double expectedCardFeeAbsorbedAmount;
   final double expectedPlatformAmount;
   final double expectedEmployeeConsumptionAmount;
   final double totalExpectedRealMoney;
@@ -64,9 +66,15 @@ class CashSession {
   final String notes;
 
   bool get isOpen => status == 'open';
+  double get estimatedCardNetAmount =>
+      expectedCardChargedAmount - expectedCardFeeAbsorbedAmount;
 
   factory CashSession.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
+    final legacyCardSurcharge = _toDouble(data['expectedCardSurchargeAmount']);
+    final cardFeeAbsorbed = _toDouble(data['expectedCardFeeAbsorbedAmount']) > 0
+        ? _toDouble(data['expectedCardFeeAbsorbedAmount'])
+        : legacyCardSurcharge;
 
     return CashSession(
       id: doc.id,
@@ -84,9 +92,8 @@ class CashSession {
       expectedCashAmount: _toDouble(data['expectedCashAmount']),
       expectedCardChargedAmount: _toDouble(data['expectedCardChargedAmount']),
       expectedCardBaseAmount: _toDouble(data['expectedCardBaseAmount']),
-      expectedCardSurchargeAmount: _toDouble(
-        data['expectedCardSurchargeAmount'],
-      ),
+      expectedCardSurchargeAmount: legacyCardSurcharge,
+      expectedCardFeeAbsorbedAmount: cardFeeAbsorbed,
       expectedPlatformAmount: _toDouble(data['expectedPlatformAmount']),
       expectedEmployeeConsumptionAmount: _toDouble(
         data['expectedEmployeeConsumptionAmount'],
@@ -124,6 +131,7 @@ class CashSessionTotals {
     this.expectedCardChargedAmount = 0,
     this.expectedCardBaseAmount = 0,
     this.expectedCardSurchargeAmount = 0,
+    this.expectedCardFeeAbsorbedAmount = 0,
     this.expectedPlatformAmount = 0,
     this.expectedEmployeeConsumptionAmount = 0,
     this.approvedWithdrawalsTotal = 0,
@@ -135,6 +143,10 @@ class CashSessionTotals {
   final double expectedCardChargedAmount;
   final double expectedCardBaseAmount;
   final double expectedCardSurchargeAmount;
+  final double expectedCardFeeAbsorbedAmount;
+
+  double get estimatedCardNetAmount =>
+      expectedCardChargedAmount - expectedCardFeeAbsorbedAmount;
   final double expectedPlatformAmount;
   final double expectedEmployeeConsumptionAmount;
   final double approvedWithdrawalsTotal;

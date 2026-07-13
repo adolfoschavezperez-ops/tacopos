@@ -382,7 +382,7 @@ class _IngredientSummary extends StatelessWidget {
             ),
           ),
           child: Text(
-            '${entry.key} x ${entry.value}',
+            '${entry.key} x ${_qty(entry.value)}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
@@ -395,6 +395,11 @@ class _IngredientSummary extends StatelessWidget {
       }).toList(),
     );
   }
+}
+
+String _qty(double value) {
+  if (value == value.roundToDouble()) return value.toStringAsFixed(0);
+  return value.toStringAsFixed(2);
 }
 
 class KitchenElapsedBadge extends StatefulWidget {

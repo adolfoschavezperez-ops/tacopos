@@ -25,9 +25,9 @@ class BrandedScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final compact = width < 700;
-    final toolbarHeight = compact ? 58.0 : 68.0;
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 650 || size.height < 750;
+    final toolbarHeight = compact ? 52.0 : 68.0;
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: PreferredSize(
@@ -72,9 +72,9 @@ class BrandedScaffold extends StatelessWidget {
                 ],
               ),
               actions: [
-                _OperationDateBadge(compact: compact),
+                if (!compact) _OperationDateBadge(compact: compact),
                 _SessionBadge(compact: compact),
-                _ConnectionStatusBadge(compact: compact),
+                if (!compact) _ConnectionStatusBadge(compact: compact),
                 if (actions != null) ...actions!,
               ],
             ),

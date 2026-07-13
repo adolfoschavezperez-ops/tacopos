@@ -505,7 +505,9 @@ class _OrderScreenState extends State<OrderScreen> {
   Widget _buildBody(AsyncSnapshot<PosOrder?> orderSnapshot) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 960;
+        final compact =
+            constraints.maxWidth < 650 || constraints.maxHeight < 750;
+        final wide = constraints.maxWidth >= 960 && !compact;
         final selectedPerson = _selectedPerson < 1 ? 1 : _selectedPerson;
         final order = orderSnapshot.data;
         final canTakeOrders =
@@ -588,6 +590,47 @@ class _OrderScreenState extends State<OrderScreen> {
                   ),
                 ),
               ],
+            ),
+          );
+        }
+
+        if (compact) {
+          return DefaultTabController(
+            length: 2,
+            child: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Column(
+                children: [
+                  const SizedBox(
+                    height: 38,
+                    child: TabBar(
+                      tabs: [
+                        Tab(text: 'Orden'),
+                        Tab(text: 'Productos'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        GlassPanel(
+                          padding: EdgeInsets.zero,
+                          borderRadius: 14,
+                          blur: 8,
+                          child: summary,
+                        ),
+                        GlassPanel(
+                          padding: EdgeInsets.zero,
+                          borderRadius: 14,
+                          blur: 8,
+                          child: menu,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           );
         }
@@ -997,6 +1040,9 @@ class _OrderSummaryState extends State<_OrderSummary> {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 650 || size.height < 750;
+    final edgePadding = compact ? 10.0 : 18.0;
     final grouped = <int, List<OrderItem>>{};
     for (final item in widget.items) {
       grouped.putIfAbsent(item.personNumber, () => []).add(item);
@@ -1007,7 +1053,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: const EdgeInsets.all(18),
+          padding: EdgeInsets.all(edgePadding),
           child: Row(
             children: [
               Expanded(
@@ -1038,9 +1084,9 @@ class _OrderSummaryState extends State<_OrderSummary> {
                   ),
                   MoneyText(
                     value: widget.order.total,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: BrandColors.accentYellow,
-                      fontSize: 28,
+                      fontSize: compact ? 22 : 28,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -1050,9 +1096,9 @@ class _OrderSummaryState extends State<_OrderSummary> {
           ),
         ),
         SizedBox(
-          height: 58,
+          height: compact ? 44 : 58,
           child: ListView.separated(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
+            padding: EdgeInsets.symmetric(horizontal: edgePadding),
             scrollDirection: Axis.horizontal,
             itemCount: widget.personCount + 1,
             separatorBuilder: (_, _) => const SizedBox(width: 10),
@@ -1079,7 +1125,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
             },
           ),
         ),
-        const SizedBox(height: 6),
+        SizedBox(height: compact ? 2 : 6),
         Expanded(
           child: widget.items.isEmpty
               ? const EmptyState(
@@ -1089,7 +1135,12 @@ class _OrderSummaryState extends State<_OrderSummary> {
                 )
               : ListView.builder(
                   controller: _scrollController,
-                  padding: const EdgeInsets.fromLTRB(18, 8, 18, 18),
+                  padding: EdgeInsets.fromLTRB(
+                    edgePadding,
+                    compact ? 4 : 8,
+                    edgePadding,
+                    edgePadding,
+                  ),
                   itemCount: widget.personCount,
                   itemBuilder: (context, index) {
                     final person = index + 1;
@@ -1156,13 +1207,15 @@ class _PersonItemsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 650 || size.height < 750;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 14),
+      padding: EdgeInsets.only(bottom: compact ? 8 : 14),
       child: GlassCard(
         onTap: onSelect,
         selected: selected,
         accent: BrandColors.accentYellow,
-        padding: const EdgeInsets.all(14),
+        padding: EdgeInsets.all(compact ? 10 : 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1171,8 +1224,8 @@ class _PersonItemsCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     personName,
-                    style: const TextStyle(
-                      fontSize: 18,
+                    style: TextStyle(
+                      fontSize: compact ? 16 : 18,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
@@ -1182,18 +1235,18 @@ class _PersonItemsCard extends StatelessWidget {
                   onPressed: canEditOrder ? onRename : null,
                   icon: const Icon(Icons.edit_outlined),
                 ),
-                const SizedBox(width: 4),
+                SizedBox(width: compact ? 2 : 4),
                 MoneyText(
                   value: subtotal,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: BrandColors.accentYellow,
-                    fontSize: 18,
+                    fontSize: compact ? 16 : 18,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            SizedBox(height: compact ? 4 : 8),
             if (items.isEmpty)
               const Text(
                 'Sin productos',
@@ -1430,6 +1483,8 @@ class _TopOrderActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 650 || size.height < 750;
     final currentOrder = order;
     final pendingKitchenCount = items
         .where((item) => item.sendToKitchen && item.kitchenStatus == 'pending')
@@ -1474,6 +1529,55 @@ class _TopOrderActions extends StatelessWidget {
         currentOrder.status != 'paid' &&
         items.isNotEmpty &&
         !items.any((item) => item.kitchenStatus == 'ready');
+
+    if (compact) {
+      return Padding(
+        padding: const EdgeInsets.only(right: 2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Tooltip(
+              message: sendLabel,
+              child: IconButton.filledTonal(
+                onPressed: canSend ? onSendToKitchen : null,
+                icon: Icon(
+                  pendingKitchenCount == 0
+                      ? Icons.check_circle_outline
+                      : Icons.room_service_outlined,
+                ),
+              ),
+            ),
+            if (canCloseEmpty)
+              Tooltip(
+                message: 'Cerrar mesa vacia',
+                child: IconButton(
+                  onPressed: busy ? null : onCloseEmptyOrder,
+                  icon: const Icon(Icons.close),
+                ),
+              ),
+            if (canCancelOrder)
+              Tooltip(
+                message: 'Cancelar ticket',
+                child: IconButton(
+                  onPressed: busy ? null : onCancelOrder,
+                  icon: const Icon(Icons.cancel_outlined),
+                ),
+              ),
+            Tooltip(
+              message: chargeLabel,
+              child: IconButton.filled(
+                onPressed: !canAttemptCharge
+                    ? null
+                    : hasKitchenPending
+                    ? onBlockedPayment
+                    : onOpenPayment,
+                icon: const Icon(Icons.point_of_sale_outlined),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.only(right: 2),
@@ -1539,6 +1643,8 @@ class _OrderItemRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 650 || size.height < 750;
     final cancelled = item.isCancelled;
     final locked = item.kitchenStatus == 'ready';
     final canRequestCancel = [
@@ -1581,7 +1687,7 @@ class _OrderItemRow extends StatelessWidget {
     return Opacity(
       opacity: cancelled ? 0.58 : 1,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        padding: EdgeInsets.symmetric(vertical: compact ? 5 : 8),
         child: Row(
           children: [
             Expanded(
@@ -1596,6 +1702,7 @@ class _OrderItemRow extends StatelessWidget {
                       color: contentColor,
                       decoration: textDecoration,
                       decorationThickness: 2,
+                      fontSize: compact ? 13 : null,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
@@ -1608,7 +1715,7 @@ class _OrderItemRow extends StatelessWidget {
                       color: BrandColors.textMuted.withValues(
                         alpha: cancelled ? 0.75 : 1,
                       ),
-                      fontSize: 12,
+                      fontSize: compact ? 11 : 12,
                       decoration: textDecoration,
                     ),
                   ),
@@ -1679,6 +1786,7 @@ class _OrderItemRow extends StatelessWidget {
             const SizedBox(width: 8),
             IconButton.filledTonal(
               tooltip: 'Menos',
+              visualDensity: compact ? VisualDensity.compact : null,
               onPressed: cancelled
                   ? null
                   : editable
@@ -1689,7 +1797,7 @@ class _OrderItemRow extends StatelessWidget {
               icon: const Icon(Icons.remove),
             ),
             SizedBox(
-              width: 34,
+              width: compact ? 24 : 34,
               child: Text(
                 '${item.qty}',
                 textAlign: TextAlign.center,
@@ -1702,6 +1810,7 @@ class _OrderItemRow extends StatelessWidget {
             ),
             IconButton.filledTonal(
               tooltip: 'Mas',
+              visualDensity: compact ? VisualDensity.compact : null,
               onPressed: cancelled
                   ? null
                   : editable
@@ -1711,9 +1820,9 @@ class _OrderItemRow extends StatelessWidget {
                   : null,
               icon: const Icon(Icons.add),
             ),
-            const SizedBox(width: 8),
+            SizedBox(width: compact ? 4 : 8),
             SizedBox(
-              width: 86,
+              width: compact ? 68 : 86,
               child: MoneyText(
                 value: item.total,
                 textAlign: TextAlign.end,
@@ -1726,6 +1835,7 @@ class _OrderItemRow extends StatelessWidget {
             ),
             IconButton(
               tooltip: cancelButtonLabel,
+              visualDensity: compact ? VisualDensity.compact : null,
               onPressed: cancellable
                   ? onCancel
                   : locked
@@ -1766,6 +1876,8 @@ class _ProductMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 650 || size.height < 750;
     return StreamBuilder<List<Product>>(
       stream: productsStream,
       builder: (context, snapshot) {
@@ -1804,14 +1916,19 @@ class _ProductMenu extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(18, 18, 18, 8),
+              padding: EdgeInsets.fromLTRB(
+                compact ? 10 : 18,
+                compact ? 10 : 18,
+                compact ? 10 : 18,
+                compact ? 4 : 8,
+              ),
               child: Row(
                 children: [
-                  const Expanded(
+                  Expanded(
                     child: Text(
                       'Menu',
                       style: TextStyle(
-                        fontSize: 28,
+                        fontSize: compact ? 20 : 28,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -1824,12 +1941,12 @@ class _ProductMenu extends StatelessWidget {
               ),
             ),
             SizedBox(
-              height: 54,
+              height: compact ? 42 : 54,
               child: ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 18),
+                padding: EdgeInsets.symmetric(horizontal: compact ? 10 : 18),
                 scrollDirection: Axis.horizontal,
                 itemCount: categories.length,
-                separatorBuilder: (_, _) => const SizedBox(width: 10),
+                separatorBuilder: (_, _) => SizedBox(width: compact ? 6 : 10),
                 itemBuilder: (context, index) {
                   final category = categories[index];
                   return ChoiceChip(
@@ -1844,14 +1961,15 @@ class _ProductMenu extends StatelessWidget {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final columns = constraints.maxWidth >= 700 ? 3 : 2;
+                  final smallColumns = constraints.maxWidth < 330 ? 1 : 2;
 
                   return GridView.builder(
-                    padding: const EdgeInsets.all(18),
+                    padding: EdgeInsets.all(compact ? 10 : 18),
                     gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: columns,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                      childAspectRatio: 1.45,
+                      crossAxisCount: compact ? smallColumns : columns,
+                      crossAxisSpacing: compact ? 8 : 12,
+                      mainAxisSpacing: compact ? 8 : 12,
+                      childAspectRatio: compact ? 1.8 : 1.45,
                     ),
                     itemCount: visibleProducts.length,
                     itemBuilder: (context, index) {
@@ -1860,6 +1978,7 @@ class _ProductMenu extends StatelessWidget {
                         key: ValueKey('product-${product.id}'),
                         product: product,
                         platformId: platformId,
+                        compact: compact,
                         onTap: canAddProducts
                             ? () => onAddProduct(product)
                             : onBlockedAddProduct,
@@ -1881,18 +2000,20 @@ class _ProductTile extends StatelessWidget {
     super.key,
     required this.product,
     required this.platformId,
+    required this.compact,
     required this.onTap,
   });
 
   final Product product;
   final String? platformId;
+  final bool compact;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return GlassCard(
       onTap: onTap,
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.all(compact ? 9 : 14),
       accent: BrandColors.accentOrange,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1906,14 +2027,15 @@ class _ProductTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: BrandColors.accentOrange,
-                    fontSize: 11,
+                    fontSize: 10.5,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
-              const Icon(
+              Icon(
                 Icons.add_circle_outline,
                 color: BrandColors.accentYellow,
+                size: compact ? 18 : 24,
               ),
             ],
           ),
@@ -1922,18 +2044,18 @@ class _ProductTile extends StatelessWidget {
             product.name,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 18,
+            style: TextStyle(
+              fontSize: compact ? 14 : 18,
               fontWeight: FontWeight.w800,
               height: 1.05,
             ),
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: compact ? 4 : 8),
           MoneyText(
             value: product.priceForPlatform(platformId),
-            style: const TextStyle(
+            style: TextStyle(
               color: BrandColors.accentYellow,
-              fontSize: 18,
+              fontSize: compact ? 14 : 18,
               fontWeight: FontWeight.w800,
             ),
           ),

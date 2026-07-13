@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import 'product_recipe_item.dart';
+
 class OrderItem {
   const OrderItem({
     required this.id,
@@ -30,6 +32,7 @@ class OrderItem {
     this.kitchenStockItemName,
     this.affectsKitchenStock = false,
     this.kitchenStockUnit,
+    this.recipeItems = const [],
     this.status = 'active',
     this.cancelStatus = 'none',
     this.cancelRequestedAt,
@@ -76,6 +79,7 @@ class OrderItem {
   final String? kitchenStockItemName;
   final bool affectsKitchenStock;
   final String? kitchenStockUnit;
+  final List<ProductRecipeItem> recipeItems;
   final String status;
   final String cancelStatus;
   final DateTime? cancelRequestedAt;
@@ -106,6 +110,15 @@ class OrderItem {
   factory OrderItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
 
+    final kitchenStockItemId = data['kitchenStockItemId'] as String?;
+    final kitchenStockItemName = data['kitchenStockItemName'] as String?;
+    final kitchenStockUnit = data['kitchenStockUnit'] as String?;
+    final recipeItems = ProductRecipeItem.readList(
+      data['recipeItems'],
+      legacyStockItemId: kitchenStockItemId,
+      legacyStockItemName: kitchenStockItemName,
+      legacyStockUnit: kitchenStockUnit,
+    );
     return OrderItem(
       id: doc.id,
       personNumber: (data['personNumber'] as num?)?.toInt() ?? 1,
@@ -132,10 +145,12 @@ class OrderItem {
       appliedPlatformId: data['appliedPlatformId'] as String?,
       appliedPlatformName: data['appliedPlatformName'] as String?,
       priceSource: data['priceSource'] as String?,
-      kitchenStockItemId: data['kitchenStockItemId'] as String?,
-      kitchenStockItemName: data['kitchenStockItemName'] as String?,
-      affectsKitchenStock: data['affectsKitchenStock'] as bool? ?? false,
-      kitchenStockUnit: data['kitchenStockUnit'] as String?,
+      kitchenStockItemId: kitchenStockItemId,
+      kitchenStockItemName: kitchenStockItemName,
+      affectsKitchenStock:
+          data['affectsKitchenStock'] as bool? ?? recipeItems.isNotEmpty,
+      kitchenStockUnit: kitchenStockUnit,
+      recipeItems: recipeItems,
       status: data['status'] as String? ?? 'active',
       cancelStatus: data['cancelStatus'] as String? ?? 'none',
       cancelRequestedAt: _toDate(data['cancelRequestedAt']),

@@ -23,7 +23,27 @@ class TablesScreen extends StatefulWidget {
 
 class _TablesScreenState extends State<TablesScreen> {
   final _repository = TacoPosRepository();
+  final _scrollController = ScrollController(keepScrollOffset: false);
   bool _opening = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToTop() {
+    if (!_scrollController.hasClients) {
+      return;
+    }
+    _scrollController.jumpTo(0);
+  }
 
   Future<void> _openTable(PosTable table) async {
     final employee = AppSession.instance.employee;
@@ -39,6 +59,7 @@ class _TablesScreenState extends State<TablesScreen> {
         context,
         MaterialPageRoute(builder: (_) => const TakeoutOrdersScreen()),
       );
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
       return;
     }
 
@@ -78,6 +99,7 @@ class _TablesScreenState extends State<TablesScreen> {
           ),
         ),
       );
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
     } catch (error) {
       if (!mounted) {
         return;
@@ -170,43 +192,46 @@ class _TablesScreenState extends State<TablesScreen> {
               return LayoutBuilder(
                 builder: (context, constraints) {
                   final width = constraints.maxWidth;
-                  final compact = width < 700;
+                  final height = constraints.maxHeight;
+                  final compact = width < 650 || height < 750;
+                  final veryNarrow = width < 330;
                   final medium = width < 950;
                   final padding = compact
-                      ? 12.0
+                      ? 8.0
                       : medium
                       ? 16.0
                       : 22.0;
-                  final gap = compact ? 10.0 : 16.0;
+                  final gap = compact ? 8.0 : 16.0;
 
                   return Padding(
                     padding: EdgeInsets.all(padding),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        SectionHeader(
-                          title: 'Mesas',
-                          subtitle:
-                              '${tables.length} puntos de servicio activos',
-                        ),
-                        SizedBox(height: compact ? 10 : 18),
+                        if (!compact) ...[
+                          SectionHeader(
+                            title: 'Mesas',
+                            subtitle:
+                                '${tables.length} puntos de servicio activos',
+                          ),
+                          const SizedBox(height: 18),
+                        ],
                         Expanded(
                           child: GridView.builder(
-                            gridDelegate:
-                                SliverGridDelegateWithMaxCrossAxisExtent(
-                                  maxCrossAxisExtent: compact
-                                      ? 300
-                                      : medium
-                                      ? 340
-                                      : 360,
-                                  mainAxisExtent: compact
-                                      ? 138
-                                      : medium
-                                      ? 158
-                                      : 178,
-                                  crossAxisSpacing: gap,
-                                  mainAxisSpacing: gap,
-                                ),
+                            controller: _scrollController,
+                            gridDelegate: compact
+                                ? SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: veryNarrow ? 1 : 2,
+                                    mainAxisExtent: veryNarrow ? 88 : 104,
+                                    crossAxisSpacing: gap,
+                                    mainAxisSpacing: gap,
+                                  )
+                                : SliverGridDelegateWithMaxCrossAxisExtent(
+                                    maxCrossAxisExtent: medium ? 340 : 360,
+                                    mainAxisExtent: medium ? 158 : 178,
+                                    crossAxisSpacing: gap,
+                                    mainAxisSpacing: gap,
+                                  ),
                             itemCount: tables.length,
                             itemBuilder: (context, index) {
                               final table = tables[index];
@@ -259,41 +284,28 @@ class _TableCard extends StatelessWidget {
       onTap: onTap,
       accent: accent,
       selected: hasOrder || takeoutActive,
-      padding: EdgeInsets.all(compact ? 10 : 18),
+      padding: EdgeInsets.all(compact ? 8 : 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                width: compact ? 38 : 50,
-                height: compact ? 38 : 50,
-                decoration: BoxDecoration(
-                  color: status.background,
-                  borderRadius: BorderRadius.circular(compact ? 12 : 16),
-                ),
-                child: Icon(
-                  isTakeout ? Icons.shopping_bag_outlined : Icons.table_bar,
-                  color: status.color,
-                  size: compact ? 22 : 28,
+              Expanded(
+                child: Text(
+                  table.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: compact ? 17 : 26,
+                    fontWeight: FontWeight.w800,
+                    color: BrandColors.textPrimary,
+                  ),
                 ),
               ),
-              const Spacer(),
-              if (!isTakeout) Flexible(child: StatusBadge(style: status)),
+              if (!isTakeout) StatusBadge(style: status),
             ],
           ),
           const Spacer(),
-          Text(
-            table.name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: compact ? 20 : 26,
-              fontWeight: FontWeight.w800,
-              color: BrandColors.textPrimary,
-            ),
-          ),
-          SizedBox(height: compact ? 4 : 8),
           Row(
             children: [
               Expanded(

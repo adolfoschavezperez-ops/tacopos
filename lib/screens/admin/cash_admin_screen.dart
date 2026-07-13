@@ -324,8 +324,14 @@ class _CashSessionDetailCard extends StatelessWidget {
                 value: session.cardDifference,
               ),
               _MoneyChip(
-                label: 'Comision tarjeta',
-                value: session.expectedCardSurchargeAmount,
+                label: 'Comision absorbida',
+                value: session.expectedCardFeeAbsorbedAmount,
+              ),
+              _MoneyChip(
+                label: 'Neto estimado tarjeta',
+                value:
+                    session.expectedCardChargedAmount -
+                    session.expectedCardFeeAbsorbedAmount,
               ),
               _MoneyChip(
                 label: 'Plataforma',

@@ -876,10 +876,9 @@ class _ChargePreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final surcharge = method == 'card'
+    final absorbedFee = method == 'card'
         ? baseAmount * TacoPosRepository.cardSurchargeRate
         : 0.0;
-    final charged = baseAmount + surcharge;
 
     return GlassPanel(
       child: Column(
@@ -892,9 +891,16 @@ class _ChargePreview extends StatelessWidget {
           const SizedBox(height: 12),
           _PreviewRow(label: 'Monto base', value: baseAmount),
           if (method == 'card')
-            _PreviewRow(label: 'Comision tarjeta 4%', value: surcharge),
+            _PreviewRow(
+              label: 'Comision absorbida por negocio',
+              value: absorbedFee,
+            ),
           const Divider(height: 18),
-          _PreviewRow(label: 'Total a cobrar', value: charged, highlight: true),
+          _PreviewRow(
+            label: 'Total a cobrar',
+            value: baseAmount,
+            highlight: true,
+          ),
         ],
       ),
     );
@@ -1245,10 +1251,9 @@ class _PersonPaymentCard extends StatelessWidget {
         .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
         .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
     final paid = pending <= 0.01;
-    final surcharge = method == 'card'
+    final absorbedFee = method == 'card'
         ? pending * TacoPosRepository.cardSurchargeRate
         : 0.0;
-    final charged = pending + surcharge;
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -1302,13 +1307,13 @@ class _PersonPaymentCard extends StatelessWidget {
               _PersonChargeRow(label: 'Subtotal base', value: pending),
               if (method == 'card')
                 _PersonChargeRow(
-                  label: 'Comision tarjeta 4%',
-                  value: surcharge,
+                  label: 'Comision absorbida por negocio',
+                  value: absorbedFee,
                 ),
               const Divider(height: 14),
               _PersonChargeRow(
                 label: 'Total a cobrar',
-                value: charged,
+                value: pending,
                 highlight: true,
               ),
             ],
@@ -1445,9 +1450,12 @@ class _PaymentsHistory extends StatelessWidget {
     final employee = payment.employeeName == null
         ? ''
         : ' · ${payment.employeeName}';
-    final fee = payment.surchargeAmount <= 0
+    final absorbedFee = payment.cardFeeAbsorbedAmount <= 0
         ? ''
-        : ' · Comision \$${payment.surchargeAmount.toStringAsFixed(2)}';
+        : ' · Comision absorbida \$${payment.cardFeeAbsorbedAmount.toStringAsFixed(2)}';
+    final legacySurcharge = payment.surchargeAmount <= 0
+        ? ''
+        : ' · Recargo cliente \$${payment.surchargeAmount.toStringAsFixed(2)}';
     final cashChange =
         payment.method == 'cash' && payment.cashReceivedAmount != null
         ? ' · Recibido \$${payment.cashReceivedAmount!.toStringAsFixed(2)} · Cambio \$${(payment.cashChangeAmount ?? 0).toStringAsFixed(2)}'
@@ -1455,6 +1463,6 @@ class _PaymentsHistory extends StatelessWidget {
     final cancelled = payment.isCancelled
         ? ' | Anulado: ${payment.cancelReason ?? 'Sin motivo'}'
         : '';
-    return 'Base \$${payment.baseAmount.toStringAsFixed(2)}$fee$cashChange$employee$cancelled';
+    return 'Base \$${payment.baseAmount.toStringAsFixed(2)}$absorbedFee$legacySurcharge$cashChange$employee$cancelled';
   }
 }

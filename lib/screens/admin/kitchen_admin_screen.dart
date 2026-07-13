@@ -243,7 +243,7 @@ class _KitchenReportTab extends StatelessWidget {
                     DataColumn(label: Text('Sobrante')),
                     DataColumn(label: Text('Merma')),
                     DataColumn(label: Text('Consumo real')),
-                    DataColumn(label: Text('Vendidos')),
+                    DataColumn(label: Text('Equivalentes')),
                     DataColumn(label: Text('Rendimiento optimo')),
                     DataColumn(label: Text('Rendimiento actual')),
                     DataColumn(label: Text('Rendimiento promedio')),
@@ -294,10 +294,10 @@ class _KitchenReportTab extends StatelessWidget {
   String _yieldText(double value, KitchenYieldReportRow row) {
     if (value <= 0) return 'Sin configurar';
     final suffix = row.item.unit == 'kg'
-        ? 'g/producto'
+        ? 'g/equivalente'
         : row.item.unit == 'piece'
-        ? 'piezas/producto'
-        : '${row.item.unit}/producto';
+        ? 'piezas/equivalente'
+        : '${row.item.unit}/equivalente';
     return '${_qty(value)} $suffix';
   }
 
@@ -389,13 +389,22 @@ class _KitchenStockCatalogTabState extends State<_KitchenStockCatalogTab> {
                 ),
                 const SizedBox(height: 18),
                 ...items.map((item) {
-                  final linkedProducts = products
-                      .where((product) => product.kitchenStockItemId == item.id)
-                      .map((product) => product.name)
-                      .toList();
-                  final linkedText = item.id == 'tortilla_maiz'
-                      ? 'Insumo fijo | productos: ${linkedProducts.isEmpty ? 'sin liga directa' : linkedProducts.join(', ')}'
-                      : 'Productos ligados: ${linkedProducts.isEmpty ? 'Sin productos ligados' : linkedProducts.join(', ')}';
+                  final linkedProducts = <String>[];
+                  for (final product in products) {
+                    for (final recipeItem in product.recipeItems) {
+                      if (recipeItem.kitchenStockItemId == item.id) {
+                        linkedProducts.add(
+                          '${product.name} x${_qty(recipeItem.consumptionFactor)}',
+                        );
+                      }
+                    }
+                    if (product.recipeItems.isEmpty &&
+                        product.kitchenStockItemId == item.id) {
+                      linkedProducts.add('${product.name} x1');
+                    }
+                  }
+                  final linkedText =
+                      'Productos ligados: ${linkedProducts.isEmpty ? 'Sin productos ligados' : linkedProducts.join(', ')}';
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: GlassCard(
@@ -605,11 +614,11 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
                 items: const [
                   DropdownMenuItem(
                     value: 'g_per_item',
-                    child: Text('g por taco/producto'),
+                    child: Text('g por equivalente'),
                   ),
                   DropdownMenuItem(
                     value: 'piece_per_item',
-                    child: Text('pieza por venta'),
+                    child: Text('pieza por equivalente'),
                   ),
                 ],
                 onChanged: _saving
@@ -661,6 +670,7 @@ String _categoryLabel(String category) {
   return switch (category) {
     'meat' => 'Carne',
     'tortilla' => 'Tortilla',
+    'dairy' => 'Lacteo',
     'drink' => 'Bebida',
     'water' => 'Agua',
     _ => 'Otro',
@@ -681,9 +691,9 @@ String _optimalLabel(KitchenStockItem item) {
   }
   final qty = _qty(item.optimalConsumptionPerSaleQty);
   return switch (item.optimalConsumptionUnit) {
-    'piece_per_item' => '$qty pieza por venta',
-    'g_per_item' => '$qty g por producto',
-    _ => '$qty por producto',
+    'piece_per_item' => '$qty pieza por equivalente',
+    'g_per_item' => '$qty g por equivalente',
+    _ => '$qty por equivalente',
   };
 }
 

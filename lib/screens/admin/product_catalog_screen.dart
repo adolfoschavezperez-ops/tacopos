@@ -4,6 +4,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../models/kitchen_stock_item.dart';
 import '../../models/order_platform.dart';
 import '../../models/product.dart';
+import '../../models/product_recipe_item.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
@@ -165,7 +166,7 @@ class _ProductDialogState extends State<_ProductDialog> {
   late bool _sendToKitchen;
   late bool _affectsKitchenStock;
   late List<KitchenStockItem> _stockItems;
-  String? _selectedKitchenStockItemId;
+  late List<_RecipeDraftItem> _recipeItems;
   bool _saving = false;
 
   @override
@@ -196,9 +197,16 @@ class _ProductDialogState extends State<_ProductDialog> {
           _nameController.text,
         );
     _stockItems = [...widget.stockItems];
-    _selectedKitchenStockItemId =
-        product?.kitchenStockItemId ??
-        (_affectsKitchenStock ? _guessStockItemId(product?.name ?? '') : null);
+    _recipeItems = [
+      for (final item in product?.recipeItems ?? const <ProductRecipeItem>[])
+        _RecipeDraftItem.fromRecipeItem(item),
+    ];
+    if (_recipeItems.isEmpty && _affectsKitchenStock) {
+      final guessed = _guessStockItemId(product?.name ?? '');
+      if (guessed != null) {
+        _recipeItems.add(_RecipeDraftItem(stockItemId: guessed, factor: 1));
+      }
+    }
   }
 
   @override
@@ -208,6 +216,9 @@ class _ProductDialogState extends State<_ProductDialog> {
     _priceController.dispose();
     for (final controller in _platformControllers.values) {
       controller.dispose();
+    }
+    for (final item in _recipeItems) {
+      item.dispose();
     }
     super.dispose();
   }
@@ -222,7 +233,7 @@ class _ProductDialogState extends State<_ProductDialog> {
     final normalizedName = _normalize(name);
     for (final item in _stockItems) {
       if (_normalize(item.name) == normalizedName) {
-        setState(() => _selectedKitchenStockItemId = item.id);
+        setState(() => _addRecipeItem(item.id));
         _message('Insumo existente seleccionado.');
         return;
       }
@@ -246,8 +257,38 @@ class _ProductDialogState extends State<_ProductDialog> {
     setState(() {
       _stockItems = [..._stockItems, created]
         ..sort((a, b) => a.name.compareTo(b.name));
-      _selectedKitchenStockItemId = created.id;
+      _addRecipeItem(created.id);
     });
+  }
+
+  void _addRecipeItem([String? stockItemId]) {
+    final selectedIds = _recipeItems
+        .map((item) => item.stockItemId)
+        .whereType<String>()
+        .toSet();
+    String? id = stockItemId;
+    if (id == null) {
+      for (final item in _stockItems) {
+        if (item.active && !selectedIds.contains(item.id)) {
+          id = item.id;
+          break;
+        }
+      }
+    }
+    if (id == null) {
+      _message('No hay insumos disponibles para agregar.');
+      return;
+    }
+    if (selectedIds.contains(id)) {
+      _message('Ese insumo ya esta en la receta.');
+      return;
+    }
+    _recipeItems.add(_RecipeDraftItem(stockItemId: id, factor: 1));
+  }
+
+  void _removeRecipeItem(int index) {
+    final removed = _recipeItems.removeAt(index);
+    removed.dispose();
   }
 
   Future<void> _save() async {
@@ -259,8 +300,9 @@ class _ProductDialogState extends State<_ProductDialog> {
       return;
     }
 
-    if (_affectsKitchenStock && _selectedKitchenStockItem == null) {
-      _message('Selecciona un insumo de cocina.');
+    final recipeItems = _readRecipeItems();
+    if (_affectsKitchenStock && recipeItems.isEmpty) {
+      _message('Agrega al menos un insumo a la receta.');
       return;
     }
 
@@ -278,7 +320,6 @@ class _ProductDialogState extends State<_ProductDialog> {
 
     setState(() => _saving = true);
     try {
-      final selectedStockItem = _selectedKitchenStockItem;
       await widget.repository.saveProduct(
         productId: widget.product?.id,
         name: _nameController.text,
@@ -288,11 +329,7 @@ class _ProductDialogState extends State<_ProductDialog> {
         active: _active,
         sendToKitchen: _sendToKitchen,
         affectsKitchenStock: _affectsKitchenStock,
-        kitchenStockItemId: _affectsKitchenStock ? selectedStockItem?.id : null,
-        kitchenStockItemName: _affectsKitchenStock
-            ? selectedStockItem?.name
-            : null,
-        kitchenStockUnit: _affectsKitchenStock ? selectedStockItem?.unit : null,
+        recipeItems: recipeItems,
       );
       if (!mounted) return;
       Navigator.pop(context);
@@ -303,8 +340,40 @@ class _ProductDialogState extends State<_ProductDialog> {
     }
   }
 
-  KitchenStockItem? get _selectedKitchenStockItem =>
-      _stockItemById(_stockItems, _selectedKitchenStockItemId);
+  List<ProductRecipeItem> _readRecipeItems() {
+    if (!_affectsKitchenStock) {
+      return const [];
+    }
+    final ids = <String>{};
+    final recipe = <ProductRecipeItem>[];
+    for (final draft in _recipeItems) {
+      final stockItem = _stockItemById(_stockItems, draft.stockItemId);
+      final factor = double.tryParse(
+        draft.factorController.text.trim().replaceAll(',', '.'),
+      );
+      if (stockItem == null) {
+        _message('Selecciona todos los insumos de la receta.');
+        return const [];
+      }
+      if (factor == null || factor <= 0) {
+        _message('Cada factor debe ser mayor a cero.');
+        return const [];
+      }
+      if (!ids.add(stockItem.id)) {
+        _message('No repitas insumos dentro de la receta.');
+        return const [];
+      }
+      recipe.add(
+        ProductRecipeItem(
+          kitchenStockItemId: stockItem.id,
+          kitchenStockItemName: stockItem.name,
+          kitchenStockUnit: stockItem.unit,
+          consumptionFactor: factor,
+        ),
+      );
+    }
+    return recipe;
+  }
 
   void _message(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
@@ -312,7 +381,6 @@ class _ProductDialogState extends State<_ProductDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final selectedStockItem = _selectedKitchenStockItem;
     return SafeArea(
       child: Dialog(
         insetPadding: const EdgeInsets.all(18),
@@ -370,15 +438,27 @@ class _ProductDialogState extends State<_ProductDialog> {
                           platforms: widget.platforms,
                           saving: _saving,
                           affectsKitchenStock: _affectsKitchenStock,
-                          selectedStockItemId: _selectedKitchenStockItemId,
                           stockItems: _stockItems,
-                          selectedStockItem: selectedStockItem,
+                          recipeItems: _recipeItems,
                           onAffectsChanged: (value) {
-                            setState(() => _affectsKitchenStock = value);
+                            setState(() {
+                              _affectsKitchenStock = value;
+                              if (value && _recipeItems.isEmpty) {
+                                _addRecipeItem(
+                                  _guessStockItemId(_nameController.text),
+                                );
+                              }
+                            });
                           },
-                          onStockChanged: (value) {
-                            setState(() => _selectedKitchenStockItemId = value);
+                          onRecipeStockChanged: (index, value) {
+                            setState(() {
+                              _recipeItems[index].stockItemId = value;
+                            });
                           },
+                          onAddRecipeItem: () =>
+                              setState(() => _addRecipeItem()),
+                          onRemoveRecipeItem: (index) =>
+                              setState(() => _removeRecipeItem(index)),
                           onCreateStockItem: _createKitchenStockItem,
                         );
                         if (!wide) {
@@ -500,11 +580,12 @@ class _ProductKitchenFields extends StatelessWidget {
     required this.platforms,
     required this.saving,
     required this.affectsKitchenStock,
-    required this.selectedStockItemId,
     required this.stockItems,
-    required this.selectedStockItem,
+    required this.recipeItems,
     required this.onAffectsChanged,
-    required this.onStockChanged,
+    required this.onRecipeStockChanged,
+    required this.onAddRecipeItem,
+    required this.onRemoveRecipeItem,
     required this.onCreateStockItem,
   });
 
@@ -512,11 +593,12 @@ class _ProductKitchenFields extends StatelessWidget {
   final List<OrderPlatform> platforms;
   final bool saving;
   final bool affectsKitchenStock;
-  final String? selectedStockItemId;
   final List<KitchenStockItem> stockItems;
-  final KitchenStockItem? selectedStockItem;
+  final List<_RecipeDraftItem> recipeItems;
   final ValueChanged<bool> onAffectsChanged;
-  final ValueChanged<String?> onStockChanged;
+  final void Function(int index, String? stockItemId) onRecipeStockChanged;
+  final VoidCallback onAddRecipeItem;
+  final ValueChanged<int> onRemoveRecipeItem;
   final VoidCallback onCreateStockItem;
 
   @override
@@ -571,6 +653,14 @@ class _ProductKitchenFields extends StatelessWidget {
               ),
               if (affectsKitchenStock) ...[
                 const SizedBox(height: 8),
+                const Text(
+                  'Taco normal = 1 equivalente. Gringa chica carne = 2. Gringa grande carne = 3.',
+                  style: TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
                 if (!stockItems.any((item) => item.active))
                   const Text(
                     'No hay insumos de cocina activos. Crea uno en Admin > Insumos de cocina.',
@@ -579,48 +669,41 @@ class _ProductKitchenFields extends StatelessWidget {
                       fontWeight: FontWeight.w700,
                     ),
                   )
-                else
-                  DropdownButtonFormField<String>(
-                    initialValue: selectedStockItemId,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Insumo ligado',
+                else if (recipeItems.isEmpty)
+                  const Text(
+                    'Agrega uno o mas insumos a la receta.',
+                    style: TextStyle(color: BrandColors.textMuted),
+                  )
+                else ...[
+                  for (var index = 0; index < recipeItems.length; index++)
+                    _RecipeItemEditor(
+                      index: index,
+                      item: recipeItems[index],
+                      stockItems: stockItems,
+                      allItems: recipeItems,
+                      saving: saving,
+                      onStockChanged: (value) =>
+                          onRecipeStockChanged(index, value),
+                      onRemove: () => onRemoveRecipeItem(index),
                     ),
-                    items: stockItems
-                        .where(
-                          (item) =>
-                              item.active || item.id == selectedStockItemId,
-                        )
-                        .map(
-                          (item) => DropdownMenuItem(
-                            value: item.id,
-                            child: Text(
-                              '${item.name} - ${_categoryLabel(item.category)} - ${_unitLabel(item.unit)}',
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: saving ? null : onStockChanged,
-                  ),
-                const SizedBox(height: 10),
-                Text(
-                  selectedStockItem == null
-                      ? 'Unidad: sin insumo seleccionado'
-                      : 'Unidad: ${_unitLabel(selectedStockItem!.unit)}',
-                  style: const TextStyle(
-                    color: BrandColors.textMuted,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
+                ],
                 const SizedBox(height: 12),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: OutlinedButton.icon(
-                    onPressed: saving ? null : onCreateStockItem,
-                    icon: const Icon(Icons.add),
-                    label: const Text('Crear insumo nuevo'),
-                  ),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: saving ? null : onAddRecipeItem,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Agregar insumo'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: saving ? null : onCreateStockItem,
+                      icon: const Icon(Icons.add_business_outlined),
+                      label: const Text('Crear insumo nuevo'),
+                    ),
+                  ],
                 ),
               ] else
                 const Text(
@@ -634,6 +717,125 @@ class _ProductKitchenFields extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _RecipeDraftItem {
+  _RecipeDraftItem({this.stockItemId, double factor = 1})
+    : factorController = TextEditingController(text: _factorText(factor));
+
+  factory _RecipeDraftItem.fromRecipeItem(ProductRecipeItem item) {
+    return _RecipeDraftItem(
+      stockItemId: item.kitchenStockItemId,
+      factor: item.consumptionFactor,
+    );
+  }
+
+  String? stockItemId;
+  final TextEditingController factorController;
+
+  void dispose() {
+    factorController.dispose();
+  }
+}
+
+class _RecipeItemEditor extends StatelessWidget {
+  const _RecipeItemEditor({
+    required this.index,
+    required this.item,
+    required this.stockItems,
+    required this.allItems,
+    required this.saving,
+    required this.onStockChanged,
+    required this.onRemove,
+  });
+
+  final int index;
+  final _RecipeDraftItem item;
+  final List<KitchenStockItem> stockItems;
+  final List<_RecipeDraftItem> allItems;
+  final bool saving;
+  final ValueChanged<String?> onStockChanged;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedByOtherRows = {
+      for (var i = 0; i < allItems.length; i++)
+        if (i != index && allItems[i].stockItemId != null)
+          allItems[i].stockItemId!,
+    };
+    final selectedStockItem = _stockItemById(stockItems, item.stockItemId);
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            flex: 5,
+            child: DropdownButtonFormField<String>(
+              initialValue: item.stockItemId,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Insumo'),
+              items: stockItems
+                  .where(
+                    (stockItem) =>
+                        (stockItem.active ||
+                            stockItem.id == item.stockItemId) &&
+                        !selectedByOtherRows.contains(stockItem.id),
+                  )
+                  .map(
+                    (stockItem) => DropdownMenuItem(
+                      value: stockItem.id,
+                      child: Text(
+                        stockItem.name,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: saving ? null : onStockChanged,
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 72,
+            child: TextField(
+              controller: item.factorController,
+              enabled: !saving,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(labelText: 'Factor'),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 76,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 14),
+              child: Text(
+                selectedStockItem == null
+                    ? '-'
+                    : _unitLabel(selectedStockItem.unit),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: BrandColors.textMuted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Quitar',
+            onPressed: saving ? null : onRemove,
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -792,7 +994,11 @@ _KitchenDefaults _kitchenDefaultsFor(String category, String name) {
 bool _defaultAffectsKitchenStock(String category, String name) {
   final safeCategory = _normalize(category);
   final safeName = _normalize(name);
-  if (safeCategory.contains('taco')) return true;
+  if (safeCategory.contains('taco') ||
+      safeName.contains('taco') ||
+      safeName.contains('gringa')) {
+    return true;
+  }
   if (safeCategory.contains('bebida') || safeName.contains('refresco')) {
     return true;
   }
@@ -835,14 +1041,9 @@ String? _guessStockItemId(String productName) {
   return null;
 }
 
-String _categoryLabel(String category) {
-  return switch (category) {
-    'meat' => 'Carne',
-    'tortilla' => 'Tortilla',
-    'drink' => 'Bebida',
-    'water' => 'Agua',
-    _ => 'Otro',
-  };
+String _factorText(double value) {
+  if (value == value.roundToDouble()) return value.toStringAsFixed(0);
+  return value.toStringAsFixed(2);
 }
 
 String _unitLabel(String unit) {
@@ -867,7 +1068,9 @@ class _ProductAdminTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final kitchenText = product.affectsKitchenStock
-        ? 'Controla: ${product.kitchenStockItemName ?? 'Sin insumo'} - ${_unitLabel(product.kitchenStockUnit ?? '')}'
+        ? product.recipeItems.isEmpty
+              ? 'Receta: sin insumos'
+              : 'Receta: ${product.recipeItems.map((item) => '${item.kitchenStockItemName} x${_factorText(item.consumptionFactor)}').join(' | ')}'
         : 'No controla cocina';
 
     return GlassCard(

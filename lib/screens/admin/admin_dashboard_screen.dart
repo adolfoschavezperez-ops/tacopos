@@ -234,12 +234,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               );
               final cash = _baseByMethod(payments, 'cash');
               final cardBase = _baseByMethod(payments, 'card');
-              final cardSurcharge = payments
+              final cardFeeAbsorbed = payments
                   .where((payment) => payment.method == 'card')
                   .fold<double>(
                     0,
                     (runningTotal, payment) =>
-                        runningTotal + payment.surchargeAmount,
+                        runningTotal + payment.cardFeeAbsorbedAmount,
                   );
               final cardCharged = payments
                   .where((payment) => payment.method == 'card')
@@ -248,6 +248,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     (runningTotal, payment) =>
                         runningTotal + payment.chargedAmount,
                   );
+              final cardNetEstimated = cardCharged - cardFeeAbsorbed;
               final employeeConsumption = _baseByMethod(
                 payments,
                 'employee_consumption',
@@ -347,9 +348,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                                 accent: BrandColors.success,
                               ),
                               _MetricCard(
-                                title: 'Comision tarjeta',
+                                title: 'Comision absorbida',
                                 icon: Icons.percent,
-                                money: cardSurcharge,
+                                money: cardFeeAbsorbed,
                                 accent: BrandColors.info,
                               ),
                             ],
@@ -379,6 +380,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                                 icon: Icons.credit_score,
                                 money: cardCharged,
                                 accent: BrandColors.accentYellow,
+                              ),
+                              _MetricCard(
+                                title: 'Neto tarjeta',
+                                icon: Icons.account_balance_wallet_outlined,
+                                money: cardNetEstimated,
+                                accent: BrandColors.success,
                               ),
                               _MetricCard(
                                 title: 'Consumo empleado',
@@ -941,8 +948,12 @@ class _CashStatusPanel extends StatelessWidget {
                         value: totals.expectedCardChargedAmount,
                       ),
                       _TinyMoney(
-                        label: 'Comision',
-                        value: totals.expectedCardSurchargeAmount,
+                        label: 'Comision absorbida',
+                        value: totals.expectedCardFeeAbsorbedAmount,
+                      ),
+                      _TinyMoney(
+                        label: 'Neto tarjeta',
+                        value: totals.estimatedCardNetAmount,
                       ),
                       _TinyMoney(
                         label: 'Plataforma',

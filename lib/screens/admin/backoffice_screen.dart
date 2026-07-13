@@ -576,7 +576,15 @@ class _DashboardSection extends StatelessWidget {
       payments.where((payment) => payment.method == 'card'),
       (payment) => payment.baseAmount,
     );
-    final cardFee = _sum(payments, (payment) => payment.surchargeAmount);
+    final cardFee = _sum(
+      payments.where((payment) => payment.method == 'card'),
+      (payment) => payment.cardFeeAbsorbedAmount,
+    );
+    final cardCharged = _sum(
+      payments.where((payment) => payment.method == 'card'),
+      (payment) => payment.chargedAmount,
+    );
+    final cardNet = cardCharged - cardFee;
     final platform = _sum(
       payments.where((payment) => payment.method == 'platform_paid'),
       (payment) => payment.baseAmount,
@@ -652,7 +660,7 @@ class _DashboardSection extends StatelessWidget {
             ExecutiveKpiCard(
               title: 'Cobrado real',
               value: _money(charged),
-              detail: 'Incluye comisiones y cargos',
+              detail: 'Monto cobrado al cliente',
               icon: Icons.payments_outlined,
               accent: BrandColors.success,
             ),
@@ -695,9 +703,14 @@ class _DashboardSection extends StatelessWidget {
                 icon: Icons.credit_card,
               ),
               SecondaryMetricCard(
-                label: 'Comision tarjeta',
+                label: 'Comision absorbida',
                 value: _money(cardFee),
                 icon: Icons.percent,
+              ),
+              SecondaryMetricCard(
+                label: 'Neto estimado tarjeta',
+                value: _money(cardNet),
+                icon: Icons.account_balance_wallet_outlined,
               ),
               SecondaryMetricCard(
                 label: 'Pagado plataforma',
@@ -1750,7 +1763,7 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Sobrante final',
       'Merma',
       'Consumo real',
-      'Vendido',
+      'Equivalentes',
       'Rendimiento',
     ],
     _ReportKind.platform => [
@@ -1762,8 +1775,10 @@ List<String> _reportHeaders(_ReportKind kind) {
     _ReportKind.paymentMethod => [
       'Metodo',
       'Base',
-      'Comision',
+      'Recargo cliente',
+      'Comision absorbida',
       'Total cobrado',
+      'Neto estimado',
     ],
     _ReportKind.employee => [
       'Empleado',
@@ -1779,6 +1794,8 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Efectivo esperado',
       'Efectivo contado',
       'Tarjeta esperada',
+      'Comision absorbida',
+      'Neto tarjeta',
       'Terminal',
       'Faltante',
       'Sobrante',
@@ -1938,9 +1955,30 @@ Future<List<List<String>>> _reportRows(
           )
           .toList();
     case _ReportKind.paymentMethod:
-      return _salesByMethod(payments)
-          .map((row) => [row.label, row.displayValue, '-', row.displayValue])
-          .toList();
+      final byMethod = <String, List<Payment>>{};
+      for (final payment in payments) {
+        final label = _paymentMethodLabel(payment.method);
+        byMethod.putIfAbsent(label, () => []).add(payment);
+      }
+      return byMethod.entries.map((entry) {
+        final list = entry.value;
+        final base = _sum(list, (payment) => payment.baseAmount);
+        final surcharge = _sum(list, (payment) => payment.surchargeAmount);
+        final absorbedFee = _sum(
+          list.where((payment) => payment.method == 'card'),
+          (payment) => payment.cardFeeAbsorbedAmount,
+        );
+        final charged = _sum(list, (payment) => payment.chargedAmount);
+        final net = charged - absorbedFee;
+        return [
+          entry.key,
+          _money(base),
+          _money(surcharge),
+          _money(absorbedFee),
+          _money(charged),
+          _money(net),
+        ];
+      }).toList();
     case _ReportKind.employee:
       final byEmployee = <String, List<Payment>>{};
       for (final payment in payments) {
@@ -1978,6 +2016,11 @@ Future<List<List<String>>> _reportRows(
               _money(session.expectedCashAmount),
               _money(session.countedCashAmount),
               _money(session.expectedCardChargedAmount),
+              _money(session.expectedCardFeeAbsorbedAmount),
+              _money(
+                session.expectedCardChargedAmount -
+                    session.expectedCardFeeAbsorbedAmount,
+              ),
               _money(session.terminalReportedAmount),
               _money(session.shortageAmount),
               _money(session.overAmount),
@@ -2280,7 +2323,14 @@ class _SaleDetailDialog extends StatelessWidget {
                                 ? '${item.notes.trim().isEmpty ? '' : '${item.notes} | '}Motivo: ${item.cancelReason}'
                                 : item.notes,
                             formatKitchenStatus(item.kitchenStatus),
-                            item.kitchenStockItemName ?? '-',
+                            item.recipeItems.isEmpty
+                                ? item.kitchenStockItemName ?? '-'
+                                : item.recipeItems
+                                      .map(
+                                        (recipeItem) =>
+                                            '${recipeItem.kitchenStockItemName} x${_qty(recipeItem.consumptionFactor)}',
+                                      )
+                                      .join(', '),
                           ],
                         )
                         .toList(),
@@ -2291,7 +2341,8 @@ class _SaleDetailDialog extends StatelessWidget {
                     headers: const [
                       'Metodo',
                       'Base',
-                      'Comision',
+                      'Recargo',
+                      'Comision absorbida',
                       'Cobrado',
                       'Recibido',
                       'Cambio',
@@ -2304,6 +2355,7 @@ class _SaleDetailDialog extends StatelessWidget {
                             _paymentMethodLabel(payment.method),
                             _money(payment.baseAmount),
                             _money(payment.surchargeAmount),
+                            _money(payment.cardFeeAbsorbedAmount),
                             _money(payment.chargedAmount),
                             payment.cashReceivedAmount == null
                                 ? '-'

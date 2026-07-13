@@ -190,7 +190,7 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
           const SizedBox(height: 16),
           const GlassPanel(
             child: Text(
-              'El desglose del sistema se guardara internamente y solo estara disponible para Admin.',
+              'La terminal debe capturarse con lo cobrado al cliente. La comision de tarjeta absorbida se guarda solo como dato administrativo.',
               style: TextStyle(
                 color: BrandColors.textMuted,
                 fontWeight: FontWeight.w700,

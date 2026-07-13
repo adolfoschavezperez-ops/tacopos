@@ -135,6 +135,14 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
                 value: result.expectedCardChargedAmount,
               ),
               _CashCloseDiffRow(
+                label: 'Comision absorbida',
+                value: result.expectedCardFeeAbsorbedAmount,
+              ),
+              _CashCloseDiffRow(
+                label: 'Neto estimado tarjeta',
+                value: result.estimatedCardNetAmount,
+              ),
+              _CashCloseDiffRow(
                 label: 'Terminal reportada',
                 value: result.terminalReportedAmount,
               ),
