@@ -1,11 +1,14 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../utils/category_utils.dart';
 import 'product_recipe_item.dart';
 
 class Product {
   const Product({
     required this.id,
     required this.name,
+    required this.categoryId,
+    required this.categoryName,
     required this.category,
     required this.price,
     required this.active,
@@ -22,6 +25,8 @@ class Product {
 
   final String id;
   final String name;
+  final String categoryId;
+  final String categoryName;
   final String category;
   final double price;
   final bool active;
@@ -40,7 +45,12 @@ class Product {
 
   factory Product.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
-    final category = _readString(data['category'], 'General');
+    final legacyCategory = _readString(data['category'], 'General');
+    final categoryName = _readString(data['categoryName'], legacyCategory);
+    final categoryId = _readString(
+      data['categoryId'],
+      categoryIdForName(categoryName),
+    );
     final stockConsumptionQty = data['stockConsumptionQty'] is num
         ? (data['stockConsumptionQty'] as num).toDouble()
         : data['kitchenConsumptionFactor'] is num
@@ -61,7 +71,7 @@ class Product {
         _readBool(
           data['affectsKitchenStock'],
           fallback: _defaultAffectsKitchenStock(
-            category,
+            categoryName,
             data['name'] as String?,
           ),
         ) ||
@@ -70,12 +80,14 @@ class Product {
     return Product(
       id: doc.id,
       name: _readString(data['name'], doc.id),
-      category: category,
+      categoryId: categoryId,
+      categoryName: categoryName,
+      category: categoryName,
       price: _readDouble(data['price']),
       active: _readBool(data['active'], fallback: true),
       sendToKitchen: _readBool(
         data['sendToKitchen'],
-        fallback: _defaultSendToKitchen(category),
+        fallback: _defaultSendToKitchen(categoryName),
       ),
       sortOrder: _readInt(data['sortOrder']),
       platformPrices: _readPlatformPrices(data['platformPrices']),

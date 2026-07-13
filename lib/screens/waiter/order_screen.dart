@@ -9,6 +9,7 @@ import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/product.dart';
+import '../../models/product_category.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
@@ -42,6 +43,7 @@ class _OrderScreenState extends State<OrderScreen> {
   final _repository = TacoPosRepository();
   late Stream<PosOrder?> _orderStream;
   late final Stream<List<Product>> _productsStream;
+  late final Stream<List<ProductCategory>> _productCategoriesStream;
   late String _boundOrderId;
   StreamSubscription<List<OrderItem>>? _itemsSubscription;
   List<OrderItem> _loadedItems = const [];
@@ -49,7 +51,7 @@ class _OrderScreenState extends State<OrderScreen> {
   Object? _itemsError;
   int _selectedPerson = 1;
   int _personCount = 1;
-  String _selectedCategory = 'Tacos';
+  String _selectedCategory = 'tacos';
   bool _busy = false;
   String? _lastOrderDebugSignature;
   String? _lastItemsDebugSignature;
@@ -59,6 +61,9 @@ class _OrderScreenState extends State<OrderScreen> {
     super.initState();
     _bindOrderStreams(widget.orderId);
     _productsStream = _repository.watchProducts(activeOnly: true);
+    _productCategoriesStream = _repository.watchProductCategories(
+      activeOnly: true,
+    );
     LivePresenceService.instance.update(
       appMode: 'waiter',
       currentScreen: 'Orden',
@@ -571,6 +576,7 @@ class _OrderScreenState extends State<OrderScreen> {
         );
         final menu = _ProductMenu(
           productsStream: _productsStream,
+          categoriesStream: _productCategoriesStream,
           selectedCategory: _selectedCategory,
           platformId: order?.orderType == 'takeout' ? order?.platformId : null,
           onCategoryChanged: (category) {
@@ -1984,6 +1990,7 @@ class _OrderItemRow extends StatelessWidget {
 class _ProductMenu extends StatelessWidget {
   const _ProductMenu({
     required this.productsStream,
+    required this.categoriesStream,
     required this.selectedCategory,
     required this.platformId,
     required this.onCategoryChanged,
@@ -1993,6 +2000,7 @@ class _ProductMenu extends StatelessWidget {
   });
 
   final Stream<List<Product>> productsStream;
+  final Stream<List<ProductCategory>> categoriesStream;
   final String selectedCategory;
   final String? platformId;
   final ValueChanged<String> onCategoryChanged;
@@ -2004,189 +2012,249 @@ class _ProductMenu extends StatelessWidget {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final compact = size.width < 650 || size.height < 750;
-    return StreamBuilder<List<Product>>(
-      stream: productsStream,
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return EmptyState(
-            icon: Icons.error_outline,
-            title: 'No se pudieron cargar los productos',
-            message: '${snapshot.error}',
-          );
-        }
+    return StreamBuilder<List<ProductCategory>>(
+      stream: categoriesStream,
+      builder: (context, categoriesSnapshot) {
+        final catalogCategories =
+            categoriesSnapshot.data ?? const <ProductCategory>[];
+        return StreamBuilder<List<Product>>(
+          stream: productsStream,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return EmptyState(
+                icon: Icons.error_outline,
+                title: 'No se pudieron cargar los productos',
+                message: '${snapshot.error}',
+              );
+            }
 
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const LoadingPanel(message: 'Cargando productos...');
-        }
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const LoadingPanel(message: 'Cargando productos...');
+            }
 
-        final products = snapshot.data ?? [];
-        if (products.isEmpty) {
-          return const EmptyState(
-            icon: Icons.restaurant_menu,
-            title: 'No hay productos activos',
-            message: 'Agrega o activa productos desde el catalogo de Admin.',
-          );
-        }
+            final products = snapshot.data ?? [];
+            if (products.isEmpty) {
+              return const EmptyState(
+                icon: Icons.restaurant_menu,
+                title: 'No hay productos activos',
+                message:
+                    'Agrega o activa productos desde el catalogo de Admin.',
+              );
+            }
 
-        final categories = orderedCategories(
-          products.map((product) => product.category),
-        );
-        if (categories.isEmpty) {
-          return const EmptyState(
-            icon: Icons.category_outlined,
-            title: 'Sin categorias',
-            message: 'Asigna categoria a los productos activos.',
-          );
-        }
-        final effectiveCategory = categories.contains(selectedCategory)
-            ? selectedCategory
-            : categories.first;
-        if (effectiveCategory != selectedCategory) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            onCategoryChanged(effectiveCategory);
-          });
-        }
-        final visibleProducts =
-            products
-                .where((product) => product.category == effectiveCategory)
-                .toList()
-              ..sort(_compareProductsForMenu);
+            final categories = _menuCategories(products, catalogCategories);
+            if (categories.isEmpty) {
+              return const EmptyState(
+                icon: Icons.category_outlined,
+                title: 'Sin categorias',
+                message: 'Asigna categoria a los productos activos.',
+              );
+            }
+            final effectiveCategory =
+                categories.any((category) => category.id == selectedCategory)
+                ? selectedCategory
+                : categories.first.id;
+            if (effectiveCategory != selectedCategory) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                onCategoryChanged(effectiveCategory);
+              });
+            }
+            final visibleProducts =
+                products
+                    .where((product) => product.categoryId == effectiveCategory)
+                    .toList()
+                  ..sort(_compareProductsForMenu);
+            final currentCategory = categories.firstWhere(
+              (category) => category.id == effectiveCategory,
+              orElse: () => categories.first,
+            );
 
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                compact ? 8 : 18,
-                compact ? 7 : 18,
-                compact ? 8 : 18,
-                compact ? 2 : 8,
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Menu',
-                      style: TextStyle(
-                        fontSize: compact ? 16 : 28,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 8 : 18,
+                    compact ? 7 : 18,
+                    compact ? 8 : 18,
+                    compact ? 2 : 8,
                   ),
-                  Text(
-                    '${visibleProducts.length} productos',
-                    style: TextStyle(
-                      color: BrandColors.textMuted,
-                      fontSize: compact ? 11 : null,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            SizedBox(
-              height: compact ? 34 : 54,
-              child: ListView.separated(
-                padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 18),
-                scrollDirection: Axis.horizontal,
-                itemCount: categories.length,
-                separatorBuilder: (_, _) => SizedBox(width: compact ? 6 : 10),
-                itemBuilder: (context, index) {
-                  final category = categories[index];
-                  final categoryAccent = categoryColor(category);
-                  final selected = effectiveCategory == category;
-                  return ChoiceChip(
-                    visualDensity: compact ? VisualDensity.compact : null,
-                    selected: selected,
-                    onSelected: (_) => onCategoryChanged(category),
-                    backgroundColor: categoryAccent.withValues(alpha: 0.08),
-                    selectedColor: categoryAccent.withValues(alpha: 0.22),
-                    side: BorderSide(
-                      color: categoryAccent.withValues(
-                        alpha: selected ? 0.72 : 0.32,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          currentCategory.name,
+                          style: TextStyle(
+                            fontSize: compact ? 16 : 28,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
                       ),
-                    ),
-                    labelStyle: TextStyle(
-                      color: selected ? categoryAccent : BrandColors.textMuted,
-                      fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
-                    ),
-                    label: Text(category),
-                  );
-                },
-              ),
-            ),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final columns = constraints.maxWidth >= 1100
-                      ? 5
-                      : constraints.maxWidth >= 760
-                      ? 4
-                      : constraints.maxWidth >= 430
-                      ? 3
-                      : constraints.maxWidth >= 300
-                      ? 2
-                      : 1;
-
-                  return GridView.builder(
-                    padding: EdgeInsets.all(compact ? 8 : 18),
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: columns,
-                      crossAxisSpacing: compact ? 7 : 12,
-                      mainAxisSpacing: compact ? 7 : 12,
-                      childAspectRatio: compact ? 2.15 : 1.9,
-                    ),
-                    itemCount: visibleProducts.length,
+                      Text(
+                        '${visibleProducts.length} productos',
+                        style: TextStyle(
+                          color: BrandColors.textMuted,
+                          fontSize: compact ? 11 : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  height: compact ? 34 : 54,
+                  child: ListView.separated(
+                    padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 18),
+                    scrollDirection: Axis.horizontal,
+                    itemCount: categories.length,
+                    separatorBuilder: (_, _) =>
+                        SizedBox(width: compact ? 6 : 10),
                     itemBuilder: (context, index) {
-                      final product = visibleProducts[index];
-                      return _ProductTile(
-                        key: ValueKey('product-${product.id}'),
-                        product: product,
-                        platformId: platformId,
-                        compact: compact,
-                        onTap: canAddProducts
-                            ? () => onAddProduct(product)
-                            : onBlockedAddProduct,
+                      final category = categories[index];
+                      final accent = categoryColorFromModel(category);
+                      final selected = effectiveCategory == category.id;
+                      return ChoiceChip(
+                        visualDensity: compact ? VisualDensity.compact : null,
+                        selected: selected,
+                        onSelected: (_) => onCategoryChanged(category.id),
+                        backgroundColor: accent.withValues(alpha: 0.08),
+                        selectedColor: accent.withValues(alpha: 0.22),
+                        side: BorderSide(
+                          color: accent.withValues(
+                            alpha: selected ? 0.72 : 0.32,
+                          ),
+                        ),
+                        labelStyle: TextStyle(
+                          color: selected ? accent : BrandColors.textMuted,
+                          fontWeight: selected
+                              ? FontWeight.w900
+                              : FontWeight.w700,
+                        ),
+                        label: Text(category.name),
                       );
                     },
-                  );
-                },
-              ),
-            ),
-          ],
+                  ),
+                ),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final columns = constraints.maxWidth >= 1100
+                          ? 5
+                          : constraints.maxWidth >= 760
+                          ? 4
+                          : constraints.maxWidth >= 430
+                          ? 3
+                          : constraints.maxWidth >= 300
+                          ? 2
+                          : 1;
+
+                      return GridView.builder(
+                        padding: EdgeInsets.all(compact ? 8 : 18),
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: columns,
+                          crossAxisSpacing: compact ? 7 : 12,
+                          mainAxisSpacing: compact ? 7 : 12,
+                          childAspectRatio: compact ? 2.15 : 1.9,
+                        ),
+                        itemCount: visibleProducts.length,
+                        itemBuilder: (context, index) {
+                          final product = visibleProducts[index];
+                          final category = findCategoryById(
+                            categories,
+                            product.categoryId,
+                          );
+                          return _ProductTile(
+                            key: ValueKey('product-${product.id}'),
+                            product: product,
+                            category: category,
+                            platformId: platformId,
+                            compact: compact,
+                            onTap: canAddProducts
+                                ? () => onAddProduct(product)
+                                : onBlockedAddProduct,
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
         );
       },
     );
   }
 }
 
+List<ProductCategory> _menuCategories(
+  List<Product> products,
+  List<ProductCategory> catalogCategories,
+) {
+  final productCategoryIds = products
+      .map((product) => product.categoryId)
+      .where((id) => id.trim().isNotEmpty)
+      .toSet();
+  final categories = <ProductCategory>[
+    for (final category in catalogCategories)
+      if (productCategoryIds.contains(category.id)) category,
+  ];
+  final knownIds = categories.map((category) => category.id).toSet();
+  for (final product in products) {
+    if (knownIds.contains(product.categoryId)) continue;
+    knownIds.add(product.categoryId);
+    categories.add(
+      ProductCategory(
+        id: product.categoryId,
+        name: product.categoryName,
+        normalizedName: normalizeCategory(product.categoryName),
+        active: true,
+        sortOrder: categoryRank(product.categoryName),
+      ),
+    );
+  }
+  categories.sort((a, b) {
+    final sortCompare = a.sortOrder.compareTo(b.sortOrder);
+    if (sortCompare != 0) return sortCompare;
+    return normalizeCategory(a.name).compareTo(normalizeCategory(b.name));
+  });
+  return categories;
+}
+
 class _ProductTile extends StatelessWidget {
   const _ProductTile({
     super.key,
     required this.product,
+    required this.category,
     required this.platformId,
     required this.compact,
     required this.onTap,
   });
 
   final Product product;
+  final ProductCategory? category;
   final String? platformId;
   final bool compact;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final categoryAccent = categoryColor(product.category);
+    final accent = category == null
+        ? categoryAccent(
+            categoryId: product.categoryId,
+            categoryName: product.categoryName,
+          )
+        : categoryColorFromModel(category!);
     return GlassCard(
       onTap: onTap,
       padding: EdgeInsets.all(compact ? 7 : 12),
-      accent: categoryAccent,
+      accent: accent,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             height: compact ? 2 : 3,
             decoration: BoxDecoration(
-              color: categoryAccent.withValues(alpha: 0.72),
+              color: accent.withValues(alpha: 0.72),
               borderRadius: BorderRadius.circular(999),
             ),
           ),
@@ -2195,11 +2263,11 @@ class _ProductTile extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  product.category.toUpperCase(),
+                  product.categoryName.toUpperCase(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: categoryAccent,
+                    color: accent,
                     fontSize: 10,
                     fontWeight: FontWeight.w800,
                   ),
@@ -2207,7 +2275,7 @@ class _ProductTile extends StatelessWidget {
               ),
               Icon(
                 Icons.add_circle_outline,
-                color: categoryAccent,
+                color: accent,
                 size: compact ? 16 : 22,
               ),
             ],

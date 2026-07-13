@@ -392,11 +392,12 @@ class _KitchenStockCatalogTabState extends State<_KitchenStockCatalogTab> {
                   final linkedProducts = <String>[];
                   for (final product in products) {
                     if (product.recipeItems.isNotEmpty) {
-                      final recipeItem = product.recipeItems.first;
-                      if (recipeItem.kitchenStockItemId == item.id) {
-                        linkedProducts.add(
-                          '${product.name} x${_qty(recipeItem.consumptionFactor)} equiv.',
-                        );
+                      for (final recipeItem in product.recipeItems) {
+                        if (recipeItem.kitchenStockItemId == item.id) {
+                          linkedProducts.add(
+                            '${product.name} x${_qty(recipeItem.consumptionFactor)} equiv.',
+                          );
+                        }
                       }
                     }
                     if (product.recipeItems.isEmpty &&

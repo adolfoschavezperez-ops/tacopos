@@ -4,6 +4,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../models/kitchen_stock_item.dart';
 import '../../models/order_platform.dart';
 import '../../models/product.dart';
+import '../../models/product_category.dart';
 import '../../models/product_recipe_item.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
@@ -81,7 +82,7 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
         ),
       ],
       body: FutureBuilder<void>(
-        future: repository.ensureKitchenStockLinksForProducts(),
+        future: _prepareCatalog(repository),
         builder: (context, setupSnapshot) {
           if (setupSnapshot.connectionState == ConnectionState.waiting) {
             return const LoadingPanel(message: 'Preparando catalogo...');
@@ -93,79 +94,104 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
               message: '${setupSnapshot.error}',
             );
           }
-          return StreamBuilder<List<Product>>(
-            stream: repository.watchProducts(),
-            builder: (context, productsSnapshot) {
-              if (productsSnapshot.hasError) {
+          return StreamBuilder<List<ProductCategory>>(
+            stream: repository.watchProductCategories(),
+            builder: (context, categoriesSnapshot) {
+              if (categoriesSnapshot.hasError) {
                 return EmptyState(
                   icon: Icons.error_outline,
-                  title: 'No se pudo cargar el catalogo',
-                  message: '${productsSnapshot.error}',
+                  title: 'No se pudieron cargar categorias',
+                  message: '${categoriesSnapshot.error}',
                 );
               }
-
-              if (productsSnapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingPanel(message: 'Cargando catalogo...');
+              if (categoriesSnapshot.connectionState ==
+                  ConnectionState.waiting) {
+                return const LoadingPanel(message: 'Cargando categorias...');
               }
+              final categories =
+                  categoriesSnapshot.data ?? const <ProductCategory>[];
+              return StreamBuilder<List<Product>>(
+                stream: repository.watchProducts(),
+                builder: (context, productsSnapshot) {
+                  if (productsSnapshot.hasError) {
+                    return EmptyState(
+                      icon: Icons.error_outline,
+                      title: 'No se pudo cargar el catalogo',
+                      message: '${productsSnapshot.error}',
+                    );
+                  }
 
-              final products = productsSnapshot.data ?? [];
-              if (products.isEmpty) {
-                return const EmptyState(
-                  icon: Icons.restaurant_menu,
-                  title: 'Catalogo vacio',
-                  message:
-                      'Agrega productos para que aparezcan en Mesero / Caja.',
-                );
-              }
+                  if (productsSnapshot.connectionState ==
+                      ConnectionState.waiting) {
+                    return const LoadingPanel(message: 'Cargando catalogo...');
+                  }
 
-              return StreamBuilder<List<OrderPlatform>>(
-                stream: repository.watchOrderPlatforms(activeOnly: false),
-                builder: (context, platformsSnapshot) {
-                  final platforms =
-                      platformsSnapshot.data ?? const <OrderPlatform>[];
-                  return StreamBuilder<List<KitchenStockItem>>(
-                    stream: repository.watchKitchenStockItems(),
-                    builder: (context, stockSnapshot) {
-                      final stockItems =
-                          stockSnapshot.data ?? const <KitchenStockItem>[];
-                      return _ProductCatalogView(
-                        products: products,
-                        platforms: platforms,
-                        stockItems: stockItems,
-                        searchController: _searchController,
-                        categoryFilter: _categoryFilter,
-                        statusFilter: _statusFilter,
-                        kitchenFilter: _kitchenFilter,
-                        stockFilter: _stockFilter,
-                        platformFilter: _platformFilter,
-                        sortMode: _sortMode,
-                        minPriceController: _minPriceController,
-                        maxPriceController: _maxPriceController,
-                        factorController: _factorController,
-                        onSearchChanged: (_) => setState(() {}),
-                        onCategoryChanged: (value) => setState(
-                          () => _categoryFilter = value ?? _allFilter,
-                        ),
-                        onStatusChanged: (value) =>
-                            setState(() => _statusFilter = value ?? _allFilter),
-                        onKitchenChanged: (value) => setState(
-                          () => _kitchenFilter = value ?? _allFilter,
-                        ),
-                        onStockChanged: (value) =>
-                            setState(() => _stockFilter = value ?? _allFilter),
-                        onPlatformChanged: (value) => setState(
-                          () => _platformFilter = value ?? _allFilter,
-                        ),
-                        onSortChanged: (value) => setState(
-                          () => _sortMode = value ?? _ProductSortMode.sortOrder,
-                        ),
-                        onClearFilters: _clearFilters,
-                        onEdit: (product) => _showProductDialog(
-                          context,
-                          repository,
-                          product: product,
-                        ),
-                        onToggle: repository.toggleProduct,
+                  final products = productsSnapshot.data ?? [];
+                  if (products.isEmpty) {
+                    return const EmptyState(
+                      icon: Icons.restaurant_menu,
+                      title: 'Catalogo vacio',
+                      message:
+                          'Agrega productos para que aparezcan en Mesero / Caja.',
+                    );
+                  }
+
+                  return StreamBuilder<List<OrderPlatform>>(
+                    stream: repository.watchOrderPlatforms(activeOnly: false),
+                    builder: (context, platformsSnapshot) {
+                      final platforms =
+                          platformsSnapshot.data ?? const <OrderPlatform>[];
+                      return StreamBuilder<List<KitchenStockItem>>(
+                        stream: repository.watchKitchenStockItems(),
+                        builder: (context, stockSnapshot) {
+                          final stockItems =
+                              stockSnapshot.data ?? const <KitchenStockItem>[];
+                          return _ProductCatalogView(
+                            products: products,
+                            categories: categories,
+                            platforms: platforms,
+                            stockItems: stockItems,
+                            searchController: _searchController,
+                            categoryFilter: _categoryFilter,
+                            statusFilter: _statusFilter,
+                            kitchenFilter: _kitchenFilter,
+                            stockFilter: _stockFilter,
+                            platformFilter: _platformFilter,
+                            sortMode: _sortMode,
+                            minPriceController: _minPriceController,
+                            maxPriceController: _maxPriceController,
+                            factorController: _factorController,
+                            onSearchChanged: (_) => setState(() {}),
+                            onCategoryChanged: (value) => setState(
+                              () => _categoryFilter = value ?? _allFilter,
+                            ),
+                            onStatusChanged: (value) => setState(
+                              () => _statusFilter = value ?? _allFilter,
+                            ),
+                            onKitchenChanged: (value) => setState(
+                              () => _kitchenFilter = value ?? _allFilter,
+                            ),
+                            onStockChanged: (value) => setState(
+                              () => _stockFilter = value ?? _allFilter,
+                            ),
+                            onPlatformChanged: (value) => setState(
+                              () => _platformFilter = value ?? _allFilter,
+                            ),
+                            onSortChanged: (value) => setState(
+                              () => _sortMode =
+                                  value ?? _ProductSortMode.sortOrder,
+                            ),
+                            onClearFilters: _clearFilters,
+                            onNormalizeCategories: () =>
+                                _normalizeCategories(repository),
+                            onEdit: (product) => _showProductDialog(
+                              context,
+                              repository,
+                              product: product,
+                            ),
+                            onToggle: repository.toggleProduct,
+                          );
+                        },
                       );
                     },
                   );
@@ -193,8 +219,12 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
     Product? product,
   }) async {
     await repository.ensureDefaultOrderPlatforms();
+    await repository.ensureDefaultProductCategories();
     await repository.ensureKitchenStockLinksForProducts();
     final platforms = await repository.watchOrderPlatforms().first;
+    final categories = await repository
+        .watchProductCategories(activeOnly: true)
+        .first;
     final stockItems = await repository.watchKitchenStockItems().first;
     if (!context.mounted) return;
 
@@ -203,10 +233,24 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
       builder: (_) => _ProductDialog(
         repository: repository,
         product: product,
+        categories: categories,
         platforms: platforms,
         stockItems: stockItems,
       ),
     );
+  }
+
+  Future<void> _prepareCatalog(TacoPosRepository repository) async {
+    await repository.ensureDefaultProductCategories();
+    await repository.ensureKitchenStockLinksForProducts();
+  }
+
+  Future<void> _normalizeCategories(TacoPosRepository repository) async {
+    await repository.normalizeProductCategoriesAndProducts();
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Categorias normalizadas.')));
   }
 }
 
@@ -225,6 +269,7 @@ enum _ProductSortMode {
 class _ProductCatalogView extends StatelessWidget {
   const _ProductCatalogView({
     required this.products,
+    required this.categories,
     required this.platforms,
     required this.stockItems,
     required this.searchController,
@@ -245,11 +290,13 @@ class _ProductCatalogView extends StatelessWidget {
     required this.onPlatformChanged,
     required this.onSortChanged,
     required this.onClearFilters,
+    required this.onNormalizeCategories,
     required this.onEdit,
     required this.onToggle,
   });
 
   final List<Product> products;
+  final List<ProductCategory> categories;
   final List<OrderPlatform> platforms;
   final List<KitchenStockItem> stockItems;
   final TextEditingController searchController;
@@ -270,14 +317,12 @@ class _ProductCatalogView extends StatelessWidget {
   final ValueChanged<String?> onPlatformChanged;
   final ValueChanged<_ProductSortMode?> onSortChanged;
   final VoidCallback onClearFilters;
+  final VoidCallback onNormalizeCategories;
   final ValueChanged<Product> onEdit;
   final ValueChanged<Product> onToggle;
 
   @override
   Widget build(BuildContext context) {
-    final categories = orderedCategories(
-      products.map((product) => product.category),
-    );
     final filteredProducts = _filterProducts(products);
     filteredProducts.sort((a, b) => _compareProducts(a, b, sortMode));
     final counts = _ProductCounts.from(products);
@@ -315,6 +360,7 @@ class _ProductCatalogView extends StatelessWidget {
           onPlatformChanged: onPlatformChanged,
           onSortChanged: onSortChanged,
           onClearFilters: onClearFilters,
+          onNormalizeCategories: onNormalizeCategories,
         ),
         const SizedBox(height: 12),
         Wrap(
@@ -367,12 +413,11 @@ class _ProductCatalogView extends StatelessWidget {
     return source.where((product) {
       if (query.isNotEmpty &&
           !_normalizeSearch(product.name).contains(query) &&
-          !_normalizeSearch(product.category).contains(query)) {
+          !_normalizeSearch(product.categoryName).contains(query)) {
         return false;
       }
       if (categoryFilter != _allFilter &&
-          normalizeCategory(product.category) !=
-              normalizeCategory(categoryFilter)) {
+          product.categoryId != categoryFilter) {
         return false;
       }
       if (statusFilter == 'active' && !product.active) {
@@ -445,10 +490,11 @@ class _ProductCatalogFilters extends StatelessWidget {
     required this.onPlatformChanged,
     required this.onSortChanged,
     required this.onClearFilters,
+    required this.onNormalizeCategories,
   });
 
   final List<Product> products;
-  final List<String> categories;
+  final List<ProductCategory> categories;
   final List<OrderPlatform> platforms;
   final List<KitchenStockItem> stockItems;
   final TextEditingController searchController;
@@ -469,6 +515,7 @@ class _ProductCatalogFilters extends StatelessWidget {
   final ValueChanged<String?> onPlatformChanged;
   final ValueChanged<_ProductSortMode?> onSortChanged;
   final VoidCallback onClearFilters;
+  final VoidCallback onNormalizeCategories;
 
   @override
   Widget build(BuildContext context) {
@@ -485,13 +532,13 @@ class _ProductCatalogFilters extends StatelessWidget {
           ..sort((a, b) => a.name.compareTo(b.name));
     final categoryValue =
         categoryFilter == _allFilter ||
-            categories.any(
-              (category) =>
-                  normalizeCategory(category) ==
-                  normalizeCategory(categoryFilter),
-            )
+            categories.any((category) => category.id == categoryFilter)
         ? categoryFilter
         : _allFilter;
+    ProductCategory? quickCategory(String name) {
+      return findCategoryByName(categories, name);
+    }
+
     final stockValue =
         stockFilter == _allFilter ||
             availableStock.any((item) => item.id == stockFilter)
@@ -536,14 +583,19 @@ class _ProductCatalogFilters extends StatelessWidget {
                 selected: _allFiltersSelected,
                 onSelected: (_) => onClearFilters(),
               ),
-              for (final category in ['Tacos', 'Gringas', 'Bebidas'])
+              for (final categoryName in ['Tacos', 'Gringas', 'Bebidas'])
                 _QuickFilterChip(
-                  label: category,
-                  selected:
-                      normalizeCategory(categoryFilter) ==
-                      normalizeCategory(category),
-                  color: categoryColor(category),
-                  onSelected: (_) => onCategoryChanged(category),
+                  label: categoryName,
+                  selected: categoryFilter == quickCategory(categoryName)?.id,
+                  color: categoryAccent(
+                    categoryId: quickCategory(categoryName)?.id,
+                    categoryName: categoryName,
+                    colorHex: quickCategory(categoryName)?.colorHex,
+                  ),
+                  onSelected: (_) {
+                    final category = quickCategory(categoryName);
+                    if (category != null) onCategoryChanged(category.id);
+                  },
                 ),
               _QuickFilterChip(
                 label: 'Activos',
@@ -581,7 +633,10 @@ class _ProductCatalogFilters extends StatelessWidget {
                     child: Text('Todas'),
                   ),
                   for (final category in categories)
-                    DropdownMenuItem(value: category, child: Text(category)),
+                    DropdownMenuItem(
+                      value: category.id,
+                      child: Text(category.name),
+                    ),
                 ],
                 onChanged: onCategoryChanged,
               ),
@@ -691,6 +746,11 @@ class _ProductCatalogFilters extends StatelessWidget {
                 onPressed: onClearFilters,
                 icon: const Icon(Icons.filter_alt_off_outlined),
                 label: const Text('Limpiar filtros'),
+              ),
+              OutlinedButton.icon(
+                onPressed: onNormalizeCategories,
+                icon: const Icon(Icons.auto_fix_high_outlined),
+                label: const Text('Normalizar categorias'),
               ),
             ],
           ),
@@ -852,9 +912,10 @@ class _ProductCounts {
       inactive: products.length - active,
       withKitchen: withKitchen,
       withoutKitchen: products.length - withKitchen,
-      categoryCount: orderedCategories(
-        products.map((product) => product.category),
-      ).length,
+      categoryCount: products
+          .map((product) => product.categoryId)
+          .toSet()
+          .length,
     );
   }
 }
@@ -909,6 +970,7 @@ double? _readDoubleFilter(String value) {
 class _ProductDialog extends StatefulWidget {
   const _ProductDialog({
     required this.repository,
+    required this.categories,
     required this.platforms,
     required this.stockItems,
     this.product,
@@ -916,6 +978,7 @@ class _ProductDialog extends StatefulWidget {
 
   final TacoPosRepository repository;
   final Product? product;
+  final List<ProductCategory> categories;
   final List<OrderPlatform> platforms;
   final List<KitchenStockItem> stockItems;
 
@@ -925,9 +988,9 @@ class _ProductDialog extends StatefulWidget {
 
 class _ProductDialogState extends State<_ProductDialog> {
   late final TextEditingController _nameController;
-  late final TextEditingController _categoryController;
   late final TextEditingController _priceController;
   late final Map<String, TextEditingController> _platformControllers;
+  late String _categoryId;
   late bool _active;
   late bool _sendToKitchen;
   late bool _affectsKitchenStock;
@@ -940,9 +1003,12 @@ class _ProductDialogState extends State<_ProductDialog> {
     super.initState();
     final product = widget.product;
     _nameController = TextEditingController(text: product?.name ?? '');
-    _categoryController = TextEditingController(
-      text: product?.category ?? 'Tacos',
-    );
+    final initialCategory =
+        findCategoryById(widget.categories, product?.categoryId) ??
+        findCategoryByName(widget.categories, product?.categoryName ?? '') ??
+        findCategoryByName(widget.categories, 'Tacos') ??
+        (widget.categories.isNotEmpty ? widget.categories.first : null);
+    _categoryId = initialCategory?.id ?? product?.categoryId ?? 'tacos';
     _priceController = TextEditingController(
       text: product == null ? '' : product.price.toStringAsFixed(2),
     );
@@ -959,7 +1025,7 @@ class _ProductDialogState extends State<_ProductDialog> {
     _affectsKitchenStock =
         product?.affectsKitchenStock ??
         _defaultAffectsKitchenStock(
-          _categoryController.text,
+          _selectedCategoryName,
           _nameController.text,
         );
     _stockItems = [...widget.stockItems];
@@ -984,7 +1050,7 @@ class _ProductDialogState extends State<_ProductDialog> {
           _RecipeDraftItem(
             stockItemId: stockItemId,
             factor: _defaultEquivalenceFactor(
-              _categoryController.text,
+              _selectedCategoryName,
               product?.name ?? '',
             ),
           ),
@@ -996,7 +1062,6 @@ class _ProductDialogState extends State<_ProductDialog> {
   @override
   void dispose() {
     _nameController.dispose();
-    _categoryController.dispose();
     _priceController.dispose();
     for (final controller in _platformControllers.values) {
       controller.dispose();
@@ -1024,7 +1089,7 @@ class _ProductDialogState extends State<_ProductDialog> {
     }
 
     final defaults = _kitchenDefaultsFor(
-      _categoryController.text,
+      _selectedCategoryName,
       _nameController.text,
     );
     final created = await showDialog<KitchenStockItem>(
@@ -1064,7 +1129,7 @@ class _ProductDialogState extends State<_ProductDialog> {
         _RecipeDraftItem(
           stockItemId: id,
           factor: _defaultEquivalenceFactor(
-            _categoryController.text,
+            _selectedCategoryName,
             _nameController.text,
           ),
         ),
@@ -1076,8 +1141,9 @@ class _ProductDialogState extends State<_ProductDialog> {
 
   Future<void> _save() async {
     final price = double.tryParse(_priceController.text.replaceAll(',', '.'));
+    final selectedCategory = _selectedCategory;
     if (_nameController.text.trim().isEmpty ||
-        _categoryController.text.trim().isEmpty ||
+        selectedCategory == null ||
         price == null) {
       _message('Completa nombre, categoria y precio.');
       return;
@@ -1106,7 +1172,9 @@ class _ProductDialogState extends State<_ProductDialog> {
       await widget.repository.saveProduct(
         productId: widget.product?.id,
         name: _nameController.text,
-        category: _categoryController.text,
+        categoryId: selectedCategory.id,
+        categoryName: selectedCategory.name,
+        category: selectedCategory.name,
         price: price,
         platformPrices: platformPrices,
         active: _active,
@@ -1156,6 +1224,11 @@ class _ProductDialogState extends State<_ProductDialog> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  ProductCategory? get _selectedCategory =>
+      findCategoryById(widget.categories, _categoryId);
+
+  String get _selectedCategoryName => _selectedCategory?.name ?? 'Otros';
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -1198,11 +1271,23 @@ class _ProductDialogState extends State<_ProductDialog> {
                         final wide = constraints.maxWidth >= 720;
                         final left = _MainProductFields(
                           nameController: _nameController,
-                          categoryController: _categoryController,
+                          categories: widget.categories,
+                          categoryId: _categoryId,
                           priceController: _priceController,
                           active: _active,
                           sendToKitchen: _sendToKitchen,
                           saving: _saving,
+                          onCategoryChanged: (value) {
+                            setState(() {
+                              _categoryId = value ?? _categoryId;
+                              _affectsKitchenStock =
+                                  _affectsKitchenStock ||
+                                  _defaultAffectsKitchenStock(
+                                    _selectedCategoryName,
+                                    _nameController.text,
+                                  );
+                            });
+                          },
                           onActiveChanged: (value) {
                             setState(() => _active = value);
                           },
@@ -1278,21 +1363,25 @@ class _ProductDialogState extends State<_ProductDialog> {
 class _MainProductFields extends StatelessWidget {
   const _MainProductFields({
     required this.nameController,
-    required this.categoryController,
+    required this.categories,
+    required this.categoryId,
     required this.priceController,
     required this.active,
     required this.sendToKitchen,
     required this.saving,
+    required this.onCategoryChanged,
     required this.onActiveChanged,
     required this.onSendToKitchenChanged,
   });
 
   final TextEditingController nameController;
-  final TextEditingController categoryController;
+  final List<ProductCategory> categories;
+  final String categoryId;
   final TextEditingController priceController;
   final bool active;
   final bool sendToKitchen;
   final bool saving;
+  final ValueChanged<String?> onCategoryChanged;
   final ValueChanged<bool> onActiveChanged;
   final ValueChanged<bool> onSendToKitchenChanged;
 
@@ -1315,11 +1404,24 @@ class _MainProductFields extends StatelessWidget {
             decoration: const InputDecoration(labelText: 'Nombre'),
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: categoryController,
-            enabled: !saving,
-            textCapitalization: TextCapitalization.words,
+          DropdownButtonFormField<String>(
+            initialValue:
+                categories.any((category) => category.id == categoryId)
+                ? categoryId
+                : categories.isNotEmpty
+                ? categories.first.id
+                : null,
+            isExpanded: true,
             decoration: const InputDecoration(labelText: 'Categoria'),
+            items: categories
+                .map(
+                  (category) => DropdownMenuItem(
+                    value: category.id,
+                    child: Text(category.name),
+                  ),
+                )
+                .toList(),
+            onChanged: saving ? null : onCategoryChanged,
           ),
           const SizedBox(height: 12),
           TextField(
@@ -1765,12 +1867,15 @@ class _ProductAdminTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final categoryAccent = categoryColor(product.category);
+    final accent = categoryAccent(
+      categoryId: product.categoryId,
+      categoryName: product.categoryName,
+    );
     final platformPrices = platforms
         .where((platform) => product.platformPrices.containsKey(platform.id))
         .toList();
     return GlassCard(
-      accent: product.active ? categoryAccent : BrandColors.textMuted,
+      accent: product.active ? accent : BrandColors.textMuted,
       padding: const EdgeInsets.all(12),
       child: Row(
         children: [
@@ -1779,13 +1884,13 @@ class _ProductAdminTile extends StatelessWidget {
             height: 52,
             decoration: BoxDecoration(
               color: product.active
-                  ? categoryAccent.withValues(alpha: 0.16)
+                  ? accent.withValues(alpha: 0.16)
                   : BrandColors.glassFill,
               borderRadius: BorderRadius.circular(16),
             ),
             child: Icon(
               product.active ? Icons.fastfood : Icons.visibility_off,
-              color: product.active ? categoryAccent : BrandColors.textMuted,
+              color: product.active ? accent : BrandColors.textMuted,
             ),
           ),
           const SizedBox(width: 14),
@@ -1804,13 +1909,10 @@ class _ProductAdminTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Categoria: ${product.category}',
+                  'Categoria: ${product.categoryName}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: categoryAccent,
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: TextStyle(color: accent, fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 6),
                 Wrap(
@@ -1849,7 +1951,7 @@ class _ProductAdminTile extends StatelessWidget {
               product.sendToKitchen
                   ? Icons.room_service_outlined
                   : Icons.local_drink_outlined,
-              color: product.sendToKitchen ? categoryAccent : BrandColors.info,
+              color: product.sendToKitchen ? accent : BrandColors.info,
             ),
           ),
           const SizedBox(width: 12),

@@ -34,6 +34,8 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
   String _statusFilter = 'Todos';
 
   bool get _canControl => widget.employee.canControlLiveOperations;
+  bool get _canView =>
+      widget.employee.canViewLiveOperations || widget.employee.canViewAdmin;
 
   @override
   void dispose() {
@@ -43,7 +45,7 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (!widget.employee.canViewLiveOperations) {
+    if (!_canView) {
       return const EmptyState(
         icon: Icons.lock_outline,
         title: 'Sin permiso',
@@ -248,7 +250,8 @@ class _UsersLiveTab extends StatelessWidget {
           return const EmptyState(
             icon: Icons.people_outline,
             title: 'Sin usuarios activos',
-            message: 'No hay sesiones que coincidan con los filtros.',
+            message:
+                'No hay usuarios activos en este momento. Todavia no hay sesiones reportando actividad.',
           );
         }
         return ListView.builder(
@@ -721,7 +724,7 @@ class _ActivityTab extends StatelessWidget {
           return const EmptyState(
             icon: Icons.history,
             title: 'Sin intervenciones recientes',
-            message: 'Las acciones del visor apareceran aqui.',
+            message: 'Todavia no hay sesiones reportando actividad.',
           );
         }
         return ListView.builder(

@@ -23,6 +23,7 @@ import 'employee_catalog_screen.dart';
 import 'kitchen_admin_screen.dart';
 import 'live_operations_screen.dart';
 import 'order_platform_catalog_screen.dart';
+import 'product_category_catalog_screen.dart';
 import 'product_catalog_screen.dart';
 import 'table_catalog_screen.dart';
 
@@ -1234,6 +1235,18 @@ class _SettingsSection extends StatelessWidget {
             MaterialPageRoute(builder: (_) => const ProductCatalogScreen()),
           ),
         ),
+      if (employee?.canManageProducts == true)
+        _SettingsLink(
+          'Categorias de productos',
+          'Subcatalogo, orden, acentos y productos ligados.',
+          Icons.category_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const ProductCategoryCatalogScreen(),
+            ),
+          ),
+        ),
       if (employee?.canManageTables == true)
         _SettingsLink(
           'Mesas',
@@ -1683,7 +1696,8 @@ List<_NavItem> _navItems(Employee? employee) {
         Icons.dashboard_outlined,
         'Dashboard',
       ),
-    if (employee?.canViewLiveOperations == true)
+    if (employee?.canViewLiveOperations == true ||
+        employee?.canViewAdmin == true)
       const _NavItem(
         _BackofficeSection.live,
         Icons.monitor_heart_outlined,
