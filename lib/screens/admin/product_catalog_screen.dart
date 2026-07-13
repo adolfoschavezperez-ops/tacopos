@@ -7,14 +7,46 @@ import '../../models/product.dart';
 import '../../models/product_recipe_item.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/category_utils.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 
-class ProductCatalogScreen extends StatelessWidget {
+class ProductCatalogScreen extends StatefulWidget {
   const ProductCatalogScreen({super.key});
+
+  @override
+  State<ProductCatalogScreen> createState() => _ProductCatalogScreenState();
+}
+
+class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
+  final _searchController = TextEditingController();
+  String _categoryFilter = _allFilter;
+  String _statusFilter = _allFilter;
+  String _kitchenFilter = _allFilter;
+  String _stockFilter = _allFilter;
+  String _platformFilter = _allFilter;
+  _ProductSortMode _sortMode = _ProductSortMode.sortOrder;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _clearFilters() {
+    setState(() {
+      _searchController.clear();
+      _categoryFilter = _allFilter;
+      _statusFilter = _allFilter;
+      _kitchenFilter = _allFilter;
+      _stockFilter = _allFilter;
+      _platformFilter = _allFilter;
+      _sortMode = _ProductSortMode.sortOrder;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,20 +86,20 @@ class ProductCatalogScreen extends StatelessWidget {
           }
           return StreamBuilder<List<Product>>(
             stream: repository.watchProducts(),
-            builder: (context, snapshot) {
-              if (snapshot.hasError) {
+            builder: (context, productsSnapshot) {
+              if (productsSnapshot.hasError) {
                 return EmptyState(
                   icon: Icons.error_outline,
                   title: 'No se pudo cargar el catalogo',
-                  message: '${snapshot.error}',
+                  message: '${productsSnapshot.error}',
                 );
               }
 
-              if (snapshot.connectionState == ConnectionState.waiting) {
+              if (productsSnapshot.connectionState == ConnectionState.waiting) {
                 return const LoadingPanel(message: 'Cargando catalogo...');
               }
 
-              final products = snapshot.data ?? [];
+              final products = productsSnapshot.data ?? [];
               if (products.isEmpty) {
                 return const EmptyState(
                   icon: Icons.restaurant_menu,
@@ -77,29 +109,55 @@ class ProductCatalogScreen extends StatelessWidget {
                 );
               }
 
-              return ListView(
-                padding: const EdgeInsets.all(22),
-                children: [
-                  SectionHeader(
-                    title: 'Productos',
-                    subtitle: '${products.length} productos configurados',
-                  ),
-                  const SizedBox(height: 18),
-                  ...products.map(
-                    (product) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: _ProductAdminTile(
-                        product: product,
-                        onEdit: () => _showProductDialog(
+              return StreamBuilder<List<OrderPlatform>>(
+                stream: repository.watchOrderPlatforms(activeOnly: false),
+                builder: (context, platformsSnapshot) {
+                  final platforms =
+                      platformsSnapshot.data ?? const <OrderPlatform>[];
+                  return StreamBuilder<List<KitchenStockItem>>(
+                    stream: repository.watchKitchenStockItems(),
+                    builder: (context, stockSnapshot) {
+                      final stockItems =
+                          stockSnapshot.data ?? const <KitchenStockItem>[];
+                      return _ProductCatalogView(
+                        products: products,
+                        platforms: platforms,
+                        stockItems: stockItems,
+                        searchController: _searchController,
+                        categoryFilter: _categoryFilter,
+                        statusFilter: _statusFilter,
+                        kitchenFilter: _kitchenFilter,
+                        stockFilter: _stockFilter,
+                        platformFilter: _platformFilter,
+                        sortMode: _sortMode,
+                        onSearchChanged: (_) => setState(() {}),
+                        onCategoryChanged: (value) => setState(
+                          () => _categoryFilter = value ?? _allFilter,
+                        ),
+                        onStatusChanged: (value) =>
+                            setState(() => _statusFilter = value ?? _allFilter),
+                        onKitchenChanged: (value) => setState(
+                          () => _kitchenFilter = value ?? _allFilter,
+                        ),
+                        onStockChanged: (value) =>
+                            setState(() => _stockFilter = value ?? _allFilter),
+                        onPlatformChanged: (value) => setState(
+                          () => _platformFilter = value ?? _allFilter,
+                        ),
+                        onSortChanged: (value) => setState(
+                          () => _sortMode = value ?? _ProductSortMode.sortOrder,
+                        ),
+                        onClearFilters: _clearFilters,
+                        onEdit: (product) => _showProductDialog(
                           context,
                           repository,
                           product: product,
                         ),
-                        onToggle: () => repository.toggleProduct(product),
-                      ),
-                    ),
-                  ),
-                ],
+                        onToggle: repository.toggleProduct,
+                      );
+                    },
+                  );
+                },
               );
             },
           );
@@ -138,6 +196,595 @@ class ProductCatalogScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+const _allFilter = '__all__';
+
+enum _ProductSortMode { sortOrder, name, category, price, activeFirst }
+
+class _ProductCatalogView extends StatelessWidget {
+  const _ProductCatalogView({
+    required this.products,
+    required this.platforms,
+    required this.stockItems,
+    required this.searchController,
+    required this.categoryFilter,
+    required this.statusFilter,
+    required this.kitchenFilter,
+    required this.stockFilter,
+    required this.platformFilter,
+    required this.sortMode,
+    required this.onSearchChanged,
+    required this.onCategoryChanged,
+    required this.onStatusChanged,
+    required this.onKitchenChanged,
+    required this.onStockChanged,
+    required this.onPlatformChanged,
+    required this.onSortChanged,
+    required this.onClearFilters,
+    required this.onEdit,
+    required this.onToggle,
+  });
+
+  final List<Product> products;
+  final List<OrderPlatform> platforms;
+  final List<KitchenStockItem> stockItems;
+  final TextEditingController searchController;
+  final String categoryFilter;
+  final String statusFilter;
+  final String kitchenFilter;
+  final String stockFilter;
+  final String platformFilter;
+  final _ProductSortMode sortMode;
+  final ValueChanged<String> onSearchChanged;
+  final ValueChanged<String?> onCategoryChanged;
+  final ValueChanged<String?> onStatusChanged;
+  final ValueChanged<String?> onKitchenChanged;
+  final ValueChanged<String?> onStockChanged;
+  final ValueChanged<String?> onPlatformChanged;
+  final ValueChanged<_ProductSortMode?> onSortChanged;
+  final VoidCallback onClearFilters;
+  final ValueChanged<Product> onEdit;
+  final ValueChanged<Product> onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final categories = orderedCategories(
+      products.map((product) => product.category),
+    );
+    final filteredProducts = _filterProducts(products);
+    filteredProducts.sort((a, b) => _compareProducts(a, b, sortMode));
+    final counts = _ProductCounts.from(products);
+    final compact = MediaQuery.sizeOf(context).width < 650;
+
+    return ListView(
+      padding: EdgeInsets.all(compact ? 12 : 22),
+      children: [
+        SectionHeader(
+          title: 'Productos',
+          subtitle:
+              '${counts.total} productos · ${counts.active} activos · ${counts.withKitchen} con rendimiento · ${counts.categoryCount} categorias',
+        ),
+        const SizedBox(height: 12),
+        _ProductCatalogFilters(
+          products: products,
+          categories: categories,
+          platforms: platforms,
+          stockItems: stockItems,
+          searchController: searchController,
+          categoryFilter: categoryFilter,
+          statusFilter: statusFilter,
+          kitchenFilter: kitchenFilter,
+          stockFilter: stockFilter,
+          platformFilter: platformFilter,
+          sortMode: sortMode,
+          onSearchChanged: onSearchChanged,
+          onCategoryChanged: onCategoryChanged,
+          onStatusChanged: onStatusChanged,
+          onKitchenChanged: onKitchenChanged,
+          onStockChanged: onStockChanged,
+          onPlatformChanged: onPlatformChanged,
+          onSortChanged: onSortChanged,
+          onClearFilters: onClearFilters,
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _CountChip(label: '${counts.total} total'),
+            _CountChip(label: '${counts.active} activos'),
+            _CountChip(label: '${counts.inactive} inactivos'),
+            _CountChip(label: '${counts.withKitchen} con rendimiento'),
+            _CountChip(label: '${counts.withoutKitchen} sin rendimiento'),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Text(
+          '${filteredProducts.length} resultados',
+          style: const TextStyle(
+            color: BrandColors.textMuted,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 10),
+        if (filteredProducts.isEmpty)
+          const EmptyState(
+            icon: Icons.search_off,
+            title: 'Sin resultados',
+            message: 'Ajusta busqueda o filtros para ver productos.',
+          )
+        else
+          ...filteredProducts.map(
+            (product) => Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _ProductAdminTile(
+                product: product,
+                platforms: platforms,
+                onEdit: () => onEdit(product),
+                onToggle: () => onToggle(product),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  List<Product> _filterProducts(List<Product> source) {
+    final query = _normalizeSearch(searchController.text);
+    return source.where((product) {
+      if (query.isNotEmpty &&
+          !_normalizeSearch(product.name).contains(query) &&
+          !_normalizeSearch(product.category).contains(query)) {
+        return false;
+      }
+      if (categoryFilter != _allFilter &&
+          normalizeCategory(product.category) !=
+              normalizeCategory(categoryFilter)) {
+        return false;
+      }
+      if (statusFilter == 'active' && !product.active) {
+        return false;
+      }
+      if (statusFilter == 'inactive' && product.active) {
+        return false;
+      }
+      final hasKitchen =
+          product.affectsKitchenStock && product.recipeItems.isNotEmpty;
+      if (kitchenFilter == 'with' && !hasKitchen) {
+        return false;
+      }
+      if (kitchenFilter == 'without' && hasKitchen) {
+        return false;
+      }
+      if (stockFilter != _allFilter) {
+        final primaryStockId = product.recipeItems.isNotEmpty
+            ? product.recipeItems.first.kitchenStockItemId
+            : product.kitchenStockItemId;
+        if (primaryStockId != stockFilter) {
+          return false;
+        }
+      }
+      if (platformFilter != _allFilter) {
+        if (!product.platformPrices.containsKey(platformFilter)) {
+          return false;
+        }
+      }
+      return true;
+    }).toList();
+  }
+}
+
+class _ProductCatalogFilters extends StatelessWidget {
+  const _ProductCatalogFilters({
+    required this.products,
+    required this.categories,
+    required this.platforms,
+    required this.stockItems,
+    required this.searchController,
+    required this.categoryFilter,
+    required this.statusFilter,
+    required this.kitchenFilter,
+    required this.stockFilter,
+    required this.platformFilter,
+    required this.sortMode,
+    required this.onSearchChanged,
+    required this.onCategoryChanged,
+    required this.onStatusChanged,
+    required this.onKitchenChanged,
+    required this.onStockChanged,
+    required this.onPlatformChanged,
+    required this.onSortChanged,
+    required this.onClearFilters,
+  });
+
+  final List<Product> products;
+  final List<String> categories;
+  final List<OrderPlatform> platforms;
+  final List<KitchenStockItem> stockItems;
+  final TextEditingController searchController;
+  final String categoryFilter;
+  final String statusFilter;
+  final String kitchenFilter;
+  final String stockFilter;
+  final String platformFilter;
+  final _ProductSortMode sortMode;
+  final ValueChanged<String> onSearchChanged;
+  final ValueChanged<String?> onCategoryChanged;
+  final ValueChanged<String?> onStatusChanged;
+  final ValueChanged<String?> onKitchenChanged;
+  final ValueChanged<String?> onStockChanged;
+  final ValueChanged<String?> onPlatformChanged;
+  final ValueChanged<_ProductSortMode?> onSortChanged;
+  final VoidCallback onClearFilters;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 650;
+    final usedStockIds = {
+      for (final product in products)
+        if (product.recipeItems.isNotEmpty)
+          product.recipeItems.first.kitchenStockItemId
+        else if ((product.kitchenStockItemId ?? '').isNotEmpty)
+          product.kitchenStockItemId!,
+    };
+    final availableStock =
+        stockItems.where((item) => usedStockIds.contains(item.id)).toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+    final categoryValue =
+        categoryFilter == _allFilter ||
+            categories.any(
+              (category) =>
+                  normalizeCategory(category) ==
+                  normalizeCategory(categoryFilter),
+            )
+        ? categoryFilter
+        : _allFilter;
+    final stockValue =
+        stockFilter == _allFilter ||
+            availableStock.any((item) => item.id == stockFilter)
+        ? stockFilter
+        : _allFilter;
+    final platformValue =
+        platformFilter == _allFilter ||
+            platforms.any((platform) => platform.id == platformFilter)
+        ? platformFilter
+        : _allFilter;
+
+    return GlassPanel(
+      padding: EdgeInsets.all(compact ? 12 : 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: searchController,
+            onChanged: onSearchChanged,
+            decoration: InputDecoration(
+              labelText: 'Buscar por nombre',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: searchController.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Limpiar busqueda',
+                      onPressed: () {
+                        searchController.clear();
+                        onSearchChanged('');
+                      },
+                      icon: const Icon(Icons.clear),
+                    ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _QuickFilterChip(
+                label: 'Todos',
+                selected: _allFiltersSelected,
+                onSelected: (_) => onClearFilters(),
+              ),
+              for (final category in ['Tacos', 'Gringas', 'Bebidas'])
+                _QuickFilterChip(
+                  label: category,
+                  selected:
+                      normalizeCategory(categoryFilter) ==
+                      normalizeCategory(category),
+                  color: categoryColor(category),
+                  onSelected: (_) => onCategoryChanged(category),
+                ),
+              _QuickFilterChip(
+                label: 'Activos',
+                selected: statusFilter == 'active',
+                onSelected: (_) => onStatusChanged('active'),
+              ),
+              _QuickFilterChip(
+                label: 'Inactivos',
+                selected: statusFilter == 'inactive',
+                onSelected: (_) => onStatusChanged('inactive'),
+              ),
+              _QuickFilterChip(
+                label: 'Con rendimiento',
+                selected: kitchenFilter == 'with',
+                onSelected: (_) => onKitchenChanged('with'),
+              ),
+              _QuickFilterChip(
+                label: 'Sin rendimiento',
+                selected: kitchenFilter == 'without',
+                onSelected: (_) => onKitchenChanged('without'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _FilterDropdown<String>(
+                label: 'Categoria',
+                value: categoryValue,
+                items: [
+                  const DropdownMenuItem(
+                    value: _allFilter,
+                    child: Text('Todas'),
+                  ),
+                  for (final category in categories)
+                    DropdownMenuItem(value: category, child: Text(category)),
+                ],
+                onChanged: onCategoryChanged,
+              ),
+              _FilterDropdown<String>(
+                label: 'Estado',
+                value: statusFilter,
+                items: const [
+                  DropdownMenuItem(value: _allFilter, child: Text('Todos')),
+                  DropdownMenuItem(value: 'active', child: Text('Activos')),
+                  DropdownMenuItem(value: 'inactive', child: Text('Inactivos')),
+                ],
+                onChanged: onStatusChanged,
+              ),
+              _FilterDropdown<String>(
+                label: 'Rendimiento',
+                value: kitchenFilter,
+                items: const [
+                  DropdownMenuItem(value: _allFilter, child: Text('Todos')),
+                  DropdownMenuItem(
+                    value: 'with',
+                    child: Text('Afecta rendimiento'),
+                  ),
+                  DropdownMenuItem(value: 'without', child: Text('No afecta')),
+                ],
+                onChanged: onKitchenChanged,
+              ),
+              _FilterDropdown<String>(
+                label: 'Insumo principal',
+                value: stockValue,
+                items: [
+                  const DropdownMenuItem(
+                    value: _allFilter,
+                    child: Text('Todos'),
+                  ),
+                  for (final item in availableStock)
+                    DropdownMenuItem(value: item.id, child: Text(item.name)),
+                ],
+                onChanged: onStockChanged,
+              ),
+              _FilterDropdown<String>(
+                label: 'Plataforma',
+                value: platformValue,
+                items: [
+                  const DropdownMenuItem(
+                    value: _allFilter,
+                    child: Text('Todas'),
+                  ),
+                  for (final platform in platforms)
+                    DropdownMenuItem(
+                      value: platform.id,
+                      child: Text('Con precio ${platform.name}'),
+                    ),
+                ],
+                onChanged: onPlatformChanged,
+              ),
+              _FilterDropdown<_ProductSortMode>(
+                label: 'Ordenar',
+                value: sortMode,
+                items: const [
+                  DropdownMenuItem(
+                    value: _ProductSortMode.sortOrder,
+                    child: Text('sortOrder'),
+                  ),
+                  DropdownMenuItem(
+                    value: _ProductSortMode.name,
+                    child: Text('Nombre A-Z'),
+                  ),
+                  DropdownMenuItem(
+                    value: _ProductSortMode.category,
+                    child: Text('Categoria'),
+                  ),
+                  DropdownMenuItem(
+                    value: _ProductSortMode.price,
+                    child: Text('Precio'),
+                  ),
+                  DropdownMenuItem(
+                    value: _ProductSortMode.activeFirst,
+                    child: Text('Activos primero'),
+                  ),
+                ],
+                onChanged: onSortChanged,
+              ),
+              OutlinedButton.icon(
+                onPressed: onClearFilters,
+                icon: const Icon(Icons.filter_alt_off_outlined),
+                label: const Text('Limpiar filtros'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool get _allFiltersSelected =>
+      searchController.text.isEmpty &&
+      categoryFilter == _allFilter &&
+      statusFilter == _allFilter &&
+      kitchenFilter == _allFilter &&
+      stockFilter == _allFilter &&
+      platformFilter == _allFilter &&
+      sortMode == _ProductSortMode.sortOrder;
+}
+
+class _FilterDropdown<T> extends StatelessWidget {
+  const _FilterDropdown({
+    required this.label,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  final String label;
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 210,
+      child: DropdownButtonFormField<T>(
+        initialValue: value,
+        isExpanded: true,
+        decoration: InputDecoration(labelText: label),
+        items: items,
+        onChanged: onChanged,
+      ),
+    );
+  }
+}
+
+class _QuickFilterChip extends StatelessWidget {
+  const _QuickFilterChip({
+    required this.label,
+    required this.selected,
+    required this.onSelected,
+    this.color = BrandColors.accentYellow,
+  });
+
+  final String label;
+  final bool selected;
+  final ValueChanged<bool> onSelected;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilterChip(
+      selected: selected,
+      onSelected: onSelected,
+      label: Text(label),
+      backgroundColor: color.withValues(alpha: 0.08),
+      selectedColor: color.withValues(alpha: 0.22),
+      side: BorderSide(color: color.withValues(alpha: selected ? 0.7 : 0.28)),
+      labelStyle: TextStyle(
+        color: selected ? color : BrandColors.textMuted,
+        fontWeight: FontWeight.w800,
+      ),
+    );
+  }
+}
+
+class _CountChip extends StatelessWidget {
+  const _CountChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: BrandColors.glassFill,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: BrandColors.glassBorder),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: BrandColors.textSecondary,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+class _ProductCounts {
+  const _ProductCounts({
+    required this.total,
+    required this.active,
+    required this.inactive,
+    required this.withKitchen,
+    required this.withoutKitchen,
+    required this.categoryCount,
+  });
+
+  final int total;
+  final int active;
+  final int inactive;
+  final int withKitchen;
+  final int withoutKitchen;
+  final int categoryCount;
+
+  factory _ProductCounts.from(List<Product> products) {
+    final active = products.where((product) => product.active).length;
+    final withKitchen = products
+        .where(
+          (product) =>
+              product.affectsKitchenStock && product.recipeItems.isNotEmpty,
+        )
+        .length;
+    return _ProductCounts(
+      total: products.length,
+      active: active,
+      inactive: products.length - active,
+      withKitchen: withKitchen,
+      withoutKitchen: products.length - withKitchen,
+      categoryCount: orderedCategories(
+        products.map((product) => product.category),
+      ).length,
+    );
+  }
+}
+
+int _compareProducts(Product a, Product b, _ProductSortMode sortMode) {
+  switch (sortMode) {
+    case _ProductSortMode.name:
+      return _compareText(a.name, b.name);
+    case _ProductSortMode.category:
+      final categoryCompare = compareCategories(a.category, b.category);
+      return categoryCompare != 0
+          ? categoryCompare
+          : _compareText(a.name, b.name);
+    case _ProductSortMode.price:
+      final priceCompare = a.price.compareTo(b.price);
+      return priceCompare != 0 ? priceCompare : _compareText(a.name, b.name);
+    case _ProductSortMode.activeFirst:
+      final activeCompare = (b.active ? 1 : 0).compareTo(a.active ? 1 : 0);
+      return activeCompare != 0 ? activeCompare : _compareText(a.name, b.name);
+    case _ProductSortMode.sortOrder:
+      final categoryCompare = compareCategories(a.category, b.category);
+      if (categoryCompare != 0) return categoryCompare;
+      final sortCompare = a.sortOrder.compareTo(b.sortOrder);
+      return sortCompare != 0 ? sortCompare : _compareText(a.name, b.name);
+  }
+}
+
+int _compareText(String a, String b) {
+  return _normalizeSearch(a).compareTo(_normalizeSearch(b));
+}
+
+String _normalizeSearch(String value) {
+  return normalizeCategory(value);
 }
 
 class _ProductDialog extends StatefulWidget {
@@ -987,18 +1634,24 @@ String _factorText(double value) {
 class _ProductAdminTile extends StatelessWidget {
   const _ProductAdminTile({
     required this.product,
+    required this.platforms,
     required this.onEdit,
     required this.onToggle,
   });
 
   final Product product;
+  final List<OrderPlatform> platforms;
   final VoidCallback onEdit;
   final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
+    final categoryAccent = categoryColor(product.category);
+    final platformPrices = platforms
+        .where((platform) => product.platformPrices.containsKey(platform.id))
+        .toList();
     return GlassCard(
-      accent: product.active ? BrandColors.accentOrange : BrandColors.textMuted,
+      accent: product.active ? categoryAccent : BrandColors.textMuted,
       padding: const EdgeInsets.all(12),
       child: Row(
         children: [
@@ -1007,15 +1660,13 @@ class _ProductAdminTile extends StatelessWidget {
             height: 52,
             decoration: BoxDecoration(
               color: product.active
-                  ? BrandColors.accentOrange.withValues(alpha: 0.16)
+                  ? categoryAccent.withValues(alpha: 0.16)
                   : BrandColors.glassFill,
               borderRadius: BorderRadius.circular(16),
             ),
             child: Icon(
               product.active ? Icons.fastfood : Icons.visibility_off,
-              color: product.active
-                  ? BrandColors.accentYellow
-                  : BrandColors.textMuted,
+              color: product.active ? categoryAccent : BrandColors.textMuted,
             ),
           ),
           const SizedBox(width: 14),
@@ -1034,12 +1685,38 @@ class _ProductAdminTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  product.category,
+                  'Categoria: ${product.category}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: BrandColors.textMuted),
+                  style: TextStyle(
+                    color: categoryAccent,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    _MiniInfoChip(
+                      label: product.active ? 'Activo' : 'Inactivo',
+                      color: product.active
+                          ? BrandColors.success
+                          : BrandColors.textMuted,
+                    ),
+                    _MiniInfoChip(
+                      label: 'Precio tienda ${_moneyText(product.price)}',
+                      color: BrandColors.accentYellow,
+                    ),
+                    for (final platform in platformPrices)
+                      _MiniInfoChip(
+                        label:
+                            '${platform.name} ${_moneyText(product.platformPrices[platform.id] ?? 0)}',
+                        color: BrandColors.info,
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
                 _ProductRecipeSummary(product: product),
               ],
             ),
@@ -1053,9 +1730,7 @@ class _ProductAdminTile extends StatelessWidget {
               product.sendToKitchen
                   ? Icons.room_service_outlined
                   : Icons.local_drink_outlined,
-              color: product.sendToKitchen
-                  ? BrandColors.accentOrange
-                  : BrandColors.info,
+              color: product.sendToKitchen ? categoryAccent : BrandColors.info,
             ),
           ),
           const SizedBox(width: 12),
@@ -1084,6 +1759,33 @@ class _ProductAdminTile extends StatelessWidget {
             color: product.active ? BrandColors.success : BrandColors.textMuted,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _MiniInfoChip extends StatelessWidget {
+  const _MiniInfoChip({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.26)),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w800,
+        ),
       ),
     );
   }
@@ -1136,4 +1838,8 @@ class _ProductRecipeSummary extends StatelessWidget {
       ),
     );
   }
+}
+
+String _moneyText(double value) {
+  return '\$${value.toStringAsFixed(2)}';
 }

@@ -28,6 +28,7 @@ class BrandedScaffold extends StatelessWidget {
     final size = MediaQuery.sizeOf(context);
     final compact = size.width < 650 || size.height < 750;
     final toolbarHeight = compact ? 52.0 : 68.0;
+    final topInset = MediaQuery.paddingOf(context).top;
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: PreferredSize(
@@ -85,7 +86,7 @@ class BrandedScaffold extends StatelessWidget {
         child: SafeArea(
           top: false,
           child: Padding(
-            padding: EdgeInsets.only(top: toolbarHeight),
+            padding: EdgeInsets.only(top: toolbarHeight + topInset),
             child: body,
           ),
         ),

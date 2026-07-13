@@ -11,6 +11,7 @@ import '../../models/order_item.dart';
 import '../../models/product.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/category_utils.dart';
 import '../../utils/formatters.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -47,7 +48,7 @@ class _OrderScreenState extends State<OrderScreen> {
   Object? _itemsError;
   int _selectedPerson = 1;
   int _personCount = 1;
-  String _selectedCategory = 'Todos';
+  String _selectedCategory = 'Tacos';
   bool _busy = false;
   String? _lastOrderDebugSignature;
   String? _lastItemsDebugSignature;
@@ -507,7 +508,7 @@ class _OrderScreenState extends State<OrderScreen> {
       builder: (context, constraints) {
         final compact =
             constraints.maxWidth < 650 || constraints.maxHeight < 750;
-        final wide = constraints.maxWidth >= 960 && !compact;
+        final twoPane = constraints.maxWidth >= 720;
         final selectedPerson = _selectedPerson < 1 ? 1 : _selectedPerson;
         final order = orderSnapshot.data;
         final canTakeOrders =
@@ -563,15 +564,16 @@ class _OrderScreenState extends State<OrderScreen> {
               _showMessage('No tienes permiso para levantar pedidos'),
         );
 
-        if (wide) {
+        if (twoPane) {
+          final orderWidthFactor = constraints.maxWidth >= 960 ? 0.46 : 0.43;
           return Padding(
-            padding: const EdgeInsets.all(18),
+            padding: EdgeInsets.all(compact ? 8 : 18),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 RepaintBoundary(
                   child: SizedBox(
-                    width: constraints.maxWidth * 0.46,
+                    width: constraints.maxWidth * orderWidthFactor,
                     child: GlassPanel(
                       padding: EdgeInsets.zero,
                       blur: 8,
@@ -579,7 +581,7 @@ class _OrderScreenState extends State<OrderScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(width: 16),
+                SizedBox(width: compact ? 8 : 16),
                 Expanded(
                   child: RepaintBoundary(
                     child: GlassPanel(
@@ -595,61 +597,59 @@ class _OrderScreenState extends State<OrderScreen> {
         }
 
         if (compact) {
-          return DefaultTabController(
-            length: 2,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                children: [
-                  const SizedBox(
-                    height: 38,
-                    child: TabBar(
-                      tabs: [
-                        Tab(text: 'Orden'),
-                        Tab(text: 'Productos'),
-                      ],
-                    ),
+          final orderPanelHeight = (constraints.maxHeight * 0.40).clamp(
+            230.0,
+            320.0,
+          );
+          return Padding(
+            padding: const EdgeInsets.all(8),
+            child: Column(
+              children: [
+                SizedBox(
+                  height: orderPanelHeight,
+                  child: GlassPanel(
+                    padding: EdgeInsets.zero,
+                    borderRadius: 14,
+                    blur: 8,
+                    child: summary,
                   ),
-                  const SizedBox(height: 8),
-                  Expanded(
-                    child: TabBarView(
-                      children: [
-                        GlassPanel(
-                          padding: EdgeInsets.zero,
-                          borderRadius: 14,
-                          blur: 8,
-                          child: summary,
-                        ),
-                        GlassPanel(
-                          padding: EdgeInsets.zero,
-                          borderRadius: 14,
-                          blur: 8,
-                          child: menu,
-                        ),
-                      ],
-                    ),
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: GlassPanel(
+                    padding: EdgeInsets.zero,
+                    borderRadius: 14,
+                    blur: 8,
+                    child: menu,
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           );
         }
 
-        return ListView(
-          padding: const EdgeInsets.all(18),
-          children: [
-            GlassPanel(
-              padding: EdgeInsets.zero,
-              blur: 8,
-              child: SizedBox(height: 560, child: summary),
-            ),
-            const SizedBox(height: 16),
-            GlassPanel(
-              padding: EdgeInsets.zero,
-              blur: 8,
-              child: SizedBox(height: 640, child: menu),
-            ),
-          ],
+        return Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            children: [
+              SizedBox(
+                height: (constraints.maxHeight * 0.38).clamp(300.0, 420.0),
+                child: GlassPanel(
+                  padding: EdgeInsets.zero,
+                  blur: 8,
+                  child: summary,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Expanded(
+                child: GlassPanel(
+                  padding: EdgeInsets.zero,
+                  blur: 8,
+                  child: menu,
+                ),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -1053,32 +1053,47 @@ class _OrderSummaryState extends State<_OrderSummary> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Padding(
-          padding: EdgeInsets.all(edgePadding),
+          padding: EdgeInsets.all(compact ? 8 : edgePadding),
           child: Row(
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SectionHeader(
-                      title: widget.order.displayName,
-                      subtitle: 'Orden por personas',
-                      trailing: StatusBadge(
+                    if (compact) ...[
+                      Text(
+                        widget.order.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      StatusBadge(
                         style: kitchenStatusStyle(widget.order.kitchenStatus),
                       ),
-                    ),
+                    ] else
+                      SectionHeader(
+                        title: widget.order.displayName,
+                        subtitle: 'Orden por personas',
+                        trailing: StatusBadge(
+                          style: kitchenStatusStyle(widget.order.kitchenStatus),
+                        ),
+                      ),
                   ],
                 ),
               ),
-              const SizedBox(width: 12),
+              SizedBox(width: compact ? 8 : 12),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Text(
+                  Text(
                     'TOTAL',
                     style: TextStyle(
                       color: BrandColors.textMuted,
-                      fontSize: 12,
+                      fontSize: compact ? 10 : 12,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -1096,18 +1111,26 @@ class _OrderSummaryState extends State<_OrderSummary> {
           ),
         ),
         SizedBox(
-          height: compact ? 44 : 58,
+          height: compact ? 36 : 58,
           child: ListView.separated(
-            padding: EdgeInsets.symmetric(horizontal: edgePadding),
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 8 : edgePadding,
+            ),
             scrollDirection: Axis.horizontal,
             itemCount: widget.personCount + 1,
-            separatorBuilder: (_, _) => const SizedBox(width: 10),
+            separatorBuilder: (_, _) => SizedBox(width: compact ? 6 : 10),
             itemBuilder: (context, index) {
               if (index == widget.personCount) {
                 return OutlinedButton.icon(
                   onPressed: widget.onAddPerson,
                   icon: const Icon(Icons.person_add),
                   label: const Text('Persona'),
+                  style: compact
+                      ? OutlinedButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                        )
+                      : null,
                 );
               }
 
@@ -1118,6 +1141,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
                 items: grouped[person] ?? const [],
               );
               return ChoiceChip(
+                visualDensity: compact ? VisualDensity.compact : null,
                 selected: widget.selectedPerson == person,
                 onSelected: (_) => widget.onSelectPerson(person),
                 label: Text(personName),
@@ -1136,10 +1160,10 @@ class _OrderSummaryState extends State<_OrderSummary> {
               : ListView.builder(
                   controller: _scrollController,
                   padding: EdgeInsets.fromLTRB(
-                    edgePadding,
-                    compact ? 4 : 8,
-                    edgePadding,
-                    edgePadding,
+                    compact ? 8 : edgePadding,
+                    compact ? 3 : 8,
+                    compact ? 8 : edgePadding,
+                    compact ? 8 : edgePadding,
                   ),
                   itemCount: widget.personCount,
                   itemBuilder: (context, index) {
@@ -1210,12 +1234,12 @@ class _PersonItemsCard extends StatelessWidget {
     final size = MediaQuery.sizeOf(context);
     final compact = size.width < 650 || size.height < 750;
     return Padding(
-      padding: EdgeInsets.only(bottom: compact ? 8 : 14),
+      padding: EdgeInsets.only(bottom: compact ? 6 : 14),
       child: GlassCard(
         onTap: onSelect,
         selected: selected,
         accent: BrandColors.accentYellow,
-        padding: EdgeInsets.all(compact ? 10 : 14),
+        padding: EdgeInsets.all(compact ? 7 : 14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1224,14 +1248,17 @@ class _PersonItemsCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     personName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: compact ? 16 : 18,
+                      fontSize: compact ? 14 : 18,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
                 IconButton(
                   tooltip: 'Renombrar persona',
+                  visualDensity: compact ? VisualDensity.compact : null,
                   onPressed: canEditOrder ? onRename : null,
                   icon: const Icon(Icons.edit_outlined),
                 ),
@@ -1240,7 +1267,7 @@ class _PersonItemsCard extends StatelessWidget {
                   value: subtotal,
                   style: TextStyle(
                     color: BrandColors.accentYellow,
-                    fontSize: compact ? 16 : 18,
+                    fontSize: compact ? 14 : 18,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -1280,8 +1307,10 @@ class _OrderBatchDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final compact = size.width < 650 || size.height < 750;
     return Padding(
-      padding: const EdgeInsets.only(top: 12, bottom: 6),
+      padding: EdgeInsets.only(top: compact ? 6 : 12, bottom: compact ? 3 : 6),
       child: Row(
         children: [
           Expanded(
@@ -1290,14 +1319,14 @@ class _OrderBatchDivider extends StatelessWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10),
+            padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 10),
             child: Text(
               '${label.title} · ${_formatBatchTime(label.time)}',
               style: TextStyle(
                 color: label.initial
                     ? BrandColors.textMuted
                     : BrandColors.accentYellow,
-                fontSize: 12,
+                fontSize: compact ? 10.5 : 12,
                 fontWeight: FontWeight.w900,
               ),
             ),
@@ -1536,10 +1565,16 @@ class _TopOrderActions extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            _CompactHeaderAction(
+              onPressed: () => Navigator.maybePop(context),
+              icon: const Icon(Icons.arrow_back),
+              label: 'Volver',
+            ),
             Tooltip(
               message: sendLabel,
-              child: IconButton.filledTonal(
+              child: _CompactHeaderAction(
                 onPressed: canSend ? onSendToKitchen : null,
+                label: 'Enviar',
                 icon: Icon(
                   pendingKitchenCount == 0
                       ? Icons.check_circle_outline
@@ -1550,28 +1585,32 @@ class _TopOrderActions extends StatelessWidget {
             if (canCloseEmpty)
               Tooltip(
                 message: 'Cerrar mesa vacia',
-                child: IconButton(
+                child: _CompactHeaderAction(
                   onPressed: busy ? null : onCloseEmptyOrder,
                   icon: const Icon(Icons.close),
+                  label: 'Cerrar',
                 ),
               ),
             if (canCancelOrder)
               Tooltip(
                 message: 'Cancelar ticket',
-                child: IconButton(
+                child: _CompactHeaderAction(
                   onPressed: busy ? null : onCancelOrder,
                   icon: const Icon(Icons.cancel_outlined),
+                  label: 'Cancelar',
                 ),
               ),
             Tooltip(
               message: chargeLabel,
-              child: IconButton.filled(
+              child: _CompactHeaderAction(
                 onPressed: !canAttemptCharge
                     ? null
                     : hasKitchenPending
                     ? onBlockedPayment
                     : onOpenPayment,
                 icon: const Icon(Icons.point_of_sale_outlined),
+                label: 'Cobrar',
+                prominent: true,
               ),
             ),
           ],
@@ -1584,6 +1623,12 @@ class _TopOrderActions extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          OutlinedButton.icon(
+            onPressed: () => Navigator.maybePop(context),
+            icon: const Icon(Icons.arrow_back),
+            label: const Text('Volver'),
+          ),
+          const SizedBox(width: 8),
           OutlinedButton.icon(
             onPressed: canSend ? onSendToKitchen : null,
             icon: Icon(
@@ -1624,6 +1669,60 @@ class _TopOrderActions extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CompactHeaderAction extends StatelessWidget {
+  const _CompactHeaderAction({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    this.prominent = false,
+  });
+
+  final Widget icon;
+  final String label;
+  final VoidCallback? onPressed;
+  final bool prominent;
+
+  @override
+  Widget build(BuildContext context) {
+    final buttonStyle = prominent
+        ? FilledButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 7),
+            minimumSize: const Size(0, 34),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          )
+        : OutlinedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 7),
+            minimumSize: const Size(0, 34),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          );
+    final child = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconTheme.merge(data: const IconThemeData(size: 16), child: icon),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800),
+        ),
+      ],
+    );
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: prominent
+          ? FilledButton(onPressed: onPressed, style: buttonStyle, child: child)
+          : OutlinedButton(
+              onPressed: onPressed,
+              style: buttonStyle,
+              child: child,
+            ),
     );
   }
 }
@@ -1687,7 +1786,7 @@ class _OrderItemRow extends StatelessWidget {
     return Opacity(
       opacity: cancelled ? 0.58 : 1,
       child: Padding(
-        padding: EdgeInsets.symmetric(vertical: compact ? 5 : 8),
+        padding: EdgeInsets.symmetric(vertical: compact ? 3 : 8),
         child: Row(
           children: [
             Expanded(
@@ -1702,11 +1801,11 @@ class _OrderItemRow extends StatelessWidget {
                       color: contentColor,
                       decoration: textDecoration,
                       decorationThickness: 2,
-                      fontSize: compact ? 13 : null,
+                      fontSize: compact ? 12.5 : null,
                       fontWeight: FontWeight.w900,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  SizedBox(height: compact ? 1 : 2),
                   Text(
                     '${item.category} | ${formatKitchenStatus(item.kitchenStatus)}',
                     maxLines: 1,
@@ -1715,7 +1814,7 @@ class _OrderItemRow extends StatelessWidget {
                       color: BrandColors.textMuted.withValues(
                         alpha: cancelled ? 0.75 : 1,
                       ),
-                      fontSize: compact ? 11 : 12,
+                      fontSize: compact ? 10.5 : 12,
                       decoration: textDecoration,
                     ),
                   ),
@@ -1786,6 +1885,7 @@ class _OrderItemRow extends StatelessWidget {
             const SizedBox(width: 8),
             IconButton.filledTonal(
               tooltip: 'Menos',
+              iconSize: compact ? 18 : 24,
               visualDensity: compact ? VisualDensity.compact : null,
               onPressed: cancelled
                   ? null
@@ -1797,7 +1897,7 @@ class _OrderItemRow extends StatelessWidget {
               icon: const Icon(Icons.remove),
             ),
             SizedBox(
-              width: compact ? 24 : 34,
+              width: compact ? 20 : 34,
               child: Text(
                 '${item.qty}',
                 textAlign: TextAlign.center,
@@ -1810,6 +1910,7 @@ class _OrderItemRow extends StatelessWidget {
             ),
             IconButton.filledTonal(
               tooltip: 'Mas',
+              iconSize: compact ? 18 : 24,
               visualDensity: compact ? VisualDensity.compact : null,
               onPressed: cancelled
                   ? null
@@ -1822,7 +1923,7 @@ class _OrderItemRow extends StatelessWidget {
             ),
             SizedBox(width: compact ? 4 : 8),
             SizedBox(
-              width: compact ? 68 : 86,
+              width: compact ? 58 : 86,
               child: MoneyText(
                 value: item.total,
                 textAlign: TextAlign.end,
@@ -1835,6 +1936,7 @@ class _OrderItemRow extends StatelessWidget {
             ),
             IconButton(
               tooltip: cancelButtonLabel,
+              iconSize: compact ? 18 : 24,
               visualDensity: compact ? VisualDensity.compact : null,
               onPressed: cancellable
                   ? onCancel
@@ -1902,25 +2004,39 @@ class _ProductMenu extends StatelessWidget {
           );
         }
 
-        final categories = [
-          'Todos',
-          ...{for (final product in products) product.category},
-        ];
-        final visibleProducts = selectedCategory == 'Todos'
-            ? products
-            : products
-                  .where((product) => product.category == selectedCategory)
-                  .toList();
+        final categories = orderedCategories(
+          products.map((product) => product.category),
+        );
+        if (categories.isEmpty) {
+          return const EmptyState(
+            icon: Icons.category_outlined,
+            title: 'Sin categorias',
+            message: 'Asigna categoria a los productos activos.',
+          );
+        }
+        final effectiveCategory = categories.contains(selectedCategory)
+            ? selectedCategory
+            : categories.first;
+        if (effectiveCategory != selectedCategory) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            onCategoryChanged(effectiveCategory);
+          });
+        }
+        final visibleProducts =
+            products
+                .where((product) => product.category == effectiveCategory)
+                .toList()
+              ..sort(_compareProductsForMenu);
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Padding(
               padding: EdgeInsets.fromLTRB(
-                compact ? 10 : 18,
-                compact ? 10 : 18,
-                compact ? 10 : 18,
-                compact ? 4 : 8,
+                compact ? 8 : 18,
+                compact ? 7 : 18,
+                compact ? 8 : 18,
+                compact ? 2 : 8,
               ),
               child: Row(
                 children: [
@@ -1928,30 +2044,47 @@ class _ProductMenu extends StatelessWidget {
                     child: Text(
                       'Menu',
                       style: TextStyle(
-                        fontSize: compact ? 20 : 28,
+                        fontSize: compact ? 16 : 28,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
                   ),
                   Text(
                     '${visibleProducts.length} productos',
-                    style: const TextStyle(color: BrandColors.textMuted),
+                    style: TextStyle(
+                      color: BrandColors.textMuted,
+                      fontSize: compact ? 11 : null,
+                    ),
                   ),
                 ],
               ),
             ),
             SizedBox(
-              height: compact ? 42 : 54,
+              height: compact ? 34 : 54,
               child: ListView.separated(
-                padding: EdgeInsets.symmetric(horizontal: compact ? 10 : 18),
+                padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 18),
                 scrollDirection: Axis.horizontal,
                 itemCount: categories.length,
                 separatorBuilder: (_, _) => SizedBox(width: compact ? 6 : 10),
                 itemBuilder: (context, index) {
                   final category = categories[index];
+                  final categoryAccent = categoryColor(category);
+                  final selected = effectiveCategory == category;
                   return ChoiceChip(
-                    selected: selectedCategory == category,
+                    visualDensity: compact ? VisualDensity.compact : null,
+                    selected: selected,
                     onSelected: (_) => onCategoryChanged(category),
+                    backgroundColor: categoryAccent.withValues(alpha: 0.08),
+                    selectedColor: categoryAccent.withValues(alpha: 0.22),
+                    side: BorderSide(
+                      color: categoryAccent.withValues(
+                        alpha: selected ? 0.72 : 0.32,
+                      ),
+                    ),
+                    labelStyle: TextStyle(
+                      color: selected ? categoryAccent : BrandColors.textMuted,
+                      fontWeight: selected ? FontWeight.w900 : FontWeight.w700,
+                    ),
                     label: Text(category),
                   );
                 },
@@ -1960,16 +2093,23 @@ class _ProductMenu extends StatelessWidget {
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  final columns = constraints.maxWidth >= 700 ? 3 : 2;
-                  final smallColumns = constraints.maxWidth < 330 ? 1 : 2;
+                  final columns = constraints.maxWidth >= 1100
+                      ? 5
+                      : constraints.maxWidth >= 760
+                      ? 4
+                      : constraints.maxWidth >= 430
+                      ? 3
+                      : constraints.maxWidth >= 300
+                      ? 2
+                      : 1;
 
                   return GridView.builder(
-                    padding: EdgeInsets.all(compact ? 10 : 18),
+                    padding: EdgeInsets.all(compact ? 8 : 18),
                     gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: compact ? smallColumns : columns,
-                      crossAxisSpacing: compact ? 8 : 12,
-                      mainAxisSpacing: compact ? 8 : 12,
-                      childAspectRatio: compact ? 1.8 : 1.45,
+                      crossAxisCount: columns,
+                      crossAxisSpacing: compact ? 7 : 12,
+                      mainAxisSpacing: compact ? 7 : 12,
+                      childAspectRatio: compact ? 2.15 : 1.9,
                     ),
                     itemCount: visibleProducts.length,
                     itemBuilder: (context, index) {
@@ -2011,13 +2151,22 @@ class _ProductTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final categoryAccent = categoryColor(product.category);
     return GlassCard(
       onTap: onTap,
-      padding: EdgeInsets.all(compact ? 9 : 14),
-      accent: BrandColors.accentOrange,
+      padding: EdgeInsets.all(compact ? 7 : 12),
+      accent: categoryAccent,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Container(
+            height: compact ? 2 : 3,
+            decoration: BoxDecoration(
+              color: categoryAccent.withValues(alpha: 0.72),
+              borderRadius: BorderRadius.circular(999),
+            ),
+          ),
+          SizedBox(height: compact ? 5 : 7),
           Row(
             children: [
               Expanded(
@@ -2025,17 +2174,17 @@ class _ProductTile extends StatelessWidget {
                   product.category.toUpperCase(),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: BrandColors.accentOrange,
-                    fontSize: 10.5,
+                  style: TextStyle(
+                    color: categoryAccent,
+                    fontSize: 10,
                     fontWeight: FontWeight.w800,
                   ),
                 ),
               ),
               Icon(
                 Icons.add_circle_outline,
-                color: BrandColors.accentYellow,
-                size: compact ? 18 : 24,
+                color: categoryAccent,
+                size: compact ? 16 : 22,
               ),
             ],
           ),
@@ -2045,17 +2194,17 @@ class _ProductTile extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: compact ? 14 : 18,
+              fontSize: compact ? 12.5 : 16,
               fontWeight: FontWeight.w800,
               height: 1.05,
             ),
           ),
-          SizedBox(height: compact ? 4 : 8),
+          SizedBox(height: compact ? 2 : 6),
           MoneyText(
             value: product.priceForPlatform(platformId),
             style: TextStyle(
               color: BrandColors.accentYellow,
-              fontSize: compact ? 14 : 18,
+              fontSize: compact ? 12.5 : 16,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -2063,4 +2212,12 @@ class _ProductTile extends StatelessWidget {
       ),
     );
   }
+}
+
+int _compareProductsForMenu(Product a, Product b) {
+  final sortCompare = a.sortOrder.compareTo(b.sortOrder);
+  if (sortCompare != 0) {
+    return sortCompare;
+  }
+  return a.name.toLowerCase().compareTo(b.name.toLowerCase());
 }
