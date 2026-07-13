@@ -56,6 +56,7 @@ class Product {
       legacyStockUnit: kitchenStockUnit,
       legacyConsumptionFactor: stockConsumptionQty,
     );
+    final primaryRecipe = recipeItems.isNotEmpty ? recipeItems.first : null;
     final affectsKitchenStock =
         _readBool(
           data['affectsKitchenStock'],
@@ -79,10 +80,13 @@ class Product {
       sortOrder: _readInt(data['sortOrder']),
       platformPrices: _readPlatformPrices(data['platformPrices']),
       affectsKitchenStock: affectsKitchenStock,
-      kitchenStockItemId: kitchenStockItemId,
-      kitchenStockItemName: kitchenStockItemName,
-      kitchenStockUnit: kitchenStockUnit,
-      stockConsumptionQty: stockConsumptionQty,
+      kitchenStockItemId:
+          kitchenStockItemId ?? primaryRecipe?.kitchenStockItemId,
+      kitchenStockItemName:
+          kitchenStockItemName ?? primaryRecipe?.kitchenStockItemName,
+      kitchenStockUnit: kitchenStockUnit ?? primaryRecipe?.kitchenStockUnit,
+      stockConsumptionQty:
+          stockConsumptionQty ?? primaryRecipe?.consumptionFactor,
       recipeItems: recipeItems,
     );
   }

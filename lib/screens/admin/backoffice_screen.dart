@@ -2325,12 +2325,7 @@ class _SaleDetailDialog extends StatelessWidget {
                             formatKitchenStatus(item.kitchenStatus),
                             item.recipeItems.isEmpty
                                 ? item.kitchenStockItemName ?? '-'
-                                : item.recipeItems
-                                      .map(
-                                        (recipeItem) =>
-                                            '${recipeItem.kitchenStockItemName} x${_qty(recipeItem.consumptionFactor)}',
-                                      )
-                                      .join(', '),
+                                : '${item.recipeItems.first.kitchenStockItemName} x${_qty(item.recipeItems.first.consumptionFactor)} equiv.',
                           ],
                         )
                         .toList(),

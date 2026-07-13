@@ -62,13 +62,12 @@ class KitchenOrderBundle {
     final counts = <String, double>{};
     for (final item in items) {
       if (item.recipeItems.isNotEmpty) {
-        for (final recipeItem in item.recipeItems) {
-          final key = recipeItem.kitchenStockItemName.trim().isNotEmpty
-              ? recipeItem.kitchenStockItemName.trim()
-              : recipeItem.kitchenStockItemId;
-          counts[key] =
-              (counts[key] ?? 0) + item.qty * recipeItem.consumptionFactor;
-        }
+        final recipeItem = item.recipeItems.first;
+        final key = recipeItem.kitchenStockItemName.trim().isNotEmpty
+            ? recipeItem.kitchenStockItemName.trim()
+            : recipeItem.kitchenStockItemId;
+        counts[key] =
+            (counts[key] ?? 0) + item.qty * recipeItem.consumptionFactor;
         continue;
       }
       final key =
@@ -933,8 +932,8 @@ class TacoPosRepository {
       if (!product.active || !product.affectsKitchenStock) {
         continue;
       }
-      for (final recipeItem in product.recipeItems) {
-        linkedStockIds.add(recipeItem.kitchenStockItemId);
+      if (product.recipeItems.isNotEmpty) {
+        linkedStockIds.add(product.recipeItems.first.kitchenStockItemId);
       }
       final legacyId = product.kitchenStockItemId;
       if (legacyId != null && legacyId.trim().isNotEmpty) {
@@ -2013,11 +2012,10 @@ class TacoPosRepository {
           continue;
         }
         if (item.recipeItems.isNotEmpty) {
-          for (final recipeItem in item.recipeItems) {
-            sold[recipeItem.kitchenStockItemId] =
-                (sold[recipeItem.kitchenStockItemId] ?? 0) +
-                item.qty * recipeItem.consumptionFactor;
-          }
+          final recipeItem = item.recipeItems.first;
+          sold[recipeItem.kitchenStockItemId] =
+              (sold[recipeItem.kitchenStockItemId] ?? 0) +
+              item.qty * recipeItem.consumptionFactor;
           continue;
         }
         final stockItemId =
@@ -2087,21 +2085,7 @@ class TacoPosRepository {
           stockById,
           fallbackName: _titleFromId(meatId),
           fallbackUnit: 'kg',
-          factor: isGrande ? 3 : 2,
-        ),
-        _recipeItemForStockId(
-          'queso',
-          stockById,
-          fallbackName: 'Queso',
-          fallbackUnit: 'kg',
-          factor: isGrande ? 2 : 1,
-        ),
-        _recipeItemForStockId(
-          'tortilla_harina',
-          stockById,
-          fallbackName: 'Tortilla de harina',
-          fallbackUnit: 'kg',
-          factor: 1,
+          factor: isGrande ? 3.5 : 2.5,
         ),
       ];
     }
@@ -2112,13 +2096,6 @@ class TacoPosRepository {
           meatId,
           stockById,
           fallbackName: _titleFromId(meatId),
-          fallbackUnit: 'kg',
-          factor: 1,
-        ),
-        _recipeItemForStockId(
-          'tortilla_maiz',
-          stockById,
-          fallbackName: 'Tortilla de maiz',
           fallbackUnit: 'kg',
           factor: 1,
         ),
@@ -2519,6 +2496,9 @@ class TacoPosRepository {
       return;
     }
 
+    final primaryRecipe = product.recipeItems.isNotEmpty
+        ? product.recipeItems.first
+        : null;
     final itemRef = _ordersRef.doc(cleanOrderId).collection('items').doc();
     await itemRef.set({
       'personNumber': personNumber,
@@ -2537,26 +2517,22 @@ class TacoPosRepository {
       'sendToKitchen': product.sendToKitchen,
       'affectsKitchenStock': product.affectsKitchenStock,
       'recipeItems': product.affectsKitchenStock
-          ? ProductRecipeItem.toMapList(product.recipeItems)
+          ? ProductRecipeItem.toMapList(product.recipeItems.take(1).toList())
           : const [],
       'kitchenStockItemId': product.affectsKitchenStock
-          ? product.kitchenStockItemId
+          ? primaryRecipe?.kitchenStockItemId ?? product.kitchenStockItemId
           : null,
       'kitchenStockItemName': product.affectsKitchenStock
-          ? product.kitchenStockItemName
+          ? primaryRecipe?.kitchenStockItemName ?? product.kitchenStockItemName
           : null,
       'kitchenStockUnit': product.affectsKitchenStock
-          ? product.kitchenStockUnit
+          ? primaryRecipe?.kitchenStockUnit ?? product.kitchenStockUnit
           : null,
       'stockConsumptionQty': product.affectsKitchenStock
-          ? product.recipeItems.isNotEmpty
-                ? product.recipeItems.first.consumptionFactor
-                : null
+          ? primaryRecipe?.consumptionFactor ?? product.stockConsumptionQty
           : null,
       'kitchenConsumptionFactor': product.affectsKitchenStock
-          ? product.recipeItems.isNotEmpty
-                ? product.recipeItems.first.consumptionFactor
-                : null
+          ? primaryRecipe?.consumptionFactor ?? product.stockConsumptionQty
           : null,
       'kitchenStatus': product.sendToKitchen ? 'pending' : 'not_required',
       'kitchenBatchId': null,
@@ -3940,18 +3916,18 @@ class TacoPosRepository {
         : _productsRef.doc(productId);
     final current = await _productsRef.get();
     final cleanRecipeItems = affectsKitchenStock
-        ? recipeItems.where((item) => item.isValid).toList()
+        ? recipeItems.where((item) => item.isValid).take(1).toList()
         : <ProductRecipeItem>[];
     if (affectsKitchenStock && cleanRecipeItems.isEmpty) {
-      throw ArgumentError('Agrega al menos un insumo a la receta.');
+      throw ArgumentError('Selecciona un insumo principal para rendimiento.');
     }
     final recipeIds = <String>{};
     for (final item in cleanRecipeItems) {
       if (item.consumptionFactor <= 0) {
-        throw ArgumentError('Cada factor de receta debe ser mayor a cero.');
+        throw ArgumentError('El factor de equivalencia debe ser mayor a cero.');
       }
       if (!recipeIds.add(item.kitchenStockItemId)) {
-        throw ArgumentError('No repitas insumos dentro de la receta.');
+        throw ArgumentError('No repitas insumos de rendimiento.');
       }
     }
     final primary = cleanRecipeItems.isEmpty ? null : cleanRecipeItems.first;
