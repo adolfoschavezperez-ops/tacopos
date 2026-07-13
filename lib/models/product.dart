@@ -43,6 +43,8 @@ class Product {
     final category = _readString(data['category'], 'General');
     final stockConsumptionQty = data['stockConsumptionQty'] is num
         ? (data['stockConsumptionQty'] as num).toDouble()
+        : data['kitchenConsumptionFactor'] is num
+        ? (data['kitchenConsumptionFactor'] as num).toDouble()
         : null;
     final kitchenStockItemId = data['kitchenStockItemId'] as String?;
     final kitchenStockItemName = data['kitchenStockItemName'] as String?;

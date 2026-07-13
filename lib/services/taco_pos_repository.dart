@@ -914,6 +914,7 @@ class TacoPosRepository {
         'kitchenStockItemName': primary.kitchenStockItemName,
         'kitchenStockUnit': primary.kitchenStockUnit,
         'stockConsumptionQty': primary.consumptionFactor,
+        'kitchenConsumptionFactor': primary.consumptionFactor,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       hasUpdates = true;
@@ -2547,6 +2548,16 @@ class TacoPosRepository {
       'kitchenStockUnit': product.affectsKitchenStock
           ? product.kitchenStockUnit
           : null,
+      'stockConsumptionQty': product.affectsKitchenStock
+          ? product.recipeItems.isNotEmpty
+                ? product.recipeItems.first.consumptionFactor
+                : null
+          : null,
+      'kitchenConsumptionFactor': product.affectsKitchenStock
+          ? product.recipeItems.isNotEmpty
+                ? product.recipeItems.first.consumptionFactor
+                : null
+          : null,
       'kitchenStatus': product.sendToKitchen ? 'pending' : 'not_required',
       'kitchenBatchId': null,
       'paymentStatus': 'pending',
@@ -3959,6 +3970,7 @@ class TacoPosRepository {
       'kitchenStockItemName': primary?.kitchenStockItemName,
       'kitchenStockUnit': primary?.kitchenStockUnit,
       'stockConsumptionQty': primary?.consumptionFactor,
+      'kitchenConsumptionFactor': primary?.consumptionFactor,
       'sortOrder': current.docs.length + 1,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

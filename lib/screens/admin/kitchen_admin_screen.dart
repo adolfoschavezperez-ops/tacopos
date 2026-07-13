@@ -403,8 +403,9 @@ class _KitchenStockCatalogTabState extends State<_KitchenStockCatalogTab> {
                       linkedProducts.add('${product.name} x1');
                     }
                   }
-                  final linkedText =
-                      'Productos ligados: ${linkedProducts.isEmpty ? 'Sin productos ligados' : linkedProducts.join(', ')}';
+                  final linkedText = linkedProducts.isEmpty
+                      ? 'Productos ligados: Sin productos ligados'
+                      : 'Productos ligados:\n${linkedProducts.map((product) => '- $product').join('\n')}';
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 10),
                     child: GlassCard(

@@ -118,6 +118,11 @@ class OrderItem {
       legacyStockItemId: kitchenStockItemId,
       legacyStockItemName: kitchenStockItemName,
       legacyStockUnit: kitchenStockUnit,
+      legacyConsumptionFactor: data['stockConsumptionQty'] is num
+          ? (data['stockConsumptionQty'] as num).toDouble()
+          : data['kitchenConsumptionFactor'] is num
+          ? (data['kitchenConsumptionFactor'] as num).toDouble()
+          : null,
     );
     return OrderItem(
       id: doc.id,

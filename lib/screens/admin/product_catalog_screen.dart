@@ -21,7 +21,7 @@ class ProductCatalogScreen extends StatelessWidget {
     final repository = TacoPosRepository();
     if (AppSession.instance.employee?.canManageProducts != true) {
       return const BrandedScaffold(
-        title: 'Catalogo',
+        title: 'Productos',
         body: EmptyState(
           icon: Icons.lock_outline,
           title: 'Sin permiso',
@@ -31,7 +31,7 @@ class ProductCatalogScreen extends StatelessWidget {
     }
 
     return BrandedScaffold(
-      title: 'Catalogo',
+      title: 'Productos',
       actions: [
         IconButton(
           tooltip: 'Agregar producto',
@@ -81,7 +81,7 @@ class ProductCatalogScreen extends StatelessWidget {
                 padding: const EdgeInsets.all(22),
                 children: [
                   SectionHeader(
-                    title: 'Catalogo',
+                    title: 'Productos',
                     subtitle: '${products.length} productos configurados',
                   ),
                   const SizedBox(height: 18),
@@ -611,37 +611,7 @@ class _ProductKitchenFields extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Precios por plataforma',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-              ),
-              const SizedBox(height: 14),
-              for (final platform in platforms.where(
-                (platform) => platform.id != 'en_persona',
-              )) ...[
-                TextField(
-                  controller: platformControllers[platform.id],
-                  enabled: !saving,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: InputDecoration(
-                    labelText: 'Precio ${platform.name}',
-                    helperText: 'Vacio usa precio tienda',
-                  ),
-                ),
-                const SizedBox(height: 12),
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        GlassPanel(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Control de cocina',
+                'Receta / equivalencias de cocina',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 8),
@@ -675,6 +645,8 @@ class _ProductKitchenFields extends StatelessWidget {
                     style: TextStyle(color: BrandColors.textMuted),
                   )
                 else ...[
+                  const _RecipeHeaderRow(),
+                  const SizedBox(height: 6),
                   for (var index = 0; index < recipeItems.length; index++)
                     _RecipeItemEditor(
                       index: index,
@@ -716,6 +688,59 @@ class _ProductKitchenFields extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(height: 16),
+        GlassPanel(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Precios por plataforma',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 14),
+              for (final platform in platforms.where(
+                (platform) => platform.id != 'en_persona',
+              )) ...[
+                TextField(
+                  controller: platformControllers[platform.id],
+                  enabled: !saving,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: 'Precio ${platform.name}',
+                    helperText: 'Vacio usa precio tienda',
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RecipeHeaderRow extends StatelessWidget {
+  const _RecipeHeaderRow();
+
+  @override
+  Widget build(BuildContext context) {
+    const style = TextStyle(
+      color: BrandColors.textMuted,
+      fontSize: 12,
+      fontWeight: FontWeight.w900,
+    );
+    return const Row(
+      children: [
+        Expanded(flex: 5, child: Text('Insumo', style: style)),
+        SizedBox(width: 8),
+        SizedBox(width: 76, child: Text('Unidad', style: style)),
+        SizedBox(width: 8),
+        SizedBox(width: 72, child: Text('Factor', style: style)),
+        SizedBox(width: 48, child: Text('Accion', style: style)),
       ],
     );
   }
@@ -801,18 +826,6 @@ class _RecipeItemEditor extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           SizedBox(
-            width: 72,
-            child: TextField(
-              controller: item.factorController,
-              enabled: !saving,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(labelText: 'Factor'),
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
             width: 76,
             child: Padding(
               padding: const EdgeInsets.only(top: 14),
@@ -827,6 +840,18 @@ class _RecipeItemEditor extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                 ),
               ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 72,
+            child: TextField(
+              controller: item.factorController,
+              enabled: !saving,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: const InputDecoration(labelText: 'Factor'),
             ),
           ),
           IconButton(
@@ -1067,12 +1092,6 @@ class _ProductAdminTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final kitchenText = product.affectsKitchenStock
-        ? product.recipeItems.isEmpty
-              ? 'Receta: sin insumos'
-              : 'Receta: ${product.recipeItems.map((item) => '${item.kitchenStockItemName} x${_factorText(item.consumptionFactor)}').join(' | ')}'
-        : 'No controla cocina';
-
     return GlassCard(
       accent: product.active ? BrandColors.accentOrange : BrandColors.textMuted,
       padding: const EdgeInsets.all(12),
@@ -1110,11 +1129,13 @@ class _ProductAdminTile extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${product.category} | $kitchenText',
-                  maxLines: 2,
+                  product.category,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: BrandColors.textMuted),
                 ),
+                const SizedBox(height: 8),
+                _ProductRecipeSummary(product: product),
               ],
             ),
           ),
@@ -1159,6 +1180,75 @@ class _ProductAdminTile extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ProductRecipeSummary extends StatelessWidget {
+  const _ProductRecipeSummary({required this.product});
+
+  final Product product;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!product.affectsKitchenStock) {
+      return const Text(
+        'No controla cocina',
+        style: TextStyle(
+          color: BrandColors.textMuted,
+          fontWeight: FontWeight.w800,
+        ),
+      );
+    }
+
+    if (product.recipeItems.isEmpty) {
+      return const Text(
+        'Receta: sin insumos',
+        style: TextStyle(
+          color: BrandColors.danger,
+          fontWeight: FontWeight.w800,
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Receta:',
+          style: TextStyle(
+            color: BrandColors.accentYellow,
+            fontSize: 12,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final item in product.recipeItems)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: BrandColors.accentYellow.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: BrandColors.accentYellow.withValues(alpha: 0.28),
+                  ),
+                ),
+                child: Text(
+                  '${item.kitchenStockItemName} x${_factorText(item.consumptionFactor)}',
+                  style: const TextStyle(
+                    color: BrandColors.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }
