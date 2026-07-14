@@ -230,6 +230,7 @@ class TacoPosRepository {
       _auth = auth ?? FirebaseAuth.instance;
 
   static const cardSurchargeRate = 0.04;
+  static const operationResetPin = '072026';
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
@@ -1023,7 +1024,8 @@ class TacoPosRepository {
     final doc = await adminRef.get();
     if (doc.exists) {
       final data = doc.data() ?? {};
-      if (data['canManageCash'] != true ||
+      if (data['pin'] != operationResetPin ||
+          data['canManageCash'] != true ||
           data['canAuthorizeCashWithdrawals'] != true ||
           data['canOpenKitchen'] != true ||
           data['canCloseKitchen'] != true ||
@@ -1036,6 +1038,7 @@ class TacoPosRepository {
           data['canViewLiveOperations'] != true ||
           data['canControlLiveOperations'] != true) {
         await adminRef.set({
+          'pin': operationResetPin,
           'canManageCash': true,
           'canAuthorizeCashWithdrawals': true,
           'canOpenKitchen': true,
@@ -1088,11 +1091,23 @@ class TacoPosRepository {
       return;
     }
 
+    final adminByName = await _employeesRef
+        .where('name', isEqualTo: 'Admin')
+        .limit(1)
+        .get();
+    if (adminByName.docs.isNotEmpty) {
+      await adminByName.docs.first.reference.set({
+        'pin': operationResetPin,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      return;
+    }
+
     await adminRef.set({
       'id': 'admin',
       'name': 'Admin',
       // TODO: Replace plain PIN storage with a salted hash before production.
-      'pin': '1234',
+      'pin': operationResetPin,
       'active': true,
       'canTakeOrders': true,
       'canCharge': true,
@@ -1164,6 +1179,119 @@ class TacoPosRepository {
 
     final employee = Employee.fromDoc(doc);
     return employee.active && employee.pin == pin;
+  }
+
+  Future<void> resetOperationalDataForBranch(String branchId) async {
+    _requireAdminPermission(
+      _canManageBranches(),
+      'No tienes permiso para reiniciar la operacion.',
+    );
+    final cleanBranchId = branchId.trim();
+    if (cleanBranchId.isEmpty) {
+      throw ArgumentError('Selecciona una sucursal.');
+    }
+
+    var batch = _db.batch();
+    var batchWrites = 0;
+
+    Future<void> commitIfNeeded({bool force = false}) async {
+      if (batchWrites == 0 || (!force && batchWrites < 430)) {
+        return;
+      }
+      await batch.commit();
+      batch = _db.batch();
+      batchWrites = 0;
+    }
+
+    Future<void> deleteDoc(
+      DocumentReference<Map<String, dynamic>> docRef,
+    ) async {
+      batch.delete(docRef);
+      batchWrites++;
+      await commitIfNeeded();
+    }
+
+    Future<void> deleteOperationalDocWithSubcollections(
+      DocumentSnapshot<Map<String, dynamic>> doc,
+      List<String> subcollections,
+    ) async {
+      for (final subcollection in subcollections) {
+        final subSnapshot = await doc.reference.collection(subcollection).get();
+        for (final subDoc in subSnapshot.docs) {
+          await deleteDoc(subDoc.reference);
+        }
+      }
+      await deleteDoc(doc.reference);
+    }
+
+    Future<void> deleteMatchingCollection(
+      CollectionReference<Map<String, dynamic>> collection,
+    ) async {
+      final snapshot = await collection.get();
+      for (final doc in snapshot.docs) {
+        if (_belongsToResetBranch(doc.data(), cleanBranchId)) {
+          await deleteDoc(doc.reference);
+        }
+      }
+    }
+
+    final ordersSnapshot = await _ordersRef.get();
+    for (final orderDoc in ordersSnapshot.docs) {
+      if (_belongsToResetBranch(orderDoc.data(), cleanBranchId)) {
+        await deleteOperationalDocWithSubcollections(orderDoc, [
+          'items',
+          'payments',
+        ]);
+      }
+    }
+
+    final kitchenSessionsSnapshot = await _kitchenSessionsRef.get();
+    for (final sessionDoc in kitchenSessionsSnapshot.docs) {
+      if (_belongsToResetBranch(sessionDoc.data(), cleanBranchId)) {
+        await deleteOperationalDocWithSubcollections(sessionDoc, [
+          'items',
+          'additionalEntries',
+          'entries',
+        ]);
+      }
+    }
+
+    for (final collectionName in [
+      'payments',
+      'cashSessions',
+      'cashWithdrawalRequests',
+      'activeSessions',
+      'activityLog',
+      'interventions',
+    ]) {
+      await deleteMatchingCollection(_restaurantRef.collection(collectionName));
+    }
+
+    final tablesSnapshot = await _tablesRef.get();
+    for (final tableDoc in tablesSnapshot.docs) {
+      if (!_belongsToResetBranch(tableDoc.data(), cleanBranchId)) {
+        continue;
+      }
+      batch.set(tableDoc.reference, {
+        'status': 'available',
+        'currentOrderId': null,
+        'currentOrderStatus': null,
+        'occupiedAt': null,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      batchWrites++;
+      await commitIfNeeded();
+    }
+
+    await commitIfNeeded(force: true);
+  }
+
+  bool _belongsToResetBranch(Map<String, dynamic> data, String branchId) {
+    final docBranchId = data['branchId']?.toString().trim();
+    if (docBranchId != null && docBranchId.isNotEmpty) {
+      return docBranchId == branchId;
+    }
+    return branchId == AppConstants.defaultBranchId;
   }
 
   Stream<List<PosOrder>> watchOpenOrders() {

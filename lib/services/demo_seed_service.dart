@@ -159,7 +159,7 @@ const _employees = [
     'id': 'admin',
     'name': 'Admin',
     'active': true,
-    'pin': '1234',
+    'pin': '072026',
     'canTakeOrders': true,
     'canCharge': true,
     'canViewKitchen': true,

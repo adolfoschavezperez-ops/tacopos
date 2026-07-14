@@ -25,6 +25,7 @@ import 'employee_catalog_screen.dart';
 import 'kitchen_admin_screen.dart';
 import 'live_operations_screen.dart';
 import 'order_platform_catalog_screen.dart';
+import 'operation_reset_screen.dart';
 import 'product_category_catalog_screen.dart';
 import 'product_catalog_screen.dart';
 import 'table_catalog_screen.dart';
@@ -1329,6 +1330,16 @@ class _SettingsSection extends StatelessWidget {
           () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const KitchenAdminScreen()),
+          ),
+        ),
+      if (employee?.hasAdminAccess == true)
+        _SettingsLink(
+          'Reiniciar operación',
+          'Limpieza segura por sucursal con PIN.',
+          Icons.restart_alt_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const OperationResetScreen()),
           ),
         ),
     ];
