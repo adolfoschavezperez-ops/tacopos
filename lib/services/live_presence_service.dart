@@ -46,12 +46,7 @@ class LivePresenceService {
 
   Future<void> updateBranch(Branch branch) {
     _branch = branch;
-    return update(
-      appMode: 'home',
-      currentScreen: 'Inicio',
-      currentAction: 'Sucursal cambiada',
-      force: true,
-    );
+    return markMainMenu(currentAction: 'Sucursal cambiada');
   }
 
   Future<void> stop() async {
@@ -88,6 +83,18 @@ class LivePresenceService {
   }) {
     return update(
       currentScreen: currentScreen,
+      currentAction: currentAction,
+      force: force,
+    );
+  }
+
+  Future<void> markMainMenu({
+    String currentAction = 'En menú principal',
+    bool force = true,
+  }) {
+    return update(
+      appMode: 'home',
+      currentScreen: 'Inicio',
       currentAction: currentAction,
       force: force,
     );

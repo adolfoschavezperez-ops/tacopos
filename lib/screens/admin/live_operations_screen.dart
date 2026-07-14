@@ -117,6 +117,7 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                         value: _screenFilter,
                         values: const [
                           'Todos',
+                          'Inicio',
                           'Mesas',
                           'Orden',
                           'Cobro',
@@ -262,7 +263,7 @@ class _UsersLiveTab extends StatelessWidget {
             return false;
           }
           if (screenFilter != 'Todos' &&
-              session.currentScreen != screenFilter) {
+              _liveScreenLabel(session.currentScreen) != screenFilter) {
             return false;
           }
           if (statusFilter != 'Todos' &&
@@ -318,6 +319,9 @@ class _SessionCard extends StatelessWidget {
       'Inactivo' => BrandColors.accentYellow,
       _ => BrandColors.textMuted,
     };
+    final screenLabel = _liveScreenLabel(session.currentScreen);
+    final actionLabel = _liveActionLabel(session.currentAction);
+    final appModeLabel = _liveAppModeLabel(session.appMode);
     return GlassCard(
       accent: color,
       child: Column(
@@ -343,9 +347,9 @@ class _SessionCard extends StatelessWidget {
             runSpacing: 8,
             children: [
               _Pill(label: session.platform, color: BrandColors.info),
-              _Pill(label: session.appMode, color: BrandColors.accentYellow),
-              _Pill(label: session.currentScreen, color: BrandColors.textMuted),
-              _Pill(label: session.currentAction, color: BrandColors.success),
+              _Pill(label: appModeLabel, color: BrandColors.accentYellow),
+              _Pill(label: screenLabel, color: BrandColors.textMuted),
+              _Pill(label: actionLabel, color: BrandColors.success),
               if ((session.currentTableName ?? '').isNotEmpty)
                 _Pill(
                   label: 'Mesa ${session.currentTableName}',
@@ -1656,6 +1660,51 @@ String _dateTime(DateTime? date) {
 
 String _shortId(String value) {
   return value.length <= 6 ? value : value.substring(0, 6);
+}
+
+String _liveScreenLabel(String value) {
+  final normalized = _normalizeLiveLabel(value);
+  if (normalized == 'home' ||
+      normalized == 'inicio' ||
+      normalized == 'main_menu' ||
+      normalized == 'menu_principal') {
+    return 'Inicio';
+  }
+  return value;
+}
+
+String _liveActionLabel(String value) {
+  final normalized = _normalizeLiveLabel(value);
+  if (normalized == 'main_menu' ||
+      normalized == 'menu_principal' ||
+      normalized == 'seleccionando_modulo') {
+    return 'En menú principal';
+  }
+  return value;
+}
+
+String _liveAppModeLabel(String value) {
+  return switch (_normalizeLiveLabel(value)) {
+    'home' => 'Inicio',
+    'waiter' => 'Mesero',
+    'cash' => 'Caja',
+    'kitchen' => 'Cocina',
+    'kitchen_control' => 'Control cocina',
+    'admin' => 'Backoffice',
+    _ => value,
+  };
+}
+
+String _normalizeLiveLabel(String value) {
+  return value
+      .toLowerCase()
+      .trim()
+      .replaceAll('á', 'a')
+      .replaceAll('é', 'e')
+      .replaceAll('í', 'i')
+      .replaceAll('ó', 'o')
+      .replaceAll('ú', 'u')
+      .replaceAll(' ', '_');
 }
 
 String _money(double value) {

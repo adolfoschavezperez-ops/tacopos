@@ -31,11 +31,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    LivePresenceService.instance.update(
-      appMode: 'home',
-      currentScreen: 'Inicio',
-      currentAction: 'Seleccionando modulo',
-    );
+    _markMainMenu();
+  }
+
+  Future<void> _markMainMenu({String action = 'En menú principal'}) {
+    return LivePresenceService.instance.markMainMenu(currentAction: action);
   }
 
   Future<void> _showBranchSelector() async {
@@ -55,6 +55,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
     if (selected != null) {
       AppSession.instance.selectBranch(selected);
+      await _markMainMenu(action: 'Sucursal cambiada');
     }
   }
 
@@ -94,7 +95,20 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
       if (!kitchenIsOpen) {
-        await _showKitchenNotOpenDialog();
+        final openKitchenControl = await _showKitchenNotOpenDialog();
+        if (!mounted) {
+          return;
+        }
+        if (openKitchenControl) {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const KitchenControlScreen()),
+          );
+          if (!mounted) {
+            return;
+          }
+        }
+        await _markMainMenu();
         return;
       }
     }
@@ -107,42 +121,39 @@ class _HomeScreenState extends State<HomeScreen> {
       AppMode.admin => const AdminDashboardScreen(),
     };
 
-    Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => screen));
+    if (!mounted) {
+      return;
+    }
+    await _markMainMenu();
   }
 
-  Future<void> _showKitchenNotOpenDialog() async {
+  Future<bool> _showKitchenNotOpenDialog() async {
     final canOpenKitchen = AppSession.instance.employee?.canOpenKitchen == true;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cocina sin apertura'),
-        content: Text(
-          canOpenKitchen
-              ? 'Debes completar la apertura de cocina antes de entrar a operacion.'
-              : 'Debes completar la apertura de cocina antes de entrar a operacion.\n\nNo tienes permiso para abrir cocina. Solicita a un administrador.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cerrar'),
-          ),
-          if (canOpenKitchen)
-            FilledButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                Navigator.push(
-                  this.context,
-                  MaterialPageRoute(
-                    builder: (_) => const KitchenControlScreen(),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.soup_kitchen_outlined),
-              label: const Text('Abrir cocina'),
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Cocina sin apertura'),
+            content: Text(
+              canOpenKitchen
+                  ? 'Debes completar la apertura de cocina antes de entrar a operacion.'
+                  : 'Debes completar la apertura de cocina antes de entrar a operacion.\n\nNo tienes permiso para abrir cocina. Solicita a un administrador.',
             ),
-        ],
-      ),
-    );
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cerrar'),
+              ),
+              if (canOpenKitchen)
+                FilledButton.icon(
+                  onPressed: () => Navigator.pop(context, true),
+                  icon: const Icon(Icons.soup_kitchen_outlined),
+                  label: const Text('Abrir cocina'),
+                ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   void _openWithdrawalRequests() {
@@ -151,7 +162,11 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (_) => const CashAdminScreen(initialTabIndex: 1),
       ),
-    );
+    ).then((_) {
+      if (mounted) {
+        _markMainMenu();
+      }
+    });
   }
 
   @override
