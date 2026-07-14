@@ -748,7 +748,7 @@ class TacoPosRepository {
   Stream<List<PosOrder>> watchOpenOrders() {
     return _ordersRef.snapshots().map((snapshot) {
       final orders =
-          snapshot.docs.map(PosOrder.fromDoc).where(_isActiveOrder).toList()
+          snapshot.docs.map(PosOrder.fromDoc).where(isActiveOrder).toList()
             ..sort((a, b) {
               final aDate =
                   a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -766,8 +766,7 @@ class TacoPosRepository {
           snapshot.docs
               .map(PosOrder.fromDoc)
               .where(
-                (order) =>
-                    order.orderType == 'takeout' && _isActiveOrder(order),
+                (order) => order.orderType == 'takeout' && isActiveOrder(order),
               )
               .toList()
             ..sort((a, b) {
@@ -797,7 +796,7 @@ class TacoPosRepository {
     return _ordersRef.snapshots().asyncMap((snapshot) async {
       final orders = snapshot.docs
           .map(PosOrder.fromDoc)
-          .where(_isActiveOrder)
+          .where(isActiveOrder)
           .toList();
 
       final bundles = <KitchenOrderBundle>[];
@@ -4524,13 +4523,59 @@ String _activeSessionGroupKey(ActiveSession session) {
   return session.id;
 }
 
-bool _isActiveOrder(PosOrder order) {
+bool isActiveOrder(PosOrder order) {
   final status = order.status.toLowerCase().trim();
   final paymentStatus = order.paymentStatus.toLowerCase().trim();
-  const inactiveStatuses = {'cancelled', 'canceled', 'paid', 'closed'};
-  const inactivePaymentStatuses = {'paid', 'cancelled', 'canceled'};
-  return !inactiveStatuses.contains(status) &&
-      !inactivePaymentStatuses.contains(paymentStatus);
+  const inactiveStatuses = {
+    'cancelled',
+    'canceled',
+    'cancelada',
+    'paid',
+    'pagada',
+    'closed',
+    'cerrada',
+    'voided',
+  };
+  const inactivePaymentStatuses = {
+    'paid',
+    'pagado',
+    'cancelled',
+    'canceled',
+    'cancelado',
+    'cancelada',
+  };
+  if (inactiveStatuses.contains(status) ||
+      inactivePaymentStatuses.contains(paymentStatus)) {
+    return false;
+  }
+  if (order.cancelledAt != null) {
+    return false;
+  }
+  if (order.paidAt != null && order.pendingTotal <= 0.01) {
+    return false;
+  }
+  return true;
+}
+
+PosOrder? getActiveOrderForTable(String tableId, List<PosOrder> orders) {
+  final cleanTableId = tableId.trim();
+  final activeOrders =
+      orders
+          .where((order) => order.tableId.trim() == cleanTableId)
+          .where(isActiveOrder)
+          .toList()
+        ..sort((a, b) {
+          final aDate =
+              a.updatedAt ??
+              a.createdAt ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          final bDate =
+              b.updatedAt ??
+              b.createdAt ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          return bDate.compareTo(aDate);
+        });
+  return activeOrders.isEmpty ? null : activeOrders.first;
 }
 
 String? _cleanColorHex(String? value) {

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
@@ -401,14 +402,9 @@ class _TablesLiveTab extends StatelessWidget {
           return const LoadingPanel(message: 'Cargando mesas...');
         }
         return StreamBuilder<List<PosOrder>>(
-          stream: repository.watchOpenOrders(),
+          stream: repository.watchAllOrders(),
           builder: (context, ordersSnapshot) {
             final orders = ordersSnapshot.data ?? const <PosOrder>[];
-            final orderByTable = <String, PosOrder>{};
-            for (final order in orders) {
-              if (order.tableId.trim().isEmpty) continue;
-              orderByTable.putIfAbsent(order.tableId, () => order);
-            }
             final tables = tablesSnapshot.data!;
             return GridView.builder(
               padding: const EdgeInsets.all(18),
@@ -421,7 +417,8 @@ class _TablesLiveTab extends StatelessWidget {
               itemCount: tables.length,
               itemBuilder: (context, index) {
                 final table = tables[index];
-                final order = orderByTable[table.id];
+                final order = getActiveOrderForTable(table.id, orders);
+                _debugLiveTableOrders(table, orders, order);
                 return _LiveTableCard(
                   table: table,
                   order: order,
@@ -497,6 +494,47 @@ class _LiveTableCard extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+void _debugLiveTableOrders(
+  PosTable table,
+  List<PosOrder> orders,
+  PosOrder? activeOrder,
+) {
+  if (!kDebugMode) return;
+  final tableName = table.name.toLowerCase().trim();
+  final shouldLog =
+      tableName == 'mesa 1' ||
+      tableName == 'mesa 2' ||
+      table.id.toLowerCase().contains('mesa_1') ||
+      table.id.toLowerCase().contains('mesa_2');
+  if (!shouldLog) return;
+
+  final tableOrders =
+      orders.where((order) => order.tableId.trim() == table.id.trim()).toList()
+        ..sort((a, b) {
+          final aDate =
+              a.updatedAt ??
+              a.createdAt ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          final bDate =
+              b.updatedAt ??
+              b.createdAt ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          return bDate.compareTo(aDate);
+        });
+  debugPrint(
+    '[TacoPOS][LiveTables] tableId=${table.id} tableName=${table.name} '
+    'orders=${tableOrders.length} activeOrder=${activeOrder?.id ?? '-'}',
+  );
+  for (final order in tableOrders) {
+    debugPrint(
+      '[TacoPOS][LiveTables.order] tableId=${table.id} orderId=${order.id} '
+      'status=${order.status} paymentStatus=${order.paymentStatus} '
+      'cancelledAt=${order.cancelledAt} paidAt=${order.paidAt} '
+      'pendingTotal=${order.pendingTotal} isActive=${isActiveOrder(order)}',
     );
   }
 }
