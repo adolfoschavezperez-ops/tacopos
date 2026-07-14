@@ -188,6 +188,7 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
                               context,
                               repository,
                               product: product,
+                              categories: categories,
                             ),
                             onToggle: repository.toggleProduct,
                           );
@@ -217,27 +218,34 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
     BuildContext context,
     TacoPosRepository repository, {
     Product? product,
+    List<ProductCategory>? categories,
   }) async {
-    await repository.ensureDefaultOrderPlatforms();
-    await repository.seedDefaultProductCategoriesIfNeeded();
-    await repository.ensureKitchenStockLinksForProducts();
-    final platforms = await repository.watchOrderPlatforms().first;
-    final categories = await repository.getProductCategoriesOnce(
-      activeOnly: true,
-    );
-    final stockItems = await repository.watchKitchenStockItems().first;
-    if (!context.mounted) return;
+    try {
+      final platforms = await repository
+          .watchOrderPlatforms(activeOnly: false)
+          .first;
+      final activeCategories =
+          categories ??
+          await repository.getProductCategoriesOnce(activeOnly: true);
+      final stockItems = await repository.watchKitchenStockItems().first;
+      if (!context.mounted) return;
 
-    await showDialog<void>(
-      context: context,
-      builder: (_) => _ProductDialog(
-        repository: repository,
-        product: product,
-        categories: categories,
-        platforms: platforms,
-        stockItems: stockItems,
-      ),
-    );
+      await showDialog<void>(
+        context: context,
+        builder: (_) => _ProductDialog(
+          repository: repository,
+          product: product,
+          categories: activeCategories,
+          platforms: platforms,
+          stockItems: stockItems,
+        ),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo abrir el editor: $error')),
+      );
+    }
   }
 
   Future<void> _prepareCatalog(TacoPosRepository repository) async {
@@ -1029,12 +1037,8 @@ class _ProductDialogState extends State<_ProductDialog> {
     final product = widget.product;
     _categories = [...widget.categories];
     _nameController = TextEditingController(text: product?.name ?? '');
-    final initialCategory =
-        findCategoryById(_categories, product?.categoryId) ??
-        findCategoryByName(_categories, product?.categoryName ?? '') ??
-        findCategoryByName(_categories, 'Tacos') ??
-        (_categories.isNotEmpty ? _categories.first : null);
-    _categoryId = initialCategory?.id ?? product?.categoryId ?? 'tacos';
+    final initialCategory = _resolveInitialCategory(product, _categories);
+    _categoryId = initialCategory?.id ?? '';
     _priceController = TextEditingController(
       text: product == null ? '' : product.price.toStringAsFixed(2),
     );
@@ -1250,8 +1254,11 @@ class _ProductDialogState extends State<_ProductDialog> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  ProductCategory? get _selectedCategory =>
-      findCategoryById(_categories, _categoryId);
+  ProductCategory? get _selectedCategory {
+    final selected = findCategoryById(_categories, _categoryId);
+    if (selected != null) return selected;
+    return _resolveInitialCategory(widget.product, _categories);
+  }
 
   String get _selectedCategoryName => _selectedCategory?.name ?? 'Otros';
 
@@ -1265,10 +1272,8 @@ class _ProductDialogState extends State<_ProductDialog> {
       if (!mounted) return;
       setState(() {
         _categories = categories;
-        final tacos = findCategoryByName(_categories, 'Tacos');
-        _categoryId =
-            tacos?.id ??
-            (_categories.isNotEmpty ? _categories.first.id : _categoryId);
+        final resolved = _resolveInitialCategory(widget.product, _categories);
+        _categoryId = resolved?.id ?? _categoryId;
         _saving = false;
       });
     } catch (error) {
@@ -1321,7 +1326,7 @@ class _ProductDialogState extends State<_ProductDialog> {
                         final left = _MainProductFields(
                           nameController: _nameController,
                           categories: _categories,
-                          categoryId: _categoryId,
+                          categoryId: _selectedCategory?.id ?? '',
                           priceController: _priceController,
                           active: _active,
                           sendToKitchen: _sendToKitchen,
@@ -1408,6 +1413,34 @@ class _ProductDialogState extends State<_ProductDialog> {
       ),
     );
   }
+}
+
+ProductCategory? _resolveInitialCategory(
+  Product? product,
+  List<ProductCategory> categories,
+) {
+  if (categories.isEmpty) return null;
+  if (product != null) {
+    final byId = findCategoryById(categories, product.categoryId);
+    if (byId != null) return byId;
+
+    final byCategoryName = findCategoryByName(categories, product.categoryName);
+    if (byCategoryName != null) return byCategoryName;
+
+    final byLegacyCategory = findCategoryByName(categories, product.category);
+    if (byLegacyCategory != null) return byLegacyCategory;
+
+    final otros = findCategoryByName(categories, 'Otros');
+    if (otros != null) return otros;
+  }
+
+  final tacos = findCategoryByName(categories, 'Tacos');
+  if (tacos != null) return tacos;
+
+  final otros = findCategoryByName(categories, 'Otros');
+  if (otros != null) return otros;
+
+  return categories.first;
 }
 
 class _MainProductFields extends StatelessWidget {
