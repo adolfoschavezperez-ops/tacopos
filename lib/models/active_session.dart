@@ -22,6 +22,7 @@ class ActiveSession {
     this.updatedAt,
     this.archived = false,
     this.archivedAt,
+    this.sessionType,
   });
 
   final String id;
@@ -44,6 +45,7 @@ class ActiveSession {
   final DateTime? updatedAt;
   final bool archived;
   final DateTime? archivedAt;
+  final String? sessionType;
 
   bool get hasRecentConnection {
     final seen = lastSeenAt;
@@ -52,7 +54,15 @@ class ActiveSession {
   }
 
   bool get isVisibleInLiveViewer {
-    return !archived && isOnline && hasRecentConnection;
+    return !isBackofficeSession && !archived && isOnline && hasRecentConnection;
+  }
+
+  bool get isBackofficeSession {
+    return platform.toLowerCase().trim() == 'web' ||
+        appMode.toLowerCase().trim() == 'admin' ||
+        currentScreen.toLowerCase().trim() == 'backoffice' ||
+        currentAction.toLowerCase().trim() == 'viendo backoffice' ||
+        (sessionType ?? '').toLowerCase().trim() == 'backoffice';
   }
 
   String get connectionLabel {
@@ -88,6 +98,7 @@ class ActiveSession {
       updatedAt: _toDate(data['updatedAt']),
       archived: data['archived'] as bool? ?? false,
       archivedAt: _toDate(data['archivedAt']),
+      sessionType: data['sessionType'] as String?,
     );
   }
 

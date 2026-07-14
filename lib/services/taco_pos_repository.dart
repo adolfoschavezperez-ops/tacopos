@@ -565,11 +565,7 @@ class TacoPosRepository {
             if (!session.isVisibleInLiveViewer) {
               continue;
             }
-            final key = session.employeeId.trim().isNotEmpty
-                ? session.employeeId.trim()
-                : session.deviceId.trim().isNotEmpty
-                ? session.deviceId.trim()
-                : session.id;
+            final key = _activeSessionGroupKey(session);
             final current = latestByUser[key];
             if (current == null || _sessionIsNewer(session, current)) {
               latestByUser[key] = session;
@@ -593,12 +589,10 @@ class TacoPosRepository {
     final cutoff = DateTime.now().subtract(const Duration(seconds: 180));
     final latestByUser = <String, ActiveSession>{};
     final sessions = snapshot.docs.map(ActiveSession.fromDoc).toList();
-    for (final session in sessions) {
-      final key = session.employeeId.trim().isNotEmpty
-          ? session.employeeId.trim()
-          : session.deviceId.trim().isNotEmpty
-          ? session.deviceId.trim()
-          : session.id;
+    for (final session in sessions.where(
+      (session) => !session.isBackofficeSession,
+    )) {
+      final key = _activeSessionGroupKey(session);
       final current = latestByUser[key];
       if (current == null || _sessionIsNewer(session, current)) {
         latestByUser[key] = session;
@@ -609,14 +603,15 @@ class TacoPosRepository {
     var count = 0;
     for (final session in sessions) {
       final seen = session.lastSeenAt ?? session.updatedAt;
-      final key = session.employeeId.trim().isNotEmpty
-          ? session.employeeId.trim()
-          : session.deviceId.trim().isNotEmpty
-          ? session.deviceId.trim()
-          : session.id;
+      final key = _activeSessionGroupKey(session);
       final isDuplicate = latestByUser[key]?.id != session.id;
       final isOld = seen == null || seen.isBefore(cutoff);
-      if (session.archived || (!isDuplicate && session.isOnline && !isOld)) {
+      final shouldArchive =
+          session.isBackofficeSession ||
+          isDuplicate ||
+          isOld ||
+          !session.isOnline;
+      if (session.archived || !shouldArchive) {
         continue;
       }
       batch.set(_activeSessionsRef.doc(session.id), {
@@ -639,7 +634,7 @@ class TacoPosRepository {
     return count;
   }
 
-  Stream<List<ActivityEvent>> watchRecentActivityEvents({int limit = 40}) {
+  Stream<List<ActivityEvent>> watchRecentActivityEvents({int limit = 50}) {
     return _restaurantRef
         .collection('activityLog')
         .orderBy('createdAt', descending: true)
@@ -753,10 +748,7 @@ class TacoPosRepository {
   Stream<List<PosOrder>> watchOpenOrders() {
     return _ordersRef.snapshots().map((snapshot) {
       final orders =
-          snapshot.docs
-              .map(PosOrder.fromDoc)
-              .where((order) => order.status != 'paid')
-              .toList()
+          snapshot.docs.map(PosOrder.fromDoc).where(_isActiveOrder).toList()
             ..sort((a, b) {
               final aDate =
                   a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -775,8 +767,7 @@ class TacoPosRepository {
               .map(PosOrder.fromDoc)
               .where(
                 (order) =>
-                    order.orderType == 'takeout' &&
-                    !['paid', 'cancelled'].contains(order.status),
+                    order.orderType == 'takeout' && _isActiveOrder(order),
               )
               .toList()
             ..sort((a, b) {
@@ -806,7 +797,7 @@ class TacoPosRepository {
     return _ordersRef.snapshots().asyncMap((snapshot) async {
       final orders = snapshot.docs
           .map(PosOrder.fromDoc)
-          .where((order) => !['paid', 'cancelled'].contains(order.status))
+          .where(_isActiveOrder)
           .toList();
 
       final bundles = <KitchenOrderBundle>[];
@@ -4523,6 +4514,23 @@ bool _sessionIsNewer(ActiveSession a, ActiveSession b) {
   final aSeen = a.lastSeenAt ?? a.updatedAt ?? DateTime(1970);
   final bSeen = b.lastSeenAt ?? b.updatedAt ?? DateTime(1970);
   return aSeen.isAfter(bSeen);
+}
+
+String _activeSessionGroupKey(ActiveSession session) {
+  final employeeId = session.employeeId.trim();
+  if (employeeId.isNotEmpty) return employeeId;
+  final deviceId = session.deviceId.trim();
+  if (deviceId.isNotEmpty) return deviceId;
+  return session.id;
+}
+
+bool _isActiveOrder(PosOrder order) {
+  final status = order.status.toLowerCase().trim();
+  final paymentStatus = order.paymentStatus.toLowerCase().trim();
+  const inactiveStatuses = {'cancelled', 'canceled', 'paid', 'closed'};
+  const inactivePaymentStatuses = {'paid', 'cancelled', 'canceled'};
+  return !inactiveStatuses.contains(status) &&
+      !inactivePaymentStatuses.contains(paymentStatus);
 }
 
 String? _cleanColorHex(String? value) {

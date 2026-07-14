@@ -179,7 +179,10 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                   canControl: _canControl,
                   onOpenOrder: _openOrderDetail,
                 ),
-                _ActivityTab(repository: _repository),
+                _ActivityLiveTab(
+                  repository: _repository,
+                  onOpenOrder: _openOrderDetail,
+                ),
               ],
             ),
           ),
@@ -401,9 +404,11 @@ class _TablesLiveTab extends StatelessWidget {
           stream: repository.watchOpenOrders(),
           builder: (context, ordersSnapshot) {
             final orders = ordersSnapshot.data ?? const <PosOrder>[];
-            final orderByTable = {
-              for (final order in orders) order.tableId: order,
-            };
+            final orderByTable = <String, PosOrder>{};
+            for (final order in orders) {
+              if (order.tableId.trim().isEmpty) continue;
+              orderByTable.putIfAbsent(order.tableId, () => order);
+            }
             final tables = tablesSnapshot.data!;
             return GridView.builder(
               padding: const EdgeInsets.all(18),
@@ -724,6 +729,7 @@ class _TakeoutLiveTab extends StatelessWidget {
   }
 }
 
+// ignore: unused_element
 class _ActivityTab extends StatelessWidget {
   const _ActivityTab({required this.repository});
 
@@ -768,6 +774,192 @@ class _ActivityTab extends StatelessWidget {
           },
         );
       },
+    );
+  }
+}
+
+class _ActivityLiveTab extends StatefulWidget {
+  const _ActivityLiveTab({required this.repository, required this.onOpenOrder});
+
+  final TacoPosRepository repository;
+  final ValueChanged<String> onOpenOrder;
+
+  @override
+  State<_ActivityLiveTab> createState() => _ActivityLiveTabState();
+}
+
+class _ActivityLiveTabState extends State<_ActivityLiveTab> {
+  String _filter = 'Todos';
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<ActivityEvent>>(
+      stream: widget.repository.watchRecentActivityEvents(limit: 50),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const LoadingPanel(message: 'Cargando intervenciones...');
+        }
+        final events =
+            snapshot.data!.where((event) => _matchesFilter(event)).toList()
+              ..sort((a, b) {
+                final aDate = a.createdAt ?? DateTime(1970);
+                final bDate = b.createdAt ?? DateTime(1970);
+                return bDate.compareTo(aDate);
+              });
+        return ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            _ActivityFilters(value: _filter, onChanged: _setFilter),
+            const SizedBox(height: 14),
+            if (events.isEmpty)
+              const EmptyState(
+                icon: Icons.history,
+                title: 'Sin intervenciones recientes',
+                message: 'Todavia no hay actividad reciente para este filtro.',
+              )
+            else
+              ...events.map(
+                (event) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: _ActivityCard(
+                    event: event,
+                    onOpenOrder: event.orderId == null
+                        ? null
+                        : () => widget.onOpenOrder(event.orderId!),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _setFilter(String value) {
+    setState(() => _filter = value);
+  }
+
+  bool _matchesFilter(ActivityEvent event) {
+    return switch (_filter) {
+      'Ordenes' => event.orderId != null || event.type.contains('order'),
+      'Cocina' => event.type.contains('kitchen'),
+      'Pagos' => event.type.contains('payment') || event.type.contains('pay'),
+      'Cancelaciones' =>
+        event.type.contains('cancel') || event.type.contains('removed'),
+      'Backoffice' => event.actionSource == 'backoffice_live_viewer',
+      _ => true,
+    };
+  }
+}
+
+class _ActivityFilters extends StatelessWidget {
+  const _ActivityFilters({required this.value, required this.onChanged});
+
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    const filters = [
+      'Todos',
+      'Ordenes',
+      'Cocina',
+      'Pagos',
+      'Cancelaciones',
+      'Backoffice',
+    ];
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final filter in filters)
+          ChoiceChip(
+            selected: value == filter,
+            onSelected: (_) => onChanged(filter),
+            label: Text(filter),
+          ),
+      ],
+    );
+  }
+}
+
+class _ActivityCard extends StatelessWidget {
+  const _ActivityCard({required this.event, required this.onOpenOrder});
+
+  final ActivityEvent event;
+  final VoidCallback? onOpenOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _activityColor(event);
+    final itemName = event.productName ?? event.itemName;
+    final details = <String>[
+      event.employeeName,
+      _timeAgo(event.createdAt),
+      if ((event.tableName ?? '').isNotEmpty) 'Mesa ${event.tableName}',
+      if ((event.orderId ?? '').isNotEmpty) 'Orden ${_shortId(event.orderId!)}',
+      if ((itemName ?? '').isNotEmpty) itemName!,
+    ];
+    final note = event.reason ?? event.note;
+    return GlassCard(
+      accent: color,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  formatInterventionAction(event.type),
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              _Pill(
+                label: _formatActionSource(event.actionSource),
+                color: color,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            details.join(' - '),
+            style: const TextStyle(color: BrandColors.textMuted),
+          ),
+          if ((note ?? '').trim().isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Motivo/nota: ${note!.trim()}',
+              style: const TextStyle(color: BrandColors.textSecondary),
+            ),
+          ],
+          if (formatInterventionAction(event.type) == 'Actividad registrada')
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(
+                event.type,
+                style: const TextStyle(
+                  color: BrandColors.textMuted,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          if (onOpenOrder != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: OutlinedButton.icon(
+                onPressed: onOpenOrder,
+                icon: const Icon(Icons.receipt_long_outlined),
+                label: const Text('Ver orden'),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
@@ -1318,6 +1510,59 @@ Color _statusColor(String status) {
     'paid' => BrandColors.success,
     'cancelled' => BrandColors.danger,
     _ => BrandColors.textMuted,
+  };
+}
+
+Color _activityColor(ActivityEvent event) {
+  final type = event.type.toLowerCase();
+  if (type.contains('payment') || type.contains('pay')) {
+    return BrandColors.success;
+  }
+  if (type.contains('cancel') || type.contains('removed')) {
+    return BrandColors.danger;
+  }
+  if (type.contains('kitchen')) {
+    return BrandColors.accentYellow;
+  }
+  if (event.actionSource == 'backoffice_live_viewer') {
+    return BrandColors.info;
+  }
+  return BrandColors.textMuted;
+}
+
+String formatInterventionAction(String actionType) {
+  return switch (actionType) {
+    'kitchen_mark_ready' => 'Producto marcado como listo',
+    'kitchen_mark_cooking' => 'Producto marcado en preparacion',
+    'kitchen_start_order' => 'Cocina inicio comanda',
+    'item_cancel_requested' ||
+    'request_item_cancellation' => 'Solicitud de cancelacion de producto',
+    'item_cancel_accepted' => 'Cancelacion de producto aceptada',
+    'item_cancel_rejected' => 'Cancelacion de producto rechazada',
+    'order_cancelled' => 'Orden cancelada',
+    'payment_created' ||
+    'full_table' ||
+    'person' ||
+    'partial' ||
+    'platform' => 'Pago registrado',
+    'payment_cancelled' || 'cancel_payment' => 'Pago cancelado',
+    'order_sent_to_kitchen' || 'send_to_kitchen' => 'Orden enviada a cocina',
+    'product_added' || 'add_product' => 'Producto agregado',
+    'product_removed' ||
+    'cancel_item' ||
+    'order_item_cancelled' => 'Producto cancelado',
+    'backoffice_live_viewer' => 'Intervencion desde backoffice',
+    _ => 'Actividad registrada',
+  };
+}
+
+String _formatActionSource(String source) {
+  return switch (source) {
+    'backoffice_live_viewer' => 'Backoffice',
+    'kitchen' => 'Cocina',
+    'cash' => 'Caja',
+    'tablet' || 'waiter' || 'app' => 'Tablet',
+    _ => source.trim().isEmpty ? 'Sistema' : source,
   };
 }
 

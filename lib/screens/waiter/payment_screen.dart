@@ -259,7 +259,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
       if (result.allPaid) {
         await LivePresenceService.instance.clearCurrentOrder(
-          currentAction: 'Orden finalizada',
+          currentAction: 'Viendo mesas',
         );
         if (!mounted) {
           return;

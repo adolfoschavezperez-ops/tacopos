@@ -315,7 +315,7 @@ class _OrderScreenState extends State<OrderScreen> {
         return;
       }
       await LivePresenceService.instance.clearCurrentOrder(
-        currentAction: 'Orden finalizada',
+        currentAction: 'Viendo mesas',
       );
       if (!mounted) {
         return;
@@ -350,7 +350,7 @@ class _OrderScreenState extends State<OrderScreen> {
         return;
       }
       await LivePresenceService.instance.clearCurrentOrder(
-        currentAction: 'Orden finalizada',
+        currentAction: 'Viendo mesas',
       );
       if (!mounted) {
         return;

@@ -7,6 +7,12 @@ class ActivityEvent {
     required this.employeeName,
     required this.actionSource,
     this.orderId,
+    this.targetId,
+    this.note,
+    this.reason,
+    this.tableName,
+    this.productName,
+    this.itemName,
     this.createdAt,
   });
 
@@ -15,6 +21,12 @@ class ActivityEvent {
   final String employeeName;
   final String actionSource;
   final String? orderId;
+  final String? targetId;
+  final String? note;
+  final String? reason;
+  final String? tableName;
+  final String? productName;
+  final String? itemName;
   final DateTime? createdAt;
 
   factory ActivityEvent.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
@@ -28,6 +40,15 @@ class ActivityEvent {
           'Empleado',
       actionSource: data['actionSource'] as String? ?? 'app',
       orderId: data['orderId'] as String?,
+      targetId: data['targetId'] as String?,
+      note: data['note'] as String?,
+      reason:
+          data['reason'] as String? ??
+          data['cancelReason'] as String? ??
+          data['cancelRejectReason'] as String?,
+      tableName: data['tableName'] as String?,
+      productName: data['productName'] as String?,
+      itemName: data['itemName'] as String?,
       createdAt: _toDate(data['createdAt'] ?? data['timestamp']),
     );
   }

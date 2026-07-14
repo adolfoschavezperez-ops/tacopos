@@ -70,7 +70,7 @@ class LivePresenceService {
 
   Future<void> clearCurrentOrder({
     String currentScreen = 'Mesas',
-    String currentAction = 'Orden finalizada',
+    String currentAction = 'Viendo mesas',
     bool force = true,
   }) {
     return update(
@@ -130,7 +130,20 @@ class LivePresenceService {
       return doc.id;
     }
 
-    for (final doc in snapshot.docs) {
+    bool isBackoffice(QueryDocumentSnapshot<Map<String, dynamic>> doc) {
+      final data = doc.data();
+      return (data['platform'] as String? ?? '').toLowerCase().trim() ==
+              'web' ||
+          (data['appMode'] as String? ?? '').toLowerCase().trim() == 'admin' ||
+          (data['currentScreen'] as String? ?? '').toLowerCase().trim() ==
+              'backoffice' ||
+          (data['currentAction'] as String? ?? '').toLowerCase().trim() ==
+              'viendo backoffice' ||
+          (data['sessionType'] as String? ?? '').toLowerCase().trim() ==
+              'backoffice';
+    }
+
+    for (final doc in snapshot.docs.where((doc) => !isBackoffice(doc))) {
       final key = groupKey(doc);
       final current = latestByEmployee[key];
       if (current == null) {
@@ -153,7 +166,9 @@ class LivePresenceService {
       final isOld = seen == null || seen.isBefore(cutoff);
       final isOnline = data['isOnline'] as bool? ?? false;
       final archived = data['archived'] as bool? ?? false;
-      if (archived || (!isDuplicate && isOnline && !isOld)) {
+      final shouldArchive =
+          isBackoffice(doc) || isDuplicate || isOld || !isOnline;
+      if (archived || !shouldArchive) {
         continue;
       }
       batch.set(doc.reference, {
@@ -230,11 +245,19 @@ class LivePresenceService {
 
     _lastState = nextState;
     _lastWriteAt = DateTime.now();
+    final platform = kIsWeb ? 'web' : defaultTargetPlatform.name;
+    final sessionType =
+        platform == 'web' ||
+            (nextState['appMode'] ?? '') == 'admin' ||
+            (nextState['currentScreen'] ?? '') == 'Backoffice'
+        ? 'backoffice'
+        : 'operational';
     await _sessionsRef.doc(sessionId).set({
       'employeeId': employee.id,
       'employeeName': employee.name,
       'deviceId': deviceId,
-      'platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
+      'platform': platform,
+      'sessionType': sessionType,
       'appMode': nextState['appMode'] ?? 'app',
       'currentScreen': nextState['currentScreen'] ?? 'Inicio',
       'currentAction': nextState['currentAction'] ?? 'Activo',
