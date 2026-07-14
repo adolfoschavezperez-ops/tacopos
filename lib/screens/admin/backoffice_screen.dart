@@ -73,9 +73,9 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
     final now = DateTime.now();
     _startDate = DateTime(now.year, now.month, now.day);
     _endDate = _startDate;
-    LivePresenceService.instance.update(
+    LivePresenceService.instance.updateCurrentScreen(
       appMode: 'admin',
-      currentScreen: 'Admin',
+      currentScreen: 'Backoffice',
       currentAction: 'Viendo backoffice',
     );
   }

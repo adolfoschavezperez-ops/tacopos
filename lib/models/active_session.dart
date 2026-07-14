@@ -20,6 +20,8 @@ class ActiveSession {
     this.lastSeenAt,
     this.createdAt,
     this.updatedAt,
+    this.archived = false,
+    this.archivedAt,
   });
 
   final String id;
@@ -40,16 +42,26 @@ class ActiveSession {
   final DateTime? lastSeenAt;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final bool archived;
+  final DateTime? archivedAt;
 
   bool get hasRecentConnection {
     final seen = lastSeenAt;
     if (seen == null) return false;
-    return DateTime.now().difference(seen).inMinutes < 2;
+    return DateTime.now().difference(seen).inSeconds <= 180;
+  }
+
+  bool get isVisibleInLiveViewer {
+    return !archived && isOnline && hasRecentConnection;
   }
 
   String get connectionLabel {
-    if (isOnline && hasRecentConnection) return 'En linea';
-    if (hasRecentConnection) return 'Inactivo';
+    final seen = lastSeenAt;
+    if (isOnline && seen != null) {
+      final ageSeconds = DateTime.now().difference(seen).inSeconds;
+      if (ageSeconds <= 90) return 'En linea';
+      if (ageSeconds <= 180) return 'Inactivo';
+    }
     return 'Sin conexion reciente';
   }
 
@@ -74,6 +86,8 @@ class ActiveSession {
       lastSeenAt: _toDate(data['lastSeenAt']),
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),
+      archived: data['archived'] as bool? ?? false,
+      archivedAt: _toDate(data['archivedAt']),
     );
   }
 

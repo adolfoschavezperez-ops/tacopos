@@ -559,14 +559,84 @@ class TacoPosRepository {
         .orderBy('lastSeenAt', descending: true)
         .limit(60)
         .snapshots()
-        .map(
-          (snapshot) =>
-              snapshot.docs.map(ActiveSession.fromDoc).toList()..sort((a, b) {
-                final aSeen = a.lastSeenAt ?? DateTime(1970);
-                final bSeen = b.lastSeenAt ?? DateTime(1970);
-                return bSeen.compareTo(aSeen);
-              }),
-        );
+        .map((snapshot) {
+          final latestByUser = <String, ActiveSession>{};
+          for (final session in snapshot.docs.map(ActiveSession.fromDoc)) {
+            if (!session.isVisibleInLiveViewer) {
+              continue;
+            }
+            final key = session.employeeId.trim().isNotEmpty
+                ? session.employeeId.trim()
+                : session.deviceId.trim().isNotEmpty
+                ? session.deviceId.trim()
+                : session.id;
+            final current = latestByUser[key];
+            if (current == null || _sessionIsNewer(session, current)) {
+              latestByUser[key] = session;
+            }
+          }
+          return latestByUser.values.toList()..sort((a, b) {
+            final aSeen = a.lastSeenAt ?? a.updatedAt ?? DateTime(1970);
+            final bSeen = b.lastSeenAt ?? b.updatedAt ?? DateTime(1970);
+            return bSeen.compareTo(aSeen);
+          });
+        });
+  }
+
+  Future<int> cleanupInactiveActiveSessions() async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canViewAdmin == true ||
+          AppSession.instance.employee?.canControlLiveOperations == true,
+      'No tienes permiso para limpiar sesiones operativas.',
+    );
+    final snapshot = await _activeSessionsRef.limit(200).get();
+    final cutoff = DateTime.now().subtract(const Duration(seconds: 180));
+    final latestByUser = <String, ActiveSession>{};
+    final sessions = snapshot.docs.map(ActiveSession.fromDoc).toList();
+    for (final session in sessions) {
+      final key = session.employeeId.trim().isNotEmpty
+          ? session.employeeId.trim()
+          : session.deviceId.trim().isNotEmpty
+          ? session.deviceId.trim()
+          : session.id;
+      final current = latestByUser[key];
+      if (current == null || _sessionIsNewer(session, current)) {
+        latestByUser[key] = session;
+      }
+    }
+
+    final batch = _db.batch();
+    var count = 0;
+    for (final session in sessions) {
+      final seen = session.lastSeenAt ?? session.updatedAt;
+      final key = session.employeeId.trim().isNotEmpty
+          ? session.employeeId.trim()
+          : session.deviceId.trim().isNotEmpty
+          ? session.deviceId.trim()
+          : session.id;
+      final isDuplicate = latestByUser[key]?.id != session.id;
+      final isOld = seen == null || seen.isBefore(cutoff);
+      if (session.archived || (!isDuplicate && session.isOnline && !isOld)) {
+        continue;
+      }
+      batch.set(_activeSessionsRef.doc(session.id), {
+        'archived': true,
+        'isOnline': false,
+        'currentOrderId': null,
+        'currentTableId': null,
+        'currentTableName': null,
+        'currentTakeoutOrderId': null,
+        'currentKitchenBundleId': null,
+        'currentPersonNumber': null,
+        'archivedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      count++;
+    }
+    if (count > 0) {
+      await batch.commit();
+    }
+    return count;
   }
 
   Stream<List<ActivityEvent>> watchRecentActivityEvents({int limit = 40}) {
@@ -4447,6 +4517,12 @@ String _readText(Object? value, String fallback) {
 
 String _cleanCategoryDisplayName(String value) {
   return value.trim().replaceAll(RegExp(r'\s+'), ' ');
+}
+
+bool _sessionIsNewer(ActiveSession a, ActiveSession b) {
+  final aSeen = a.lastSeenAt ?? a.updatedAt ?? DateTime(1970);
+  final bSeen = b.lastSeenAt ?? b.updatedAt ?? DateTime(1970);
+  return aSeen.isAfter(bSeen);
 }
 
 String? _cleanColorHex(String? value) {

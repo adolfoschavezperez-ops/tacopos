@@ -258,6 +258,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _showMessage('Pago registrado.');
 
       if (result.allPaid) {
+        await LivePresenceService.instance.clearCurrentOrder(
+          currentAction: 'Orden finalizada',
+        );
+        if (!mounted) {
+          return;
+        }
         Navigator.pop(context);
         Navigator.pop(context);
       }

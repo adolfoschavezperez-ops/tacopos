@@ -30,11 +30,7 @@ class _TablesScreenState extends State<TablesScreen> {
   @override
   void initState() {
     super.initState();
-    LivePresenceService.instance.update(
-      appMode: 'waiter',
-      currentScreen: 'Mesas',
-      currentAction: 'Viendo mesas',
-    );
+    _markViewingTables();
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
   }
 
@@ -65,6 +61,7 @@ class _TablesScreenState extends State<TablesScreen> {
         context,
         MaterialPageRoute(builder: (_) => const TakeoutOrdersScreen()),
       );
+      _markViewingTables();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
       return;
     }
@@ -105,6 +102,7 @@ class _TablesScreenState extends State<TablesScreen> {
           ),
         ),
       );
+      _markViewingTables();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
     } catch (error) {
       if (!mounted) {
@@ -127,6 +125,15 @@ class _TablesScreenState extends State<TablesScreen> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _markViewingTables() {
+    LivePresenceService.instance.updateCurrentScreen(
+      appMode: 'waiter',
+      currentScreen: 'Mesas',
+      currentAction: 'Viendo mesas',
+      force: true,
+    );
   }
 
   @override

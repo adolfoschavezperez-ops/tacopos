@@ -78,6 +78,12 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                         onPressed: () => setState(() {}),
                         icon: const Icon(Icons.refresh),
                       ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: _cleanupInactiveSessions,
+                        icon: const Icon(Icons.cleaning_services_outlined),
+                        label: const Text('Limpiar sesiones inactivas'),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 10),
@@ -117,6 +123,7 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                           'Cocina detalle',
                           'Caja',
                           'Control cocina',
+                          'Backoffice',
                           'Admin',
                         ],
                         onChanged: (value) =>
@@ -125,12 +132,7 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                       _FilterDropdown(
                         label: 'Estado',
                         value: _statusFilter,
-                        values: const [
-                          'Todos',
-                          'En linea',
-                          'Inactivo',
-                          'Sin conexion reciente',
-                        ],
+                        values: const ['Todos', 'En linea', 'Inactivo'],
                         onChanged: (value) =>
                             setState(() => _statusFilter = value ?? 'Todos'),
                       ),
@@ -196,6 +198,22 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
       ),
     );
   }
+
+  Future<void> _cleanupInactiveSessions() async {
+    try {
+      final count = await _repository.cleanupInactiveActiveSessions();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$count sesiones inactivas archivadas.')),
+      );
+      setState(() {});
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
 }
 
 class _UsersLiveTab extends StatelessWidget {
@@ -232,6 +250,9 @@ class _UsersLiveTab extends StatelessWidget {
         }
         final query = search.toLowerCase().trim();
         final sessions = snapshot.data!.where((session) {
+          if (!session.isVisibleInLiveViewer) {
+            return false;
+          }
           if (query.isNotEmpty &&
               !session.employeeName.toLowerCase().contains(query)) {
             return false;
@@ -250,8 +271,7 @@ class _UsersLiveTab extends StatelessWidget {
           return const EmptyState(
             icon: Icons.people_outline,
             title: 'Sin usuarios activos',
-            message:
-                'No hay usuarios activos en este momento. Todavia no hay sesiones reportando actividad.',
+            message: 'No hay usuarios activos en este momento.',
           );
         }
         return ListView.builder(

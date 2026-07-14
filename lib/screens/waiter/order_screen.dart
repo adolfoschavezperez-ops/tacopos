@@ -251,6 +251,19 @@ class _OrderScreenState extends State<OrderScreen> {
       context,
       MaterialPageRoute(builder: (_) => PaymentScreen(orderId: _boundOrderId)),
     );
+    if (!mounted) {
+      return;
+    }
+    LivePresenceService.instance.updateCurrentScreen(
+      appMode: 'waiter',
+      currentScreen: 'Orden',
+      currentAction: 'Levantando orden',
+      currentTableId: widget.tableId,
+      currentTableName: widget.tableName,
+      currentOrderId: _boundOrderId,
+      currentPersonNumber: _selectedPerson,
+      force: true,
+    );
   }
 
   Future<void> _showKitchenPendingDialog() async {
@@ -301,6 +314,12 @@ class _OrderScreenState extends State<OrderScreen> {
       if (!mounted) {
         return;
       }
+      await LivePresenceService.instance.clearCurrentOrder(
+        currentAction: 'Orden finalizada',
+      );
+      if (!mounted) {
+        return;
+      }
       Navigator.pop(context);
     } catch (error) {
       if (!mounted) {
@@ -327,6 +346,12 @@ class _OrderScreenState extends State<OrderScreen> {
 
     try {
       await _repository.cancelOrder(orderId: _boundOrderId, reason: reason);
+      if (!mounted) {
+        return;
+      }
+      await LivePresenceService.instance.clearCurrentOrder(
+        currentAction: 'Orden finalizada',
+      );
       if (!mounted) {
         return;
       }
