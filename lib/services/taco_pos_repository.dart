@@ -479,6 +479,47 @@ class TacoPosRepository {
     );
   }
 
+  Future<int> countDefaultBranchBackfillPending() async {
+    _requireAdminPermission(
+      _canManageBranches(),
+      'No tienes permiso para revisar datos de sucursales.',
+    );
+    var pending = 0;
+
+    bool needsBranch(DocumentSnapshot<Map<String, dynamic>> doc) {
+      final data = doc.data() ?? {};
+      final branchId = data['branchId']?.toString().trim();
+      return branchId == null || branchId.isEmpty;
+    }
+
+    for (final collectionName in [
+      'tables',
+      'cashSessions',
+      'cashWithdrawalRequests',
+      'kitchenSessions',
+      'activeSessions',
+      'activityLog',
+    ]) {
+      final snapshot = await _restaurantRef.collection(collectionName).get();
+      pending += snapshot.docs.where(needsBranch).length;
+    }
+
+    final ordersSnapshot = await _ordersRef.get();
+    for (final orderDoc in ordersSnapshot.docs) {
+      if (needsBranch(orderDoc)) pending++;
+
+      final itemSnapshot = await orderDoc.reference.collection('items').get();
+      pending += itemSnapshot.docs.where(needsBranch).length;
+
+      final paymentSnapshot = await orderDoc.reference
+          .collection('payments')
+          .get();
+      pending += paymentSnapshot.docs.where(needsBranch).length;
+    }
+
+    return pending;
+  }
+
   Future<int> backfillDefaultBranch() async {
     _requireAdminPermission(
       _canManageBranches(),
