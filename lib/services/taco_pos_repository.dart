@@ -315,7 +315,25 @@ class TacoPosRepository {
     });
   }
 
+  Future<List<ProductCategory>> getProductCategoriesOnce({
+    bool activeOnly = false,
+  }) async {
+    final snapshot = await _productCategoriesRef.get();
+    final categories = snapshot.docs.map(ProductCategory.fromDoc).toList()
+      ..sort((a, b) {
+        final sortCompare = a.sortOrder.compareTo(b.sortOrder);
+        return sortCompare != 0 ? sortCompare : a.name.compareTo(b.name);
+      });
+    return activeOnly
+        ? categories.where((category) => category.active).toList()
+        : categories;
+  }
+
   Future<void> ensureDefaultProductCategories() async {
+    await seedDefaultProductCategoriesIfNeeded();
+  }
+
+  Future<void> seedDefaultProductCategoriesIfNeeded() async {
     const defaults = [
       _DefaultProductCategory('Tacos', 1, '#F59A23'),
       _DefaultProductCategory('Gringas', 2, '#BFA7FF'),
@@ -327,22 +345,48 @@ class TacoPosRepository {
 
     final existing = await _productCategoriesRef.get();
     final existingIds = existing.docs.map((doc) => doc.id).toSet();
+    final existingNormalizedNames = existing.docs
+        .map((doc) => ProductCategory.fromDoc(doc).normalizedName)
+        .toSet();
     final batch = _db.batch();
+    var writes = 0;
     for (final category in defaults) {
       final id = categoryIdForName(category.name);
+      final normalizedName = normalizeCategory(category.name);
+      if (existingIds.contains(id) ||
+          existingNormalizedNames.contains(normalizedName)) {
+        continue;
+      }
       batch.set(_productCategoriesRef.doc(id), {
         'id': id,
         'name': category.name,
-        'normalizedName': normalizeCategory(category.name),
+        'normalizedName': normalizedName,
         'active': true,
         'sortOrder': category.sortOrder,
         'colorHex': category.colorHex,
+        'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
-        if (!existingIds.contains(id))
-          'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+      writes++;
     }
-    await batch.commit();
+    if (writes > 0) {
+      await batch.commit();
+    }
+  }
+
+  Future<ProductCategory?> findCategoryByNormalizedName(
+    String normalizedName,
+  ) async {
+    final snapshot = await _productCategoriesRef
+        .where('normalizedName', isEqualTo: normalizeCategory(normalizedName))
+        .limit(1)
+        .get();
+    if (snapshot.docs.isEmpty) return null;
+    return ProductCategory.fromDoc(snapshot.docs.first);
+  }
+
+  Future<void> normalizeProductCategories() async {
+    await normalizeProductCategoriesAndProducts();
   }
 
   Future<void> normalizeProductCategoriesAndProducts() async {
@@ -350,7 +394,7 @@ class TacoPosRepository {
       AppSession.instance.employee?.canManageProducts == true,
       'No tienes permiso para administrar productos.',
     );
-    await ensureDefaultProductCategories();
+    await seedDefaultProductCategoriesIfNeeded();
     final categoriesSnapshot = await _productCategoriesRef.get();
     final categoriesByName = <String, ProductCategory>{
       for (final doc in categoriesSnapshot.docs)
@@ -408,6 +452,36 @@ class TacoPosRepository {
     }
   }
 
+  Future<void> createProductCategory({
+    required String name,
+    required int sortOrder,
+    bool active = true,
+    String? colorHex,
+  }) async {
+    await saveProductCategory(
+      name: name,
+      active: active,
+      sortOrder: sortOrder,
+      colorHex: colorHex,
+    );
+  }
+
+  Future<void> updateProductCategory({
+    required String categoryId,
+    required String name,
+    required bool active,
+    required int sortOrder,
+    String? colorHex,
+  }) async {
+    await saveProductCategory(
+      categoryId: categoryId,
+      name: name,
+      active: active,
+      sortOrder: sortOrder,
+      colorHex: colorHex,
+    );
+  }
+
   Future<void> saveProductCategory({
     String? categoryId,
     required String name,
@@ -419,11 +493,15 @@ class TacoPosRepository {
       AppSession.instance.employee?.canManageProducts == true,
       'No tienes permiso para administrar productos.',
     );
-    final cleanName = name.trim();
+    final cleanName = _cleanCategoryDisplayName(name);
     if (cleanName.isEmpty) {
       throw ArgumentError('Captura el nombre de la categoria.');
     }
-    final id = (categoryId ?? categoryIdForName(cleanName)).trim();
+    final existing = categoryId == null
+        ? await findCategoryByNormalizedName(cleanName)
+        : null;
+    final id = (categoryId ?? existing?.id ?? categoryIdForName(cleanName))
+        .trim();
     await _productCategoriesRef.doc(id).set({
       'id': id,
       'name': cleanName,
@@ -436,15 +514,19 @@ class TacoPosRepository {
     }, SetOptions(merge: true));
   }
 
-  Future<void> toggleProductCategory(ProductCategory category) async {
+  Future<void> setActive(ProductCategory category, bool active) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageProducts == true,
       'No tienes permiso para administrar productos.',
     );
     await _productCategoriesRef.doc(category.id).update({
-      'active': !category.active,
+      'active': active,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  Future<void> toggleProductCategory(ProductCategory category) async {
+    await setActive(category, !category.active);
   }
 
   Stream<List<Product>> watchProducts({bool activeOnly = false}) {
@@ -4358,9 +4440,13 @@ class _DefaultProductCategory {
 
 String _readText(Object? value, String fallback) {
   if (value is String && value.trim().isNotEmpty) {
-    return value.trim();
+    return _cleanCategoryDisplayName(value);
   }
   return fallback;
+}
+
+String _cleanCategoryDisplayName(String value) {
+  return value.trim().replaceAll(RegExp(r'\s+'), ' ');
 }
 
 String? _cleanColorHex(String? value) {

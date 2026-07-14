@@ -4,7 +4,7 @@ import '../core/theme/brand_colors.dart';
 import '../models/product_category.dart';
 
 String normalizeCategory(String value) {
-  return value
+  final normalized = value
       .toLowerCase()
       .trim()
       .replaceAll('á', 'a')
@@ -24,7 +24,14 @@ String normalizeCategory(String value) {
       .replaceAll('ÃƒÂ­', 'i')
       .replaceAll('ÃƒÂ³', 'o')
       .replaceAll('ÃƒÂº', 'u')
-      .replaceAll('ÃƒÂ±', 'n');
+      .replaceAll('ÃƒÂ±', 'n')
+      .replaceAll('ÃƒÆ’Ã‚Â¡', 'a')
+      .replaceAll('ÃƒÆ’Ã‚Â©', 'e')
+      .replaceAll('ÃƒÆ’Ã‚Â­', 'i')
+      .replaceAll('ÃƒÆ’Ã‚Â³', 'o')
+      .replaceAll('ÃƒÆ’Ã‚Âº', 'u')
+      .replaceAll('ÃƒÆ’Ã‚Â±', 'n');
+  return normalized.replaceAll(RegExp(r'\s+'), ' ');
 }
 
 String categoryIdForName(String value) {
@@ -60,9 +67,7 @@ Color categoryColor(String category) {
     'otro': Color(0xFF8A8F98),
   };
   final fixed = fixedColors[normalized];
-  if (fixed != null) {
-    return fixed;
-  }
+  if (fixed != null) return fixed;
 
   const fallbackPalette = <Color>[
     Color(0xFFE28B6D),
@@ -86,9 +91,7 @@ Color categoryAccent({
   String? colorHex,
 }) {
   final parsedHex = _colorFromHex(colorHex);
-  if (parsedHex != null) {
-    return parsedHex;
-  }
+  if (parsedHex != null) return parsedHex;
   final key = (categoryId ?? '').trim().isNotEmpty
       ? categoryId!.trim()
       : categoryName ?? '';
@@ -117,9 +120,7 @@ int categoryRank(String category) {
 
 int compareCategories(String a, String b) {
   final rankCompare = categoryRank(a).compareTo(categoryRank(b));
-  if (rankCompare != 0) {
-    return rankCompare;
-  }
+  if (rankCompare != 0) return rankCompare;
   return normalizeCategory(a).compareTo(normalizeCategory(b));
 }
 
@@ -127,9 +128,7 @@ List<String> orderedCategories(Iterable<String> categories) {
   final unique = <String, String>{};
   for (final category in categories) {
     final clean = category.trim();
-    if (clean.isEmpty) {
-      continue;
-    }
+    if (clean.isEmpty) continue;
     unique.putIfAbsent(normalizeCategory(clean), () => clean);
   }
   return unique.values.toList()..sort(compareCategories);

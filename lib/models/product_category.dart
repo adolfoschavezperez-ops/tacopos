@@ -9,6 +9,8 @@ class ProductCategory {
     required this.sortOrder,
     this.colorKey,
     this.colorHex,
+    this.createdAt,
+    this.updatedAt,
   });
 
   final String id;
@@ -18,6 +20,8 @@ class ProductCategory {
   final int sortOrder;
   final String? colorKey;
   final String? colorHex;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
 
   factory ProductCategory.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -30,6 +34,8 @@ class ProductCategory {
       sortOrder: _readInt(data['sortOrder'], fallback: 99),
       colorKey: data['colorKey'] as String?,
       colorHex: data['colorHex'] as String?,
+      createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+      updatedAt: (data['updatedAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -58,7 +64,7 @@ class ProductCategory {
   }
 
   static String _normalize(String value) {
-    return value
+    final normalized = value
         .toLowerCase()
         .trim()
         .replaceAll('á', 'a')
@@ -66,6 +72,13 @@ class ProductCategory {
         .replaceAll('í', 'i')
         .replaceAll('ó', 'o')
         .replaceAll('ú', 'u')
-        .replaceAll('ñ', 'n');
+        .replaceAll('ñ', 'n')
+        .replaceAll('Ã¡', 'a')
+        .replaceAll('Ã©', 'e')
+        .replaceAll('Ã­', 'i')
+        .replaceAll('Ã³', 'o')
+        .replaceAll('Ãº', 'u')
+        .replaceAll('Ã±', 'n');
+    return normalized.replaceAll(RegExp(r'\s+'), ' ');
   }
 }

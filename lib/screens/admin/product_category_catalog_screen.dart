@@ -51,7 +51,7 @@ class _ProductCategoryCatalogScreenState
         ),
       ],
       body: FutureBuilder<void>(
-        future: _repository.ensureDefaultProductCategories(),
+        future: _repository.seedDefaultProductCategoriesIfNeeded(),
         builder: (context, setupSnapshot) {
           if (setupSnapshot.connectionState == ConnectionState.waiting) {
             return const LoadingPanel(message: 'Preparando categorias...');
@@ -152,11 +152,11 @@ class _ProductCategoryCatalogScreenState
 
   Future<void> _normalize() async {
     try {
-      await _repository.normalizeProductCategoriesAndProducts();
+      await _repository.normalizeProductCategories();
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Categorias normalizadas.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Categorias normalizadas correctamente')),
+      );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -302,13 +302,22 @@ class _ProductCategoryDialogState extends State<_ProductCategoryDialog> {
     }
     setState(() => _saving = true);
     try {
-      await widget.repository.saveProductCategory(
-        categoryId: widget.category?.id,
-        name: name,
-        active: _active,
-        sortOrder: sortOrder,
-        colorHex: _colorController.text,
-      );
+      if (widget.category == null) {
+        await widget.repository.createProductCategory(
+          name: name,
+          active: _active,
+          sortOrder: sortOrder,
+          colorHex: _colorController.text,
+        );
+      } else {
+        await widget.repository.updateProductCategory(
+          categoryId: widget.category!.id,
+          name: name,
+          active: _active,
+          sortOrder: sortOrder,
+          colorHex: _colorController.text,
+        );
+      }
       if (mounted) Navigator.pop(context);
     } catch (error) {
       if (!mounted) return;

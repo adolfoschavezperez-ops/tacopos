@@ -219,12 +219,12 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
     Product? product,
   }) async {
     await repository.ensureDefaultOrderPlatforms();
-    await repository.ensureDefaultProductCategories();
+    await repository.seedDefaultProductCategoriesIfNeeded();
     await repository.ensureKitchenStockLinksForProducts();
     final platforms = await repository.watchOrderPlatforms().first;
-    final categories = await repository
-        .watchProductCategories(activeOnly: true)
-        .first;
+    final categories = await repository.getProductCategoriesOnce(
+      activeOnly: true,
+    );
     final stockItems = await repository.watchKitchenStockItems().first;
     if (!context.mounted) return;
 
@@ -241,16 +241,16 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
   }
 
   Future<void> _prepareCatalog(TacoPosRepository repository) async {
-    await repository.ensureDefaultProductCategories();
+    await repository.seedDefaultProductCategoriesIfNeeded();
     await repository.ensureKitchenStockLinksForProducts();
   }
 
   Future<void> _normalizeCategories(TacoPosRepository repository) async {
-    await repository.normalizeProductCategoriesAndProducts();
+    await repository.normalizeProductCategories();
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Categorias normalizadas.')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Categorias normalizadas correctamente')),
+    );
   }
 }
 
@@ -324,7 +324,9 @@ class _ProductCatalogView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final filteredProducts = _filterProducts(products);
-    filteredProducts.sort((a, b) => _compareProducts(a, b, sortMode));
+    filteredProducts.sort(
+      (a, b) => _compareProducts(a, b, sortMode, categories),
+    );
     final counts = _ProductCounts.from(products);
     final compact = MediaQuery.sizeOf(context).width < 650;
 
@@ -920,12 +922,17 @@ class _ProductCounts {
   }
 }
 
-int _compareProducts(Product a, Product b, _ProductSortMode sortMode) {
+int _compareProducts(
+  Product a,
+  Product b,
+  _ProductSortMode sortMode,
+  List<ProductCategory> categories,
+) {
   switch (sortMode) {
     case _ProductSortMode.name:
       return _compareText(a.name, b.name);
     case _ProductSortMode.category:
-      final categoryCompare = compareCategories(a.category, b.category);
+      final categoryCompare = _compareProductCategories(a, b, categories);
       return categoryCompare != 0
           ? categoryCompare
           : _compareText(a.name, b.name);
@@ -946,11 +953,28 @@ int _compareProducts(Product a, Product b, _ProductSortMode sortMode) {
           ? kitchenCompare
           : _compareText(a.name, b.name);
     case _ProductSortMode.sortOrder:
-      final categoryCompare = compareCategories(a.category, b.category);
+      final categoryCompare = _compareProductCategories(a, b, categories);
       if (categoryCompare != 0) return categoryCompare;
       final sortCompare = a.sortOrder.compareTo(b.sortOrder);
       return sortCompare != 0 ? sortCompare : _compareText(a.name, b.name);
   }
+}
+
+int _compareProductCategories(
+  Product a,
+  Product b,
+  List<ProductCategory> categories,
+) {
+  final aCategory = findCategoryById(categories, a.categoryId);
+  final bCategory = findCategoryById(categories, b.categoryId);
+  final aSort = aCategory?.sortOrder ?? categoryRank(a.categoryName);
+  final bSort = bCategory?.sortOrder ?? categoryRank(b.categoryName);
+  final sortCompare = aSort.compareTo(bSort);
+  if (sortCompare != 0) return sortCompare;
+  return _compareText(
+    aCategory?.name ?? a.categoryName,
+    bCategory?.name ?? b.categoryName,
+  );
 }
 
 int _compareText(String a, String b) {
@@ -990,6 +1014,7 @@ class _ProductDialogState extends State<_ProductDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _priceController;
   late final Map<String, TextEditingController> _platformControllers;
+  late List<ProductCategory> _categories;
   late String _categoryId;
   late bool _active;
   late bool _sendToKitchen;
@@ -1002,12 +1027,13 @@ class _ProductDialogState extends State<_ProductDialog> {
   void initState() {
     super.initState();
     final product = widget.product;
+    _categories = [...widget.categories];
     _nameController = TextEditingController(text: product?.name ?? '');
     final initialCategory =
-        findCategoryById(widget.categories, product?.categoryId) ??
-        findCategoryByName(widget.categories, product?.categoryName ?? '') ??
-        findCategoryByName(widget.categories, 'Tacos') ??
-        (widget.categories.isNotEmpty ? widget.categories.first : null);
+        findCategoryById(_categories, product?.categoryId) ??
+        findCategoryByName(_categories, product?.categoryName ?? '') ??
+        findCategoryByName(_categories, 'Tacos') ??
+        (_categories.isNotEmpty ? _categories.first : null);
     _categoryId = initialCategory?.id ?? product?.categoryId ?? 'tacos';
     _priceController = TextEditingController(
       text: product == null ? '' : product.price.toStringAsFixed(2),
@@ -1225,9 +1251,32 @@ class _ProductDialogState extends State<_ProductDialog> {
   }
 
   ProductCategory? get _selectedCategory =>
-      findCategoryById(widget.categories, _categoryId);
+      findCategoryById(_categories, _categoryId);
 
   String get _selectedCategoryName => _selectedCategory?.name ?? 'Otros';
+
+  Future<void> _seedInitialCategories() async {
+    setState(() => _saving = true);
+    try {
+      await widget.repository.seedDefaultProductCategoriesIfNeeded();
+      final categories = await widget.repository.getProductCategoriesOnce(
+        activeOnly: true,
+      );
+      if (!mounted) return;
+      setState(() {
+        _categories = categories;
+        final tacos = findCategoryByName(_categories, 'Tacos');
+        _categoryId =
+            tacos?.id ??
+            (_categories.isNotEmpty ? _categories.first.id : _categoryId);
+        _saving = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      _message(error.toString());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1271,12 +1320,13 @@ class _ProductDialogState extends State<_ProductDialog> {
                         final wide = constraints.maxWidth >= 720;
                         final left = _MainProductFields(
                           nameController: _nameController,
-                          categories: widget.categories,
+                          categories: _categories,
                           categoryId: _categoryId,
                           priceController: _priceController,
                           active: _active,
                           sendToKitchen: _sendToKitchen,
                           saving: _saving,
+                          onSeedCategories: _seedInitialCategories,
                           onCategoryChanged: (value) {
                             setState(() {
                               _categoryId = value ?? _categoryId;
@@ -1369,6 +1419,7 @@ class _MainProductFields extends StatelessWidget {
     required this.active,
     required this.sendToKitchen,
     required this.saving,
+    required this.onSeedCategories,
     required this.onCategoryChanged,
     required this.onActiveChanged,
     required this.onSendToKitchenChanged,
@@ -1381,6 +1432,7 @@ class _MainProductFields extends StatelessWidget {
   final bool active;
   final bool sendToKitchen;
   final bool saving;
+  final VoidCallback onSeedCategories;
   final ValueChanged<String?> onCategoryChanged;
   final ValueChanged<bool> onActiveChanged;
   final ValueChanged<bool> onSendToKitchenChanged;
@@ -1404,25 +1456,30 @@ class _MainProductFields extends StatelessWidget {
             decoration: const InputDecoration(labelText: 'Nombre'),
           ),
           const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            initialValue:
-                categories.any((category) => category.id == categoryId)
-                ? categoryId
-                : categories.isNotEmpty
-                ? categories.first.id
-                : null,
-            isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Categoria'),
-            items: categories
-                .map(
-                  (category) => DropdownMenuItem(
-                    value: category.id,
-                    child: Text(category.name),
-                  ),
-                )
-                .toList(),
-            onChanged: saving ? null : onCategoryChanged,
-          ),
+          if (categories.isEmpty)
+            OutlinedButton.icon(
+              onPressed: saving ? null : onSeedCategories,
+              icon: const Icon(Icons.category_outlined),
+              label: const Text('Crear categorias iniciales'),
+            )
+          else
+            DropdownButtonFormField<String>(
+              initialValue:
+                  categories.any((category) => category.id == categoryId)
+                  ? categoryId
+                  : categories.first.id,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Categoria'),
+              items: categories
+                  .map(
+                    (category) => DropdownMenuItem(
+                      value: category.id,
+                      child: Text(category.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: saving ? null : onCategoryChanged,
+            ),
           const SizedBox(height: 12),
           TextField(
             controller: priceController,
