@@ -25,11 +25,16 @@ class AppSession extends ChangeNotifier {
   String get currentBranchName => _selectedBranch.name;
   bool get canChangeBranch => _accessibleBranches.length > 1;
 
-  void signIn(Employee employee, {List<Branch> branches = const []}) {
+  void signIn(
+    Employee employee, {
+    List<Branch> branches = const [],
+    Branch? initialBranch,
+  }) {
     _accessibleBranches = branches.isEmpty
         ? const [Branch.defaultBranch]
         : branches;
-    _selectedBranch = _resolveInitialBranch(employee, _accessibleBranches);
+    _selectedBranch =
+        initialBranch ?? _resolveInitialBranch(employee, _accessibleBranches);
     _baseEmployee = employee;
     _employee = employee.withBranchPermissions(_selectedBranch.id);
     LivePresenceService.instance.start(_employee!, _selectedBranch);

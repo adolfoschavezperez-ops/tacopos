@@ -21,6 +21,7 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
   bool _preparing = false;
 
   Future<void> _showBranchDialog({Branch? branch}) async {
+    final isNew = branch == null;
     final result = await showDialog<_BranchFormResult>(
       context: context,
       builder: (_) => _BranchDialog(branch: branch),
@@ -35,25 +36,20 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
         address: result.address,
         phone: result.phone,
       );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isNew
+                ? 'Sucursal creada correctamente.'
+                : 'Sucursal actualizada correctamente.',
+          ),
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo guardar sucursal: $error')),
-      );
-    }
-  }
-
-  Future<void> _createAviacion() async {
-    try {
-      await _repository.ensureDefaultBranch();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Sucursal Aviacion creada.')),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo crear Aviacion: $error')),
       );
     }
   }
@@ -95,12 +91,7 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
       title: 'Sucursales',
       actions: [
         IconButton(
-          tooltip: 'Preparar datos para sucursales',
-          onPressed: _preparing ? null : _prepareData,
-          icon: const Icon(Icons.account_tree_outlined),
-        ),
-        IconButton(
-          tooltip: 'Agregar sucursal',
+          tooltip: 'Nueva sucursal',
           onPressed: () => _showBranchDialog(),
           icon: const Icon(Icons.add_business_outlined),
         ),
@@ -120,33 +111,12 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
           }
           final branches = snapshot.data ?? [];
           if (branches.isEmpty) {
-            return _EmptyBranchesPanel(
-              preparing: _preparing,
-              onCreate: () => _showBranchDialog(),
-              onCreateAviacion: _createAviacion,
-              onPrepareData: _prepareData,
-            );
+            return _EmptyBranchesPanel(onCreate: () => _showBranchDialog());
           }
           return ListView(
             padding: const EdgeInsets.all(22),
             children: [
-              const SectionHeader(
-                title: 'Catalogo de sucursales',
-                subtitle: 'Las apps leen esta lista desde Firestore.',
-              ),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  onPressed: _preparing ? null : _prepareData,
-                  icon: const Icon(Icons.account_tree_outlined),
-                  label: Text(
-                    _preparing
-                        ? 'Preparando...'
-                        : 'Preparar datos para sucursales',
-                  ),
-                ),
-              ),
+              _BranchCatalogHeader(onCreate: () => _showBranchDialog()),
               const SizedBox(height: 18),
               ...branches.map(
                 (branch) => Padding(
@@ -159,6 +129,11 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
                   ),
                 ),
               ),
+              const SizedBox(height: 8),
+              _AdvancedPreparationPanel(
+                preparing: _preparing,
+                onPrepareData: _prepareData,
+              ),
             ],
           );
         },
@@ -168,7 +143,7 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
         child: GlassButton(
           onTap: () => _showBranchDialog(),
           icon: Icons.add_business_outlined,
-          label: 'Agregar sucursal',
+          label: 'Nueva sucursal',
           prominent: true,
         ),
       ),
@@ -283,18 +258,105 @@ class _BranchTile extends StatelessWidget {
   }
 }
 
-class _EmptyBranchesPanel extends StatelessWidget {
-  const _EmptyBranchesPanel({
+class _BranchCatalogHeader extends StatelessWidget {
+  const _BranchCatalogHeader({required this.onCreate});
+
+  final VoidCallback onCreate;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(18),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.storefront_outlined,
+            color: BrandColors.accentYellow,
+            size: 30,
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Sucursales',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Administra las sucursales del restaurante.',
+                  style: TextStyle(color: BrandColors.textMuted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            onPressed: onCreate,
+            icon: const Icon(Icons.add_business_outlined),
+            label: const Text('Nueva sucursal'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AdvancedPreparationPanel extends StatelessWidget {
+  const _AdvancedPreparationPanel({
     required this.preparing,
-    required this.onCreate,
-    required this.onCreateAviacion,
     required this.onPrepareData,
   });
 
   final bool preparing;
-  final VoidCallback onCreate;
-  final VoidCallback onCreateAviacion;
   final VoidCallback onPrepareData;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      padding: EdgeInsets.zero,
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        leading: const Icon(Icons.tune_outlined, color: BrandColors.textMuted),
+        title: const Text(
+          'Avanzado / Preparacion',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        subtitle: const Text(
+          'Opciones para datos antiguos.',
+          style: TextStyle(color: BrandColors.textMuted),
+        ),
+        children: [
+          const Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'Asigna la sucursal Aviacion a datos antiguos que todavia no tienen sucursal.',
+              style: TextStyle(color: BrandColors.textMuted),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: preparing ? null : onPrepareData,
+              icon: const Icon(Icons.account_tree_outlined),
+              label: Text(
+                preparing ? 'Preparando...' : 'Preparar datos actuales',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyBranchesPanel extends StatelessWidget {
+  const _EmptyBranchesPanel({required this.onCreate});
+
+  final VoidCallback onCreate;
 
   @override
   Widget build(BuildContext context) {
@@ -304,7 +366,7 @@ class _EmptyBranchesPanel extends StatelessWidget {
         const EmptyState(
           icon: Icons.storefront_outlined,
           title: 'No hay sucursales registradas.',
-          message: 'Crea una sucursal o prepara Aviacion para datos actuales.',
+          message: 'Crea la primera sucursal del restaurante.',
         ),
         const SizedBox(height: 18),
         Wrap(
@@ -314,19 +376,7 @@ class _EmptyBranchesPanel extends StatelessWidget {
             FilledButton.icon(
               onPressed: onCreate,
               icon: const Icon(Icons.add_business_outlined),
-              label: const Text('Crear sucursal'),
-            ),
-            OutlinedButton.icon(
-              onPressed: onCreateAviacion,
-              icon: const Icon(Icons.storefront_outlined),
-              label: const Text('Crear sucursal Aviacion'),
-            ),
-            OutlinedButton.icon(
-              onPressed: preparing ? null : onPrepareData,
-              icon: const Icon(Icons.account_tree_outlined),
-              label: Text(
-                preparing ? 'Preparando...' : 'Preparar datos para sucursales',
-              ),
+              label: const Text('Crear primera sucursal'),
             ),
           ],
         ),

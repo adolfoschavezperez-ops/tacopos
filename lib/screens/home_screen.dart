@@ -28,8 +28,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool _branchPromptShown = false;
-
   @override
   void initState() {
     super.initState();
@@ -38,14 +36,6 @@ class _HomeScreenState extends State<HomeScreen> {
       currentScreen: 'Inicio',
       currentAction: 'Seleccionando modulo',
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeSelectBranch());
-  }
-
-  Future<void> _maybeSelectBranch() async {
-    if (_branchPromptShown || !mounted || kIsWeb) return;
-    if (!AppSession.instance.canChangeBranch) return;
-    _branchPromptShown = true;
-    await _showBranchSelector();
   }
 
   Future<void> _showBranchSelector() async {
@@ -341,7 +331,11 @@ class _BranchBadge extends StatelessWidget {
         return OutlinedButton.icon(
           onPressed: session.canChangeBranch ? onChangeBranch : null,
           icon: const Icon(Icons.storefront_outlined),
-          label: Text('Sucursal: ${session.currentBranchName}'),
+          label: Text(
+            session.canChangeBranch
+                ? 'Cambiar sucursal · ${session.currentBranchName}'
+                : '${session.currentRestaurantName} · ${session.currentBranchName}',
+          ),
         );
       },
     );

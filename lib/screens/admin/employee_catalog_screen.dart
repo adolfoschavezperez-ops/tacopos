@@ -198,7 +198,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canViewLiveOperations = widget.employee?.canViewLiveOperations ?? false;
     _canControlLiveOperations =
         widget.employee?.canControlLiveOperations ?? false;
-    _branchesFuture = widget.repository.getBranchesOnce(activeOnly: false);
+    _branchesFuture = widget.repository.getBranchesOnce(activeOnly: true);
     final access = widget.employee?.effectiveBranchAccess ?? const [];
     _branchAccessIds = access.map((item) => item.branchId).toSet();
     if (_branchAccessIds.isEmpty) {
@@ -393,7 +393,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                                     setState(() {});
                                   },
                             icon: const Icon(Icons.account_tree_outlined),
-                            label: const Text('Preparar datos para sucursales'),
+                            label: const Text('Preparar datos actuales'),
                           ),
                         ],
                       ),

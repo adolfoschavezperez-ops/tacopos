@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
+import '../models/branch.dart';
 import '../models/employee.dart';
 import '../services/app_session.dart';
 import '../services/taco_pos_repository.dart';
@@ -101,7 +102,24 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) {
         return;
       }
-      AppSession.instance.signIn(employee, branches: branches);
+      final selectedBranch = !kIsWeb && branches.length > 1
+          ? await _selectBranch(branches)
+          : (branches.isEmpty ? null : branches.first);
+      if (!mounted) {
+        return;
+      }
+      if (!kIsWeb && branches.length > 1 && selectedBranch == null) {
+        setState(() {
+          _busy = false;
+          _error = 'Selecciona una sucursal para continuar.';
+        });
+        return;
+      }
+      AppSession.instance.signIn(
+        employee,
+        branches: branches,
+        initialBranch: selectedBranch,
+      );
     } catch (error) {
       if (!mounted) {
         return;
@@ -111,6 +129,33 @@ class _LoginScreenState extends State<LoginScreen> {
         _error = 'No se pudo iniciar sesion: $error';
       });
     }
+  }
+
+  Future<Branch?> _selectBranch(List<Branch> branches) {
+    return showDialog<Branch>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Selecciona sucursal'),
+        content: SizedBox(
+          width: 360,
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: branches.length,
+            separatorBuilder: (_, _) => const Divider(height: 1),
+            itemBuilder: (context, index) {
+              final branch = branches[index];
+              return ListTile(
+                leading: const Icon(Icons.storefront_outlined),
+                title: Text(branch.name),
+                subtitle: Text(branch.restaurantName),
+                onTap: () => Navigator.pop(context, branch),
+              );
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   @override

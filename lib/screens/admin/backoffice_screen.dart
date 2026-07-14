@@ -1370,10 +1370,6 @@ class _SettingsSection extends StatelessWidget {
               )
               .toList(),
         ),
-        if (employee?.hasAdminAccess == true) ...[
-          const SizedBox(height: 18),
-          _BackfillBranchesCard(repository: repository),
-        ],
       ],
     );
   }
@@ -1430,34 +1426,20 @@ class _BackofficeBranchSelector extends StatelessWidget {
                 const SizedBox(width: 10),
                 const Expanded(
                   child: Text(
-                    'Sucursal: Sin sucursal',
+                    'Sin sucursal seleccionada',
                     style: TextStyle(fontWeight: FontWeight.w900),
                   ),
                 ),
                 TextButton(
-                  onPressed: () async {
-                    try {
-                      await repository.backfillDefaultBranch();
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Datos preparados para sucursales correctamente.',
-                          ),
-                        ),
-                      );
-                    } catch (error) {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text(
-                            'No se pudo preparar sucursales: $error',
-                          ),
-                        ),
-                      );
-                    }
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => const BranchCatalogScreen(),
+                      ),
+                    );
                   },
-                  child: const Text('Preparar datos para sucursales'),
+                  child: const Text('Ir a Sucursales'),
                 ),
               ],
             ),
@@ -1478,12 +1460,14 @@ class _BackofficeBranchSelector extends StatelessWidget {
                   child: DropdownButton<String>(
                     value: selected,
                     isExpanded: true,
-                    hint: const Text('Sucursal: Sin sucursal'),
+                    hint: const Text('Sin sucursal seleccionada'),
                     items: visibleBranches
                         .map(
                           (branch) => DropdownMenuItem(
                             value: branch.id,
-                            child: Text('Sucursal: ${branch.name}'),
+                            child: Text(
+                              '${branch.restaurantName} · ${branch.name}',
+                            ),
                           ),
                         )
                         .toList(),
@@ -1503,73 +1487,6 @@ class _BackofficeBranchSelector extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _BackfillBranchesCard extends StatefulWidget {
-  const _BackfillBranchesCard({required this.repository});
-
-  final TacoPosRepository repository;
-
-  @override
-  State<_BackfillBranchesCard> createState() => _BackfillBranchesCardState();
-}
-
-class _BackfillBranchesCardState extends State<_BackfillBranchesCard> {
-  bool _busy = false;
-
-  Future<void> _run() async {
-    setState(() => _busy = true);
-    try {
-      await widget.repository.backfillDefaultBranch();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Datos preparados para sucursales correctamente.'),
-        ),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo preparar sucursales: $error')),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      accent: BrandColors.info,
-      child: Row(
-        children: [
-          const Icon(Icons.account_tree_outlined, color: BrandColors.info),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Preparar datos para sucursales',
-                  style: TextStyle(fontWeight: FontWeight.w900),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'Crea Aviacion y agrega branchId a documentos operativos antiguos.',
-                  style: TextStyle(color: BrandColors.textMuted),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          FilledButton(
-            onPressed: _busy ? null : _run,
-            child: Text(_busy ? 'Preparando...' : 'Ejecutar'),
-          ),
-        ],
-      ),
     );
   }
 }

@@ -182,10 +182,8 @@ class _TablesScreenState extends State<TablesScreen> {
 
           final tables = snapshot.data ?? [];
           if (tables.isEmpty) {
-            return const EmptyState(
-              icon: Icons.table_restaurant,
-              title: 'Aun no hay mesas',
-              message: 'Configura mesas activas en Firestore.',
+            return _NoTablesForBranch(
+              canManageTables: employee?.canManageTables == true,
             );
           }
 
@@ -265,6 +263,51 @@ class _TablesScreenState extends State<TablesScreen> {
             },
           );
         },
+      ),
+    );
+  }
+}
+
+class _NoTablesForBranch extends StatelessWidget {
+  const _NoTablesForBranch({required this.canManageTables});
+
+  final bool canManageTables;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: GlassPanel(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.table_restaurant,
+              size: 46,
+              color: BrandColors.accentOrange,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'No hay mesas registradas para esta sucursal.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Sucursal: ${AppSession.instance.currentBranchName}',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: BrandColors.textMuted),
+            ),
+            if (canManageTables) ...[
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.settings_outlined),
+                label: const Text('Crear mesas desde Backoffice'),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

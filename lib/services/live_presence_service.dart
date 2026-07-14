@@ -46,7 +46,12 @@ class LivePresenceService {
 
   Future<void> updateBranch(Branch branch) {
     _branch = branch;
-    return update(force: true);
+    return update(
+      appMode: 'home',
+      currentScreen: 'Inicio',
+      currentAction: 'Sucursal cambiada',
+      force: true,
+    );
   }
 
   Future<void> stop() async {
