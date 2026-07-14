@@ -373,29 +373,11 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                     );
                   }
                   if (branches.isEmpty) {
-                    return Align(
+                    return const Align(
                       alignment: Alignment.centerLeft,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Primero crea sucursales desde Configuracion > Sucursales.',
-                            style: TextStyle(color: BrandColors.textMuted),
-                          ),
-                          const SizedBox(height: 8),
-                          OutlinedButton.icon(
-                            onPressed: _saving
-                                ? null
-                                : () async {
-                                    await widget.repository
-                                        .backfillDefaultBranch();
-                                    if (!mounted) return;
-                                    setState(() {});
-                                  },
-                            icon: const Icon(Icons.account_tree_outlined),
-                            label: const Text('Preparar datos actuales'),
-                          ),
-                        ],
+                      child: Text(
+                        'Primero crea sucursales desde Configuracion > Sucursales.',
+                        style: TextStyle(color: BrandColors.textMuted),
                       ),
                     );
                   }

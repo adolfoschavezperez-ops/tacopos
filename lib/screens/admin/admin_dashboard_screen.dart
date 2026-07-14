@@ -554,7 +554,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                           iconColor: BrandColors.accentYellow,
                           title: 'Sucursales',
                           subtitle:
-                              'Crear, editar y preparar datos multi-sucursal.',
+                              'Crear y editar sucursales del restaurante.',
                           onTap: () {
                             Navigator.push(
                               context,

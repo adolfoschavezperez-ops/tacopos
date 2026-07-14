@@ -18,21 +18,6 @@ class BranchCatalogScreen extends StatefulWidget {
 
 class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
   final _repository = TacoPosRepository();
-  bool _preparing = false;
-  late Future<int> _pendingPreparationFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _pendingPreparationFuture = _loadPendingPreparationStatus();
-  }
-
-  Future<int> _loadPendingPreparationStatus() {
-    if (AppSession.instance.employee?.hasAdminAccess != true) {
-      return Future.value(0);
-    }
-    return _repository.countDefaultBranchBackfillPending();
-  }
 
   Future<void> _showBranchDialog({Branch? branch}) async {
     final isNew = branch == null;
@@ -64,33 +49,6 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('No se pudo guardar sucursal: $error')),
-      );
-    }
-  }
-
-  Future<void> _prepareData() async {
-    setState(() => _preparing = true);
-    try {
-      final updated = await _repository.backfillDefaultBranch();
-      if (!mounted) return;
-      setState(() {
-        _preparing = false;
-        _pendingPreparationFuture = _loadPendingPreparationStatus();
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            updated == 0
-                ? 'Los datos actuales ya están preparados.'
-                : 'Datos preparados correctamente.',
-          ),
-        ),
-      );
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _preparing = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudieron preparar los datos: $error')),
       );
     }
   }
@@ -132,12 +90,7 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
           }
           final branches = snapshot.data ?? [];
           if (branches.isEmpty) {
-            return _EmptyBranchesPanel(
-              onCreate: () => _showBranchDialog(),
-              preparing: _preparing,
-              pendingPreparationFuture: _pendingPreparationFuture,
-              onPrepareData: _prepareData,
-            );
+            return _EmptyBranchesPanel(onCreate: () => _showBranchDialog());
           }
           return ListView(
             padding: const EdgeInsets.all(22),
@@ -154,12 +107,6 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
                     onToggle: () => _repository.toggleBranch(branch),
                   ),
                 ),
-              ),
-              const SizedBox(height: 8),
-              _AdvancedPreparationPanel(
-                preparing: _preparing,
-                pendingFuture: _pendingPreparationFuture,
-                onPrepareData: _prepareData,
               ),
             ],
           );
@@ -330,124 +277,10 @@ class _BranchCatalogHeader extends StatelessWidget {
   }
 }
 
-class _AdvancedPreparationPanel extends StatelessWidget {
-  const _AdvancedPreparationPanel({
-    required this.preparing,
-    required this.pendingFuture,
-    required this.onPrepareData,
-  });
-
-  final bool preparing;
-  final Future<int> pendingFuture;
-  final VoidCallback onPrepareData;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      padding: EdgeInsets.zero,
-      child: ExpansionTile(
-        initiallyExpanded: false,
-        tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        leading: const Icon(Icons.tune_outlined, color: BrandColors.textMuted),
-        title: const Text(
-          'Avanzado',
-          style: TextStyle(fontWeight: FontWeight.w900),
-        ),
-        subtitle: const Text(
-          'Opciones de preparación.',
-          style: TextStyle(color: BrandColors.textMuted),
-        ),
-        children: [
-          FutureBuilder<int>(
-            future: pendingFuture,
-            builder: (context, snapshot) {
-              final pendingCount = snapshot.data;
-              if (snapshot.connectionState == ConnectionState.waiting &&
-                  pendingCount == null) {
-                return const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Revisando datos actuales...',
-                    style: TextStyle(color: BrandColors.textMuted),
-                  ),
-                );
-              }
-              if (snapshot.hasError) {
-                return _PreparationActionContent(
-                  message: 'No se pudo revisar si hay datos pendientes.',
-                  preparing: preparing,
-                  onPrepareData: onPrepareData,
-                );
-              }
-              if ((pendingCount ?? 0) == 0) {
-                return const Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Los datos actuales ya están preparados.',
-                    style: TextStyle(color: BrandColors.textMuted),
-                  ),
-                );
-              }
-              return _PreparationActionContent(
-                message:
-                    'Asigna la sucursal Aviación a datos antiguos que todavía no tienen sucursal.',
-                preparing: preparing,
-                onPrepareData: onPrepareData,
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PreparationActionContent extends StatelessWidget {
-  const _PreparationActionContent({
-    required this.message,
-    required this.preparing,
-    required this.onPrepareData,
-  });
-
-  final String message;
-  final bool preparing;
-  final VoidCallback onPrepareData;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Preparar datos actuales',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 6),
-        Text(message, style: const TextStyle(color: BrandColors.textMuted)),
-        const SizedBox(height: 12),
-        OutlinedButton.icon(
-          onPressed: preparing ? null : onPrepareData,
-          icon: const Icon(Icons.account_tree_outlined),
-          label: Text(preparing ? 'Preparando...' : 'Preparar datos'),
-        ),
-      ],
-    );
-  }
-}
-
 class _EmptyBranchesPanel extends StatelessWidget {
-  const _EmptyBranchesPanel({
-    required this.onCreate,
-    required this.preparing,
-    required this.pendingPreparationFuture,
-    required this.onPrepareData,
-  });
+  const _EmptyBranchesPanel({required this.onCreate});
 
   final VoidCallback onCreate;
-  final bool preparing;
-  final Future<int> pendingPreparationFuture;
-  final VoidCallback onPrepareData;
 
   @override
   Widget build(BuildContext context) {
@@ -470,12 +303,6 @@ class _EmptyBranchesPanel extends StatelessWidget {
               label: const Text('Crear primera sucursal'),
             ),
           ],
-        ),
-        const SizedBox(height: 18),
-        _AdvancedPreparationPanel(
-          preparing: preparing,
-          pendingFuture: pendingPreparationFuture,
-          onPrepareData: onPrepareData,
         ),
       ],
     );
