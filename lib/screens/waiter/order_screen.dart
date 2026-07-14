@@ -355,7 +355,7 @@ class _OrderScreenState extends State<OrderScreen> {
       if (!mounted) {
         return;
       }
-      _showMessage('Ticket cancelado.');
+      _showMessage('Orden cancelada y mesa liberada.');
       Navigator.pop(context);
     } catch (error) {
       if (!mounted) {
@@ -1800,6 +1800,7 @@ class _OrderItemRow extends StatelessWidget {
     final size = MediaQuery.sizeOf(context);
     final compact = size.width < 650 || size.height < 750;
     final cancelled = item.isCancelled;
+    final cancelReason = getItemCancelReason(item);
     final locked = item.kitchenStatus == 'ready';
     final canRequestCancel = [
       'sent',
@@ -1887,9 +1888,9 @@ class _OrderItemRow extends StatelessWidget {
                               background: Color(0x1FFF5A5A),
                             ),
                           ),
-                          if ((item.cancelReason ?? '').isNotEmpty)
+                          if (cancelReason.isNotEmpty)
                             Text(
-                              'Motivo: ${item.cancelReason}',
+                              'Motivo: $cancelReason',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(

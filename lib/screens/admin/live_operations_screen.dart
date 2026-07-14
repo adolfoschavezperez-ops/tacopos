@@ -1229,6 +1229,7 @@ class _OrderItemsPanel extends StatelessWidget {
       itemBuilder: (context, index) {
         final item = items[index];
         final cancelled = item.isCancelled;
+        final cancelReason = getItemCancelReason(item);
         return Row(
           children: [
             Expanded(
@@ -1251,6 +1252,47 @@ class _OrderItemsPanel extends StatelessWidget {
                       '${item.personName} · ${formatKitchenStatus(item.kitchenStatus)} · ${formatPaymentStatus(item.paymentStatus)}',
                       style: const TextStyle(color: BrandColors.textMuted),
                     ),
+                    if (cancelled) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 6,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 3,
+                            ),
+                            decoration: BoxDecoration(
+                              color: BrandColors.danger.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: BrandColors.danger.withValues(
+                                  alpha: 0.28,
+                                ),
+                              ),
+                            ),
+                            child: const Text(
+                              'Cancelado',
+                              style: TextStyle(
+                                color: BrandColors.danger,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                          if (cancelReason.isNotEmpty)
+                            Text(
+                              'Motivo: $cancelReason',
+                              style: const TextStyle(
+                                color: BrandColors.textMuted,
+                                fontSize: 12,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),

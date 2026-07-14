@@ -3026,6 +3026,18 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
     await recalculateOrderTotal(orderId);
+    await _restaurantRef.collection('activityLog').add({
+      'type': 'order_item_cancelled',
+      'orderId': orderId,
+      'itemId': item.id,
+      'productName': item.productName,
+      'qty': item.qty,
+      'reason': cleanReason,
+      'employeeId': AppSession.instance.employee?.id ?? '',
+      'employeeName': AppSession.instance.employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+    });
   }
 
   Future<void> requestOrderItemCancellation({
@@ -3131,24 +3143,30 @@ class TacoPosRepository {
       throw StateError('La orden ya no existe.');
     }
     final order = PosOrder.fromDoc(orderDoc);
-    if (order.status == 'paid' || order.paymentStatus == 'paid') {
+    if (_isPaidStatus(order.paymentStatus) ||
+        (order.paidAt != null && order.paidTotal > 0.01)) {
       throw StateError('No se puede cancelar una orden pagada al 100%.');
     }
 
     final itemsSnapshot = await orderRef.collection('items').get();
     final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
-    if (items.any((item) => item.kitchenStatus == 'ready')) {
+    final activeItems = items.where(isActiveOrderItem).toList();
+    if (activeItems.any((item) => item.kitchenStatus == 'ready')) {
       throw StateError(
         'No se puede cancelar: hay productos servidos por cocina.',
       );
     }
 
     final paymentsSnapshot = await orderRef.collection('payments').get();
-    final activePaidTotal = paymentsSnapshot.docs
+    final activePayments = paymentsSnapshot.docs
         .map(Payment.fromDoc)
-        .where((payment) => payment.isActive)
-        .fold<double>(0, (total, payment) => total + payment.baseAmount);
-    if (activePaidTotal >= order.total - 0.01) {
+        .where(isActivePayment)
+        .toList();
+    final activePaidTotal = activePayments.fold<double>(
+      0,
+      (total, payment) => total + payment.baseAmount,
+    );
+    if (activePayments.isNotEmpty && activePaidTotal > 0.01) {
       throw StateError('No se puede cancelar: los pagos cierran la orden.');
     }
 
@@ -3158,6 +3176,9 @@ class TacoPosRepository {
       'status': 'cancelled',
       'kitchenStatus': 'cancelled',
       'paymentStatus': 'cancelled',
+      'total': 0.0,
+      'paidTotal': 0.0,
+      'pendingTotal': 0.0,
       'cancelledAt': FieldValue.serverTimestamp(),
       'cancelReason': cleanReason,
       ...audit,
@@ -4584,6 +4605,49 @@ bool isActiveOrderForLiveTables(PosOrder order) {
 }
 
 bool isActiveOrder(PosOrder order) => isActiveOrderForLiveTables(order);
+
+bool _isPaidStatus(String status) {
+  final normalized = normalizeStatus(status);
+  return normalized == 'paid' ||
+      normalized == 'pagado' ||
+      normalized == 'pagada';
+}
+
+bool isActivePayment(Payment payment) {
+  final status = normalizeStatus(payment.status);
+  const inactiveStatuses = {
+    'cancelled',
+    'canceled',
+    'cancelado',
+    'cancelada',
+    'voided',
+    'anulado',
+    'anulada',
+  };
+  return !inactiveStatuses.contains(status) && payment.cancelledAt == null;
+}
+
+bool isActiveOrderItem(OrderItem item) {
+  final status = normalizeStatus(item.status);
+  final kitchenStatus = normalizeStatus(item.kitchenStatus);
+  final paymentStatus = normalizeStatus(item.paymentStatus);
+  final cancelStatus = normalizeStatus(item.cancelStatus);
+  const inactiveStatuses = {
+    'cancelled',
+    'canceled',
+    'cancelado',
+    'cancelada',
+    'voided',
+    'anulado',
+    'anulada',
+  };
+  return !inactiveStatuses.contains(status) &&
+      !inactiveStatuses.contains(kitchenStatus) &&
+      !inactiveStatuses.contains(paymentStatus) &&
+      !inactiveStatuses.contains(cancelStatus) &&
+      cancelStatus != 'accepted' &&
+      item.cancelledAt == null;
+}
 
 PosOrder? getActiveOrderForTable(String tableId, List<PosOrder> orders) {
   final cleanTableId = tableId.trim();

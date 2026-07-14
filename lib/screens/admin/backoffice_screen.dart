@@ -2158,7 +2158,7 @@ Future<List<List<String>>> _reportRows(
             _shortId(order.id),
             '${order.displayName} | ${item.productName} x${item.qty}',
             _money(item.total),
-            item.cancelReason ?? '-',
+            getItemCancelReason(item).isEmpty ? '-' : getItemCancelReason(item),
             item.cancelRequestedByEmployeeName ??
                 item.cancelledByEmployeeName ??
                 '-',
@@ -2378,8 +2378,8 @@ class _SaleDetailDialog extends StatelessWidget {
                             _money(item.unitPrice),
                             _money(item.total),
                             item.isCancelled &&
-                                    (item.cancelReason ?? '').trim().isNotEmpty
-                                ? '${item.notes.trim().isEmpty ? '' : '${item.notes} | '}Motivo: ${item.cancelReason}'
+                                    getItemCancelReason(item).isNotEmpty
+                                ? '${item.notes.trim().isEmpty ? '' : '${item.notes} | '}Motivo: ${getItemCancelReason(item)}'
                                 : item.notes,
                             formatKitchenStatus(item.kitchenStatus),
                             item.recipeItems.isEmpty

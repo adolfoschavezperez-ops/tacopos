@@ -42,6 +42,10 @@ class OrderItem {
     this.cancelledByEmployeeId,
     this.cancelledByEmployeeName,
     this.cancelReason,
+    this.cancelRequestedReason,
+    this.cancelledReason,
+    this.cancelNotes,
+    this.reason,
     this.cancelAcceptedAt,
     this.cancelAcceptedByEmployeeId,
     this.cancelAcceptedByEmployeeName,
@@ -89,6 +93,10 @@ class OrderItem {
   final String? cancelledByEmployeeId;
   final String? cancelledByEmployeeName;
   final String? cancelReason;
+  final String? cancelRequestedReason;
+  final String? cancelledReason;
+  final String? cancelNotes;
+  final String? reason;
   final DateTime? cancelAcceptedAt;
   final String? cancelAcceptedByEmployeeId;
   final String? cancelAcceptedByEmployeeName;
@@ -98,14 +106,32 @@ class OrderItem {
   final String? cancelRejectReason;
 
   bool get isServed => kitchenStatus == 'ready';
-  bool get isCancelled =>
-      status == 'cancelled' ||
-      kitchenStatus == 'cancelled' ||
-      paymentStatus == 'cancelled' ||
-      cancelStatus == 'accepted';
+  bool get isCancelled {
+    final statuses = {
+      _normalizeItemStatus(status),
+      _normalizeItemStatus(kitchenStatus),
+      _normalizeItemStatus(paymentStatus),
+      _normalizeItemStatus(cancelStatus),
+    };
+    const cancelledStatuses = {
+      'cancelled',
+      'canceled',
+      'cancelado',
+      'cancelada',
+      'voided',
+      'anulado',
+      'anulada',
+    };
+    return statuses.any(cancelledStatuses.contains) ||
+        statuses.contains('accepted') ||
+        cancelledAt != null;
+  }
+
   bool get hasCancellationRequested =>
-      cancelStatus == 'requested' || kitchenStatus == 'cancel_requested';
-  bool get wasCancellationRejected => cancelStatus == 'rejected';
+      _normalizeItemStatus(cancelStatus) == 'requested' ||
+      _normalizeItemStatus(kitchenStatus) == 'cancel_requested';
+  bool get wasCancellationRejected =>
+      _normalizeItemStatus(cancelStatus) == 'rejected';
 
   factory OrderItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -166,7 +192,11 @@ class OrderItem {
       cancelledAt: _toDate(data['cancelledAt']),
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
-      cancelReason: data['cancelReason'] as String?,
+      cancelReason: _readOptionalString(data['cancelReason']),
+      cancelRequestedReason: _readOptionalString(data['cancelRequestedReason']),
+      cancelledReason: _readOptionalString(data['cancelledReason']),
+      cancelNotes: _readOptionalString(data['cancelNotes']),
+      reason: _readOptionalString(data['reason']),
       cancelAcceptedAt: _toDate(data['cancelAcceptedAt']),
       cancelAcceptedByEmployeeId: data['cancelAcceptedByEmployeeId'] as String?,
       cancelAcceptedByEmployeeName:
@@ -197,4 +227,29 @@ class OrderItem {
 
     return null;
   }
+}
+
+String getItemCancelReason(OrderItem item) {
+  for (final value in [
+    item.cancelReason,
+    item.cancelRequestedReason,
+    item.cancelledReason,
+    item.cancelNotes,
+    item.reason,
+  ]) {
+    final clean = value?.trim();
+    if (clean != null && clean.isNotEmpty) {
+      return clean;
+    }
+  }
+  return '';
+}
+
+String _normalizeItemStatus(String value) {
+  return value.trim().toLowerCase().replaceAll('á', 'a');
+}
+
+String? _readOptionalString(Object? value) {
+  final clean = value?.toString().trim();
+  return clean == null || clean.isEmpty ? null : clean;
 }
