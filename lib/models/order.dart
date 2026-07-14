@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/constants/app_constants.dart';
+
 class PosOrder {
   const PosOrder({
     required this.id,
@@ -27,6 +29,10 @@ class PosOrder {
     this.cancelledByEmployeeId,
     this.cancelledByEmployeeName,
     this.cancelReason,
+    this.restaurantId = AppConstants.restaurantId,
+    this.restaurantName = AppConstants.restaurantName,
+    this.branchId = AppConstants.defaultBranchId,
+    this.branchName = AppConstants.defaultBranchName,
   });
 
   final String id;
@@ -54,6 +60,10 @@ class PosOrder {
   final String? cancelledByEmployeeId;
   final String? cancelledByEmployeeName;
   final String? cancelReason;
+  final String restaurantId;
+  final String restaurantName;
+  final String branchId;
+  final String branchName;
 
   factory PosOrder.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -84,6 +94,13 @@ class PosOrder {
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
       cancelReason: data['cancelReason'] as String?,
+      restaurantId:
+          data['restaurantId'] as String? ?? AppConstants.restaurantId,
+      restaurantName:
+          data['restaurantName'] as String? ?? AppConstants.restaurantName,
+      branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
+      branchName:
+          data['branchName'] as String? ?? AppConstants.defaultBranchName,
     );
   }
 

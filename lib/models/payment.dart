@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/constants/app_constants.dart';
+
 class Payment {
   const Payment({
     required this.id,
@@ -31,6 +33,10 @@ class Payment {
     this.cancelledByEmployeeId,
     this.cancelledByEmployeeName,
     this.cancelReason,
+    this.restaurantId = AppConstants.restaurantId,
+    this.restaurantName = AppConstants.restaurantName,
+    this.branchId = AppConstants.defaultBranchId,
+    this.branchName = AppConstants.defaultBranchName,
   });
 
   final String id;
@@ -62,6 +68,10 @@ class Payment {
   final String? cancelledByEmployeeId;
   final String? cancelledByEmployeeName;
   final String? cancelReason;
+  final String restaurantId;
+  final String restaurantName;
+  final String branchId;
+  final String branchName;
 
   double get amount => baseAmount;
   bool get isActive => status == 'active';
@@ -115,6 +125,13 @@ class Payment {
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
       cancelReason: data['cancelReason'] as String?,
+      restaurantId:
+          data['restaurantId'] as String? ?? AppConstants.restaurantId,
+      restaurantName:
+          data['restaurantName'] as String? ?? AppConstants.restaurantName,
+      branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
+      branchName:
+          data['branchName'] as String? ?? AppConstants.defaultBranchName,
     );
   }
 

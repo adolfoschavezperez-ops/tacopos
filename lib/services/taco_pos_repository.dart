@@ -8,6 +8,7 @@ import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../models/active_session.dart';
 import '../models/activity_event.dart';
+import '../models/branch.dart';
 import '../models/employee.dart';
 import '../models/kitchen_session.dart';
 import '../models/kitchen_stock_item.dart';
@@ -19,6 +20,7 @@ import '../models/pos_table.dart';
 import '../models/product.dart';
 import '../models/product_category.dart';
 import '../models/product_recipe_item.dart';
+import '../models/restaurant.dart';
 import '../utils/category_utils.dart';
 import 'app_session.dart';
 
@@ -91,6 +93,20 @@ class PaymentResult {
   const PaymentResult({required this.allPaid});
 
   final bool allPaid;
+}
+
+class BranchSummary {
+  const BranchSummary({
+    required this.tableCount,
+    required this.openOrderCount,
+    required this.cashOpen,
+    required this.employeeAccessCount,
+  });
+
+  final int tableCount;
+  final int openOrderCount;
+  final bool cashOpen;
+  final int employeeAccessCount;
 }
 
 class CashPaymentDetails {
@@ -253,10 +269,299 @@ class TacoPosRepository {
   CollectionReference<Map<String, dynamic>> get _kitchenSessionsRef =>
       _restaurantRef.collection('kitchenSessions');
 
+  CollectionReference<Map<String, dynamic>> get _branchesRef =>
+      _restaurantRef.collection('branches');
+
+  Map<String, Object?> get _currentBranchFields {
+    final session = AppSession.instance;
+    return {
+      'restaurantId': session.currentRestaurantId,
+      'restaurantName': session.currentRestaurantName,
+      'branchId': session.currentBranchId,
+      'branchName': session.currentBranchName,
+    };
+  }
+
+  bool _matchesCurrentBranch(String? branchId) {
+    return _matchesBranch(branchId, AppSession.instance.currentBranchId);
+  }
+
+  bool _matchesBranch(String? branchId, String selectedBranchId) {
+    final cleanBranchId = branchId?.trim();
+    if (cleanBranchId == null || cleanBranchId.isEmpty) {
+      return selectedBranchId == AppConstants.defaultBranchId;
+    }
+    return cleanBranchId == selectedBranchId;
+  }
+
+  List<T> _filterCurrentBranch<T>(
+    Iterable<T> items,
+    String? Function(T item) branchId,
+  ) {
+    return items
+        .where((item) => _matchesCurrentBranch(branchId(item)))
+        .toList();
+  }
+
+  Stream<List<Restaurant>> watchRestaurants({bool activeOnly = true}) {
+    return _db.collection('restaurants').snapshots().map((snapshot) {
+      final restaurants = snapshot.docs.map(Restaurant.fromDoc).toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+      return activeOnly
+          ? restaurants.where((restaurant) => restaurant.active).toList()
+          : restaurants;
+    });
+  }
+
+  Stream<List<Branch>> watchBranches({bool activeOnly = false}) {
+    return _branchesRef.snapshots().map((snapshot) {
+      final branches =
+          snapshot.docs
+              .map(
+                (doc) => Branch.fromDoc(
+                  doc,
+                  restaurantId: AppConstants.restaurantId,
+                  restaurantName: AppConstants.restaurantName,
+                ),
+              )
+              .toList()
+            ..sort((a, b) {
+              final sortCompare = a.sortOrder.compareTo(b.sortOrder);
+              return sortCompare != 0 ? sortCompare : a.name.compareTo(b.name);
+            });
+      return activeOnly
+          ? branches.where((branch) => branch.active).toList()
+          : branches;
+    });
+  }
+
+  Future<List<Branch>> getBranchesOnce({bool activeOnly = true}) async {
+    final snapshot = await _branchesRef.get();
+    final branches =
+        snapshot.docs
+            .map(
+              (doc) => Branch.fromDoc(
+                doc,
+                restaurantId: AppConstants.restaurantId,
+                restaurantName: AppConstants.restaurantName,
+              ),
+            )
+            .toList()
+          ..sort((a, b) {
+            final sortCompare = a.sortOrder.compareTo(b.sortOrder);
+            return sortCompare != 0 ? sortCompare : a.name.compareTo(b.name);
+          });
+    return activeOnly
+        ? branches.where((branch) => branch.active).toList()
+        : branches;
+  }
+
+  Future<List<Branch>> getAccessibleBranches(Employee employee) async {
+    await ensureDefaultBranch();
+    final branches = await getBranchesOnce(activeOnly: true);
+    if (employee.isSuperAdmin || employee.canViewAdmin) {
+      return branches.isEmpty ? const [Branch.defaultBranch] : branches;
+    }
+    final allowedIds = employee.effectiveBranchAccess
+        .where((access) => access.active)
+        .map((access) => access.branchId)
+        .toSet();
+    final allowed = branches
+        .where((branch) => allowedIds.contains(branch.id))
+        .toList();
+    return allowed.isEmpty ? const [Branch.defaultBranch] : allowed;
+  }
+
+  Future<void> ensureDefaultBranch() async {
+    final batch = _db.batch();
+    batch.set(_restaurantRef, {
+      'name': AppConstants.restaurantName,
+      'active': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    batch.set(_branchesRef.doc(AppConstants.defaultBranchId), {
+      'id': AppConstants.defaultBranchId,
+      'restaurantId': AppConstants.restaurantId,
+      'restaurantName': AppConstants.restaurantName,
+      'name': AppConstants.defaultBranchName,
+      'normalizedName': AppConstants.defaultBranchId,
+      'active': true,
+      'sortOrder': 1,
+      'timezone': AppConstants.defaultTimezone,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await batch.commit();
+  }
+
+  Future<void> saveBranch({
+    String? branchId,
+    required String name,
+    required bool active,
+    required int sortOrder,
+    String address = '',
+    String phone = '',
+  }) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canViewAdmin == true,
+      'No tienes permiso para administrar sucursales.',
+    );
+    final normalized = normalizeBranchName(name);
+    final id = (branchId == null || branchId.trim().isEmpty)
+        ? normalized
+        : branchId.trim();
+    final docRef = _branchesRef.doc(id);
+    await docRef.set({
+      'id': id,
+      'restaurantId': AppConstants.restaurantId,
+      'restaurantName': AppConstants.restaurantName,
+      'name': name.trim(),
+      'normalizedName': normalized,
+      'active': active,
+      'sortOrder': sortOrder,
+      'address': address.trim(),
+      'phone': phone.trim(),
+      'timezone': AppConstants.defaultTimezone,
+      if (branchId == null) 'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> toggleBranch(Branch branch) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canViewAdmin == true,
+      'No tienes permiso para administrar sucursales.',
+    );
+    await _branchesRef.doc(branch.id).update({
+      'active': !branch.active,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<BranchSummary> branchSummary(Branch branch) async {
+    final tablesSnapshot = await _tablesRef.get();
+    final ordersSnapshot = await _ordersRef.get();
+    final cashSnapshot = await _cashSessionsRef.get();
+    final employeesSnapshot = await _employeesRef.get();
+    final tableCount = tablesSnapshot.docs
+        .map(PosTable.fromDoc)
+        .where((table) => _matchesBranch(table.branchId, branch.id))
+        .length;
+    final openOrderCount = ordersSnapshot.docs
+        .map(PosOrder.fromDoc)
+        .where(
+          (order) =>
+              _matchesBranch(order.branchId, branch.id) && isActiveOrder(order),
+        )
+        .length;
+    final cashOpen = cashSnapshot.docs
+        .map(CashSession.fromDoc)
+        .any(
+          (session) =>
+              _matchesBranch(session.branchId, branch.id) && session.isOpen,
+        );
+    final employeeAccessCount = employeesSnapshot.docs
+        .map(Employee.fromDoc)
+        .where(
+          (employee) =>
+              employee.isSuperAdmin ||
+              employee.effectiveBranchAccess.any(
+                (access) => access.active && access.branchId == branch.id,
+              ),
+        )
+        .length;
+    return BranchSummary(
+      tableCount: tableCount,
+      openOrderCount: openOrderCount,
+      cashOpen: cashOpen,
+      employeeAccessCount: employeeAccessCount,
+    );
+  }
+
+  Future<int> backfillDefaultBranch() async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.canViewAdmin == true,
+      'No tienes permiso para preparar datos de sucursales.',
+    );
+    await ensureDefaultBranch();
+    var updated = 0;
+    var batch = _db.batch();
+    var batchWrites = 0;
+
+    Future<void> commitIfNeeded({bool force = false}) async {
+      if (batchWrites == 0 || (!force && batchWrites < 450)) return;
+      await batch.commit();
+      batch = _db.batch();
+      batchWrites = 0;
+    }
+
+    void setBranchIfMissing(
+      DocumentSnapshot<Map<String, dynamic>> doc, {
+      Map<String, Object?> extra = const {},
+    }) {
+      final data = doc.data() ?? {};
+      final branchId = data['branchId']?.toString().trim();
+      if (branchId != null && branchId.isNotEmpty) {
+        return;
+      }
+      batch.set(doc.reference, {
+        'restaurantId': AppConstants.restaurantId,
+        'restaurantName': AppConstants.restaurantName,
+        'branchId': AppConstants.defaultBranchId,
+        'branchName': AppConstants.defaultBranchName,
+        ...extra,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      updated++;
+      batchWrites++;
+    }
+
+    for (final collectionName in [
+      'tables',
+      'cashSessions',
+      'cashWithdrawalRequests',
+      'kitchenSessions',
+      'activeSessions',
+      'activityLog',
+    ]) {
+      final snapshot = await _restaurantRef.collection(collectionName).get();
+      for (final doc in snapshot.docs) {
+        setBranchIfMissing(doc);
+        await commitIfNeeded();
+      }
+    }
+
+    final ordersSnapshot = await _ordersRef.get();
+    for (final orderDoc in ordersSnapshot.docs) {
+      setBranchIfMissing(orderDoc);
+      await commitIfNeeded();
+
+      final itemSnapshot = await orderDoc.reference.collection('items').get();
+      for (final itemDoc in itemSnapshot.docs) {
+        setBranchIfMissing(itemDoc);
+        await commitIfNeeded();
+      }
+
+      final paymentSnapshot = await orderDoc.reference
+          .collection('payments')
+          .get();
+      for (final paymentDoc in paymentSnapshot.docs) {
+        setBranchIfMissing(paymentDoc);
+        await commitIfNeeded();
+      }
+    }
+
+    await commitIfNeeded(force: true);
+    return updated;
+  }
+
   Stream<List<PosTable>> watchTables({bool activeOnly = true}) {
     return _tablesRef.snapshots().map((snapshot) {
-      final tables = snapshot.docs.map(PosTable.fromDoc).toList()
-        ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+      final tables = _filterCurrentBranch(
+        snapshot.docs.map(PosTable.fromDoc),
+        (table) => table.branchId,
+      )..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
       return activeOnly
           ? tables.where((table) => table.active).toList()
           : tables;
@@ -562,7 +867,8 @@ class TacoPosRepository {
         .map((snapshot) {
           final latestByUser = <String, ActiveSession>{};
           for (final session in snapshot.docs.map(ActiveSession.fromDoc)) {
-            if (!session.isVisibleInLiveViewer) {
+            if (!session.isVisibleInLiveViewer ||
+                !_matchesCurrentBranch(session.branchId)) {
               continue;
             }
             final key = _activeSessionGroupKey(session);
@@ -640,7 +946,12 @@ class TacoPosRepository {
         .orderBy('createdAt', descending: true)
         .limit(limit)
         .snapshots()
-        .map((snapshot) => snapshot.docs.map(ActivityEvent.fromDoc).toList());
+        .map(
+          (snapshot) => snapshot.docs
+              .map(ActivityEvent.fromDoc)
+              .where((event) => _matchesCurrentBranch(event.branchId))
+              .toList(),
+        );
   }
 
   Future<void> logBackofficeIntervention({
@@ -652,6 +963,7 @@ class TacoPosRepository {
     final employee = AppSession.instance.employee;
     await _restaurantRef.collection('activityLog').add({
       'type': type,
+      ..._currentBranchFields,
       'orderId': orderId,
       'targetId': targetId,
       'note': note,
@@ -695,6 +1007,40 @@ class TacoPosRepository {
           'canApproveKitchenCancellations': true,
           'canViewLiveOperations': true,
           'canControlLiveOperations': true,
+          'isSuperAdmin': true,
+          'defaultRestaurantId': AppConstants.restaurantId,
+          'defaultBranchId': AppConstants.defaultBranchId,
+          'restaurantAccess': [AppConstants.restaurantId],
+          'branchAccess': [
+            {
+              'restaurantId': AppConstants.restaurantId,
+              'branchId': AppConstants.defaultBranchId,
+              'branchName': AppConstants.defaultBranchName,
+              'active': true,
+              'permissions': {
+                'canTakeOrders': true,
+                'canCharge': true,
+                'canViewKitchen': true,
+                'canViewAdmin': true,
+                'canManageProducts': true,
+                'canManageTables': true,
+                'canManagePlatforms': true,
+                'canManageEmployees': true,
+                'canManageCash': true,
+                'canAuthorizeCashWithdrawals': true,
+                'canOpenKitchen': true,
+                'canCloseKitchen': true,
+                'canViewKitchenReports': true,
+                'canManageKitchenStock': true,
+                'canCancelOrders': true,
+                'canCancelPayments': true,
+                'canCancelItems': true,
+                'canApproveKitchenCancellations': true,
+                'canViewLiveOperations': true,
+                'canControlLiveOperations': true,
+              },
+            },
+          ],
           'updatedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
       }
@@ -727,6 +1073,40 @@ class TacoPosRepository {
       'canApproveKitchenCancellations': true,
       'canViewLiveOperations': true,
       'canControlLiveOperations': true,
+      'isSuperAdmin': true,
+      'defaultRestaurantId': AppConstants.restaurantId,
+      'defaultBranchId': AppConstants.defaultBranchId,
+      'restaurantAccess': [AppConstants.restaurantId],
+      'branchAccess': [
+        {
+          'restaurantId': AppConstants.restaurantId,
+          'branchId': AppConstants.defaultBranchId,
+          'branchName': AppConstants.defaultBranchName,
+          'active': true,
+          'permissions': {
+            'canTakeOrders': true,
+            'canCharge': true,
+            'canViewKitchen': true,
+            'canViewAdmin': true,
+            'canManageProducts': true,
+            'canManageTables': true,
+            'canManagePlatforms': true,
+            'canManageEmployees': true,
+            'canManageCash': true,
+            'canAuthorizeCashWithdrawals': true,
+            'canOpenKitchen': true,
+            'canCloseKitchen': true,
+            'canViewKitchenReports': true,
+            'canManageKitchenStock': true,
+            'canCancelOrders': true,
+            'canCancelPayments': true,
+            'canCancelItems': true,
+            'canApproveKitchenCancellations': true,
+            'canViewLiveOperations': true,
+            'canControlLiveOperations': true,
+          },
+        },
+      ],
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -748,14 +1128,14 @@ class TacoPosRepository {
   Stream<List<PosOrder>> watchOpenOrders() {
     return _ordersRef.snapshots().map((snapshot) {
       final orders =
-          snapshot.docs.map(PosOrder.fromDoc).where(isActiveOrder).toList()
-            ..sort((a, b) {
-              final aDate =
-                  a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              final bDate =
-                  b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              return bDate.compareTo(aDate);
-            });
+          _filterCurrentBranch(
+            snapshot.docs.map(PosOrder.fromDoc).where(isActiveOrder),
+            (order) => order.branchId,
+          )..sort((a, b) {
+            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
       return orders;
     });
   }
@@ -763,41 +1143,44 @@ class TacoPosRepository {
   Stream<List<PosOrder>> watchOpenTakeoutOrders() {
     return _ordersRef.snapshots().map((snapshot) {
       final orders =
-          snapshot.docs
-              .map(PosOrder.fromDoc)
-              .where(
-                (order) => order.orderType == 'takeout' && isActiveOrder(order),
-              )
-              .toList()
-            ..sort((a, b) {
-              final aDate =
-                  a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              final bDate =
-                  b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              return bDate.compareTo(aDate);
-            });
+          _filterCurrentBranch(
+            snapshot.docs
+                .map(PosOrder.fromDoc)
+                .where(
+                  (order) =>
+                      order.orderType == 'takeout' && isActiveOrder(order),
+                ),
+            (order) => order.branchId,
+          )..sort((a, b) {
+            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
       return orders;
     });
   }
 
   Stream<List<PosOrder>> watchAllOrders() {
     return _ordersRef.snapshots().map((snapshot) {
-      final orders = snapshot.docs.map(PosOrder.fromDoc).toList()
-        ..sort((a, b) {
-          final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return bDate.compareTo(aDate);
-        });
+      final orders =
+          _filterCurrentBranch(
+            snapshot.docs.map(PosOrder.fromDoc),
+            (order) => order.branchId,
+          )..sort((a, b) {
+            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
       return orders;
     });
   }
 
   Stream<List<KitchenOrderBundle>> watchKitchenOrderBundles() {
     return _ordersRef.snapshots().asyncMap((snapshot) async {
-      final orders = snapshot.docs
-          .map(PosOrder.fromDoc)
-          .where(isActiveOrder)
-          .toList();
+      final orders = _filterCurrentBranch(
+        snapshot.docs.map(PosOrder.fromDoc).where(isActiveOrder),
+        (order) => order.branchId,
+      );
 
       final bundles = <KitchenOrderBundle>[];
       for (final order in orders) {
@@ -949,12 +1332,15 @@ class TacoPosRepository {
     }
 
     return query.snapshots().map((snapshot) {
-      final payments = snapshot.docs.map(Payment.fromDoc).toList()
-        ..sort((a, b) {
-          final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return bDate.compareTo(aDate);
-        });
+      final payments =
+          _filterCurrentBranch(
+            snapshot.docs.map(Payment.fromDoc),
+            (payment) => payment.branchId,
+          )..sort((a, b) {
+            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
       return payments;
     });
   }
@@ -1036,12 +1422,15 @@ class TacoPosRepository {
     }
 
     return query.snapshots().map((snapshot) {
-      final sessions = snapshot.docs.map(CashSession.fromDoc).toList()
-        ..sort((a, b) {
-          final aDate = a.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final bDate = b.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return bDate.compareTo(aDate);
-        });
+      final sessions =
+          _filterCurrentBranch(
+            snapshot.docs.map(CashSession.fromDoc),
+            (session) => session.branchId,
+          )..sort((a, b) {
+            final aDate = a.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate = b.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
       return sessions;
     });
   }
@@ -1115,6 +1504,9 @@ class TacoPosRepository {
     return query.snapshots().map((snapshot) {
       final requests =
           snapshot.docs.map(CashWithdrawalRequest.fromDoc).where((request) {
+            if (!_matchesCurrentBranch(request.branchId)) {
+              return false;
+            }
             if (cashSessionId != null &&
                 request.cashSessionId != cashSessionId) {
               return false;
@@ -1154,7 +1546,11 @@ class TacoPosRepository {
     final sessions =
         snapshot.docs
             .map(CashSession.fromDoc)
-            .where((session) => session.status == 'open')
+            .where(
+              (session) =>
+                  session.status == 'open' &&
+                  _matchesCurrentBranch(session.branchId),
+            )
             .toList()
           ..sort((a, b) {
             final aDate = a.openedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -1358,8 +1754,10 @@ class TacoPosRepository {
         .where('status', isEqualTo: 'open')
         .snapshots()
         .map((snapshot) {
-          final sessions = snapshot.docs.map(KitchenSession.fromDoc).toList()
-            ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
+          final sessions = _filterCurrentBranch(
+            snapshot.docs.map(KitchenSession.fromDoc),
+            (session) => session.branchId,
+          )..sort((a, b) => b.businessDate.compareTo(a.businessDate));
           return sessions.isEmpty ? null : sessions.first;
         });
   }
@@ -1376,7 +1774,10 @@ class TacoPosRepository {
         .get();
     final sessions = snapshot.docs
         .map(KitchenSession.fromDoc)
-        .where((session) => session.isOpen)
+        .where(
+          (session) =>
+              session.isOpen && _matchesCurrentBranch(session.branchId),
+        )
         .toList();
     return sessions.isEmpty ? null : sessions.first;
   }
@@ -1405,7 +1806,8 @@ class TacoPosRepository {
             .where(
               (session) =>
                   session.businessDate.compareTo(startBusinessDate) >= 0 &&
-                  session.businessDate.compareTo(endBusinessDate) <= 0,
+                  session.businessDate.compareTo(endBusinessDate) <= 0 &&
+                  _matchesCurrentBranch(session.branchId),
             )
             .toList()
           ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
@@ -1510,8 +1912,10 @@ class TacoPosRepository {
       query = query.where('businessDate', isLessThanOrEqualTo: endBusinessDate);
     }
     return query.snapshots().map((snapshot) {
-      final sessions = snapshot.docs.map(KitchenSession.fromDoc).toList()
-        ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
+      final sessions = _filterCurrentBranch(
+        snapshot.docs.map(KitchenSession.fromDoc),
+        (session) => session.branchId,
+      )..sort((a, b) => b.businessDate.compareTo(a.businessDate));
       return sessions;
     });
   }
@@ -1585,16 +1989,19 @@ class TacoPosRepository {
     final snapshot = await _kitchenSessionsRef
         .where('businessDate', isEqualTo: businessDate)
         .get();
-    final sessions = snapshot.docs.map(KitchenSession.fromDoc).toList()
-      ..sort((a, b) {
-        final statusCompare = _kitchenSessionStatusRank(
-          a,
-        ).compareTo(_kitchenSessionStatusRank(b));
-        if (statusCompare != 0) return statusCompare;
-        final aDate = a.closedAt ?? a.openedAt ?? DateTime(0);
-        final bDate = b.closedAt ?? b.openedAt ?? DateTime(0);
-        return bDate.compareTo(aDate);
-      });
+    final sessions =
+        _filterCurrentBranch(
+          snapshot.docs.map(KitchenSession.fromDoc),
+          (session) => session.branchId,
+        )..sort((a, b) {
+          final statusCompare = _kitchenSessionStatusRank(
+            a,
+          ).compareTo(_kitchenSessionStatusRank(b));
+          if (statusCompare != 0) return statusCompare;
+          final aDate = a.closedAt ?? a.openedAt ?? DateTime(0);
+          final bDate = b.closedAt ?? b.openedAt ?? DateTime(0);
+          return bDate.compareTo(aDate);
+        });
     return sessions;
   }
 
@@ -1681,6 +2088,7 @@ class TacoPosRepository {
       'id': docRef.id,
       'businessDate': businessDate,
       'cashSessionId': openCash?.id,
+      ..._currentBranchFields,
       'status': 'open',
       'openedAt': FieldValue.serverTimestamp(),
       'openedByEmployeeId': employee?.id ?? '',
@@ -1708,6 +2116,7 @@ class TacoPosRepository {
       final availableQty = previousQty + todayInputQty;
       batch.set(docRef.collection('items').doc(item.id), {
         'kitchenStockItemId': item.id,
+        ..._currentBranchFields,
         'name': item.name,
         'category': item.category,
         'unit': item.unit,
@@ -1781,6 +2190,10 @@ class TacoPosRepository {
       'id': entryRef.id,
       'kitchenSessionId': kitchenSessionId,
       'businessDate': session.businessDate,
+      'restaurantId': session.restaurantId,
+      'restaurantName': session.restaurantName,
+      'branchId': session.branchId,
+      'branchName': session.branchName,
       'kitchenStockItemId': item.kitchenStockItemId,
       'name': item.name,
       'qty': qty,
@@ -1911,7 +2324,11 @@ class TacoPosRepository {
         .get();
     final hasClosed = existingForDate.docs
         .map(CashSession.fromDoc)
-        .any((session) => session.status == 'closed');
+        .any(
+          (session) =>
+              session.status == 'closed' &&
+              _matchesCurrentBranch(session.branchId),
+        );
     if (hasClosed) {
       throw StateError('La fecha $businessDate ya tiene corte cerrado.');
     }
@@ -1921,6 +2338,7 @@ class TacoPosRepository {
     await docRef.set({
       'id': docRef.id,
       'businessDate': businessDate,
+      ..._currentBranchFields,
       'status': 'open',
       'openingCashAmount': openingCashAmount,
       'openedAt': FieldValue.serverTimestamp(),
@@ -1979,6 +2397,7 @@ class TacoPosRepository {
       'id': docRef.id,
       'cashSessionId': cashSessionId,
       'businessDate': session.businessDate,
+      ..._currentBranchFields,
       'amount': amount,
       'reason': reason.trim(),
       'requestedByEmployeeId': employee?.id ?? '',
@@ -2040,7 +2459,8 @@ class TacoPosRepository {
 
     final ordersSnapshot = await _ordersRef.get();
     final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).where((order) {
-      return _orderBelongsToBusinessDate(order, session.businessDate);
+      return _matchesCurrentBranch(order.branchId) &&
+          _orderBelongsToBusinessDate(order, session.businessDate);
     }).toList();
 
     for (final order in orders) {
@@ -2189,6 +2609,7 @@ class TacoPosRepository {
     if (netDifference < 0) {
       await _restaurantRef.collection('activityLog').add({
         'type': 'cash_close_shortage',
+        ..._currentBranchFields,
         'cashSessionId': cashSessionId,
         'businessDate': session.businessDate,
         'shortageAmount': shortageAmount,
@@ -2244,7 +2665,7 @@ class TacoPosRepository {
     final requestsById = <String, CashWithdrawalRequest>{};
     for (final doc in [...bySession.docs, ...byDate.docs]) {
       final request = CashWithdrawalRequest.fromDoc(doc);
-      if (request.isPending) {
+      if (request.isPending && _matchesCurrentBranch(request.branchId)) {
         requestsById[doc.id] = request;
       }
     }
@@ -2315,7 +2736,9 @@ class TacoPosRepository {
         snapshot.docs
             .map(KitchenSession.fromDoc)
             .where(
-              (session) => session.businessDate.compareTo(businessDate) < 0,
+              (session) =>
+                  session.businessDate.compareTo(businessDate) < 0 &&
+                  _matchesCurrentBranch(session.branchId),
             )
             .toList()
           ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
@@ -2339,6 +2762,9 @@ class TacoPosRepository {
     final ordersSnapshot = await _ordersRef.get();
     final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).where((order) {
       if (['cancelled', 'voided'].contains(order.status)) {
+        return false;
+      }
+      if (!_matchesCurrentBranch(order.branchId)) {
         return false;
       }
       if (['pending', 'partial'].contains(order.paymentStatus) &&
@@ -2626,7 +3052,8 @@ class TacoPosRepository {
       final currentDoc = await _ordersRef.doc(currentOrderId).get();
       if (currentDoc.exists) {
         final currentOrder = PosOrder.fromDoc(currentDoc);
-        if (_isActiveDineInOrderForTable(currentOrder, table.id)) {
+        if (_isActiveDineInOrderForTable(currentOrder, table.id) &&
+            _matchesCurrentBranch(currentOrder.branchId)) {
           activeOrdersById[currentOrder.id] = currentOrder;
         } else {
           developer.log(
@@ -2648,7 +3075,8 @@ class TacoPosRepository {
         .get();
     for (final doc in snapshot.docs) {
       final order = PosOrder.fromDoc(doc);
-      if (_isActiveDineInOrderForTable(order, table.id)) {
+      if (_isActiveDineInOrderForTable(order, table.id) &&
+          _matchesCurrentBranch(order.branchId)) {
         activeOrdersById[order.id] = order;
       }
     }
@@ -2687,6 +3115,7 @@ class TacoPosRepository {
       'paidTotal': 0.0,
       'pendingTotal': 0.0,
       'personNames': {'1': 'Persona 1'},
+      ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
       'createdAt': FieldValue.serverTimestamp(),
@@ -2698,6 +3127,7 @@ class TacoPosRepository {
     batch.set(_tablesRef.doc(table.id), {
       'status': 'occupied',
       'currentOrderId': orderRef.id,
+      ..._currentBranchFields,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
     await batch.commit();
@@ -2777,6 +3207,7 @@ class TacoPosRepository {
       'paidTotal': 0.0,
       'pendingTotal': 0.0,
       'personNames': {'1': 'Persona 1'},
+      ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
       'createdAt': FieldValue.serverTimestamp(),
@@ -2792,6 +3223,10 @@ class TacoPosRepository {
     final snapshot = await _ordersRef.get();
     var maxNumber = 0;
     for (final doc in snapshot.docs) {
+      final order = PosOrder.fromDoc(doc);
+      if (!_matchesCurrentBranch(order.branchId)) {
+        continue;
+      }
       final number = (doc.data()['takeoutNumber'] as num?)?.toInt() ?? 0;
       if (number > maxNumber) {
         maxNumber = number;
@@ -2865,6 +3300,7 @@ class TacoPosRepository {
       'appliedPlatformName': usePlatformPrice ? platformName : null,
       'priceSource': usePlatformPrice ? 'platform' : 'store',
       'notes': '',
+      ..._currentBranchFields,
       ..._employeeAuditFields(prefix: 'createdBy'),
       'sendToKitchen': product.sendToKitchen,
       'affectsKitchenStock': product.affectsKitchenStock,
@@ -3028,6 +3464,7 @@ class TacoPosRepository {
     await recalculateOrderTotal(orderId);
     await _restaurantRef.collection('activityLog').add({
       'type': 'order_item_cancelled',
+      ..._currentBranchFields,
       'orderId': orderId,
       'itemId': item.id,
       'productName': item.productName,
@@ -3825,12 +4262,14 @@ class TacoPosRepository {
       'paidTotal': paidTotal,
       'pendingTotal': 0.0,
       'paidAt': FieldValue.serverTimestamp(),
+      ..._currentBranchFields,
       'updatedAt': FieldValue.serverTimestamp(),
     });
     if (order.orderType != 'takeout') {
       batch.set(_tablesRef.doc(order.tableId), {
         'status': 'available',
         'currentOrderId': FieldValue.delete(),
+        ..._currentBranchFields,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
@@ -3872,6 +4311,10 @@ class TacoPosRepository {
       'orderId': order.id,
       'tableId': order.tableId,
       'tableName': order.tableName,
+      'restaurantId': order.restaurantId,
+      'restaurantName': order.restaurantName,
+      'branchId': order.branchId,
+      'branchName': order.branchName,
       'type': type,
       'personNumber': personNumber,
       'personName': personName,
@@ -4156,6 +4599,7 @@ class TacoPosRepository {
     final employee = AppSession.instance.employee;
     final logData = <String, Object?>{
       'type': type,
+      ..._currentBranchFields,
       ...data,
       'employeeId': employee?.id ?? '',
       'employeeName': employee?.name ?? '',
@@ -4362,6 +4806,7 @@ class TacoPosRepository {
       'id': docRef.id,
       'name': name.trim(),
       'type': type,
+      ..._currentBranchFields,
       'active': active,
       'sortOrder': sortOrder,
       if (tableId == null) 'status': 'available',
@@ -4452,6 +4897,8 @@ class TacoPosRepository {
     required bool canApproveKitchenCancellations,
     required bool canViewLiveOperations,
     required bool canControlLiveOperations,
+    List<EmployeeBranchAccess>? branchAccess,
+    String? defaultBranchId,
   }) async {
     _requireAdminPermission(
       AppSession.instance.employee?.canManageEmployees == true,
@@ -4460,6 +4907,39 @@ class TacoPosRepository {
     final docRef = employeeId == null
         ? _employeesRef.doc()
         : _employeesRef.doc(employeeId);
+    final permissions = {
+      'canTakeOrders': canTakeOrders,
+      'canCharge': canCharge,
+      'canViewKitchen': canViewKitchen,
+      'canViewAdmin': canViewAdmin,
+      'canManageProducts': canManageProducts,
+      'canManageTables': canManageTables,
+      'canManagePlatforms': canManagePlatforms,
+      'canManageEmployees': canManageEmployees,
+      'canManageCash': canManageCash,
+      'canAuthorizeCashWithdrawals': canAuthorizeCashWithdrawals,
+      'canOpenKitchen': canOpenKitchen,
+      'canCloseKitchen': canCloseKitchen,
+      'canViewKitchenReports': canViewKitchenReports,
+      'canManageKitchenStock': canManageKitchenStock,
+      'canCancelOrders': canCancelOrders,
+      'canCancelPayments': canCancelPayments,
+      'canCancelItems': canCancelItems,
+      'canApproveKitchenCancellations': canApproveKitchenCancellations,
+      'canViewLiveOperations': canViewLiveOperations,
+      'canControlLiveOperations': canControlLiveOperations,
+    };
+    final access = branchAccess == null || branchAccess.isEmpty
+        ? [
+            EmployeeBranchAccess(
+              restaurantId: AppConstants.restaurantId,
+              branchId: AppConstants.defaultBranchId,
+              branchName: AppConstants.defaultBranchName,
+              active: true,
+              permissions: permissions,
+            ),
+          ]
+        : branchAccess;
 
     await docRef.set({
       'id': docRef.id,
@@ -4487,6 +4967,11 @@ class TacoPosRepository {
       'canApproveKitchenCancellations': canApproveKitchenCancellations,
       'canViewLiveOperations': canViewLiveOperations,
       'canControlLiveOperations': canControlLiveOperations,
+      'isSuperAdmin': canViewAdmin,
+      'defaultRestaurantId': AppConstants.restaurantId,
+      'defaultBranchId': defaultBranchId ?? access.first.branchId,
+      'restaurantAccess': [AppConstants.restaurantId],
+      'branchAccess': access.map((item) => item.toMap()).toList(),
       if (employeeId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));

@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/constants/app_constants.dart';
+
 class KitchenSession {
   const KitchenSession({
     required this.id,
@@ -13,6 +15,10 @@ class KitchenSession {
     this.closedAt,
     this.closedByEmployeeId,
     this.closedByEmployeeName,
+    this.restaurantId = AppConstants.restaurantId,
+    this.restaurantName = AppConstants.restaurantName,
+    this.branchId = AppConstants.defaultBranchId,
+    this.branchName = AppConstants.defaultBranchName,
   });
 
   final String id;
@@ -26,6 +32,10 @@ class KitchenSession {
   final String? closedByEmployeeId;
   final String? closedByEmployeeName;
   final String notes;
+  final String restaurantId;
+  final String restaurantName;
+  final String branchId;
+  final String branchName;
 
   bool get isOpen => status == 'open';
   bool get isClosed => status == 'closed';
@@ -44,6 +54,13 @@ class KitchenSession {
       closedByEmployeeId: data['closedByEmployeeId'] as String?,
       closedByEmployeeName: data['closedByEmployeeName'] as String?,
       notes: data['notes'] as String? ?? '',
+      restaurantId:
+          data['restaurantId'] as String? ?? AppConstants.restaurantId,
+      restaurantName:
+          data['restaurantName'] as String? ?? AppConstants.restaurantName,
+      branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
+      branchName:
+          data['branchName'] as String? ?? AppConstants.defaultBranchName,
     );
   }
 

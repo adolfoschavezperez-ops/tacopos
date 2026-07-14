@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/constants/app_constants.dart';
+
 class PosTable {
   const PosTable({
     required this.id,
@@ -9,6 +11,8 @@ class PosTable {
     required this.active,
     required this.sortOrder,
     this.currentOrderId,
+    this.branchId = AppConstants.defaultBranchId,
+    this.branchName = AppConstants.defaultBranchName,
   });
 
   final String id;
@@ -18,6 +22,8 @@ class PosTable {
   final bool active;
   final int sortOrder;
   final String? currentOrderId;
+  final String branchId;
+  final String branchName;
 
   factory PosTable.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -30,6 +36,9 @@ class PosTable {
       active: data['active'] as bool? ?? true,
       sortOrder: (data['sortOrder'] as num?)?.toInt() ?? 0,
       currentOrderId: data['currentOrderId'] as String?,
+      branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
+      branchName:
+          data['branchName'] as String? ?? AppConstants.defaultBranchName,
     );
   }
 }

@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/constants/app_constants.dart';
+
 class CashSession {
   const CashSession({
     required this.id,
@@ -32,6 +34,10 @@ class CashSession {
     this.closedAt,
     this.closedByEmployeeId,
     this.closedByEmployeeName,
+    this.restaurantId = AppConstants.restaurantId,
+    this.restaurantName = AppConstants.restaurantName,
+    this.branchId = AppConstants.defaultBranchId,
+    this.branchName = AppConstants.defaultBranchName,
   });
 
   final String id;
@@ -44,6 +50,10 @@ class CashSession {
   final DateTime? closedAt;
   final String? closedByEmployeeId;
   final String? closedByEmployeeName;
+  final String restaurantId;
+  final String restaurantName;
+  final String branchId;
+  final String branchName;
   final double countedCashAmount;
   final double terminalReportedAmount;
   final double expectedCashAmount;
@@ -87,6 +97,13 @@ class CashSession {
       closedAt: _toDate(data['closedAt']),
       closedByEmployeeId: data['closedByEmployeeId'] as String?,
       closedByEmployeeName: data['closedByEmployeeName'] as String?,
+      restaurantId:
+          data['restaurantId'] as String? ?? AppConstants.restaurantId,
+      restaurantName:
+          data['restaurantName'] as String? ?? AppConstants.restaurantName,
+      branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
+      branchName:
+          data['branchName'] as String? ?? AppConstants.defaultBranchName,
       countedCashAmount: _toDouble(data['countedCashAmount']),
       terminalReportedAmount: _toDouble(data['terminalReportedAmount']),
       expectedCashAmount: _toDouble(data['expectedCashAmount']),

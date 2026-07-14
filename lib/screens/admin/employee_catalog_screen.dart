@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
+import '../../core/constants/app_constants.dart';
+import '../../models/branch.dart';
 import '../../models/employee.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
@@ -160,6 +162,9 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canApproveKitchenCancellations;
   late bool _canViewLiveOperations;
   late bool _canControlLiveOperations;
+  late final Future<List<Branch>> _branchesFuture;
+  late Set<String> _branchAccessIds;
+  late String _defaultBranchId;
   bool _saving = false;
   String _error = '';
 
@@ -192,6 +197,17 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canViewLiveOperations = widget.employee?.canViewLiveOperations ?? false;
     _canControlLiveOperations =
         widget.employee?.canControlLiveOperations ?? false;
+    _branchesFuture = widget.repository.getBranchesOnce(activeOnly: false);
+    final access = widget.employee?.effectiveBranchAccess ?? const [];
+    _branchAccessIds = access.map((item) => item.branchId).toSet();
+    if (_branchAccessIds.isEmpty) {
+      _branchAccessIds = {AppConstants.defaultBranchId};
+    }
+    _defaultBranchId =
+        widget.employee?.defaultBranchId ??
+        (_branchAccessIds.contains(AppConstants.defaultBranchId)
+            ? AppConstants.defaultBranchId
+            : _branchAccessIds.first);
   }
 
   @override
@@ -224,6 +240,42 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     final navigator = Navigator.of(context);
 
     try {
+      final branches = await _branchesFuture;
+      final branchesById = {for (final branch in branches) branch.id: branch};
+      final cleanDefaultBranchId = _branchAccessIds.contains(_defaultBranchId)
+          ? _defaultBranchId
+          : _branchAccessIds.first;
+      final branchAccess = _branchAccessIds.map((branchId) {
+        final branch = branchesById[branchId] ?? Branch.defaultBranch;
+        return EmployeeBranchAccess(
+          restaurantId: branch.restaurantId,
+          branchId: branch.id,
+          branchName: branch.name,
+          active: true,
+          permissions: {
+            'canTakeOrders': _canTakeOrders,
+            'canCharge': _canCharge,
+            'canViewKitchen': _canViewKitchen,
+            'canViewAdmin': _canViewAdmin,
+            'canManageProducts': _canManageProducts,
+            'canManageTables': _canManageTables,
+            'canManagePlatforms': _canManagePlatforms,
+            'canManageEmployees': _canManageEmployees,
+            'canManageCash': _canManageCash,
+            'canAuthorizeCashWithdrawals': _canAuthorizeCashWithdrawals,
+            'canOpenKitchen': _canOpenKitchen,
+            'canCloseKitchen': _canCloseKitchen,
+            'canViewKitchenReports': _canViewKitchenReports,
+            'canManageKitchenStock': _canManageKitchenStock,
+            'canCancelOrders': _canCancelOrders,
+            'canCancelPayments': _canCancelPayments,
+            'canCancelItems': _canCancelItems,
+            'canApproveKitchenCancellations': _canApproveKitchenCancellations,
+            'canViewLiveOperations': _canViewLiveOperations,
+            'canControlLiveOperations': _canControlLiveOperations,
+          },
+        );
+      }).toList();
       await widget.repository.saveEmployee(
         employeeId: widget.employee?.id,
         name: name,
@@ -249,6 +301,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canApproveKitchenCancellations: _canApproveKitchenCancellations,
         canViewLiveOperations: _canViewLiveOperations,
         canControlLiveOperations: _canControlLiveOperations,
+        branchAccess: branchAccess,
+        defaultBranchId: cleanDefaultBranchId,
       );
     } catch (error) {
       if (!mounted) {
@@ -305,6 +359,88 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                           _active = value;
                         });
                       },
+              ),
+              const Divider(height: 20),
+              FutureBuilder<List<Branch>>(
+                future: _branchesFuture,
+                builder: (context, snapshot) {
+                  final branches = snapshot.data ?? const <Branch>[];
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Cargando sucursales...'),
+                    );
+                  }
+                  if (branches.isEmpty) {
+                    return const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Primero crea sucursales desde Configuracion > Sucursales.',
+                        style: TextStyle(color: BrandColors.textMuted),
+                      ),
+                    );
+                  }
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Acceso por sucursal',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                      const SizedBox(height: 8),
+                      ...branches.map(
+                        (branch) => CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(branch.name),
+                          subtitle: Text(
+                            branch.id == _defaultBranchId
+                                ? 'Sucursal default'
+                                : 'Permisos actuales se aplican a esta sucursal',
+                          ),
+                          value: _branchAccessIds.contains(branch.id),
+                          onChanged: _saving
+                              ? null
+                              : (value) {
+                                  setState(() {
+                                    if (value == true) {
+                                      _branchAccessIds.add(branch.id);
+                                      _defaultBranchId = branch.id;
+                                    } else if (_branchAccessIds.length > 1) {
+                                      _branchAccessIds.remove(branch.id);
+                                      if (_defaultBranchId == branch.id) {
+                                        _defaultBranchId =
+                                            _branchAccessIds.first;
+                                      }
+                                    }
+                                  });
+                                },
+                          secondary: IconButton(
+                            tooltip: 'Marcar como default',
+                            onPressed:
+                                _saving ||
+                                    !_branchAccessIds.contains(branch.id) ||
+                                    _defaultBranchId == branch.id
+                                ? null
+                                : () {
+                                    setState(
+                                      () => _defaultBranchId = branch.id,
+                                    );
+                                  },
+                            icon: Icon(
+                              _defaultBranchId == branch.id
+                                  ? Icons.star
+                                  : Icons.star_border,
+                            ),
+                            color: _defaultBranchId == branch.id
+                                ? BrandColors.accentYellow
+                                : BrandColors.textMuted,
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
               const Divider(height: 20),
               const Align(

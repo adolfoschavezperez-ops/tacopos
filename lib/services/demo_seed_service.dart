@@ -17,14 +17,36 @@ class DemoSeedService {
     batch.set(restaurantRef, {
       'name': AppConstants.brandName,
       'brand': AppConstants.appName,
+      'active': true,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+
+    batch.set(
+      restaurantRef.collection('branches').doc(AppConstants.defaultBranchId),
+      {
+        'id': AppConstants.defaultBranchId,
+        'restaurantId': AppConstants.restaurantId,
+        'restaurantName': AppConstants.restaurantName,
+        'name': AppConstants.defaultBranchName,
+        'normalizedName': AppConstants.defaultBranchId,
+        'active': true,
+        'sortOrder': 1,
+        'timezone': AppConstants.defaultTimezone,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
 
     for (final table in _tables) {
       final id = table['id'] as String;
       batch.set(restaurantRef.collection('tables').doc(id), {
         ...table,
+        'restaurantId': AppConstants.restaurantId,
+        'restaurantName': AppConstants.restaurantName,
+        'branchId': AppConstants.defaultBranchId,
+        'branchName': AppConstants.defaultBranchName,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
@@ -44,6 +66,18 @@ class DemoSeedService {
       final id = employee['id'] as String;
       batch.set(restaurantRef.collection('employees').doc(id), {
         ...employee,
+        'defaultRestaurantId': AppConstants.restaurantId,
+        'defaultBranchId': AppConstants.defaultBranchId,
+        'restaurantAccess': [AppConstants.restaurantId],
+        'branchAccess': [
+          {
+            'restaurantId': AppConstants.restaurantId,
+            'branchId': AppConstants.defaultBranchId,
+            'branchName': AppConstants.defaultBranchName,
+            'active': true,
+            'permissions': _employeePermissions(employee),
+          },
+        ],
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -68,6 +102,13 @@ class DemoSeedService {
 
 Map<String, double> _demoPlatformPrices(double price) {
   return {'didi': price, 'uber': price, 'rappi': price};
+}
+
+Map<String, bool> _employeePermissions(Map<String, Object> employee) {
+  return {
+    for (final entry in employee.entries)
+      if (entry.value is bool) entry.key: entry.value as bool,
+  };
 }
 
 const _tables = [

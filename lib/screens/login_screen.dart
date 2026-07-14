@@ -47,6 +47,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _employeesStream = _repository.watchEmployees();
+    _repository.ensureDefaultBranch();
     _repository.ensureInitialAdminEmployee();
   }
 
@@ -96,7 +97,11 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      AppSession.instance.signIn(employee);
+      final branches = await _repository.getAccessibleBranches(employee);
+      if (!mounted) {
+        return;
+      }
+      AppSession.instance.signIn(employee, branches: branches);
     } catch (error) {
       if (!mounted) {
         return;

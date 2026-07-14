@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
+import '../../models/branch.dart';
 import '../../models/employee.dart';
 import '../../models/kitchen_session.dart';
 import '../../models/order.dart';
@@ -19,6 +20,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import 'cash_admin_screen.dart';
+import 'branch_catalog_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'kitchen_admin_screen.dart';
 import 'live_operations_screen.dart';
@@ -78,6 +80,17 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
       currentScreen: 'Backoffice',
       currentAction: 'Viendo backoffice',
     );
+    AppSession.instance.addListener(_onSessionChanged);
+  }
+
+  @override
+  void dispose() {
+    AppSession.instance.removeListener(_onSessionChanged);
+    super.dispose();
+  }
+
+  void _onSessionChanged() {
+    if (mounted) setState(() {});
   }
 
   String get _startBusinessDate => DateFormat('yyyy-MM-dd').format(_startDate);
@@ -425,6 +438,18 @@ class _BackofficeBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Widget withBranchHeader(Widget child) {
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 16, 22, 0),
+            child: _BackofficeBranchSelector(repository: repository),
+          ),
+          Expanded(child: child),
+        ],
+      );
+    }
+
     if (section == _BackofficeSection.live) {
       final employee = AppSession.instance.employee;
       if (employee == null) {
@@ -434,16 +459,16 @@ class _BackofficeBody extends StatelessWidget {
           message: 'Inicia sesion para ver el visor operativo.',
         );
       }
-      return LiveOperationsScreen(employee: employee);
+      return withBranchHeader(LiveOperationsScreen(employee: employee));
     }
     if (section == _BackofficeSection.cash) {
-      return const CashAdminScreen();
+      return withBranchHeader(const CashAdminScreen());
     }
     if (section == _BackofficeSection.kitchen) {
-      return const KitchenAdminScreen();
+      return withBranchHeader(const KitchenAdminScreen());
     }
     if (section == _BackofficeSection.settings) {
-      return _SettingsSection();
+      return withBranchHeader(_SettingsSection(repository: repository));
     }
 
     return StreamBuilder<List<PosOrder>>(
@@ -480,6 +505,8 @@ class _BackofficeBody extends StatelessWidget {
             return ListView(
               padding: const EdgeInsets.all(22),
               children: [
+                _BackofficeBranchSelector(repository: repository),
+                const SizedBox(height: 14),
                 if (section != _BackofficeSection.dashboard) ...[
                   _HeaderRow(
                     title: _sectionTitle(section),
@@ -1221,10 +1248,24 @@ class _ReportsSection extends StatelessWidget {
 }
 
 class _SettingsSection extends StatelessWidget {
+  const _SettingsSection({required this.repository});
+
+  final TacoPosRepository repository;
+
   @override
   Widget build(BuildContext context) {
     final employee = AppSession.instance.employee;
     final links = <_SettingsLink>[
+      if (employee?.canViewAdmin == true)
+        _SettingsLink(
+          'Sucursales',
+          'Catalogo de sucursales y preparacion multi-sucursal.',
+          Icons.storefront_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const BranchCatalogScreen()),
+          ),
+        ),
       if (employee?.canManageProducts == true)
         _SettingsLink(
           'Productos',
@@ -1328,7 +1369,162 @@ class _SettingsSection extends StatelessWidget {
               )
               .toList(),
         ),
+        if (employee?.canViewAdmin == true) ...[
+          const SizedBox(height: 18),
+          _BackfillBranchesCard(repository: repository),
+        ],
       ],
+    );
+  }
+}
+
+class _BackofficeBranchSelector extends StatelessWidget {
+  const _BackofficeBranchSelector({required this.repository});
+
+  final TacoPosRepository repository;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<Branch>>(
+      stream: repository.watchBranches(activeOnly: true),
+      builder: (context, snapshot) {
+        final branches =
+            snapshot.data ?? AppSession.instance.accessibleBranches;
+        final allowedIds = AppSession.instance.accessibleBranches
+            .map((branch) => branch.id)
+            .toSet();
+        final visibleBranches = branches
+            .where(
+              (branch) =>
+                  AppSession.instance.employee?.canViewAdmin == true ||
+                  allowedIds.contains(branch.id),
+            )
+            .toList();
+        final selected =
+            visibleBranches.any(
+              (branch) => branch.id == AppSession.instance.currentBranchId,
+            )
+            ? AppSession.instance.currentBranchId
+            : (visibleBranches.isEmpty ? null : visibleBranches.first.id);
+
+        if (selected != null &&
+            selected != AppSession.instance.currentBranchId) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final next = visibleBranches
+                .where((branch) => branch.id == selected)
+                .firstOrNull;
+            if (next != null) AppSession.instance.selectBranch(next);
+          });
+        }
+
+        return GlassPanel(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.storefront_outlined,
+                color: BrandColors.accentYellow,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: selected,
+                    isExpanded: true,
+                    hint: const Text('Selecciona sucursal'),
+                    items: visibleBranches
+                        .map(
+                          (branch) => DropdownMenuItem(
+                            value: branch.id,
+                            child: Text(
+                              '${branch.restaurantName} · ${branch.name}',
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      final branch = visibleBranches
+                          .where((branch) => branch.id == value)
+                          .firstOrNull;
+                      if (branch != null) {
+                        AppSession.instance.selectBranch(branch);
+                      }
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _BackfillBranchesCard extends StatefulWidget {
+  const _BackfillBranchesCard({required this.repository});
+
+  final TacoPosRepository repository;
+
+  @override
+  State<_BackfillBranchesCard> createState() => _BackfillBranchesCardState();
+}
+
+class _BackfillBranchesCardState extends State<_BackfillBranchesCard> {
+  bool _busy = false;
+
+  Future<void> _run() async {
+    setState(() => _busy = true);
+    try {
+      final count = await widget.repository.backfillDefaultBranch();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Datos preparados. Documentos actualizados: $count'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo preparar sucursales: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      accent: BrandColors.info,
+      child: Row(
+        children: [
+          const Icon(Icons.account_tree_outlined, color: BrandColors.info),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Preparar datos para sucursales',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  'Crea Aviacion y agrega branchId a documentos operativos antiguos.',
+                  style: TextStyle(color: BrandColors.textMuted),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton(
+            onPressed: _busy ? null : _run,
+            child: Text(_busy ? 'Preparando...' : 'Ejecutar'),
+          ),
+        ],
+      ),
     );
   }
 }

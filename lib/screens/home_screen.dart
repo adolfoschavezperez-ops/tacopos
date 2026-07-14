@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
+import '../models/branch.dart';
 import '../models/employee.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../services/app_session.dart';
@@ -27,6 +28,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  bool _branchPromptShown = false;
+
   @override
   void initState() {
     super.initState();
@@ -35,6 +38,34 @@ class _HomeScreenState extends State<HomeScreen> {
       currentScreen: 'Inicio',
       currentAction: 'Seleccionando modulo',
     );
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeSelectBranch());
+  }
+
+  Future<void> _maybeSelectBranch() async {
+    if (_branchPromptShown || !mounted || kIsWeb) return;
+    if (!AppSession.instance.canChangeBranch) return;
+    _branchPromptShown = true;
+    await _showBranchSelector();
+  }
+
+  Future<void> _showBranchSelector() async {
+    final selected = await showDialog<Branch>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Seleccionar sucursal'),
+        children: AppSession.instance.accessibleBranches
+            .map(
+              (branch) => SimpleDialogOption(
+                onPressed: () => Navigator.pop(context, branch),
+                child: Text(branch.name),
+              ),
+            )
+            .toList(),
+      ),
+    );
+    if (selected != null) {
+      AppSession.instance.selectBranch(selected);
+    }
   }
 
   Future<void> _confirmSignOut() async {
@@ -167,6 +198,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   child: _HeroBlock(
                                     employee: employee,
                                     onSignOut: _confirmSignOut,
+                                    onChangeBranch: _showBranchSelector,
                                   ),
                                 ),
                                 const SizedBox(width: 34),
@@ -187,6 +219,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 _HeroBlock(
                                   employee: employee,
                                   onSignOut: _confirmSignOut,
+                                  onChangeBranch: _showBranchSelector,
                                 ),
                                 const SizedBox(height: 24),
                                 _ModePanel(
@@ -209,10 +242,15 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class _HeroBlock extends StatelessWidget {
-  const _HeroBlock({required this.employee, required this.onSignOut});
+  const _HeroBlock({
+    required this.employee,
+    required this.onSignOut,
+    required this.onChangeBranch,
+  });
 
   final Employee? employee;
   final VoidCallback onSignOut;
+  final VoidCallback onChangeBranch;
 
   @override
   Widget build(BuildContext context) {
@@ -273,6 +311,8 @@ class _HeroBlock extends StatelessWidget {
         const SizedBox(height: 18),
         const _HomeOperationBadge(),
         const SizedBox(height: 10),
+        _BranchBadge(onChangeBranch: onChangeBranch),
+        const SizedBox(height: 10),
         OutlinedButton.icon(
           onPressed: onSignOut,
           icon: const Icon(Icons.logout),
@@ -283,6 +323,29 @@ class _HeroBlock extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+class _BranchBadge extends StatelessWidget {
+  const _BranchBadge({required this.onChangeBranch});
+
+  final VoidCallback onChangeBranch;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: AppSession.instance,
+      builder: (context, _) {
+        final session = AppSession.instance;
+        return OutlinedButton.icon(
+          onPressed: session.canChangeBranch ? onChangeBranch : null,
+          icon: const Icon(Icons.storefront_outlined),
+          label: Text(
+            '${session.currentRestaurantName} · ${session.currentBranchName}',
+          ),
+        );
+      },
     );
   }
 }

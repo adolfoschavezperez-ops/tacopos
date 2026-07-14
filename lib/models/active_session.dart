@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/constants/app_constants.dart';
+
 class ActiveSession {
   const ActiveSession({
     required this.id,
@@ -23,6 +25,10 @@ class ActiveSession {
     this.archived = false,
     this.archivedAt,
     this.sessionType,
+    this.restaurantId = AppConstants.restaurantId,
+    this.restaurantName = AppConstants.restaurantName,
+    this.branchId = AppConstants.defaultBranchId,
+    this.branchName = AppConstants.defaultBranchName,
   });
 
   final String id;
@@ -46,6 +52,10 @@ class ActiveSession {
   final bool archived;
   final DateTime? archivedAt;
   final String? sessionType;
+  final String restaurantId;
+  final String restaurantName;
+  final String branchId;
+  final String branchName;
 
   bool get hasRecentConnection {
     final seen = lastSeenAt;
@@ -99,6 +109,13 @@ class ActiveSession {
       archived: data['archived'] as bool? ?? false,
       archivedAt: _toDate(data['archivedAt']),
       sessionType: data['sessionType'] as String?,
+      restaurantId:
+          data['restaurantId'] as String? ?? AppConstants.restaurantId,
+      restaurantName:
+          data['restaurantName'] as String? ?? AppConstants.restaurantName,
+      branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
+      branchName:
+          data['branchName'] as String? ?? AppConstants.defaultBranchName,
     );
   }
 

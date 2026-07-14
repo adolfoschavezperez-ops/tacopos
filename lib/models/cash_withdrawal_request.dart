@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../core/constants/app_constants.dart';
+
 class CashWithdrawalRequest {
   const CashWithdrawalRequest({
     required this.id,
@@ -15,6 +17,10 @@ class CashWithdrawalRequest {
     this.authorizedByEmployeeName,
     this.authorizedAt,
     this.adminNotes,
+    this.restaurantId = AppConstants.restaurantId,
+    this.restaurantName = AppConstants.restaurantName,
+    this.branchId = AppConstants.defaultBranchId,
+    this.branchName = AppConstants.defaultBranchName,
   });
 
   final String id;
@@ -30,6 +36,10 @@ class CashWithdrawalRequest {
   final String? authorizedByEmployeeName;
   final DateTime? authorizedAt;
   final String? adminNotes;
+  final String restaurantId;
+  final String restaurantName;
+  final String branchId;
+  final String branchName;
 
   bool get isPending => status == 'pending';
   bool get isApproved => status == 'approved';
@@ -54,6 +64,13 @@ class CashWithdrawalRequest {
       authorizedByEmployeeName: data['authorizedByEmployeeName'] as String?,
       authorizedAt: _toDate(data['authorizedAt']),
       adminNotes: data['adminNotes'] as String?,
+      restaurantId:
+          data['restaurantId'] as String? ?? AppConstants.restaurantId,
+      restaurantName:
+          data['restaurantName'] as String? ?? AppConstants.restaurantName,
+      branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
+      branchName:
+          data['branchName'] as String? ?? AppConstants.defaultBranchName,
     );
   }
 

@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/constants/app_constants.dart';
+import '../models/branch.dart';
 import '../models/employee.dart';
 
 class LivePresenceService {
@@ -14,6 +15,7 @@ class LivePresenceService {
   final _db = FirebaseFirestore.instance;
   Timer? _heartbeatTimer;
   Employee? _employee;
+  Branch _branch = Branch.defaultBranch;
   String? _sessionId;
   String? _deviceId;
   Map<String, Object?> _lastState = const {};
@@ -25,8 +27,9 @@ class LivePresenceService {
       .doc(AppConstants.restaurantId)
       .collection('activeSessions');
 
-  void start(Employee employee) {
+  void start(Employee employee, Branch branch) {
     _employee = employee;
+    _branch = branch;
     _deviceId ??= _buildDeviceId();
     _sessionId = '${employee.id}_${_platformKey()}';
     _heartbeatTimer?.cancel();
@@ -39,6 +42,11 @@ class LivePresenceService {
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 45), (_) {
       update(force: true);
     });
+  }
+
+  Future<void> updateBranch(Branch branch) {
+    _branch = branch;
+    return update(force: true);
   }
 
   Future<void> stop() async {
@@ -255,6 +263,10 @@ class LivePresenceService {
     await _sessionsRef.doc(sessionId).set({
       'employeeId': employee.id,
       'employeeName': employee.name,
+      'restaurantId': _branch.restaurantId,
+      'restaurantName': _branch.restaurantName,
+      'branchId': _branch.id,
+      'branchName': _branch.name,
       'deviceId': deviceId,
       'platform': platform,
       'sessionType': sessionType,
