@@ -451,7 +451,9 @@ class _LiveTableCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final currentOrder = order;
+    final currentOrder = order != null && isActiveOrderForLiveTables(order!)
+        ? order
+        : null;
     final color = currentOrder == null
         ? BrandColors.success
         : _statusColor(currentOrder.kitchenStatus);
@@ -504,13 +506,6 @@ void _debugLiveTableOrders(
   PosOrder? activeOrder,
 ) {
   if (!kDebugMode) return;
-  final tableName = table.name.toLowerCase().trim();
-  final shouldLog =
-      tableName == 'mesa 1' ||
-      tableName == 'mesa 2' ||
-      table.id.toLowerCase().contains('mesa_1') ||
-      table.id.toLowerCase().contains('mesa_2');
-  if (!shouldLog) return;
 
   final tableOrders =
       orders.where((order) => order.tableId.trim() == table.id.trim()).toList()
@@ -526,15 +521,13 @@ void _debugLiveTableOrders(
           return bDate.compareTo(aDate);
         });
   debugPrint(
-    '[TacoPOS][LiveTables] tableId=${table.id} tableName=${table.name} '
-    'orders=${tableOrders.length} activeOrder=${activeOrder?.id ?? '-'}',
+    "[LIVE_TABLE] mesa=${table.name} activeOrder=${activeOrder?.id ?? 'null'}",
   );
   for (final order in tableOrders) {
     debugPrint(
-      '[TacoPOS][LiveTables.order] tableId=${table.id} orderId=${order.id} '
+      '[LIVE_TABLE] mesa=${table.name} order=${order.id} '
       'status=${order.status} paymentStatus=${order.paymentStatus} '
-      'cancelledAt=${order.cancelledAt} paidAt=${order.paidAt} '
-      'pendingTotal=${order.pendingTotal} isActive=${isActiveOrder(order)}',
+      'active=${isActiveOrderForLiveTables(order)}',
     );
   }
 }

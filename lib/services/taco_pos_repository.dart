@@ -4523,17 +4523,40 @@ String _activeSessionGroupKey(ActiveSession session) {
   return session.id;
 }
 
-bool isActiveOrder(PosOrder order) {
-  final status = order.status.toLowerCase().trim();
-  final paymentStatus = order.paymentStatus.toLowerCase().trim();
+String normalizeStatus(Object? value) {
+  return value
+      .toString()
+      .toLowerCase()
+      .trim()
+      .replaceAll('á', 'a')
+      .replaceAll('é', 'e')
+      .replaceAll('í', 'i')
+      .replaceAll('ó', 'o')
+      .replaceAll('ú', 'u')
+      .replaceAll('ñ', 'n')
+      .replaceAll('Ã¡', 'a')
+      .replaceAll('Ã©', 'e')
+      .replaceAll('Ã­', 'i')
+      .replaceAll('Ã³', 'o')
+      .replaceAll('Ãº', 'u')
+      .replaceAll('Ã±', 'n');
+}
+
+bool isActiveOrderForLiveTables(PosOrder order) {
+  final status = normalizeStatus(order.status);
+  final kitchenStatus = normalizeStatus(order.kitchenStatus);
+  final paymentStatus = normalizeStatus(order.paymentStatus);
   const inactiveStatuses = {
     'cancelled',
     'canceled',
     'cancelada',
+    'cancelado',
     'paid',
     'pagada',
+    'pagado',
     'closed',
     'cerrada',
+    'cerrado',
     'voided',
   };
   const inactivePaymentStatuses = {
@@ -4545,10 +4568,13 @@ bool isActiveOrder(PosOrder order) {
     'cancelada',
   };
   if (inactiveStatuses.contains(status) ||
+      inactiveStatuses.contains(kitchenStatus) ||
       inactivePaymentStatuses.contains(paymentStatus)) {
     return false;
   }
-  if (order.cancelledAt != null) {
+  if (order.cancelledAt != null ||
+      order.canceledAt != null ||
+      order.closedAt != null) {
     return false;
   }
   if (order.paidAt != null && order.pendingTotal <= 0.01) {
@@ -4557,12 +4583,14 @@ bool isActiveOrder(PosOrder order) {
   return true;
 }
 
+bool isActiveOrder(PosOrder order) => isActiveOrderForLiveTables(order);
+
 PosOrder? getActiveOrderForTable(String tableId, List<PosOrder> orders) {
   final cleanTableId = tableId.trim();
   final activeOrders =
       orders
           .where((order) => order.tableId.trim() == cleanTableId)
-          .where(isActiveOrder)
+          .where(isActiveOrderForLiveTables)
           .toList()
         ..sort((a, b) {
           final aDate =

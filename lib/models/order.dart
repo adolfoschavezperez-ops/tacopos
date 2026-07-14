@@ -22,6 +22,8 @@ class PosOrder {
     this.sentToKitchenAt,
     this.paidAt,
     this.cancelledAt,
+    this.canceledAt,
+    this.closedAt,
     this.cancelledByEmployeeId,
     this.cancelledByEmployeeName,
     this.cancelReason,
@@ -47,6 +49,8 @@ class PosOrder {
   final DateTime? sentToKitchenAt;
   final DateTime? paidAt;
   final DateTime? cancelledAt;
+  final DateTime? canceledAt;
+  final DateTime? closedAt;
   final String? cancelledByEmployeeId;
   final String? cancelledByEmployeeName;
   final String? cancelReason;
@@ -75,6 +79,8 @@ class PosOrder {
       sentToKitchenAt: _toDate(data['sentToKitchenAt']),
       paidAt: _toDate(data['paidAt']),
       cancelledAt: _toDate(data['cancelledAt']),
+      canceledAt: _toDate(data['canceledAt']),
+      closedAt: _toDate(data['closedAt']),
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
       cancelReason: data['cancelReason'] as String?,
