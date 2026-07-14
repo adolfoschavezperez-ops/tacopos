@@ -21,20 +21,31 @@ class KitchenControlScreen extends StatefulWidget {
 class _KitchenControlScreenState extends State<KitchenControlScreen> {
   final _repository = TacoPosRepository();
   bool _opening = false;
+  String? _lastPresenceAction;
 
   @override
   void initState() {
     super.initState();
-    LivePresenceService.instance.update(
-      appMode: 'admin',
-      currentScreen: 'Control cocina',
-      currentAction: 'Controlando cocina',
+    _markControlPresence('Administrando cocina');
+  }
+
+  Future<void> _markControlPresence(String action) {
+    if (_lastPresenceAction == action) {
+      return Future.value();
+    }
+    _lastPresenceAction = action;
+    return LivePresenceService.instance.updateCurrentScreen(
+      appMode: 'kitchen_control',
+      currentScreen: 'Control de cocina',
+      currentAction: action,
+      force: true,
     );
   }
 
   Future<void> _openKitchen(Map<String, double> inputs) async {
     if (_opening) return;
     setState(() => _opening = true);
+    await _markControlPresence('Abriendo cocina');
     try {
       await _repository.openKitchenSessionWithInputs(
         todayInputByItemId: inputs,
@@ -45,7 +56,10 @@ class _KitchenControlScreenState extends State<KitchenControlScreen> {
       if (!mounted) return;
       _showMessage(_errorText(error));
     } finally {
-      if (mounted) setState(() => _opening = false);
+      if (mounted) {
+        setState(() => _opening = false);
+        await _markControlPresence('Administrando cocina');
+      }
     }
   }
 
@@ -56,6 +70,8 @@ class _KitchenControlScreenState extends State<KitchenControlScreen> {
         builder: (_) => CloseKitchenSessionScreen(session: session),
       ),
     );
+    if (!mounted) return;
+    await _markControlPresence('Administrando cocina');
   }
 
   void _showMessage(String message) {

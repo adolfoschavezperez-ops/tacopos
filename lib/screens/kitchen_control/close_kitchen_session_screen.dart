@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/kitchen_session.dart';
+import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -22,6 +23,17 @@ class _CloseKitchenSessionScreenState extends State<CloseKitchenSessionScreen> {
   final _repository = TacoPosRepository();
   final _notesController = TextEditingController();
   bool _closing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    LivePresenceService.instance.updateCurrentScreen(
+      appMode: 'kitchen_control',
+      currentScreen: 'Control de cocina',
+      currentAction: 'Cerrando cocina',
+      force: true,
+    );
+  }
 
   @override
   void dispose() {

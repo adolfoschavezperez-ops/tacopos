@@ -124,7 +124,7 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                           'Cocina',
                           'Cocina detalle',
                           'Caja',
-                          'Control cocina',
+                          'Control de cocina',
                           'Backoffice',
                           'Admin',
                         ],
@@ -1670,6 +1670,12 @@ String _liveScreenLabel(String value) {
       normalized == 'menu_principal') {
     return 'Inicio';
   }
+  if (normalized == 'control_cocina' ||
+      normalized == 'control_de_cocina' ||
+      normalized == 'kitchen_control' ||
+      normalized == 'kitchencontrolscreen') {
+    return 'Control de cocina';
+  }
   return value;
 }
 
@@ -1680,6 +1686,9 @@ String _liveActionLabel(String value) {
       normalized == 'seleccionando_modulo') {
     return 'En menú principal';
   }
+  if (normalized == 'controlando_cocina') {
+    return 'Administrando cocina';
+  }
   return value;
 }
 
@@ -1689,7 +1698,9 @@ String _liveAppModeLabel(String value) {
     'waiter' => 'Mesero',
     'cash' => 'Caja',
     'kitchen' => 'Cocina',
-    'kitchen_control' => 'Control cocina',
+    'kitchen_control' ||
+    'control_cocina' ||
+    'kitchencontrol' => 'Control de cocina',
     'admin' => 'Backoffice',
     _ => value,
   };
