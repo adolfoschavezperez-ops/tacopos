@@ -24,7 +24,7 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
   @override
   void initState() {
     super.initState();
-    _branchesFuture = _repository.getBranchesOnce(activeOnly: false);
+    _branchesFuture = _repository.getBranchesOnce(activeOnly: true);
   }
 
   Future<void> _runReset() async {

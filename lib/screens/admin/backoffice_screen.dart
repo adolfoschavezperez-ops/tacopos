@@ -1256,6 +1256,12 @@ class _SettingsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final employee = AppSession.instance.employee;
+    final canResetOperation =
+        employee?.hasAdminAccess == true ||
+        employee?.isSuperAdmin == true ||
+        employee?.canViewAdmin == true ||
+        employee?.id.toLowerCase().trim() == 'admin' ||
+        employee?.name.toLowerCase().trim() == 'admin';
     final links = <_SettingsLink>[
       if (employee?.hasAdminAccess == true)
         _SettingsLink(
@@ -1265,6 +1271,16 @@ class _SettingsSection extends StatelessWidget {
           () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const BranchCatalogScreen()),
+          ),
+        ),
+      if (canResetOperation)
+        _SettingsLink(
+          'Reiniciar operación',
+          'Limpia ventas, órdenes, pagos, caja, cocina, gastos y sesiones activas por sucursal.',
+          Icons.restart_alt_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const OperationResetScreen()),
           ),
         ),
       if (employee?.canManageProducts == true)
@@ -1330,16 +1346,6 @@ class _SettingsSection extends StatelessWidget {
           () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const KitchenAdminScreen()),
-          ),
-        ),
-      if (employee?.hasAdminAccess == true)
-        _SettingsLink(
-          'Reiniciar operación',
-          'Limpieza segura por sucursal con PIN.',
-          Icons.restart_alt_outlined,
-          () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const OperationResetScreen()),
           ),
         ),
     ];
