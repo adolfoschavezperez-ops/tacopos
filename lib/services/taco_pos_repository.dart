@@ -359,7 +359,7 @@ class TacoPosRepository {
   Future<List<Branch>> getAccessibleBranches(Employee employee) async {
     await ensureDefaultBranch();
     final branches = await getBranchesOnce(activeOnly: true);
-    if (employee.isSuperAdmin || employee.canViewAdmin) {
+    if (employee.hasAdminAccess) {
       return branches.isEmpty ? const [Branch.defaultBranch] : branches;
     }
     final allowedIds = employee.effectiveBranchAccess
@@ -404,7 +404,7 @@ class TacoPosRepository {
     String phone = '',
   }) async {
     _requireAdminPermission(
-      AppSession.instance.employee?.canViewAdmin == true,
+      _canManageBranches(),
       'No tienes permiso para administrar sucursales.',
     );
     final normalized = normalizeBranchName(name);
@@ -430,7 +430,7 @@ class TacoPosRepository {
 
   Future<void> toggleBranch(Branch branch) async {
     _requireAdminPermission(
-      AppSession.instance.employee?.canViewAdmin == true,
+      _canManageBranches(),
       'No tienes permiso para administrar sucursales.',
     );
     await _branchesRef.doc(branch.id).update({
@@ -481,7 +481,7 @@ class TacoPosRepository {
 
   Future<int> backfillDefaultBranch() async {
     _requireAdminPermission(
-      AppSession.instance.employee?.canViewAdmin == true,
+      _canManageBranches(),
       'No tienes permiso para preparar datos de sucursales.',
     );
     await ensureDefaultBranch();
@@ -4901,7 +4901,8 @@ class TacoPosRepository {
     String? defaultBranchId,
   }) async {
     _requireAdminPermission(
-      AppSession.instance.employee?.canManageEmployees == true,
+      AppSession.instance.employee?.canManageEmployees == true ||
+          _canManageBranches(),
       'No tienes permiso para administrar empleados.',
     );
     final docRef = employeeId == null
@@ -4979,7 +4980,8 @@ class TacoPosRepository {
 
   Future<void> toggleEmployee(Employee employee) async {
     _requireAdminPermission(
-      AppSession.instance.employee?.canManageEmployees == true,
+      AppSession.instance.employee?.canManageEmployees == true ||
+          _canManageBranches(),
       'No tienes permiso para administrar empleados.',
     );
     await _employeesRef.doc(employee.id).update({
@@ -4993,6 +4995,10 @@ class TacoPosRepository {
       return;
     }
     throw StateError(message);
+  }
+
+  bool _canManageBranches() {
+    return AppSession.instance.employee?.hasAdminAccess == true;
   }
 }
 

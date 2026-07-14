@@ -18,6 +18,7 @@ class BranchCatalogScreen extends StatefulWidget {
 
 class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
   final _repository = TacoPosRepository();
+  bool _preparing = false;
 
   Future<void> _showBranchDialog({Branch? branch}) async {
     final result = await showDialog<_BranchFormResult>(
@@ -42,9 +43,44 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
     }
   }
 
+  Future<void> _createAviacion() async {
+    try {
+      await _repository.ensureDefaultBranch();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Sucursal Aviacion creada.')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo crear Aviacion: $error')),
+      );
+    }
+  }
+
+  Future<void> _prepareData() async {
+    setState(() => _preparing = true);
+    try {
+      await _repository.backfillDefaultBranch();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Datos preparados para sucursales correctamente.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo preparar sucursales: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _preparing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (AppSession.instance.employee?.canViewAdmin != true) {
+    if (AppSession.instance.employee?.hasAdminAccess != true) {
       return const BrandedScaffold(
         title: 'Sucursales',
         body: EmptyState(
@@ -58,6 +94,11 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
     return BrandedScaffold(
       title: 'Sucursales',
       actions: [
+        IconButton(
+          tooltip: 'Preparar datos para sucursales',
+          onPressed: _preparing ? null : _prepareData,
+          icon: const Icon(Icons.account_tree_outlined),
+        ),
         IconButton(
           tooltip: 'Agregar sucursal',
           onPressed: () => _showBranchDialog(),
@@ -79,10 +120,11 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
           }
           final branches = snapshot.data ?? [];
           if (branches.isEmpty) {
-            return const EmptyState(
-              icon: Icons.storefront_outlined,
-              title: 'Sin sucursales',
-              message: 'Crea Aviacion para preparar la operacion actual.',
+            return _EmptyBranchesPanel(
+              preparing: _preparing,
+              onCreate: () => _showBranchDialog(),
+              onCreateAviacion: _createAviacion,
+              onPrepareData: _prepareData,
             );
           }
           return ListView(
@@ -91,6 +133,19 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
               const SectionHeader(
                 title: 'Catalogo de sucursales',
                 subtitle: 'Las apps leen esta lista desde Firestore.',
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
+                  onPressed: _preparing ? null : _prepareData,
+                  icon: const Icon(Icons.account_tree_outlined),
+                  label: Text(
+                    _preparing
+                        ? 'Preparando...'
+                        : 'Preparar datos para sucursales',
+                  ),
+                ),
               ),
               const SizedBox(height: 18),
               ...branches.map(
@@ -224,6 +279,58 @@ class _BranchTile extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _EmptyBranchesPanel extends StatelessWidget {
+  const _EmptyBranchesPanel({
+    required this.preparing,
+    required this.onCreate,
+    required this.onCreateAviacion,
+    required this.onPrepareData,
+  });
+
+  final bool preparing;
+  final VoidCallback onCreate;
+  final VoidCallback onCreateAviacion;
+  final VoidCallback onPrepareData;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(22),
+      children: [
+        const EmptyState(
+          icon: Icons.storefront_outlined,
+          title: 'No hay sucursales registradas.',
+          message: 'Crea una sucursal o prepara Aviacion para datos actuales.',
+        ),
+        const SizedBox(height: 18),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            FilledButton.icon(
+              onPressed: onCreate,
+              icon: const Icon(Icons.add_business_outlined),
+              label: const Text('Crear sucursal'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onCreateAviacion,
+              icon: const Icon(Icons.storefront_outlined),
+              label: const Text('Crear sucursal Aviacion'),
+            ),
+            OutlinedButton.icon(
+              onPressed: preparing ? null : onPrepareData,
+              icon: const Icon(Icons.account_tree_outlined),
+              label: Text(
+                preparing ? 'Preparando...' : 'Preparar datos para sucursales',
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

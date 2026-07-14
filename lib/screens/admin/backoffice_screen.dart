@@ -1256,7 +1256,7 @@ class _SettingsSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final employee = AppSession.instance.employee;
     final links = <_SettingsLink>[
-      if (employee?.canViewAdmin == true)
+      if (employee?.hasAdminAccess == true)
         _SettingsLink(
           'Sucursales',
           'Catalogo de sucursales y preparacion multi-sucursal.',
@@ -1310,7 +1310,8 @@ class _SettingsSection extends StatelessWidget {
             ),
           ),
         ),
-      if (employee?.canManageEmployees == true)
+      if (employee?.canManageEmployees == true ||
+          employee?.hasAdminAccess == true)
         _SettingsLink(
           'Empleados / permisos',
           'Usuarios operativos y permisos.',
@@ -1369,7 +1370,7 @@ class _SettingsSection extends StatelessWidget {
               )
               .toList(),
         ),
-        if (employee?.canViewAdmin == true) ...[
+        if (employee?.hasAdminAccess == true) ...[
           const SizedBox(height: 18),
           _BackfillBranchesCard(repository: repository),
         ],
@@ -1396,7 +1397,7 @@ class _BackofficeBranchSelector extends StatelessWidget {
         final visibleBranches = branches
             .where(
               (branch) =>
-                  AppSession.instance.employee?.canViewAdmin == true ||
+                  AppSession.instance.employee?.hasAdminAccess == true ||
                   allowedIds.contains(branch.id),
             )
             .toList();
@@ -1417,6 +1418,52 @@ class _BackofficeBranchSelector extends StatelessWidget {
           });
         }
 
+        if (visibleBranches.isEmpty) {
+          return GlassPanel(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.storefront_outlined,
+                  color: BrandColors.accentYellow,
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Sucursal: Sin sucursal',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    try {
+                      await repository.backfillDefaultBranch();
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Datos preparados para sucursales correctamente.',
+                          ),
+                        ),
+                      );
+                    } catch (error) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'No se pudo preparar sucursales: $error',
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text('Preparar datos para sucursales'),
+                ),
+              ],
+            ),
+          );
+        }
+
         return GlassPanel(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           child: Row(
@@ -1431,14 +1478,12 @@ class _BackofficeBranchSelector extends StatelessWidget {
                   child: DropdownButton<String>(
                     value: selected,
                     isExpanded: true,
-                    hint: const Text('Selecciona sucursal'),
+                    hint: const Text('Sucursal: Sin sucursal'),
                     items: visibleBranches
                         .map(
                           (branch) => DropdownMenuItem(
                             value: branch.id,
-                            child: Text(
-                              '${branch.restaurantName} · ${branch.name}',
-                            ),
+                            child: Text('Sucursal: ${branch.name}'),
                           ),
                         )
                         .toList(),
@@ -1477,11 +1522,11 @@ class _BackfillBranchesCardState extends State<_BackfillBranchesCard> {
   Future<void> _run() async {
     setState(() => _busy = true);
     try {
-      final count = await widget.repository.backfillDefaultBranch();
+      await widget.repository.backfillDefaultBranch();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Datos preparados. Documentos actualizados: $count'),
+        const SnackBar(
+          content: Text('Datos preparados para sucursales correctamente.'),
         ),
       );
     } catch (error) {
@@ -1886,22 +1931,22 @@ class _ItemsSummary {
 
 List<_NavItem> _navItems(Employee? employee) {
   return [
-    if (employee?.canViewAdmin == true)
+    if (employee?.hasAdminAccess == true)
       const _NavItem(
         _BackofficeSection.dashboard,
         Icons.dashboard_outlined,
         'Dashboard',
       ),
     if (employee?.canViewLiveOperations == true ||
-        employee?.canViewAdmin == true)
+        employee?.hasAdminAccess == true)
       const _NavItem(
         _BackofficeSection.live,
         Icons.monitor_heart_outlined,
         'Visor operativo',
       ),
-    if (employee?.canViewAdmin == true)
+    if (employee?.hasAdminAccess == true)
       const _NavItem(_BackofficeSection.sales, Icons.receipt_long, 'Ventas'),
-    if (employee?.canViewAdmin == true ||
+    if (employee?.hasAdminAccess == true ||
         employee?.canViewKitchenReports == true)
       const _NavItem(
         _BackofficeSection.reports,
@@ -1922,7 +1967,7 @@ List<_NavItem> _navItems(Employee? employee) {
         Icons.soup_kitchen_outlined,
         'Cocina',
       ),
-    if (employee?.canViewAdmin == true ||
+    if (employee?.hasAdminAccess == true ||
         employee?.canManageProducts == true ||
         employee?.canManageTables == true ||
         employee?.canManagePlatforms == true ||
@@ -1937,7 +1982,7 @@ List<_NavItem> _navItems(Employee? employee) {
 }
 
 bool _canUseBackoffice(Employee? employee) {
-  return employee?.canViewAdmin == true ||
+  return employee?.hasAdminAccess == true ||
       employee?.canManageCash == true ||
       employee?.canViewKitchenReports == true ||
       employee?.canAuthorizeCashWithdrawals == true ||

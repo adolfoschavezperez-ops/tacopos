@@ -29,7 +29,8 @@ class _EmployeeCatalogScreenState extends State<EmployeeCatalogScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (AppSession.instance.employee?.canManageEmployees != true) {
+    if (AppSession.instance.employee?.canManageEmployees != true &&
+        AppSession.instance.employee?.hasAdminAccess != true) {
       return const BrandedScaffold(
         title: 'Empleados',
         body: EmptyState(
@@ -372,11 +373,29 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                     );
                   }
                   if (branches.isEmpty) {
-                    return const Align(
+                    return Align(
                       alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Primero crea sucursales desde Configuracion > Sucursales.',
-                        style: TextStyle(color: BrandColors.textMuted),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Primero crea sucursales desde Configuracion > Sucursales.',
+                            style: TextStyle(color: BrandColors.textMuted),
+                          ),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            onPressed: _saving
+                                ? null
+                                : () async {
+                                    await widget.repository
+                                        .backfillDefaultBranch();
+                                    if (!mounted) return;
+                                    setState(() {});
+                                  },
+                            icon: const Icon(Icons.account_tree_outlined),
+                            label: const Text('Preparar datos para sucursales'),
+                          ),
+                        ],
                       ),
                     );
                   }

@@ -341,9 +341,7 @@ class _BranchBadge extends StatelessWidget {
         return OutlinedButton.icon(
           onPressed: session.canChangeBranch ? onChangeBranch : null,
           icon: const Icon(Icons.storefront_outlined),
-          label: Text(
-            '${session.currentRestaurantName} · ${session.currentBranchName}',
-          ),
+          label: Text('Sucursal: ${session.currentBranchName}'),
         );
       },
     );

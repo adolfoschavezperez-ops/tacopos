@@ -16,6 +16,7 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import '../cash/cash_session_screen.dart';
+import 'branch_catalog_screen.dart';
 import 'cash_admin_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'kitchen_admin_screen.dart';
@@ -101,7 +102,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final employee = AppSession.instance.employee;
 
     final canAccessBackoffice =
-        employee?.canViewAdmin == true ||
+        employee?.hasAdminAccess == true ||
         employee?.canManageCash == true ||
         employee?.canViewKitchenReports == true ||
         employee?.canAuthorizeCashWithdrawals == true;
@@ -158,7 +159,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             icon: const Icon(Icons.restaurant_menu),
           ),
         if (employee?.canManageCash == true ||
-            employee?.canViewAdmin == true ||
+            employee?.hasAdminAccess == true ||
             employee?.canAuthorizeCashWithdrawals == true)
           IconButton(
             tooltip: 'Caja Admin',
@@ -194,6 +195,17 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               );
             },
             icon: const Icon(Icons.badge_outlined),
+          ),
+        if (employee?.hasAdminAccess == true)
+          IconButton(
+            tooltip: 'Sucursales',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const BranchCatalogScreen()),
+              );
+            },
+            icon: const Icon(Icons.storefront_outlined),
           ),
       ],
       body: StreamBuilder<List<PosOrder>>(
@@ -516,7 +528,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         ),
                         const SizedBox(height: 20),
                       ],
-                      if (employee?.canViewAdmin == true ||
+                      if (employee?.hasAdminAccess == true ||
                           employee?.canManageCash == true ||
                           employee?.canAuthorizeCashWithdrawals == true) ...[
                         _AdminLinkPanel(
@@ -530,6 +542,24 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                               context,
                               MaterialPageRoute(
                                 builder: (_) => const CashAdminScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 20),
+                      ],
+                      if (employee?.hasAdminAccess == true) ...[
+                        _AdminLinkPanel(
+                          icon: Icons.storefront_outlined,
+                          iconColor: BrandColors.accentYellow,
+                          title: 'Sucursales',
+                          subtitle:
+                              'Crear, editar y preparar datos multi-sucursal.',
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const BranchCatalogScreen(),
                               ),
                             );
                           },

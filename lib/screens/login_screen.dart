@@ -278,7 +278,7 @@ bool _canAccessBackoffice(Employee employee) {
   // TODO: Antes de produccion real, migrar backoffice web a Firebase Auth
   // con email/password y reglas de Firestore mas estrictas. El PIN operativo
   // sirve para piloto, pero no debe ser la seguridad final de una app publica.
-  return employee.canViewAdmin ||
+  return employee.hasAdminAccess ||
       employee.canManageCash ||
       employee.canViewKitchenReports ||
       employee.canAuthorizeCashWithdrawals ||

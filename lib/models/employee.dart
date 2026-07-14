@@ -65,6 +65,12 @@ class Employee {
   final List<String> restaurantAccess;
   final List<EmployeeBranchAccess> branchAccess;
 
+  bool get hasAdminAccess =>
+      canViewAdmin ||
+      isSuperAdmin ||
+      id.toLowerCase().trim() == 'admin' ||
+      name.toLowerCase().trim() == 'admin';
+
   List<EmployeeBranchAccess> get effectiveBranchAccess {
     if (branchAccess.isNotEmpty) {
       return branchAccess.where((access) => access.active).toList();
