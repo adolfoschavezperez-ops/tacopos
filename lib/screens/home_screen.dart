@@ -166,15 +166,31 @@ class _HomeScreenState extends State<HomeScreen> {
           child: LayoutBuilder(
             builder: (context, constraints) {
               final wide = constraints.maxWidth >= 900;
+              final compact =
+                  constraints.maxWidth < 700 || constraints.maxHeight < 800;
 
               return SingleChildScrollView(
                 padding: EdgeInsets.symmetric(
-                  horizontal: wide ? 40 : 22,
-                  vertical: wide ? 34 : 22,
+                  horizontal: compact
+                      ? 14
+                      : wide
+                      ? 40
+                      : 22,
+                  vertical: compact
+                      ? 12
+                      : wide
+                      ? 34
+                      : 22,
                 ),
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
-                    minHeight: constraints.maxHeight - (wide ? 68 : 44),
+                    minHeight:
+                        constraints.maxHeight -
+                        (compact
+                            ? 24
+                            : wide
+                            ? 68
+                            : 44),
                   ),
                   child: Center(
                     child: ConstrainedBox(
@@ -187,6 +203,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   flex: 11,
                                   child: _HeroBlock(
                                     employee: employee,
+                                    compact: compact,
                                     onSignOut: _confirmSignOut,
                                     onChangeBranch: _showBranchSelector,
                                   ),
@@ -196,6 +213,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   flex: 9,
                                   child: _ModePanel(
                                     employee: employee,
+                                    compact: compact,
                                     onOpenMode: _openMode,
                                     onReviewWithdrawals:
                                         _openWithdrawalRequests,
@@ -208,12 +226,14 @@ class _HomeScreenState extends State<HomeScreen> {
                               children: [
                                 _HeroBlock(
                                   employee: employee,
+                                  compact: compact,
                                   onSignOut: _confirmSignOut,
                                   onChangeBranch: _showBranchSelector,
                                 ),
-                                const SizedBox(height: 24),
+                                SizedBox(height: compact ? 12 : 24),
                                 _ModePanel(
                                   employee: employee,
+                                  compact: compact,
                                   onOpenMode: _openMode,
                                   onReviewWithdrawals: _openWithdrawalRequests,
                                 ),
@@ -234,11 +254,13 @@ class _HomeScreenState extends State<HomeScreen> {
 class _HeroBlock extends StatelessWidget {
   const _HeroBlock({
     required this.employee,
+    required this.compact,
     required this.onSignOut,
     required this.onChangeBranch,
   });
 
   final Employee? employee;
+  final bool compact;
   final VoidCallback onSignOut;
   final VoidCallback onChangeBranch;
 
@@ -249,12 +271,12 @@ class _HeroBlock extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         GlassPanel(
-          padding: const EdgeInsets.all(14),
-          borderRadius: 28,
+          padding: EdgeInsets.all(compact ? 8 : 14),
+          borderRadius: compact ? 20 : 28,
           glowColor: BrandColors.accentGlow,
           child: SizedBox(
-            width: 150,
-            height: 150,
+            width: compact ? 82 : 150,
+            height: compact ? 82 : 150,
             child: Image.asset(
               AppConstants.logoAsset,
               fit: BoxFit.contain,
@@ -266,43 +288,43 @@ class _HeroBlock extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 34),
+        SizedBox(height: compact ? 14 : 34),
         Text(
           AppConstants.brandName,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-            fontSize: 54,
+            fontSize: compact ? 34 : 54,
             fontWeight: FontWeight.w800,
           ),
         ),
-        const SizedBox(height: 10),
-        const Text(
+        SizedBox(height: compact ? 4 : 10),
+        Text(
           'TacoPOS',
           style: TextStyle(
             color: BrandColors.accentOrange,
-            fontSize: 20,
+            fontSize: compact ? 15 : 20,
             fontWeight: FontWeight.w700,
           ),
         ),
-        const SizedBox(height: 18),
+        SizedBox(height: compact ? 8 : 18),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 460),
-          child: const Text(
+          child: Text(
             'Mesas, comandas y cocina en tiempo real.',
             style: TextStyle(
               color: BrandColors.textSecondary,
-              fontSize: 20,
+              fontSize: compact ? 15 : 20,
               height: 1.28,
               fontWeight: FontWeight.w500,
             ),
           ),
         ),
-        const SizedBox(height: 18),
+        SizedBox(height: compact ? 10 : 18),
         const _HomeOperationBadge(),
-        const SizedBox(height: 10),
+        SizedBox(height: compact ? 6 : 10),
         _BranchBadge(onChangeBranch: onChangeBranch),
-        const SizedBox(height: 10),
+        SizedBox(height: compact ? 6 : 10),
         OutlinedButton.icon(
           onPressed: onSignOut,
           icon: const Icon(Icons.logout),
@@ -391,31 +413,38 @@ class _HomeOperationBadge extends StatelessWidget {
 class _ModePanel extends StatelessWidget {
   const _ModePanel({
     required this.employee,
+    required this.compact,
     required this.onOpenMode,
     required this.onReviewWithdrawals,
   });
 
   final Employee? employee;
+  final bool compact;
   final ValueChanged<AppMode> onOpenMode;
   final VoidCallback onReviewWithdrawals;
 
   @override
   Widget build(BuildContext context) {
     return GlassPanel(
-      padding: const EdgeInsets.all(20),
-      borderRadius: 28,
+      padding: EdgeInsets.all(compact ? 12 : 20),
+      borderRadius: compact ? 20 : 28,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          const SectionHeader(
-            title: 'Accesos',
-            subtitle: 'Elige el flujo de trabajo.',
-          ),
-          const SizedBox(height: 18),
+          if (!compact) ...[
+            const SectionHeader(
+              title: 'Accesos',
+              subtitle: 'Elige el flujo de trabajo.',
+            ),
+            const SizedBox(height: 18),
+          ],
           if (employee?.canAuthorizeCashWithdrawals == true) ...[
-            _PendingWithdrawalsAlert(onReview: onReviewWithdrawals),
-            const SizedBox(height: 14),
+            _PendingWithdrawalsAlert(
+              compact: compact,
+              onReview: onReviewWithdrawals,
+            ),
+            SizedBox(height: compact ? 8 : 14),
           ],
           if (employee?.canTakeOrders == true ||
               employee?.canCharge == true) ...[
@@ -423,9 +452,10 @@ class _ModePanel extends StatelessWidget {
               icon: Icons.table_restaurant_outlined,
               title: 'Mesero / Caja',
               subtitle: 'Mesas, personas y cobro simple',
+              compact: compact,
               onTap: () => onOpenMode(AppMode.waiterCashier),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: compact ? 8 : 12),
           ],
           if (employee?.canCharge == true ||
               employee?.canManageCash == true) ...[
@@ -433,9 +463,10 @@ class _ModePanel extends StatelessWidget {
               icon: Icons.point_of_sale_outlined,
               title: 'Caja / Corte',
               subtitle: 'Abrir dia, revisar totales y cerrar caja',
+              compact: compact,
               onTap: () => onOpenMode(AppMode.cash),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: compact ? 8 : 12),
           ],
           if (employee?.canViewKitchen == true ||
               employee?.canOpenKitchen == true ||
@@ -444,24 +475,27 @@ class _ModePanel extends StatelessWidget {
               icon: Icons.soup_kitchen_outlined,
               title: 'Control de cocina',
               subtitle: 'Apertura, entradas y cierre diario',
+              compact: compact,
               onTap: () => onOpenMode(AppMode.kitchenControl),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: compact ? 8 : 12),
           ],
           if (employee?.canViewKitchen == true) ...[
             _ModeTile(
               icon: Icons.room_service_outlined,
               title: 'Cocina',
               subtitle: 'Comandas enviadas en tiempo real',
+              compact: compact,
               onTap: () => onOpenMode(AppMode.kitchen),
             ),
-            const SizedBox(height: 12),
+            SizedBox(height: compact ? 8 : 12),
           ],
           if (employee?.canViewAdmin == true)
             _ModeTile(
               icon: Icons.insights_outlined,
               title: 'Socio / Admin',
               subtitle: 'Metricas y catalogo de productos',
+              compact: compact,
               onTap: () => onOpenMode(AppMode.admin),
             ),
           if (employee != null &&
@@ -485,8 +519,12 @@ class _ModePanel extends StatelessWidget {
 }
 
 class _PendingWithdrawalsAlert extends StatelessWidget {
-  const _PendingWithdrawalsAlert({required this.onReview});
+  const _PendingWithdrawalsAlert({
+    required this.compact,
+    required this.onReview,
+  });
 
+  final bool compact;
   final VoidCallback onReview;
 
   @override
@@ -511,13 +549,13 @@ class _PendingWithdrawalsAlert extends StatelessWidget {
 
         final pendingCount = snapshot.data?.length ?? 0;
         if (pendingCount == 0) {
-          return const GlassCard(
-            padding: EdgeInsets.all(16),
+          return GlassCard(
+            padding: EdgeInsets.all(compact ? 10 : 16),
             child: Row(
               children: [
-                Icon(Icons.verified_outlined, color: BrandColors.success),
-                SizedBox(width: 12),
-                Expanded(
+                const Icon(Icons.verified_outlined, color: BrandColors.success),
+                SizedBox(width: compact ? 8 : 12),
+                const Expanded(
                   child: Text(
                     'Sin solicitudes pendientes',
                     style: TextStyle(
@@ -533,7 +571,7 @@ class _PendingWithdrawalsAlert extends StatelessWidget {
 
         return GlassCard(
           accent: BrandColors.accentYellow,
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(compact ? 10 : 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -578,31 +616,37 @@ class _ModeTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.subtitle,
+    required this.compact,
     required this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
+  final bool compact;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return GlassCard(
       onTap: onTap,
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(compact ? 10 : 16),
       child: Row(
         children: [
           Container(
-            width: 48,
-            height: 48,
+            width: compact ? 38 : 48,
+            height: compact ? 38 : 48,
             decoration: BoxDecoration(
               color: BrandColors.glassHighlight,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(compact ? 12 : 16),
             ),
-            child: Icon(icon, color: BrandColors.accentYellow, size: 26),
+            child: Icon(
+              icon,
+              color: BrandColors.accentYellow,
+              size: compact ? 21 : 26,
+            ),
           ),
-          const SizedBox(width: 14),
+          SizedBox(width: compact ? 10 : 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -611,29 +655,29 @@ class _ModeTile extends StatelessWidget {
                   title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 17,
+                  style: TextStyle(
+                    fontSize: compact ? 15 : 17,
                     fontWeight: FontWeight.w800,
                     color: BrandColors.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 4),
+                SizedBox(height: compact ? 2 : 4),
                 Text(
                   subtitle,
-                  maxLines: 2,
+                  maxLines: compact ? 1 : 2,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: BrandColors.textMuted,
-                    fontSize: 13,
+                    fontSize: compact ? 11 : 13,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 10),
-          const Icon(
+          SizedBox(width: compact ? 6 : 10),
+          Icon(
             Icons.arrow_forward_ios_rounded,
-            size: 16,
+            size: compact ? 13 : 16,
             color: BrandColors.textMuted,
           ),
         ],

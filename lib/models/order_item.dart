@@ -133,6 +133,7 @@ class OrderItem {
     };
     return statuses.any(cancelledStatuses.contains) ||
         statuses.contains('accepted') ||
+        cancelAcceptedAt != null ||
         cancelledAt != null;
   }
 
@@ -259,6 +260,31 @@ String getItemCancelReason(OrderItem item) {
     }
   }
   return '';
+}
+
+bool isActiveKitchenItem(OrderItem item) {
+  if (item.isCancelled ||
+      item.cancelAcceptedAt != null ||
+      item.cancelledAt != null) {
+    return false;
+  }
+
+  return item.sendToKitchen &&
+      const {
+        'pending',
+        'sent',
+        'cooking',
+      }.contains(_normalizeItemStatus(item.kitchenStatus));
+}
+
+bool isKitchenQueueItem(OrderItem item) {
+  if (item.isCancelled) {
+    return false;
+  }
+  final kitchenStatus = _normalizeItemStatus(item.kitchenStatus);
+  return item.sendToKitchen &&
+      ({'sent', 'cooking'}.contains(kitchenStatus) ||
+          item.hasCancellationRequested);
 }
 
 String _normalizeItemStatus(String value) {

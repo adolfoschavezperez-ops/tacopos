@@ -595,15 +595,17 @@ class _KitchenLiveCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final activeItems = bundle.items
-        .where((item) => !item.isCancelled)
-        .toList();
+    final activeItems = bundle.items.where(isKitchenQueueItem).toList();
     final pendingIds = activeItems
-        .where((item) => item.kitchenStatus == 'sent')
+        .where((item) => normalizeStatus(item.kitchenStatus) == 'sent')
         .map((item) => item.id)
         .toList();
     final cookingIds = activeItems
-        .where((item) => ['sent', 'cooking'].contains(item.kitchenStatus))
+        .where(
+          (item) =>
+              isActiveKitchenItem(item) &&
+              ['sent', 'cooking'].contains(normalizeStatus(item.kitchenStatus)),
+        )
         .map((item) => item.id)
         .toList();
     return GlassCard(

@@ -1337,24 +1337,12 @@ class TacoPosRepository {
   }
 
   List<OrderItem> _activeKitchenItems(List<OrderItem> items) {
-    return items
-        .where(
-          (item) =>
-              item.sendToKitchen &&
-              [
-                'sent',
-                'cooking',
-                'cancel_requested',
-              ].contains(item.kitchenStatus) &&
-              !item.isCancelled,
-        )
-        .toList()
-      ..sort((a, b) {
-        final personCompare = a.personNumber.compareTo(b.personNumber);
-        return personCompare != 0
-            ? personCompare
-            : a.productName.compareTo(b.productName);
-      });
+    return items.where(isKitchenQueueItem).toList()..sort((a, b) {
+      final personCompare = a.personNumber.compareTo(b.personNumber);
+      return personCompare != 0
+          ? personCompare
+          : a.productName.compareTo(b.productName);
+    });
   }
 
   Stream<List<Payment>> watchPayments({
@@ -2525,7 +2513,7 @@ class TacoPosRepository {
           .collection('items')
           .get();
       for (final item in itemsSnapshot.docs.map(OrderItem.fromDoc)) {
-        if (_isPendingKitchenStatus(item.kitchenStatus)) {
+        if (isActiveKitchenItem(item)) {
           pendingKitchenItemCount += item.qty;
         }
       }
@@ -3044,10 +3032,6 @@ class TacoPosRepository {
     return ['paid', 'cancelled', 'voided'].contains(status);
   }
 
-  bool _isPendingKitchenStatus(String status) {
-    return ['pending', 'sent', 'cooking', 'cancel_requested'].contains(status);
-  }
-
   Future<bool> _kitchenCloseIsComplete(String kitchenSessionId) async {
     final itemsSnapshot = await _kitchenSessionsRef
         .doc(kitchenSessionId)
@@ -3503,6 +3487,7 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
     await recalculateOrderTotal(orderId);
+    await _syncOrderKitchenStateAfterItemChange(orderId);
     await _restaurantRef.collection('activityLog').add({
       'type': 'order_item_cancelled',
       ..._currentBranchFields,
@@ -3576,18 +3561,20 @@ class TacoPosRepository {
     }
     if (accepted) {
       await _ensureCancellationKeepsPaymentsValid(orderId, item);
+      final now = FieldValue.serverTimestamp();
       await itemRef.update({
         'status': 'cancelled',
         'kitchenStatus': 'cancelled',
         'paymentStatus': 'cancelled',
         'cancelStatus': 'accepted',
-        'cancelAcceptedAt': FieldValue.serverTimestamp(),
-        'cancelledAt': FieldValue.serverTimestamp(),
+        'cancelAcceptedAt': now,
+        'cancelledAt': item.cancelledAt ?? now,
         ..._employeeAuditFields(prefix: 'cancelAcceptedBy'),
         ..._employeeAuditFields(prefix: 'cancelledBy'),
-        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedAt': now,
       });
       await recalculateOrderTotal(orderId);
+      await _syncOrderKitchenStateAfterItemChange(orderId);
       return;
     }
 
@@ -3603,6 +3590,113 @@ class TacoPosRepository {
     await _ordersRef.doc(orderId).update({
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  Future<void> _syncOrderKitchenStateAfterItemChange(String orderId) async {
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) {
+      return;
+    }
+    final order = PosOrder.fromDoc(orderDoc);
+    if (_isFinalOrderStatus(order.status)) {
+      return;
+    }
+
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    final activeBillableItems = items.where(isActiveOrderItem).toList();
+    final activeKitchenItems = items.where(isActiveKitchenItem).toList();
+    final activeReadyKitchenItems = activeBillableItems.where(
+      (item) =>
+          item.sendToKitchen && normalizeStatus(item.kitchenStatus) == 'ready',
+    );
+
+    final nextKitchenStatus = _kitchenStatusForActiveItems(
+      activeKitchenItems,
+      hasReadyItems: activeReadyKitchenItems.isNotEmpty,
+    );
+    final nextOrderStatus = _orderStatusForKitchenState(
+      nextKitchenStatus,
+      hasActiveBillableItems: activeBillableItems.isNotEmpty,
+    );
+
+    final batch = _db.batch();
+    batch.update(orderRef, {
+      'status': nextOrderStatus,
+      'kitchenStatus': nextKitchenStatus,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (order.orderType != 'takeout') {
+      batch.set(_tablesRef.doc(order.tableId), {
+        'status': _tableStatusForKitchenState(
+          nextKitchenStatus,
+          hasActiveBillableItems: activeBillableItems.isNotEmpty,
+        ),
+        'currentOrderId': order.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+
+    await batch.commit();
+  }
+
+  String _kitchenStatusForActiveItems(
+    Iterable<OrderItem> activeKitchenItems, {
+    required bool hasReadyItems,
+  }) {
+    final statuses = activeKitchenItems
+        .map((item) => normalizeStatus(item.kitchenStatus))
+        .toSet();
+    if (statuses.contains('cooking')) {
+      return 'cooking';
+    }
+    if (statuses.contains('sent')) {
+      return 'sent';
+    }
+    if (statuses.contains('pending')) {
+      return 'pending';
+    }
+    return hasReadyItems ? 'ready' : 'not_required';
+  }
+
+  String _orderStatusForKitchenState(
+    String kitchenStatus, {
+    required bool hasActiveBillableItems,
+  }) {
+    if (!hasActiveBillableItems) {
+      return 'open';
+    }
+    if (kitchenStatus == 'ready') {
+      return 'ready';
+    }
+    if (kitchenStatus == 'cooking') {
+      return 'cooking';
+    }
+    if (kitchenStatus == 'sent' || kitchenStatus == 'pending') {
+      return 'sent';
+    }
+    return 'open';
+  }
+
+  String _tableStatusForKitchenState(
+    String kitchenStatus, {
+    required bool hasActiveBillableItems,
+  }) {
+    if (!hasActiveBillableItems) {
+      return 'occupied';
+    }
+    if (kitchenStatus == 'ready') {
+      return 'ready';
+    }
+    if (kitchenStatus == 'cooking') {
+      return 'cooking';
+    }
+    if (kitchenStatus == 'sent' || kitchenStatus == 'pending') {
+      return 'sent';
+    }
+    return 'occupied';
   }
 
   Future<void> cancelOrder({
@@ -3775,7 +3869,8 @@ class TacoPosRepository {
           item.paymentStatus == 'pending' &&
           (item.kitchenStatus == 'pending' ||
               item.kitchenStatus == 'not_required');
-      if (item.sendToKitchen && item.kitchenStatus == 'pending') {
+      if (isActiveKitchenItem(item) &&
+          normalizeStatus(item.kitchenStatus) == 'pending') {
         sentCount += 1;
         batch.update(doc.reference, {
           'kitchenStatus': 'sent',
@@ -3833,6 +3928,7 @@ class TacoPosRepository {
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
       if (item.sendToKitchen &&
+          !item.isCancelled &&
           ['sent', 'cooking'].contains(item.kitchenStatus)) {
         changed += 1;
         batch.update(doc.reference, {
@@ -3905,6 +4001,7 @@ class TacoPosRepository {
       final item = OrderItem.fromDoc(doc);
       if (targetIds.contains(item.id) &&
           item.sendToKitchen &&
+          !item.isCancelled &&
           ['sent', 'cooking'].contains(item.kitchenStatus)) {
         changedIds.add(item.id);
         batch.update(doc.reference, {
@@ -3969,12 +4066,14 @@ class TacoPosRepository {
     var hasCooking = false;
     var hasReady = false;
 
-    for (final item in allItems.where((item) => item.sendToKitchen)) {
+    for (final item in allItems.where(
+      (item) => item.sendToKitchen && isActiveOrderItem(item),
+    )) {
       final status = changedIds.contains(item.id)
           ? changedStatus
-          : item.kitchenStatus;
+          : normalizeStatus(item.kitchenStatus);
 
-      switch (status) {
+      switch (normalizeStatus(status)) {
         case 'cooking':
           hasCooking = true;
         case 'sent':
@@ -4674,11 +4773,7 @@ class TacoPosRepository {
         .get();
     final hasKitchenPending = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
-        .any(
-          (item) =>
-              item.sendToKitchen &&
-              ['pending', 'sent', 'cooking'].contains(item.kitchenStatus),
-        );
+        .any(isActiveKitchenItem);
 
     if (hasKitchenPending) {
       throw StateError(
@@ -5178,6 +5273,7 @@ bool isActiveOrderItem(OrderItem item) {
       !inactiveStatuses.contains(paymentStatus) &&
       !inactiveStatuses.contains(cancelStatus) &&
       cancelStatus != 'accepted' &&
+      item.cancelAcceptedAt == null &&
       item.cancelledAt == null;
 }
 

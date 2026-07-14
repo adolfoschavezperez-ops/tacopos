@@ -1259,7 +1259,7 @@ class _SettingsSection extends StatelessWidget {
       if (employee?.hasAdminAccess == true)
         _SettingsLink(
           'Sucursales',
-          'Catalogo de sucursales y preparacion multi-sucursal.',
+          'Catalogo de sucursales del restaurante.',
           Icons.storefront_outlined,
           () => Navigator.push(
             context,

@@ -30,6 +30,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
   late final Stream<List<OrderItem>> _itemsStream;
   int _personIndex = 0;
   bool _busy = false;
+  bool _returningToList = false;
 
   @override
   void initState() {
@@ -92,6 +93,21 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     });
   }
 
+  void _returnToKitchenList() {
+    if (_returningToList || !mounted) {
+      return;
+    }
+    _returningToList = true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Comanda sin articulos pendientes.')),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        Navigator.pop(context);
+      }
+    });
+  }
+
   Future<void> _run(
     Future<void> Function() action, {
     bool popAfter = false,
@@ -142,13 +158,17 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
 
               return StreamBuilder<List<OrderItem>>(
                 stream: _itemsStream,
-                initialData: const [],
                 builder: (context, itemSnapshot) {
                   if (itemSnapshot.hasError) {
                     return EmptyState(
                       icon: Icons.error_outline,
                       title: 'No se pudieron cargar articulos de cocina',
                       message: '${itemSnapshot.error}',
+                    );
+                  }
+                  if (itemSnapshot.connectionState == ConnectionState.waiting) {
+                    return const LoadingPanel(
+                      message: 'Cargando articulos de cocina...',
                     );
                   }
 
@@ -163,8 +183,13 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                   }
 
                   if (people.isEmpty) {
-                    return const Center(
-                      child: Text('Esta comanda no tiene items de cocina.'),
+                    _returnToKitchenList();
+                    return _NoActiveKitchenItems(
+                      onBack: () {
+                        if (mounted) {
+                          Navigator.pop(context);
+                        }
+                      },
                     );
                   }
 
@@ -541,6 +566,43 @@ String _personDisplayName(int personNumber, List<OrderItem> items) {
     }
   }
   return 'Persona $personNumber';
+}
+
+class _NoActiveKitchenItems extends StatelessWidget {
+  const _NoActiveKitchenItems({required this.onBack});
+
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: GlassPanel(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.check_circle_outline,
+              color: BrandColors.success,
+              size: 42,
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Comanda sin articulos pendientes.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: onBack,
+              icon: const Icon(Icons.arrow_back),
+              label: const Text('Volver a comandas'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _PreparationTimer extends StatelessWidget {

@@ -1571,12 +1571,21 @@ class _TopOrderActions extends StatelessWidget {
     final compact = size.width < 650 || size.height < 750;
     final currentOrder = order;
     final pendingKitchenCount = items
-        .where((item) => item.sendToKitchen && item.kitchenStatus == 'pending')
+        .where(
+          (item) =>
+              isActiveKitchenItem(item) &&
+              normalizeStatus(item.kitchenStatus) == 'pending',
+        )
         .length;
     final hadKitchenSend = items.any(
       (item) =>
+          !item.isCancelled &&
           item.sendToKitchen &&
-          ['sent', 'cooking', 'ready'].contains(item.kitchenStatus),
+          [
+            'sent',
+            'cooking',
+            'ready',
+          ].contains(normalizeStatus(item.kitchenStatus)),
     );
     final canSend = canTakeOrders && !busy && pendingKitchenCount > 0;
     final sendLabel = pendingKitchenCount == 0
@@ -1584,11 +1593,7 @@ class _TopOrderActions extends StatelessWidget {
         : hadKitchenSend
         ? 'Enviar extras'
         : 'Enviar cocina';
-    final hasKitchenPending = items.any(
-      (item) =>
-          item.sendToKitchen &&
-          ['pending', 'sent', 'cooking'].contains(item.kitchenStatus),
-    );
+    final hasKitchenPending = items.any(isActiveKitchenItem);
     final canCloseEmpty =
         currentOrder != null &&
         currentOrder.status == 'open' &&
@@ -1612,7 +1617,11 @@ class _TopOrderActions extends StatelessWidget {
         currentOrder.paymentStatus != 'paid' &&
         currentOrder.status != 'paid' &&
         items.isNotEmpty &&
-        !items.any((item) => item.kitchenStatus == 'ready');
+        !items.any(
+          (item) =>
+              isActiveOrderItem(item) &&
+              normalizeStatus(item.kitchenStatus) == 'ready',
+        );
 
     if (compact) {
       return Padding(
