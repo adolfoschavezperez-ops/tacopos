@@ -2172,8 +2172,13 @@ class TacoPosRepository {
     await ensureDefaultKitchenStockItems();
     await ensureKitchenStockLinksForProducts();
     final openCash = await getOpenCashSession();
-    final businessDate =
-        openCash?.businessDate ?? _businessDateFor(DateTime.now());
+    final currentBusinessDate = _currentBusinessDate();
+    final businessDate = openCash?.businessDate ?? currentBusinessDate;
+    if (businessDate != currentBusinessDate) {
+      throw StateError(
+        'No puedes abrir cocina con una fecha diferente a la fecha actual.',
+      );
+    }
     final existingSessions = await _kitchenSessionsForBusinessDate(
       businessDate,
     );
@@ -2184,7 +2189,7 @@ class TacoPosRepository {
     }
     if (existingSessions.any((session) => session.isClosed)) {
       throw StateError(
-        'La cocina ya fue cerrada para esta fecha. Abre una nueva caja con otra fecha de operacion.',
+        'La cocina de esta sucursal ya fue cerrada hoy. No puedes abrirla nuevamente.',
       );
     }
     final previousRemaining = await _previousKitchenRemainingByItem(
@@ -2209,8 +2214,13 @@ class TacoPosRepository {
     await ensureDefaultKitchenStockItems();
     await ensureKitchenStockLinksForProducts();
     final openCash = await getOpenCashSession();
-    final businessDate =
-        openCash?.businessDate ?? _businessDateFor(DateTime.now());
+    final currentBusinessDate = _currentBusinessDate();
+    final businessDate = openCash?.businessDate ?? currentBusinessDate;
+    if (businessDate != currentBusinessDate) {
+      throw StateError(
+        'No puedes abrir cocina con una fecha diferente a la fecha actual.',
+      );
+    }
     final existingSessions = await _kitchenSessionsForBusinessDate(
       businessDate,
     );
@@ -2221,7 +2231,7 @@ class TacoPosRepository {
     }
     if (existingSessions.any((session) => session.isClosed)) {
       throw StateError(
-        'La cocina ya fue cerrada para esta fecha. Abre una nueva caja con otra fecha de operacion.',
+        'La cocina de esta sucursal ya fue cerrada hoy. No puedes abrirla nuevamente.',
       );
     }
 
@@ -2459,8 +2469,14 @@ class TacoPosRepository {
     required double openingCashAmount,
   }) async {
     _requireCashOpenPermission();
-    if (businessDate.trim().isEmpty) {
+    final cleanBusinessDate = businessDate.trim();
+    if (cleanBusinessDate.isEmpty) {
       throw ArgumentError('Selecciona la fecha operativa.');
+    }
+    if (cleanBusinessDate != _currentBusinessDate()) {
+      throw StateError(
+        'No puedes abrir caja con una fecha diferente a la fecha actual.',
+      );
     }
     if (openingCashAmount < 0) {
       throw ArgumentError('El fondo inicial no puede ser negativo.');
@@ -2468,7 +2484,7 @@ class TacoPosRepository {
 
     final openSession = await getOpenCashSession();
     if (openSession != null) {
-      if (openSession.businessDate == businessDate) {
+      if (openSession.businessDate == cleanBusinessDate) {
         return;
       }
       throw StateError(
@@ -2477,24 +2493,26 @@ class TacoPosRepository {
     }
 
     final existingForDate = await _cashSessionsRef
-        .where('businessDate', isEqualTo: businessDate)
+        .where('businessDate', isEqualTo: cleanBusinessDate)
         .get();
     final hasClosed = existingForDate.docs
         .map(CashSession.fromDoc)
         .any(
           (session) =>
-              session.status == 'closed' &&
+              (session.status == 'closed' || session.closedAt != null) &&
               _matchesCurrentBranch(session.branchId),
         );
     if (hasClosed) {
-      throw StateError('La fecha $businessDate ya tiene corte cerrado.');
+      throw StateError(
+        'La caja de esta sucursal ya fue cerrada hoy. No puedes abrirla nuevamente.',
+      );
     }
 
     final employee = AppSession.instance.employee;
     final docRef = _cashSessionsRef.doc();
     await docRef.set({
       'id': docRef.id,
-      'businessDate': businessDate,
+      'businessDate': cleanBusinessDate,
       ..._currentBranchFields,
       'status': 'open',
       'openingCashAmount': openingCashAmount,
@@ -3137,6 +3155,10 @@ class TacoPosRepository {
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
     return '${date.year}-$month-$day';
+  }
+
+  String _currentBusinessDate() {
+    return _businessDateFor(DateTime.now());
   }
 
   bool _dateInRange(DateTime? date, DateTime startDate, DateTime endDate) {
@@ -3988,6 +4010,7 @@ class TacoPosRepository {
         .collection('kitchenBatches')
         .doc()
         .id;
+    final batchCreatedAt = Timestamp.now();
     var sentCount = 0;
 
     for (final doc in itemsSnapshot.docs) {
@@ -4003,13 +4026,17 @@ class TacoPosRepository {
         batch.update(doc.reference, {
           'kitchenStatus': 'sent',
           'kitchenBatchId': kitchenBatchId,
-          'sentToKitchenAt': FieldValue.serverTimestamp(),
+          'kitchenBatchCreatedAt': batchCreatedAt,
+          'batchCreatedAt': batchCreatedAt,
+          'sentToKitchenAt': batchCreatedAt,
           'updatedAt': FieldValue.serverTimestamp(),
         });
       } else if (shouldAttachToBatch) {
         batch.update(doc.reference, {
           'kitchenBatchId': kitchenBatchId,
-          'sentToKitchenAt': FieldValue.serverTimestamp(),
+          'kitchenBatchCreatedAt': batchCreatedAt,
+          'batchCreatedAt': batchCreatedAt,
+          'sentToKitchenAt': batchCreatedAt,
           'updatedAt': FieldValue.serverTimestamp(),
         });
       }
@@ -4026,7 +4053,7 @@ class TacoPosRepository {
     batch.update(_ordersRef.doc(orderId), {
       'status': 'sent',
       'kitchenStatus': 'sent',
-      'sentToKitchenAt': FieldValue.serverTimestamp(),
+      'sentToKitchenAt': batchCreatedAt,
       'updatedAt': FieldValue.serverTimestamp(),
     });
 

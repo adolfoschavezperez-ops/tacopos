@@ -8,6 +8,7 @@ import '../../models/product_category.dart';
 import '../../models/product_recipe_item.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../utils/category_utils.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -242,8 +243,10 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
       );
     } catch (error) {
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo abrir el editor: $error')),
+      showAppSnackBar(
+        context,
+        'No se pudo abrir el editor: $error',
+        type: AppSnackBarType.error,
       );
     }
   }
@@ -256,8 +259,10 @@ class _ProductCatalogScreenState extends State<ProductCatalogScreen> {
   Future<void> _normalizeCategories(TacoPosRepository repository) async {
     await repository.normalizeProductCategories();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Categorias normalizadas correctamente')),
+    showAppSnackBar(
+      context,
+      'Categorias normalizadas correctamente',
+      type: AppSnackBarType.success,
     );
   }
 }
@@ -1251,7 +1256,7 @@ class _ProductDialogState extends State<_ProductDialog> {
   }
 
   void _message(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    showAppSnackBar(context, text);
   }
 
   ProductCategory? get _selectedCategory {

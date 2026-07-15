@@ -4,6 +4,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../models/kitchen_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -64,23 +65,24 @@ class _CloseKitchenSessionScreenState extends State<CloseKitchenSessionScreen> {
 
     setState(() => _closing = true);
     try {
-      final messenger = ScaffoldMessenger.of(context);
       await _repository.closeKitchenSession(
         kitchenSessionId: widget.session.id,
         closeInputs: inputs,
         notes: _notesController.text,
       );
       if (!mounted) return;
-      Navigator.pop(context);
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Cierre de cocina realizado.')),
+      showAppSnackBar(
+        context,
+        'Cierre de cocina realizado.',
+        type: AppSnackBarType.success,
       );
+      Navigator.pop(context);
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(error.toString().replaceFirst('Bad state: ', '')),
-        ),
+      showAppSnackBar(
+        context,
+        error.toString().replaceFirst('Bad state: ', ''),
+        type: AppSnackBarType.error,
       );
     } finally {
       if (mounted) setState(() => _closing = false);
@@ -223,7 +225,7 @@ class _CloseKitchenFormState extends State<_CloseKitchenForm> {
   }
 
   void _message(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    showAppSnackBar(context, text);
   }
 
   @override

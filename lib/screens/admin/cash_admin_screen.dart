@@ -8,6 +8,7 @@ import '../../models/order.dart';
 import '../../models/payment.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -800,20 +801,20 @@ class _WithdrawalAdminCard extends StatelessWidget {
       if (!context.mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(approved ? 'Retiro aprobado.' : 'Retiro rechazado.'),
-        ),
+      showAppSnackBar(
+        context,
+        approved ? 'Retiro aprobado.' : 'Retiro rechazado.',
+        type: AppSnackBarType.success,
       );
     } catch (error) {
       notesController.dispose();
       if (!context.mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(error.toString().replaceFirst('Bad state: ', '')),
-        ),
+      showAppSnackBar(
+        context,
+        error.toString().replaceFirst('Bad state: ', ''),
+        type: AppSnackBarType.error,
       );
     }
   }

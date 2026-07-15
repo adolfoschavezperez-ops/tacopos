@@ -37,8 +37,8 @@ class KitchenSession {
   final String branchId;
   final String branchName;
 
-  bool get isOpen => status == 'open';
-  bool get isClosed => status == 'closed';
+  bool get isOpen => status == 'open' && closedAt == null;
+  bool get isClosed => status == 'closed' || closedAt != null;
 
   factory KitchenSession.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};

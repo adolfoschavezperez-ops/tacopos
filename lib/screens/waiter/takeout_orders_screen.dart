@@ -7,6 +7,7 @@ import '../../models/order_platform.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -43,11 +44,7 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
 
   Future<void> _newOrder(List<OrderPlatform> platforms) async {
     if (AppSession.instance.employee?.canTakeOrders != true) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No tienes permiso para levantar pedidos'),
-        ),
-      );
+      showAppSnackBar(context, 'No tienes permiso para levantar pedidos');
       return;
     }
 
@@ -91,8 +88,10 @@ class _TakeoutOrdersScreenState extends State<TakeoutOrdersScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo crear pedido: $error')),
+      showAppSnackBar(
+        context,
+        'No se pudo crear pedido: $error',
+        type: AppSnackBarType.error,
       );
     } finally {
       if (mounted) {

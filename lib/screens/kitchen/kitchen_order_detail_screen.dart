@@ -9,6 +9,7 @@ import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
@@ -98,9 +99,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       return;
     }
     _returningToList = true;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Comanda sin articulos pendientes.')),
-    );
+    showAppSnackBar(context, 'Comanda sin articulos pendientes.');
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         Navigator.pop(context);

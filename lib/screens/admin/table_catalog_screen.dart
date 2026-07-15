@@ -4,6 +4,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../models/pos_table.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -43,8 +44,10 @@ class _TableCatalogScreenState extends State<TableCatalogScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar la mesa: $error')),
+      showAppSnackBar(
+        context,
+        'No se pudo guardar la mesa: $error',
+        type: AppSnackBarType.error,
       );
     }
   }

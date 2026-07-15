@@ -5,6 +5,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../models/kitchen_stock_item.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -342,12 +343,10 @@ class _KitchenStockCatalogTabState extends State<_KitchenStockCatalogTab> {
       builder: (_) => _KitchenStockDialog(repository: _repository, item: item),
     );
     if (!mounted || saved != true) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          item == null ? 'Insumo agregado.' : 'Insumo actualizado.',
-        ),
-      ),
+    showAppSnackBar(
+      context,
+      item == null ? 'Insumo agregado.' : 'Insumo actualizado.',
+      type: AppSnackBarType.success,
     );
   }
 

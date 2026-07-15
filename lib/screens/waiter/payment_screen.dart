@@ -9,6 +9,7 @@ import '../../models/payment.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../utils/formatters.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -314,9 +315,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(context, message);
   }
 
   String _paymentErrorText(Object error) {

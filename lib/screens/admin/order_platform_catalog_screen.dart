@@ -4,6 +4,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../models/order_platform.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -48,8 +49,10 @@ class _OrderPlatformCatalogScreenState
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar plataforma: $error')),
+      showAppSnackBar(
+        context,
+        'No se pudo guardar plataforma: $error',
+        type: AppSnackBarType.error,
       );
     }
   }

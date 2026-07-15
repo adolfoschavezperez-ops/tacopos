@@ -6,6 +6,7 @@ import '../../models/branch.dart';
 import '../../models/employee.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -119,12 +120,10 @@ class _EmployeeCatalogScreenState extends State<EmployeeCatalogScreen> {
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          employee == null ? 'Empleado agregado.' : 'Empleado actualizado.',
-        ),
-      ),
+    showAppSnackBar(
+      context,
+      employee == null ? 'Empleado agregado.' : 'Empleado actualizado.',
+      type: AppSnackBarType.success,
     );
   }
 }

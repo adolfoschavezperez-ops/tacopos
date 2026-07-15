@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/branch.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -157,9 +158,7 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(context, message);
   }
 
   @override

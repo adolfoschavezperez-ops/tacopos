@@ -5,6 +5,7 @@ import '../../models/product.dart';
 import '../../models/product_category.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../utils/category_utils.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -154,14 +155,14 @@ class _ProductCategoryCatalogScreenState
     try {
       await _repository.normalizeProductCategories();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Categorias normalizadas correctamente')),
+      showAppSnackBar(
+        context,
+        'Categorias normalizadas correctamente',
+        type: AppSnackBarType.success,
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      showAppSnackBar(context, error.toString(), type: AppSnackBarType.error);
     }
   }
 
@@ -327,7 +328,7 @@ class _ProductCategoryDialogState extends State<_ProductCategoryDialog> {
   }
 
   void _message(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    showAppSnackBar(context, text);
   }
 
   @override

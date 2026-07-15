@@ -75,7 +75,7 @@ class CashSession {
   final int withdrawalRequestCount;
   final String notes;
 
-  bool get isOpen => status == 'open';
+  bool get isOpen => status == 'open' && closedAt == null;
   double get estimatedCardNetAmount =>
       expectedCardChargedAmount - expectedCardFeeAbsorbedAmount;
 

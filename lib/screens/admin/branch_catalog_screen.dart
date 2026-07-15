@@ -4,6 +4,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../models/branch.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -36,19 +37,19 @@ class _BranchCatalogScreenState extends State<BranchCatalogScreen> {
         phone: result.phone,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            isNew
-                ? 'Sucursal creada correctamente.'
-                : 'Sucursal actualizada correctamente.',
-          ),
-        ),
+      showAppSnackBar(
+        context,
+        isNew
+            ? 'Sucursal creada correctamente.'
+            : 'Sucursal actualizada correctamente.',
+        type: AppSnackBarType.success,
       );
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo guardar sucursal: $error')),
+      showAppSnackBar(
+        context,
+        'No se pudo guardar sucursal: $error',
+        type: AppSnackBarType.error,
       );
     }
   }

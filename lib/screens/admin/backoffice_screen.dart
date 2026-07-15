@@ -13,6 +13,7 @@ import '../../models/payment.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../utils/csv_exporter.dart';
 import '../../utils/formatters.dart';
 import '../../widgets/backoffice_dashboard_widgets.dart';
@@ -2806,7 +2807,7 @@ Future<void> _copyCsv(
     content: csvRows,
   );
   if (!context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  showAppSnackBar(context, message, type: AppSnackBarType.success);
 }
 
 String _csvCell(String value) {

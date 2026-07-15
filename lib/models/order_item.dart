@@ -19,6 +19,7 @@ class OrderItem {
     required this.kitchenStatus,
     required this.paymentStatus,
     this.kitchenBatchId,
+    this.kitchenBatchCreatedAt,
     this.createdAt,
     this.updatedAt,
     this.sentToKitchenAt,
@@ -74,6 +75,7 @@ class OrderItem {
   final String kitchenStatus;
   final String paymentStatus;
   final String? kitchenBatchId;
+  final DateTime? kitchenBatchCreatedAt;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? sentToKitchenAt;
@@ -176,6 +178,9 @@ class OrderItem {
       kitchenStatus: data['kitchenStatus'] as String? ?? 'pending',
       paymentStatus: data['paymentStatus'] as String? ?? 'pending',
       kitchenBatchId: data['kitchenBatchId'] as String?,
+      kitchenBatchCreatedAt: _toDate(
+        data['kitchenBatchCreatedAt'] ?? data['batchCreatedAt'],
+      ),
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),
       sentToKitchenAt: _toDate(data['sentToKitchenAt']),

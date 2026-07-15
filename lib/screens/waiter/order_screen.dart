@@ -13,6 +13,7 @@ import '../../models/product_category.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../utils/category_utils.dart';
 import '../../utils/formatters.dart';
 import '../../widgets/branded_scaffold.dart';
@@ -211,15 +212,12 @@ class _OrderScreenState extends State<OrderScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          duration: const Duration(milliseconds: 900),
-          content: Text(
-            sentCount == 0
-                ? 'No hay productos de cocina para enviar.'
-                : 'Comanda enviada a cocina.',
-          ),
-        ),
+      showAppSnackBar(
+        context,
+        sentCount == 0
+            ? 'No hay productos de cocina para enviar.'
+            : 'Comanda enviada a cocina.',
+        type: sentCount == 0 ? AppSnackBarType.info : AppSnackBarType.success,
       );
 
       if (sentCount > 0) {
@@ -230,8 +228,10 @@ class _OrderScreenState extends State<OrderScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo enviar la comanda: $error')),
+      showAppSnackBar(
+        context,
+        'No se pudo enviar la comanda: $error',
+        type: AppSnackBarType.error,
       );
     } finally {
       if (mounted) {
@@ -452,16 +452,16 @@ class _OrderScreenState extends State<OrderScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No se pudo renombrar la persona: $error')),
+      showAppSnackBar(
+        context,
+        'No se pudo renombrar la persona: $error',
+        type: AppSnackBarType.error,
       );
     }
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(context, message);
   }
 
   @override
@@ -1376,7 +1376,9 @@ class _OrderBatchDivider extends StatelessWidget {
           Padding(
             padding: EdgeInsets.symmetric(horizontal: compact ? 6 : 10),
             child: Text(
-              '${label.title} · ${_formatBatchTime(label.time)}',
+              label.key == 'pending'
+                  ? label.title
+                  : '${label.title} · ${_formatBatchTime(label.time)}',
               style: TextStyle(
                 color: label.initial
                     ? BrandColors.textMuted
@@ -1425,7 +1427,7 @@ Map<String, _OrderBatchLabel> _buildBatchLabels(
   final batchTimes = <String, DateTime?>{};
   for (final item in items) {
     final key = _batchKey(item);
-    final itemTime = _batchTime(item) ?? orderCreatedAt;
+    final itemTime = _batchTime(item) ?? item.createdAt ?? orderCreatedAt;
     final current = batchTimes[key];
     if (current == null || (itemTime != null && itemTime.isBefore(current))) {
       batchTimes[key] = itemTime;
@@ -1435,22 +1437,27 @@ Map<String, _OrderBatchLabel> _buildBatchLabels(
   }
 
   final ordered = batchTimes.entries.toList()
-    ..sort((a, b) {
-      final aTime = a.value ?? DateTime.now();
-      final bTime = b.value ?? DateTime.now();
-      return aTime.compareTo(bTime);
-    });
+    ..sort((a, b) => _compareBatchEntries(a.key, a.value, b.key, b.value));
 
   final labels = <String, _OrderBatchLabel>{};
+  var sentBatchIndex = 0;
   for (var index = 0; index < ordered.length; index += 1) {
     final entry = ordered[index];
-    final initial = index == 0;
+    final pending = entry.key == 'pending';
+    final initial = !pending && sentBatchIndex == 0;
     labels[entry.key] = _OrderBatchLabel(
       key: entry.key,
-      title: initial ? 'Orden inicial' : 'Orden extra',
+      title: pending
+          ? 'Pendiente de enviar'
+          : initial
+          ? 'Orden inicial'
+          : 'Orden extra',
       time: entry.value,
       initial: initial,
     );
+    if (!pending) {
+      sentBatchIndex += 1;
+    }
   }
   return labels;
 }
@@ -1476,20 +1483,21 @@ List<_PersonBatch> _buildPersonBatches(
             );
         final sortedItems = entry.value.toList()
           ..sort((a, b) {
-            final aTime =
-                _batchTime(a) ?? DateTime.fromMillisecondsSinceEpoch(0);
-            final bTime =
-                _batchTime(b) ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final personCompare = a.personNumber.compareTo(b.personNumber);
+            if (personCompare != 0) return personCompare;
+            final aTime = _itemSortTime(a);
+            final bTime = _itemSortTime(b);
             final timeCompare = aTime.compareTo(bTime);
-            return timeCompare != 0
-                ? timeCompare
-                : a.productName.compareTo(b.productName);
+            return timeCompare != 0 ? timeCompare : a.id.compareTo(b.id);
           });
         return _PersonBatch(label: label, items: sortedItems);
       }).toList()..sort((a, b) {
-        final aTime = a.label.time ?? DateTime.now();
-        final bTime = b.label.time ?? DateTime.now();
-        return aTime.compareTo(bTime);
+        return _compareBatchEntries(
+          a.label.key,
+          a.label.time,
+          b.label.key,
+          b.label.time,
+        );
       });
 
   return batches;
@@ -1508,7 +1516,28 @@ String _batchKey(OrderItem item) {
 }
 
 DateTime? _batchTime(OrderItem item) {
-  return item.sentToKitchenAt ?? item.createdAt ?? item.updatedAt;
+  return item.kitchenBatchCreatedAt ?? item.sentToKitchenAt ?? item.createdAt;
+}
+
+DateTime _itemSortTime(OrderItem item) {
+  return item.createdAt ??
+      item.sentToKitchenAt ??
+      item.kitchenBatchCreatedAt ??
+      DateTime.fromMillisecondsSinceEpoch(0);
+}
+
+int _compareBatchEntries(
+  String aKey,
+  DateTime? aTime,
+  String bKey,
+  DateTime? bTime,
+) {
+  if (aKey == 'pending' && bKey != 'pending') return 1;
+  if (bKey == 'pending' && aKey != 'pending') return -1;
+  final aSortTime = aTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+  final bSortTime = bTime ?? DateTime.fromMillisecondsSinceEpoch(0);
+  final timeCompare = aSortTime.compareTo(bSortTime);
+  return timeCompare != 0 ? timeCompare : aKey.compareTo(bKey);
 }
 
 String _formatBatchTime(DateTime? time) {
@@ -1834,12 +1863,10 @@ class _OrderItemRow extends StatelessWidget {
         !item.hasCancellationRequested &&
         (editable || canRequestCancel);
     void blockedEdit() {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Este producto ya fue servido por cocina y no puede cancelarse.',
-          ),
-        ),
+      showAppSnackBar(
+        context,
+        'Este producto ya fue servido por cocina y no puede cancelarse.',
+        type: AppSnackBarType.warning,
       );
     }
 

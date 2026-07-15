@@ -12,6 +12,7 @@ import '../../models/payment.dart';
 import '../../models/pos_table.dart';
 import '../../models/product.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../utils/formatters.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -208,15 +209,15 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
     try {
       final count = await _repository.cleanupInactiveActiveSessions();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$count sesiones inactivas archivadas.')),
+      showAppSnackBar(
+        context,
+        '$count sesiones inactivas archivadas.',
+        type: AppSnackBarType.success,
       );
       setState(() {});
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('$error')));
+      showAppSnackBar(context, '$error', type: AppSnackBarType.error);
     }
   }
 }

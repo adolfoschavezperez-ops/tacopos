@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/glass.dart';
 
@@ -111,9 +112,7 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
       if (!mounted) {
         return;
       }
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(_errorText(error))));
+      showAppSnackBar(context, _errorText(error), type: AppSnackBarType.error);
     } finally {
       if (mounted) {
         setState(() {

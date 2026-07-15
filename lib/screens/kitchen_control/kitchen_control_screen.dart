@@ -5,6 +5,7 @@ import '../../models/kitchen_session.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -75,9 +76,7 @@ class _KitchenControlScreenState extends State<KitchenControlScreen> {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    showAppSnackBar(context, message);
   }
 
   String _errorText(Object error) {
@@ -236,7 +235,7 @@ class _KitchenOpeningFormState extends State<_KitchenOpeningForm> {
   }
 
   void _message(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    showAppSnackBar(context, text);
   }
 
   @override
@@ -447,7 +446,7 @@ class _KitchenOpenInputsPanelState extends State<_KitchenOpenInputsPanel> {
   }
 
   void _message(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    showAppSnackBar(context, text);
   }
 
   @override
