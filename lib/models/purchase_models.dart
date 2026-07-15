@@ -229,10 +229,20 @@ class SupplierPurchaseItem {
     return SupplierPurchaseItem(
       id: doc.id,
       purchaseItemId: data['purchaseItemId'] as String?,
-      purchaseItemName: data['purchaseItemName'] as String? ?? 'Insumo',
-      kitchenStockItemId: data['kitchenStockItemId'] as String?,
-      kitchenStockItemName: data['kitchenStockItemName'] as String?,
-      affectsKitchenStock: data['affectsKitchenStock'] as bool? ?? false,
+      purchaseItemName:
+          data['purchaseItemName'] as String? ??
+          data['itemName'] as String? ??
+          data['kitchenStockItemName'] as String? ??
+          'Insumo',
+      kitchenStockItemId:
+          data['kitchenStockItemId'] as String? ?? data['itemId'] as String?,
+      kitchenStockItemName:
+          data['kitchenStockItemName'] as String? ??
+          data['itemName'] as String?,
+      affectsKitchenStock:
+          data['affectsKitchenStock'] as bool? ??
+          data['affectsKitchenPerformance'] as bool? ??
+          false,
       quantity: _toDouble(data['quantity']),
       unit: data['unit'] as String? ?? '',
       unitCost: _toDouble(data['unitCost']),
@@ -345,6 +355,26 @@ class PurchaseSupplierReportRow {
   final double balance;
   final int noteCount;
   final String paymentWeekdayName;
+}
+
+class PurchaseItemReportRow {
+  const PurchaseItemReportRow({
+    required this.itemId,
+    required this.itemName,
+    required this.quantity,
+    required this.unit,
+    required this.total,
+    required this.noteCount,
+    required this.affectsKitchenPerformance,
+  });
+
+  final String itemId;
+  final String itemName;
+  final double quantity;
+  final String unit;
+  final double total;
+  final int noteCount;
+  final bool affectsKitchenPerformance;
 }
 
 class PurchaseLineInput {

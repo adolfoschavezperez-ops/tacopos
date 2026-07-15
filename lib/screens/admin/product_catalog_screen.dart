@@ -1781,6 +1781,7 @@ class _QuickKitchenStockDialogState extends State<_QuickKitchenStockDialog> {
         optimalConsumptionUnit: _unit == 'piece'
             ? 'piece_per_item'
             : 'g_per_item',
+        affectsKitchenPerformance: true,
       );
       final items = await widget.repository
           .watchKitchenStockItems(activeOnly: true)

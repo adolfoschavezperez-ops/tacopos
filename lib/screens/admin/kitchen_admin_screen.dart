@@ -427,7 +427,9 @@ class _KitchenStockCatalogTabState extends State<_KitchenStockCatalogTab> {
                           style: const TextStyle(fontWeight: FontWeight.w900),
                         ),
                         subtitle: Text(
-                          '${_categoryLabel(item.category)} | ${_unitLabel(item.unit)} | ${_optimalLabel(item)} | orden ${item.sortOrder}\n$linkedText',
+                          '${_categoryLabel(item.category)} | ${_unitLabel(item.unit)} | ${_optimalLabel(item)} | orden ${item.sortOrder}\n'
+                          'Afecta rendimiento de cocina: ${item.affectsKitchenPerformance ? 'Si' : 'No'}\n'
+                          '$linkedText',
                         ),
                         trailing: canManage
                             ? Wrap(
@@ -483,6 +485,7 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
   late String _unit;
   late String _optimalUnit;
   late bool _active;
+  late bool _affectsKitchenPerformance;
   bool _saving = false;
   String _error = '';
 
@@ -501,6 +504,7 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
     _unit = item?.unit ?? 'kg';
     _optimalUnit = item?.optimalConsumptionUnit ?? _defaultOptimalUnit(_unit);
     _active = item?.active ?? true;
+    _affectsKitchenPerformance = item?.affectsKitchenPerformance ?? true;
   }
 
   @override
@@ -538,6 +542,7 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
         sortOrder: sortOrder,
         optimalConsumptionPerSaleQty: optimal,
         optimalConsumptionUnit: _optimalUnit,
+        affectsKitchenPerformance: _affectsKitchenPerformance,
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -641,6 +646,16 @@ class _KitchenStockDialogState extends State<_KitchenStockDialog> {
                 onChanged: _saving
                     ? null
                     : (value) => setState(() => _active = value),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Afecta rendimiento de cocina'),
+                subtitle: const Text('Usarlo en apertura, cierre y merma.'),
+                value: _affectsKitchenPerformance,
+                onChanged: _saving
+                    ? null
+                    : (value) =>
+                          setState(() => _affectsKitchenPerformance = value),
               ),
               if (_error.isNotEmpty)
                 Text(

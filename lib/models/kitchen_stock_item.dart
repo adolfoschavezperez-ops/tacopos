@@ -10,6 +10,10 @@ class KitchenStockItem {
     required this.sortOrder,
     required this.optimalConsumptionPerSaleQty,
     required this.optimalConsumptionUnit,
+    this.affectsKitchenPerformance = true,
+    this.defaultSupplierId,
+    this.defaultSupplierName,
+    this.notes = '',
   });
 
   final String id;
@@ -20,6 +24,10 @@ class KitchenStockItem {
   final int sortOrder;
   final double optimalConsumptionPerSaleQty;
   final String optimalConsumptionUnit;
+  final bool affectsKitchenPerformance;
+  final String? defaultSupplierId;
+  final String? defaultSupplierName;
+  final String notes;
 
   factory KitchenStockItem.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -35,6 +43,14 @@ class KitchenStockItem {
       optimalConsumptionUnit:
           data['optimalConsumptionUnit'] as String? ??
           _defaultOptimalUnit(data['unit'] as String? ?? 'kg'),
+      affectsKitchenPerformance:
+          data['affectsKitchenPerformance'] as bool? ??
+          data['affectsKitchenYield'] as bool? ??
+          data['affectsKitchenStock'] as bool? ??
+          true,
+      defaultSupplierId: data['defaultSupplierId'] as String?,
+      defaultSupplierName: data['defaultSupplierName'] as String?,
+      notes: data['notes'] as String? ?? '',
     );
   }
 

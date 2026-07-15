@@ -67,14 +67,12 @@ class _PurchaseAdminScreenState extends State<PurchaseAdminScreen> {
 class _PurchaseData {
   const _PurchaseData({
     required this.suppliers,
-    required this.purchaseItems,
     required this.kitchenStockItems,
     required this.purchases,
     required this.payments,
   });
 
   final List<Supplier> suppliers;
-  final List<PurchaseItem> purchaseItems;
   final List<KitchenStockItem> kitchenStockItems;
   final List<SupplierPurchase> purchases;
   final List<SupplierPayment> payments;
@@ -101,28 +99,32 @@ class _PurchaseDataScope extends StatelessWidget {
         if (!suppliersSnapshot.hasData) {
           return const LoadingPanel(message: 'Cargando compras...');
         }
-        return StreamBuilder<List<PurchaseItem>>(
-          stream: repository.watchPurchaseItems(),
-          builder: (context, itemsSnapshot) {
-            return StreamBuilder<List<KitchenStockItem>>(
-              stream: repository.watchKitchenStockItems(activeOnly: true),
-              builder: (context, kitchenSnapshot) {
-                return StreamBuilder<List<SupplierPurchase>>(
-                  stream: repository.watchSupplierPurchases(),
-                  builder: (context, purchasesSnapshot) {
-                    return StreamBuilder<List<SupplierPayment>>(
-                      stream: repository.watchSupplierPayments(),
-                      builder: (context, paymentsSnapshot) {
-                        final data = _PurchaseData(
-                          suppliers: suppliersSnapshot.data ?? const [],
-                          purchaseItems: itemsSnapshot.data ?? const [],
-                          kitchenStockItems: kitchenSnapshot.data ?? const [],
-                          purchases: purchasesSnapshot.data ?? const [],
-                          payments: paymentsSnapshot.data ?? const [],
-                        );
-                        return builder(context, data);
-                      },
+        return StreamBuilder<List<KitchenStockItem>>(
+          stream: repository.watchKitchenStockItems(),
+          builder: (context, kitchenSnapshot) {
+            if (kitchenSnapshot.hasError) {
+              return EmptyState(
+                icon: Icons.error_outline,
+                title: 'No se pudieron cargar insumos',
+                message: '${kitchenSnapshot.error}',
+              );
+            }
+            if (!kitchenSnapshot.hasData) {
+              return const LoadingPanel(message: 'Cargando insumos...');
+            }
+            return StreamBuilder<List<SupplierPurchase>>(
+              stream: repository.watchSupplierPurchases(),
+              builder: (context, purchasesSnapshot) {
+                return StreamBuilder<List<SupplierPayment>>(
+                  stream: repository.watchSupplierPayments(),
+                  builder: (context, paymentsSnapshot) {
+                    final data = _PurchaseData(
+                      suppliers: suppliersSnapshot.data ?? const [],
+                      kitchenStockItems: kitchenSnapshot.data ?? const [],
+                      purchases: purchasesSnapshot.data ?? const [],
+                      payments: paymentsSnapshot.data ?? const [],
                     );
+                    return builder(context, data);
                   },
                 );
               },
@@ -315,8 +317,9 @@ class _PurchaseItemsTab extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       children: [
         _PurchaseHeader(
-          title: 'Insumos de compra',
-          subtitle: 'Catalogo separado; cocina solo se referencia si aplica.',
+          title: 'Insumos',
+          subtitle:
+              'Catalogo de insumos usados para compras y control de cocina.',
           action: FilledButton.icon(
             onPressed: () => _openDialog(context),
             icon: const Icon(Icons.add),
@@ -324,28 +327,34 @@ class _PurchaseItemsTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        if (data.purchaseItems.isEmpty)
+        if (data.kitchenStockItems.isEmpty)
           const EmptyState(
             icon: Icons.inventory_2_outlined,
-            title: 'Sin insumos de compra',
+            title: 'Sin insumos',
             message: 'Crea insumos como carne, servilletas, gas o bolsas.',
           )
         else
-          ...data.purchaseItems.map(
+          ...data.kitchenStockItems.map(
             (item) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: GlassCard(
-                accent: item.affectsKitchenStock
+                accent: item.affectsKitchenPerformance
                     ? BrandColors.success
                     : BrandColors.textMuted,
                 child: ListTile(
+                  leading: item.active
+                      ? null
+                      : const Icon(
+                          Icons.pause_circle_outline,
+                          color: BrandColors.textMuted,
+                        ),
                   title: Text(
                     item.name,
                     style: const TextStyle(fontWeight: FontWeight.w900),
                   ),
                   subtitle: Text(
-                    '${item.category} · ${item.unit} · '
-                    '${item.affectsKitchenStock ? 'Ligado a cocina: ${item.kitchenStockItemName ?? ''}' : 'No afecta cocina'}',
+                    '${_categoryLabel(item.category)} · ${_unitLabel(item.unit)} · '
+                    'Afecta rendimiento de cocina: ${item.affectsKitchenPerformance ? 'Si' : 'No'}',
                   ),
                   trailing: IconButton(
                     tooltip: 'Editar',
@@ -360,14 +369,16 @@ class _PurchaseItemsTab extends StatelessWidget {
     );
   }
 
-  Future<void> _openDialog(BuildContext context, [PurchaseItem? item]) async {
+  Future<void> _openDialog(
+    BuildContext context, [
+    KitchenStockItem? item,
+  ]) async {
     final saved = await showDialog<bool>(
       context: context,
-      builder: (_) => _PurchaseItemDialog(
+      builder: (_) => _PurchaseKitchenStockItemDialog(
         repository: repository,
         item: item,
         suppliers: data.suppliers,
-        kitchenStockItems: data.kitchenStockItems,
       ),
     );
     if (!context.mounted || saved != true) return;
@@ -580,7 +591,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
   Future<void> _addLine() async {
     final line = await showDialog<PurchaseLineInput>(
       context: context,
-      builder: (_) => _PurchaseLineDialog(items: widget.data.purchaseItems),
+      builder: (_) => _PurchaseLineDialog(items: widget.data.kitchenStockItems),
     );
     if (line != null && mounted) {
       setState(() => _lines.add(line));
@@ -936,6 +947,11 @@ class _PurchaseReportsTab extends StatelessWidget {
               ),
             ),
           ),
+        const SizedBox(height: 20),
+        _PurchasesByItemReport(
+          repository: repository,
+          purchases: data.purchases,
+        ),
       ],
     );
   }
@@ -953,6 +969,114 @@ class _PurchaseReportsTab extends StatelessWidget {
     ].join('\n');
     final message = await exportCsvFile(
       fileName: 'compras-por-proveedor.csv',
+      content: csv,
+    );
+    if (!context.mounted) return;
+    showAppSnackBar(context, message, type: AppSnackBarType.success);
+  }
+}
+
+class _PurchasesByItemReport extends StatelessWidget {
+  const _PurchasesByItemReport({
+    required this.repository,
+    required this.purchases,
+  });
+
+  final TacoPosRepository repository;
+  final List<SupplierPurchase> purchases;
+
+  @override
+  Widget build(BuildContext context) {
+    final activePurchases = purchases.where(
+      (purchase) => purchase.status != 'cancelled',
+    );
+    return FutureBuilder<List<SupplierPurchaseItem>>(
+      future: repository.getSupplierPurchaseItemsForPurchases(activePurchases),
+      builder: (context, snapshot) {
+        final itemRows = repository.buildPurchasesByItemReport(
+          items: snapshot.data ?? const [],
+        );
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _PurchaseHeader(
+              title: 'Compras por insumo',
+              subtitle: 'Agrupado por el insumo compartido con cocina.',
+              action: OutlinedButton.icon(
+                onPressed: itemRows.isEmpty
+                    ? null
+                    : () => _exportItems(context, itemRows),
+                icon: const Icon(Icons.download_outlined),
+                label: const Text('CSV'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (snapshot.connectionState == ConnectionState.waiting)
+              const LoadingPanel(message: 'Cargando compras por insumo...')
+            else if (snapshot.hasError)
+              EmptyState(
+                icon: Icons.error_outline,
+                title: 'No se pudo cargar el reporte',
+                message: '${snapshot.error}',
+              )
+            else if (itemRows.isEmpty)
+              const EmptyState(
+                icon: Icons.inventory_2_outlined,
+                title: 'Sin compras por insumo',
+                message: 'Registra compras para ver este reporte.',
+              )
+            else
+              ...itemRows.map(
+                (row) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: GlassCard(
+                    accent: row.affectsKitchenPerformance
+                        ? BrandColors.success
+                        : BrandColors.textMuted,
+                    child: ListTile(
+                      title: Text(
+                        row.itemName,
+                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                      subtitle: Text(
+                        '${row.noteCount} notas · '
+                        'Rendimiento cocina: '
+                        '${row.affectsKitchenPerformance ? 'Si' : 'No'}',
+                      ),
+                      trailing: Wrap(
+                        spacing: 14,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          _TextMetric(
+                            label: 'Cantidad',
+                            value: '${_qty(row.quantity)} ${row.unit}',
+                          ),
+                          _Metric(label: 'Total', value: row.total),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _exportItems(
+    BuildContext context,
+    List<PurchaseItemReportRow> rows,
+  ) async {
+    final csv = [
+      'Insumo,Cantidad,Unidad,Total,Notas,Afecta rendimiento cocina',
+      ...rows.map(
+        (row) =>
+            '"${row.itemName}",${row.quantity},"${row.unit}",${row.total},${row.noteCount},"${row.affectsKitchenPerformance ? 'Si' : 'No'}"',
+      ),
+    ].join('\n');
+    final message = await exportCsvFile(
+      fileName: 'compras-por-insumo.csv',
       content: csv,
     );
     if (!context.mounted) return;
@@ -1152,32 +1276,32 @@ class _SupplierDialogState extends State<_SupplierDialog> {
   }
 }
 
-class _PurchaseItemDialog extends StatefulWidget {
-  const _PurchaseItemDialog({
+class _PurchaseKitchenStockItemDialog extends StatefulWidget {
+  const _PurchaseKitchenStockItemDialog({
     required this.repository,
     required this.suppliers,
-    required this.kitchenStockItems,
     this.item,
   });
 
   final TacoPosRepository repository;
   final List<Supplier> suppliers;
-  final List<KitchenStockItem> kitchenStockItems;
-  final PurchaseItem? item;
+  final KitchenStockItem? item;
 
   @override
-  State<_PurchaseItemDialog> createState() => _PurchaseItemDialogState();
+  State<_PurchaseKitchenStockItemDialog> createState() =>
+      _PurchaseKitchenStockItemDialogState();
 }
 
-class _PurchaseItemDialogState extends State<_PurchaseItemDialog> {
+class _PurchaseKitchenStockItemDialogState
+    extends State<_PurchaseKitchenStockItemDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _categoryController;
   late final TextEditingController _unitController;
+  late final TextEditingController _sortController;
   late final TextEditingController _notesController;
   String? _supplierId;
-  String? _kitchenStockItemId;
   late bool _active;
-  late bool _affectsKitchen;
+  late bool _affectsKitchenPerformance;
   bool _saving = false;
 
   @override
@@ -1189,11 +1313,15 @@ class _PurchaseItemDialogState extends State<_PurchaseItemDialog> {
       text: item?.category ?? 'General',
     );
     _unitController = TextEditingController(text: item?.unit ?? 'kg');
+    _sortController = TextEditingController(text: '${item?.sortOrder ?? 99}');
     _notesController = TextEditingController(text: item?.notes ?? '');
     _supplierId = item?.defaultSupplierId;
-    _kitchenStockItemId = item?.kitchenStockItemId;
+    if (_supplierId != null &&
+        !widget.suppliers.any((supplier) => supplier.id == _supplierId)) {
+      _supplierId = null;
+    }
     _active = item?.active ?? true;
-    _affectsKitchen = item?.affectsKitchenStock ?? false;
+    _affectsKitchenPerformance = item?.affectsKitchenPerformance ?? false;
   }
 
   @override
@@ -1201,6 +1329,7 @@ class _PurchaseItemDialogState extends State<_PurchaseItemDialog> {
     _nameController.dispose();
     _categoryController.dispose();
     _unitController.dispose();
+    _sortController.dispose();
     _notesController.dispose();
     super.dispose();
   }
@@ -1219,6 +1348,7 @@ class _PurchaseItemDialogState extends State<_PurchaseItemDialog> {
               _text(_nameController, 'Nombre', 260),
               _text(_categoryController, 'Categoria', 180),
               _text(_unitController, 'Unidad', 120),
+              _text(_sortController, 'Orden', 100),
               SizedBox(
                 width: 260,
                 child: DropdownButtonFormField<String>(
@@ -1238,34 +1368,16 @@ class _PurchaseItemDialogState extends State<_PurchaseItemDialog> {
                 ),
               ),
               SizedBox(
-                width: 240,
+                width: 300,
                 child: SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  value: _affectsKitchen,
-                  title: const Text('Afecta cocina'),
-                  onChanged: (value) => setState(() => _affectsKitchen = value),
+                  value: _affectsKitchenPerformance,
+                  title: const Text('Afecta rendimiento de cocina'),
+                  subtitle: const Text('Usarlo en apertura, cierre y merma.'),
+                  onChanged: (value) =>
+                      setState(() => _affectsKitchenPerformance = value),
                 ),
               ),
-              if (_affectsKitchen)
-                SizedBox(
-                  width: 300,
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _kitchenStockItemId,
-                    decoration: const InputDecoration(
-                      labelText: 'Insumo cocina relacionado',
-                    ),
-                    items: widget.kitchenStockItems
-                        .map(
-                          (item) => DropdownMenuItem(
-                            value: item.id,
-                            child: Text(item.name),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) =>
-                        setState(() => _kitchenStockItemId = value),
-                  ),
-                ),
               SizedBox(
                 width: 160,
                 child: SwitchListTile(
@@ -1312,23 +1424,19 @@ class _PurchaseItemDialogState extends State<_PurchaseItemDialog> {
   Future<void> _save() async {
     setState(() => _saving = true);
     final supplier = widget.suppliers.where((item) => item.id == _supplierId);
-    final kitchen = widget.kitchenStockItems.where(
-      (item) => item.id == _kitchenStockItemId,
-    );
     try {
-      await widget.repository.savePurchaseItem(
-        purchaseItemId: widget.item?.id,
+      await widget.repository.saveKitchenStockItem(
+        itemId: widget.item?.id,
         name: _nameController.text,
         category: _categoryController.text,
         unit: _unitController.text,
         active: _active,
+        sortOrder: int.tryParse(_sortController.text.trim()) ?? 99,
+        affectsKitchenPerformance: _affectsKitchenPerformance,
         defaultSupplierId: _supplierId,
         defaultSupplierName: supplier.isEmpty
             ? null
             : supplier.first.commercialName,
-        affectsKitchenStock: _affectsKitchen,
-        kitchenStockItemId: _kitchenStockItemId,
-        kitchenStockItemName: kitchen.isEmpty ? null : kitchen.first.name,
         notes: _notesController.text,
       );
       if (!mounted) return;
@@ -1349,7 +1457,7 @@ class _PurchaseItemDialogState extends State<_PurchaseItemDialog> {
 class _PurchaseLineDialog extends StatefulWidget {
   const _PurchaseLineDialog({required this.items});
 
-  final List<PurchaseItem> items;
+  final List<KitchenStockItem> items;
 
   @override
   State<_PurchaseLineDialog> createState() => _PurchaseLineDialogState();
@@ -1445,21 +1553,24 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
     final quantity = _parse(_qtyController.text);
     final unitCost = _parse(_costController.text);
     final name = _nameController.text.trim();
+    final item = widget.items.where((item) => item.id == _itemId);
+    if (item.isEmpty) {
+      showAppSnackBar(context, 'Selecciona un insumo del catalogo.');
+      return;
+    }
     if (name.isEmpty || quantity <= 0 || unitCost < 0) {
       showAppSnackBar(context, 'Revisa nombre, cantidad y costo.');
       return;
     }
-    final item = widget.items.where((item) => item.id == _itemId);
     Navigator.pop(
       context,
       PurchaseLineInput(
-        purchaseItemId: item.isEmpty ? null : item.first.id,
+        purchaseItemId: null,
         purchaseItemName: name,
-        kitchenStockItemId: item.isEmpty ? null : item.first.kitchenStockItemId,
-        kitchenStockItemName: item.isEmpty
-            ? null
-            : item.first.kitchenStockItemName,
-        affectsKitchenStock: item.isNotEmpty && item.first.affectsKitchenStock,
+        kitchenStockItemId: item.isEmpty ? null : item.first.id,
+        kitchenStockItemName: item.isEmpty ? null : item.first.name,
+        affectsKitchenStock:
+            item.isNotEmpty && item.first.affectsKitchenPerformance,
         quantity: quantity,
         unit: _unitController.text.trim(),
         unitCost: unitCost,
@@ -1739,6 +1850,53 @@ class _Metric extends StatelessWidget {
       ],
     );
   }
+}
+
+class _TextMetric extends StatelessWidget {
+  const _TextMetric({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: BrandColors.textMuted, fontSize: 11),
+        ),
+        Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
+      ],
+    );
+  }
+}
+
+String _qty(double value) {
+  return value == value.roundToDouble()
+      ? value.toStringAsFixed(0)
+      : value.toStringAsFixed(2);
+}
+
+String _categoryLabel(String category) {
+  return switch (category) {
+    'meat' => 'Carne',
+    'tortilla' => 'Tortilla',
+    'dairy' => 'Lacteo',
+    'drink' => 'Bebida',
+    'water' => 'Agua',
+    _ => category.trim().isEmpty ? 'General' : category,
+  };
+}
+
+String _unitLabel(String unit) {
+  return switch (unit) {
+    'piece' => 'pieza',
+    'liter' => 'litro',
+    _ => unit,
+  };
 }
 
 const _weekdayLabels = {

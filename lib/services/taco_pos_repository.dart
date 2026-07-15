@@ -1071,6 +1071,23 @@ class TacoPosRepository {
         );
   }
 
+  Future<List<SupplierPurchaseItem>> getSupplierPurchaseItemsForPurchases(
+    Iterable<SupplierPurchase> purchases,
+  ) async {
+    final items = <SupplierPurchaseItem>[];
+    for (final purchase in purchases) {
+      if (purchase.status == 'cancelled') {
+        continue;
+      }
+      final snapshot = await _supplierPurchasesRef
+          .doc(purchase.id)
+          .collection('items')
+          .get();
+      items.addAll(snapshot.docs.map(SupplierPurchaseItem.fromDoc));
+    }
+    return items;
+  }
+
   Future<void> createSupplierPurchase({
     required Supplier supplier,
     required DateTime purchaseDate,
@@ -1124,13 +1141,18 @@ class TacoPosRepository {
     });
     for (final item in items) {
       final itemRef = purchaseRef.collection('items').doc();
+      final itemId = item.kitchenStockItemId ?? item.purchaseItemId;
+      final itemName = item.kitchenStockItemName ?? item.purchaseItemName;
       batch.set(itemRef, {
         'id': itemRef.id,
+        'itemId': itemId,
+        'itemName': itemName.trim(),
         'purchaseItemId': item.purchaseItemId,
         'purchaseItemName': item.purchaseItemName.trim(),
         'kitchenStockItemId': item.kitchenStockItemId,
         'kitchenStockItemName': item.kitchenStockItemName,
         'affectsKitchenStock': item.affectsKitchenStock,
+        'affectsKitchenPerformance': item.affectsKitchenStock,
         'quantity': item.quantity,
         'unit': item.unit,
         'unitCost': item.unitCost,
@@ -1330,6 +1352,52 @@ class TacoPosRepository {
       );
     }
     rows.sort((a, b) => b.balance.compareTo(a.balance));
+    return rows;
+  }
+
+  List<PurchaseItemReportRow> buildPurchasesByItemReport({
+    required Iterable<SupplierPurchaseItem> items,
+  }) {
+    final totals = <String, _PurchaseItemReportAccumulator>{};
+    for (final item in items) {
+      final itemId =
+          item.kitchenStockItemId ??
+          item.purchaseItemId ??
+          item.purchaseItemName.trim().toLowerCase();
+      final itemName = item.kitchenStockItemName ?? item.purchaseItemName;
+      final key = itemId.trim().isEmpty
+          ? item.purchaseItemName.trim().toLowerCase()
+          : itemId.trim();
+      final current = totals.putIfAbsent(
+        key,
+        () => _PurchaseItemReportAccumulator(
+          itemId: key,
+          itemName: itemName.trim().isEmpty ? 'Insumo' : itemName.trim(),
+          unit: item.unit,
+          affectsKitchenPerformance: item.affectsKitchenStock,
+        ),
+      );
+      current.quantity += item.quantity;
+      current.total += item.total;
+      current.noteCount++;
+      current.affectsKitchenPerformance =
+          current.affectsKitchenPerformance || item.affectsKitchenStock;
+    }
+    final rows =
+        totals.values
+            .map(
+              (item) => PurchaseItemReportRow(
+                itemId: item.itemId,
+                itemName: item.itemName,
+                quantity: item.quantity,
+                unit: item.unit,
+                total: item.total,
+                noteCount: item.noteCount,
+                affectsKitchenPerformance: item.affectsKitchenPerformance,
+              ),
+            )
+            .toList()
+          ..sort((a, b) => b.total.compareTo(a.total));
     return rows;
   }
 
@@ -2177,6 +2245,9 @@ class TacoPosRepository {
       batch.set(_kitchenStockItemsRef.doc(id), {
         ...item,
         'active': true,
+        'affectsKitchenPerformance': true,
+        'affectsKitchenStock': true,
+        'affectsKitchenYield': true,
         'optimalConsumptionPerSaleQty': item['unit'] == 'piece' ? 1 : 50,
         'optimalConsumptionUnit': item['unit'] == 'piece'
             ? 'piece_per_item'
@@ -2231,6 +2302,9 @@ class TacoPosRepository {
           'category': stockItem.category,
           'unit': stockItem.unit,
           'active': true,
+          'affectsKitchenPerformance': true,
+          'affectsKitchenStock': true,
+          'affectsKitchenYield': true,
           'sortOrder': stockItem.sortOrder,
           'optimalConsumptionPerSaleQty':
               stockItem.optimalConsumptionPerSaleQty,
@@ -2281,6 +2355,7 @@ class TacoPosRepository {
         .where(
           (item) =>
               item.active &&
+              item.affectsKitchenPerformance &&
               (linkedStockIds.contains(item.id) || item.id == 'tortilla_maiz'),
         )
         .toList()
@@ -2303,10 +2378,15 @@ class TacoPosRepository {
     required int sortOrder,
     double optimalConsumptionPerSaleQty = 0,
     String optimalConsumptionUnit = '',
+    bool affectsKitchenPerformance = true,
+    String? defaultSupplierId,
+    String? defaultSupplierName,
+    String notes = '',
   }) async {
     _requireAdminPermission(
-      AppSession.instance.employee?.canManageKitchenStock == true,
-      'No tienes permiso para administrar insumos de cocina.',
+      AppSession.instance.employee?.canManageKitchenStock == true ||
+          AppSession.instance.employee?.canManageSuppliers == true,
+      'No tienes permiso para administrar insumos.',
     );
     final docRef = itemId == null
         ? _kitchenStockItemsRef.doc()
@@ -2317,9 +2397,15 @@ class TacoPosRepository {
       'category': category,
       'unit': unit,
       'active': active,
+      'affectsKitchenPerformance': affectsKitchenPerformance,
+      'affectsKitchenStock': affectsKitchenPerformance,
+      'affectsKitchenYield': affectsKitchenPerformance,
       'sortOrder': sortOrder,
       'optimalConsumptionPerSaleQty': optimalConsumptionPerSaleQty,
       'optimalConsumptionUnit': optimalConsumptionUnit,
+      'defaultSupplierId': defaultSupplierId,
+      'defaultSupplierName': defaultSupplierName,
+      'notes': notes.trim(),
       if (itemId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -5751,6 +5837,23 @@ class _DefaultProductCategory {
   final String name;
   final int sortOrder;
   final String colorHex;
+}
+
+class _PurchaseItemReportAccumulator {
+  _PurchaseItemReportAccumulator({
+    required this.itemId,
+    required this.itemName,
+    required this.unit,
+    required this.affectsKitchenPerformance,
+  });
+
+  final String itemId;
+  final String itemName;
+  final String unit;
+  bool affectsKitchenPerformance;
+  double quantity = 0;
+  double total = 0;
+  int noteCount = 0;
 }
 
 String _readText(Object? value, String fallback) {
