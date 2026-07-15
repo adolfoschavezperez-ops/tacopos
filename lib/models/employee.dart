@@ -28,6 +28,12 @@ class Employee {
     required this.canApproveKitchenCancellations,
     required this.canViewLiveOperations,
     required this.canControlLiveOperations,
+    this.canViewPurchases = false,
+    this.canManageSuppliers = false,
+    this.canRegisterPurchases = false,
+    this.canPaySuppliers = false,
+    this.canViewAccountsPayable = false,
+    this.canViewPurchaseReports = false,
     this.isSuperAdmin = false,
     this.defaultRestaurantId,
     this.defaultBranchId,
@@ -59,6 +65,12 @@ class Employee {
   final bool canApproveKitchenCancellations;
   final bool canViewLiveOperations;
   final bool canControlLiveOperations;
+  final bool canViewPurchases;
+  final bool canManageSuppliers;
+  final bool canRegisterPurchases;
+  final bool canPaySuppliers;
+  final bool canViewAccountsPayable;
+  final bool canViewPurchaseReports;
   final bool isSuperAdmin;
   final String? defaultRestaurantId;
   final String? defaultBranchId;
@@ -107,6 +119,12 @@ class Employee {
     'canApproveKitchenCancellations': canApproveKitchenCancellations,
     'canViewLiveOperations': canViewLiveOperations,
     'canControlLiveOperations': canControlLiveOperations,
+    'canViewPurchases': canViewPurchases,
+    'canManageSuppliers': canManageSuppliers,
+    'canRegisterPurchases': canRegisterPurchases,
+    'canPaySuppliers': canPaySuppliers,
+    'canViewAccountsPayable': canViewAccountsPayable,
+    'canViewPurchaseReports': canViewPurchaseReports,
   };
 
   Employee withBranchPermissions(String branchId) {
@@ -160,6 +178,18 @@ class Employee {
       canControlLiveOperations: read(
         'canControlLiveOperations',
         canControlLiveOperations,
+      ),
+      canViewPurchases: read('canViewPurchases', canViewPurchases),
+      canManageSuppliers: read('canManageSuppliers', canManageSuppliers),
+      canRegisterPurchases: read('canRegisterPurchases', canRegisterPurchases),
+      canPaySuppliers: read('canPaySuppliers', canPaySuppliers),
+      canViewAccountsPayable: read(
+        'canViewAccountsPayable',
+        canViewAccountsPayable,
+      ),
+      canViewPurchaseReports: read(
+        'canViewPurchaseReports',
+        canViewPurchaseReports,
       ),
       isSuperAdmin: isSuperAdmin,
       defaultRestaurantId: defaultRestaurantId,
@@ -216,6 +246,30 @@ class Employee {
           false,
       canControlLiveOperations:
           data['canControlLiveOperations'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canViewPurchases:
+          data['canViewPurchases'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canManageSuppliers:
+          data['canManageSuppliers'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canRegisterPurchases:
+          data['canRegisterPurchases'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canPaySuppliers:
+          data['canPaySuppliers'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canViewAccountsPayable:
+          data['canViewAccountsPayable'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canViewPurchaseReports:
+          data['canViewPurchaseReports'] as bool? ??
           data['canViewAdmin'] as bool? ??
           false,
       isSuperAdmin:

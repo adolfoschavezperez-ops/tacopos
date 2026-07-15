@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -29,6 +30,7 @@ import 'order_platform_catalog_screen.dart';
 import 'operation_reset_screen.dart';
 import 'product_category_catalog_screen.dart';
 import 'product_catalog_screen.dart';
+import 'purchase_admin_screen.dart';
 import 'table_catalog_screen.dart';
 
 enum _BackofficeSection {
@@ -38,6 +40,7 @@ enum _BackofficeSection {
   reports,
   cash,
   kitchen,
+  purchases,
   settings,
 }
 
@@ -469,6 +472,9 @@ class _BackofficeBody extends StatelessWidget {
     if (section == _BackofficeSection.kitchen) {
       return withBranchHeader(const KitchenAdminScreen());
     }
+    if (section == _BackofficeSection.purchases) {
+      return withBranchHeader(const PurchaseAdminScreen());
+    }
     if (section == _BackofficeSection.settings) {
       return withBranchHeader(_SettingsSection(repository: repository));
     }
@@ -558,6 +564,7 @@ class _BackofficeBody extends StatelessWidget {
                   _BackofficeSection.live => const SizedBox.shrink(),
                   _BackofficeSection.cash => const SizedBox.shrink(),
                   _BackofficeSection.kitchen => const SizedBox.shrink(),
+                  _BackofficeSection.purchases => const SizedBox.shrink(),
                   _BackofficeSection.settings => const SizedBox.shrink(),
                 },
               ],
@@ -1902,6 +1909,19 @@ List<_NavItem> _navItems(Employee? employee) {
         Icons.soup_kitchen_outlined,
         'Cocina',
       ),
+    if (kIsWeb &&
+        (employee?.hasAdminAccess == true ||
+            employee?.canViewPurchases == true ||
+            employee?.canManageSuppliers == true ||
+            employee?.canRegisterPurchases == true ||
+            employee?.canPaySuppliers == true ||
+            employee?.canViewAccountsPayable == true ||
+            employee?.canViewPurchaseReports == true))
+      const _NavItem(
+        _BackofficeSection.purchases,
+        Icons.local_shipping_outlined,
+        'Compras',
+      ),
     if (employee?.hasAdminAccess == true ||
         employee?.canManageProducts == true ||
         employee?.canManageTables == true ||
@@ -1921,7 +1941,14 @@ bool _canUseBackoffice(Employee? employee) {
       employee?.canManageCash == true ||
       employee?.canViewKitchenReports == true ||
       employee?.canAuthorizeCashWithdrawals == true ||
-      employee?.canViewLiveOperations == true;
+      employee?.canViewLiveOperations == true ||
+      (kIsWeb &&
+          (employee?.canViewPurchases == true ||
+              employee?.canManageSuppliers == true ||
+              employee?.canRegisterPurchases == true ||
+              employee?.canPaySuppliers == true ||
+              employee?.canViewAccountsPayable == true ||
+              employee?.canViewPurchaseReports == true));
 }
 
 String _sectionTitle(_BackofficeSection section) {
@@ -1932,6 +1959,7 @@ String _sectionTitle(_BackofficeSection section) {
     _BackofficeSection.reports => 'Reportes',
     _BackofficeSection.cash => 'Caja',
     _BackofficeSection.kitchen => 'Control de cocina',
+    _BackofficeSection.purchases => 'Compras',
     _BackofficeSection.settings => 'Configuracion',
   };
 }

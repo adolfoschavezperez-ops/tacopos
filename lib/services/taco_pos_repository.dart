@@ -20,6 +20,7 @@ import '../models/pos_table.dart';
 import '../models/product.dart';
 import '../models/product_category.dart';
 import '../models/product_recipe_item.dart';
+import '../models/purchase_models.dart';
 import '../models/restaurant.dart';
 import '../utils/category_utils.dart';
 import 'app_session.dart';
@@ -272,6 +273,18 @@ class TacoPosRepository {
 
   CollectionReference<Map<String, dynamic>> get _branchesRef =>
       _restaurantRef.collection('branches');
+
+  CollectionReference<Map<String, dynamic>> get _suppliersRef =>
+      _restaurantRef.collection('suppliers');
+
+  CollectionReference<Map<String, dynamic>> get _purchaseItemsRef =>
+      _restaurantRef.collection('purchaseItems');
+
+  CollectionReference<Map<String, dynamic>> get _supplierPurchasesRef =>
+      _restaurantRef.collection('supplierPurchases');
+
+  CollectionReference<Map<String, dynamic>> get _supplierPaymentsRef =>
+      _restaurantRef.collection('supplierPayments');
 
   Map<String, Object?> get _currentBranchFields {
     final session = AppSession.instance;
@@ -899,6 +912,425 @@ class TacoPosRepository {
           ? employees.where((employee) => employee.active).toList()
           : employees;
     });
+  }
+
+  Stream<List<Supplier>> watchSuppliers({bool activeOnly = false}) {
+    return _suppliersRef.snapshots().map((snapshot) {
+      final suppliers = snapshot.docs.map(Supplier.fromDoc).toList()
+        ..sort((a, b) => a.commercialName.compareTo(b.commercialName));
+      return activeOnly
+          ? suppliers.where((supplier) => supplier.active).toList()
+          : suppliers;
+    });
+  }
+
+  Future<void> saveSupplier({
+    String? supplierId,
+    required String commercialName,
+    String legalName = '',
+    String rfc = '',
+    String phone = '',
+    String contactName = '',
+    String address = '',
+    String notes = '',
+    required bool active,
+    required String preferredPaymentMethod,
+    required int creditDays,
+    required String paymentWeekday,
+    required String paymentWeekdayName,
+  }) async {
+    _requirePurchaseAccess(manage: true);
+    final name = commercialName.trim();
+    if (name.isEmpty) {
+      throw ArgumentError('Captura el nombre comercial del proveedor.');
+    }
+    final employee = AppSession.instance.employee;
+    final docRef = supplierId == null || supplierId.trim().isEmpty
+        ? _suppliersRef.doc()
+        : _suppliersRef.doc(supplierId.trim());
+    await docRef.set({
+      'id': docRef.id,
+      'commercialName': name,
+      'legalName': legalName.trim(),
+      'rfc': rfc.trim(),
+      'phone': phone.trim(),
+      'contactName': contactName.trim(),
+      'address': address.trim(),
+      'notes': notes.trim(),
+      'active': active,
+      'preferredPaymentMethod': preferredPaymentMethod,
+      'creditDays': creditDays < 0 ? 0 : creditDays,
+      'paymentWeekday': paymentWeekday,
+      'paymentWeekdayName': paymentWeekdayName,
+      if (supplierId == null || supplierId.trim().isEmpty)
+        'createdAt': FieldValue.serverTimestamp(),
+      if (supplierId == null || supplierId.trim().isEmpty)
+        'createdByEmployeeId': employee?.id ?? '',
+      if (supplierId == null || supplierId.trim().isEmpty)
+        'createdByEmployeeName': employee?.name ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedByEmployeeId': employee?.id ?? '',
+      'updatedByEmployeeName': employee?.name ?? '',
+    }, SetOptions(merge: true));
+  }
+
+  Stream<List<PurchaseItem>> watchPurchaseItems({bool activeOnly = false}) {
+    return _purchaseItemsRef.snapshots().map((snapshot) {
+      final items = snapshot.docs.map(PurchaseItem.fromDoc).toList()
+        ..sort((a, b) {
+          final categoryCompare = a.category.compareTo(b.category);
+          return categoryCompare != 0
+              ? categoryCompare
+              : a.name.compareTo(b.name);
+        });
+      return activeOnly ? items.where((item) => item.active).toList() : items;
+    });
+  }
+
+  Future<void> savePurchaseItem({
+    String? purchaseItemId,
+    required String name,
+    required String category,
+    required String unit,
+    required bool active,
+    String? defaultSupplierId,
+    String? defaultSupplierName,
+    required bool affectsKitchenStock,
+    String? kitchenStockItemId,
+    String? kitchenStockItemName,
+    String notes = '',
+  }) async {
+    _requirePurchaseAccess(manage: true);
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) {
+      throw ArgumentError('Captura el nombre del insumo de compra.');
+    }
+    if (affectsKitchenStock && (kitchenStockItemId ?? '').trim().isEmpty) {
+      throw ArgumentError('Selecciona el insumo de cocina relacionado.');
+    }
+    final docRef = purchaseItemId == null || purchaseItemId.trim().isEmpty
+        ? _purchaseItemsRef.doc()
+        : _purchaseItemsRef.doc(purchaseItemId.trim());
+    await docRef.set({
+      'id': docRef.id,
+      'name': cleanName,
+      'normalizedName': cleanName.toLowerCase(),
+      'category': category.trim().isEmpty ? 'General' : category.trim(),
+      'unit': unit.trim().isEmpty ? 'pieza' : unit.trim(),
+      'active': active,
+      'defaultSupplierId': defaultSupplierId,
+      'defaultSupplierName': defaultSupplierName,
+      'affectsKitchenStock': affectsKitchenStock,
+      'kitchenStockItemId': affectsKitchenStock ? kitchenStockItemId : null,
+      'kitchenStockItemName': affectsKitchenStock ? kitchenStockItemName : null,
+      'notes': notes.trim(),
+      if (purchaseItemId == null || purchaseItemId.trim().isEmpty)
+        'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Stream<List<SupplierPurchase>> watchSupplierPurchases({
+    bool currentBranchOnly = true,
+  }) {
+    return _supplierPurchasesRef
+        .orderBy('purchaseDate', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          final purchases = snapshot.docs.map(SupplierPurchase.fromDoc);
+          return currentBranchOnly
+              ? _filterCurrentBranch(purchases, (purchase) => purchase.branchId)
+              : purchases.toList();
+        });
+  }
+
+  Stream<List<SupplierPayment>> watchSupplierPayments({
+    bool currentBranchOnly = true,
+  }) {
+    return _supplierPaymentsRef
+        .orderBy('paymentDate', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          final payments = snapshot.docs.map(SupplierPayment.fromDoc);
+          return currentBranchOnly
+              ? _filterCurrentBranch(payments, (payment) => payment.branchId)
+              : payments.toList();
+        });
+  }
+
+  Stream<List<SupplierPurchaseItem>> watchSupplierPurchaseItems(
+    String purchaseId,
+  ) {
+    return _supplierPurchasesRef
+        .doc(purchaseId)
+        .collection('items')
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs.map(SupplierPurchaseItem.fromDoc).toList(),
+        );
+  }
+
+  Future<void> createSupplierPurchase({
+    required Supplier supplier,
+    required DateTime purchaseDate,
+    required String folio,
+    required String documentType,
+    required List<PurchaseLineInput> items,
+    String notes = '',
+  }) async {
+    _requirePurchaseAccess(register: true);
+    if (items.isEmpty) {
+      throw ArgumentError('Agrega al menos un renglon de compra.');
+    }
+    final invalidItem = items.any(
+      (item) =>
+          item.purchaseItemName.trim().isEmpty ||
+          item.quantity <= 0 ||
+          item.unitCost < 0,
+    );
+    if (invalidItem) {
+      throw ArgumentError('Revisa cantidad y costo de los renglones.');
+    }
+    final employee = AppSession.instance.employee;
+    final total = items.fold<double>(
+      0,
+      (runningTotal, item) => runningTotal + item.total,
+    );
+    final purchaseRef = _supplierPurchasesRef.doc();
+    final batch = _db.batch();
+    final dueDate = purchaseDate.add(Duration(days: supplier.creditDays));
+    batch.set(purchaseRef, {
+      'id': purchaseRef.id,
+      ..._currentBranchFields,
+      'supplierId': supplier.id,
+      'supplierName': supplier.commercialName,
+      'purchaseDate': Timestamp.fromDate(purchaseDate),
+      'dueDate': Timestamp.fromDate(dueDate),
+      'paymentWeekdaySnapshot': supplier.paymentWeekday,
+      'paymentWeekdayNameSnapshot': supplier.paymentWeekdayName,
+      'folio': folio.trim(),
+      'documentType': documentType,
+      'status': 'pending',
+      'subtotal': total,
+      'total': total,
+      'paidTotal': 0.0,
+      'balance': total,
+      'notes': notes.trim(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'createdByEmployeeId': employee?.id ?? '',
+      'createdByEmployeeName': employee?.name ?? '',
+    });
+    for (final item in items) {
+      final itemRef = purchaseRef.collection('items').doc();
+      batch.set(itemRef, {
+        'id': itemRef.id,
+        'purchaseItemId': item.purchaseItemId,
+        'purchaseItemName': item.purchaseItemName.trim(),
+        'kitchenStockItemId': item.kitchenStockItemId,
+        'kitchenStockItemName': item.kitchenStockItemName,
+        'affectsKitchenStock': item.affectsKitchenStock,
+        'quantity': item.quantity,
+        'unit': item.unit,
+        'unitCost': item.unitCost,
+        'total': item.total,
+        'notes': item.notes.trim(),
+      });
+    }
+    await batch.commit();
+  }
+
+  Future<void> registerSupplierPayment({
+    required SupplierPurchase purchase,
+    required double amount,
+    required String method,
+    String reference = '',
+    String notes = '',
+  }) async {
+    _requirePurchaseAccess(pay: true);
+    if (amount <= 0) {
+      throw ArgumentError('Captura un monto de pago valido.');
+    }
+    if (amount > purchase.balance + 0.01) {
+      throw ArgumentError('No puedes pagar mas del saldo pendiente.');
+    }
+    CashSession? openCash;
+    if (method == 'cash') {
+      openCash = await getOpenCashSession();
+      if (openCash == null || !_matchesCurrentBranch(openCash.branchId)) {
+        throw StateError(
+          'No hay caja abierta para registrar pago en efectivo.',
+        );
+      }
+    }
+
+    final employee = AppSession.instance.employee;
+    final paymentRef = _supplierPaymentsRef.doc();
+    final purchaseRef = _supplierPurchasesRef.doc(purchase.id);
+    final nextPaidTotal = purchase.paidTotal + amount;
+    final nextBalance = (purchase.total - nextPaidTotal).clamp(
+      0,
+      double.infinity,
+    );
+    final nextStatus = nextBalance <= 0.01 ? 'paid' : 'partial';
+    final batch = _db.batch();
+    batch.set(paymentRef, {
+      'id': paymentRef.id,
+      ..._currentBranchFields,
+      'supplierId': purchase.supplierId,
+      'supplierName': purchase.supplierName,
+      'purchaseId': purchase.id,
+      'purchaseFolio': purchase.folio,
+      'paymentDate': FieldValue.serverTimestamp(),
+      'amount': amount,
+      'method': method,
+      'reference': reference.trim(),
+      'notes': notes.trim(),
+      'status': 'active',
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdByEmployeeId': employee?.id ?? '',
+      'createdByEmployeeName': employee?.name ?? '',
+    });
+    batch.update(purchaseRef, {
+      'paidTotal': nextPaidTotal,
+      'balance': nextBalance,
+      'status': nextStatus,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    if (method == 'cash' && openCash != null) {
+      final withdrawalRef = _cashWithdrawalRequestsRef.doc();
+      batch.set(withdrawalRef, {
+        'id': withdrawalRef.id,
+        'cashSessionId': openCash.id,
+        'businessDate': openCash.businessDate,
+        ..._currentBranchFields,
+        'amount': amount,
+        'reason': 'Pago proveedor ${purchase.supplierName} ${purchase.folio}',
+        'requestedByEmployeeId': employee?.id ?? '',
+        'requestedByEmployeeName': employee?.name ?? '',
+        'requestedAt': FieldValue.serverTimestamp(),
+        'status': 'approved',
+        'authorizedByEmployeeId': employee?.id ?? '',
+        'authorizedByEmployeeName': employee?.name ?? '',
+        'authorizedAt': FieldValue.serverTimestamp(),
+        'adminNotes': 'Generado desde Compras',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+        'supplierPaymentId': paymentRef.id,
+      });
+    }
+    await batch.commit();
+  }
+
+  List<SupplierStatementRow> buildSupplierStatement({
+    required String supplierId,
+    required Iterable<SupplierPurchase> purchases,
+    required Iterable<SupplierPayment> payments,
+  }) {
+    final events = <SupplierStatementRow>[];
+    for (final purchase in purchases.where(
+      (purchase) => purchase.supplierId == supplierId,
+    )) {
+      if (purchase.status == 'cancelled') continue;
+      events.add(
+        SupplierStatementRow(
+          date: purchase.purchaseDate,
+          type: 'Compra',
+          folio: purchase.folio,
+          charge: purchase.total,
+          credit: 0,
+          balance: 0,
+          method: '',
+          notes: purchase.notes,
+        ),
+      );
+    }
+    for (final payment in payments.where(
+      (payment) =>
+          payment.supplierId == supplierId && payment.status == 'active',
+    )) {
+      events.add(
+        SupplierStatementRow(
+          date: payment.paymentDate,
+          type: 'Pago',
+          folio: payment.purchaseFolio,
+          charge: 0,
+          credit: payment.amount,
+          balance: 0,
+          method: payment.method,
+          notes: payment.notes,
+        ),
+      );
+    }
+    events.sort((a, b) => a.date.compareTo(b.date));
+    var balance = 0.0;
+    return events.map((event) {
+      balance += event.charge - event.credit;
+      return SupplierStatementRow(
+        date: event.date,
+        type: event.type,
+        folio: event.folio,
+        charge: event.charge,
+        credit: event.credit,
+        balance: balance,
+        method: event.method,
+        notes: event.notes,
+      );
+    }).toList();
+  }
+
+  List<PurchaseSupplierReportRow> buildPurchasesBySupplierReport({
+    required Iterable<Supplier> suppliers,
+    required Iterable<SupplierPurchase> purchases,
+    required Iterable<SupplierPayment> payments,
+  }) {
+    final supplierById = {
+      for (final supplier in suppliers) supplier.id: supplier,
+    };
+    final ids = <String>{
+      ...purchases.map((purchase) => purchase.supplierId),
+      ...payments.map((payment) => payment.supplierId),
+    };
+    final rows = <PurchaseSupplierReportRow>[];
+    for (final supplierId in ids) {
+      final supplier = supplierById[supplierId];
+      final supplierPurchases = purchases.where(
+        (purchase) =>
+            purchase.supplierId == supplierId && purchase.status != 'cancelled',
+      );
+      final supplierPayments = payments.where(
+        (payment) =>
+            payment.supplierId == supplierId && payment.status == 'active',
+      );
+      final purchaseList = supplierPurchases.toList();
+      final paymentList = supplierPayments.toList();
+      final totalPurchased = supplierPurchases.fold<double>(
+        0,
+        (runningTotal, purchase) => runningTotal + purchase.total,
+      );
+      final totalPaid = supplierPayments.fold<double>(
+        0,
+        (runningTotal, payment) => runningTotal + payment.amount,
+      );
+      rows.add(
+        PurchaseSupplierReportRow(
+          supplierId: supplierId,
+          supplierName:
+              supplier?.commercialName ??
+              (purchaseList.isEmpty ? null : purchaseList.first.supplierName) ??
+              (paymentList.isEmpty ? null : paymentList.first.supplierName) ??
+              'Proveedor',
+          totalPurchased: totalPurchased,
+          totalPaid: totalPaid,
+          balance: (totalPurchased - totalPaid).clamp(0, double.infinity),
+          noteCount: supplierPurchases.length,
+          paymentWeekdayName: supplier?.paymentWeekdayName ?? 'Sin dia fijo',
+        ),
+      );
+    }
+    rows.sort((a, b) => b.balance.compareTo(a.balance));
+    return rows;
   }
 
   Stream<List<ActiveSession>> watchActiveSessions() {
@@ -4849,6 +5281,26 @@ class TacoPosRepository {
       return;
     }
     throw StateError('No tienes permiso para autorizar retiros.');
+  }
+
+  void _requirePurchaseAccess({
+    bool manage = false,
+    bool register = false,
+    bool pay = false,
+  }) {
+    final employee = AppSession.instance.employee;
+    if (employee?.hasAdminAccess == true) {
+      return;
+    }
+    final allowed =
+        employee?.canViewPurchases == true ||
+        (manage && employee?.canManageSuppliers == true) ||
+        (register && employee?.canRegisterPurchases == true) ||
+        (pay && employee?.canPaySuppliers == true);
+    if (allowed) {
+      return;
+    }
+    throw StateError('No tienes permiso para administrar compras.');
   }
 
   void _requireOpenKitchen() {
