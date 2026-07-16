@@ -26,6 +26,12 @@ class Payment {
     this.businessDate,
     this.cashReceivedAmount,
     this.cashChangeAmount,
+    this.subtotalBeforeDiscount = 0,
+    this.discountAmount = 0,
+    this.totalAfterDiscount = 0,
+    this.appliedDiscountType,
+    this.appliedDiscountName,
+    this.appliedDiscountPercent = 0,
     this.createdAt,
     this.createdBy,
     this.status = 'active',
@@ -61,6 +67,12 @@ class Payment {
   final String? businessDate;
   final double? cashReceivedAmount;
   final double? cashChangeAmount;
+  final double subtotalBeforeDiscount;
+  final double discountAmount;
+  final double totalAfterDiscount;
+  final String? appliedDiscountType;
+  final String? appliedDiscountName;
+  final double appliedDiscountPercent;
   final DateTime? createdAt;
   final String? createdBy;
   final String status;
@@ -118,6 +130,17 @@ class Payment {
       businessDate: data['businessDate'] as String?,
       cashReceivedAmount: (data['cashReceivedAmount'] as num?)?.toDouble(),
       cashChangeAmount: (data['cashChangeAmount'] as num?)?.toDouble(),
+      subtotalBeforeDiscount:
+          (data['subtotalBeforeDiscount'] as num?)?.toDouble() ?? baseAmount,
+      discountAmount: (data['discountAmount'] as num?)?.toDouble() ?? 0,
+      totalAfterDiscount:
+          (data['totalAfterDiscount'] as num?)?.toDouble() ??
+          (data['chargedAmount'] as num?)?.toDouble() ??
+          baseAmount,
+      appliedDiscountType: data['appliedDiscountType'] as String?,
+      appliedDiscountName: data['appliedDiscountName'] as String?,
+      appliedDiscountPercent:
+          (data['appliedDiscountPercent'] as num?)?.toDouble() ?? 0,
       createdAt: _toDate(data['createdAt']),
       createdBy: data['createdBy'] as String?,
       status: data['status'] as String? ?? 'active',

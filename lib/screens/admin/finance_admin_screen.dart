@@ -941,6 +941,7 @@ class _PartnerDialogState extends State<_PartnerDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _ownershipController;
   late final TextEditingController _phoneController;
+  late final TextEditingController _pinController;
   late final TextEditingController _notesController;
   late bool _active;
   bool _saving = false;
@@ -956,6 +957,7 @@ class _PartnerDialogState extends State<_PartnerDialog> {
           : partner.ownershipPercent.toStringAsFixed(2),
     );
     _phoneController = TextEditingController(text: partner?.phone ?? '');
+    _pinController = TextEditingController();
     _notesController = TextEditingController(text: partner?.notes ?? '');
     _active = partner?.active ?? true;
   }
@@ -965,6 +967,7 @@ class _PartnerDialogState extends State<_PartnerDialog> {
     _nameController.dispose();
     _ownershipController.dispose();
     _phoneController.dispose();
+    _pinController.dispose();
     _notesController.dispose();
     super.dispose();
   }
@@ -982,6 +985,7 @@ class _PartnerDialogState extends State<_PartnerDialog> {
             _field(_nameController, 'Nombre', 260),
             _field(_ownershipController, 'Participacion %', 140),
             _field(_phoneController, 'Telefono', 180),
+            _field(_pinController, 'Nuevo PIN', 140, obscure: true),
             SizedBox(
               width: 160,
               child: SwitchListTile(
@@ -1008,11 +1012,17 @@ class _PartnerDialogState extends State<_PartnerDialog> {
     );
   }
 
-  Widget _field(TextEditingController controller, String label, double width) {
+  Widget _field(
+    TextEditingController controller,
+    String label,
+    double width, {
+    bool obscure = false,
+  }) {
     return SizedBox(
       width: width,
       child: TextField(
         controller: controller,
+        obscureText: obscure,
         decoration: InputDecoration(labelText: label),
       ),
     );
@@ -1027,6 +1037,7 @@ class _PartnerDialogState extends State<_PartnerDialog> {
         active: _active,
         ownershipPercent: _parse(_ownershipController.text),
         phone: _phoneController.text,
+        pin: _pinController.text,
         notes: _notesController.text,
       );
       if (!mounted) return;

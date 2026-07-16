@@ -25,6 +25,10 @@ import '../models/restaurant.dart';
 import '../utils/category_utils.dart';
 import 'app_session.dart';
 
+double _numberToDouble(Object? value) {
+  return value is num ? value.toDouble() : 0.0;
+}
+
 class KitchenOrderBundle {
   const KitchenOrderBundle({required this.order, required this.items});
 
@@ -118,6 +122,110 @@ class CashPaymentDetails {
 
   final double receivedAmount;
   final double changeAmount;
+}
+
+class AppliedDiscountDetails {
+  const AppliedDiscountDetails({
+    required this.type,
+    required this.name,
+    required this.percent,
+    required this.amountBeforeDiscount,
+    required this.discountAmount,
+    required this.totalAfterDiscount,
+    this.authorizedByPartnerId,
+    this.authorizedByPartnerName,
+    this.employeeBeneficiaryId,
+    this.employeeBeneficiaryName,
+    this.reason = '',
+  });
+
+  final String type;
+  final String name;
+  final double percent;
+  final double amountBeforeDiscount;
+  final double discountAmount;
+  final double totalAfterDiscount;
+  final String? authorizedByPartnerId;
+  final String? authorizedByPartnerName;
+  final String? employeeBeneficiaryId;
+  final String? employeeBeneficiaryName;
+  final String reason;
+}
+
+class GeneralDiscountConfig {
+  const GeneralDiscountConfig({
+    required this.active,
+    required this.name,
+    required this.percent,
+    this.description = '',
+    this.branchId = 'all',
+  });
+
+  final bool active;
+  final String name;
+  final double percent;
+  final String description;
+  final String branchId;
+
+  bool appliesToCurrentBranch(String currentBranchId) {
+    return active &&
+        percent > 0 &&
+        (branchId == 'all' || branchId.isEmpty || branchId == currentBranchId);
+  }
+}
+
+class DiscountUsageRow {
+  const DiscountUsageRow({
+    required this.id,
+    required this.businessDate,
+    required this.discountType,
+    required this.discountName,
+    required this.amountBeforeDiscount,
+    required this.discountAmount,
+    required this.totalAfterDiscount,
+    required this.status,
+    this.employeeName = '',
+    this.partnerName = '',
+    this.orderId = '',
+    this.createdByEmployeeName = '',
+    this.branchId = '',
+    this.branchName = '',
+  });
+
+  final String id;
+  final String businessDate;
+  final String discountType;
+  final String discountName;
+  final double amountBeforeDiscount;
+  final double discountAmount;
+  final double totalAfterDiscount;
+  final String status;
+  final String employeeName;
+  final String partnerName;
+  final String orderId;
+  final String createdByEmployeeName;
+  final String branchId;
+  final String branchName;
+
+  factory DiscountUsageRow.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data() ?? {};
+    return DiscountUsageRow(
+      id: doc.id,
+      businessDate: data['businessDate'] as String? ?? '',
+      discountType: data['discountType'] as String? ?? '',
+      discountName: data['discountName'] as String? ?? '',
+      amountBeforeDiscount: _numberToDouble(data['amountBeforeDiscount']),
+      discountAmount: _numberToDouble(data['discountAmount']),
+      totalAfterDiscount: _numberToDouble(data['totalAfterDiscount']),
+      status: data['status'] as String? ?? 'active',
+      employeeName: data['employeeName'] as String? ?? '',
+      partnerName: data['partnerName'] as String? ?? '',
+      orderId: data['orderId'] as String? ?? '',
+      createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
+      branchId: data['branchId'] as String? ?? '',
+      branchName: data['branchName'] as String? ?? '',
+    );
+  }
 }
 
 class KitchenCloseInput {
@@ -291,6 +399,12 @@ class TacoPosRepository {
 
   CollectionReference<Map<String, dynamic>> get _partnerContributionsRef =>
       _restaurantRef.collection('partnerContributions');
+
+  CollectionReference<Map<String, dynamic>> get _discountUsageRef =>
+      _restaurantRef.collection('discountUsage');
+
+  DocumentReference<Map<String, dynamic>> get _discountSettingsRef =>
+      _restaurantRef.collection('settings').doc('discounts');
 
   Map<String, Object?> get _currentBranchFields {
     final session = AppSession.instance;
@@ -920,6 +1034,15 @@ class TacoPosRepository {
     });
   }
 
+  Future<List<Employee>> getEmployeesOnce({bool activeOnly = true}) async {
+    final snapshot = await _employeesRef.get();
+    final employees = snapshot.docs.map(Employee.fromDoc).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    return activeOnly
+        ? employees.where((employee) => employee.active).toList()
+        : employees;
+  }
+
   Stream<List<Supplier>> watchSuppliers({bool activeOnly = false}) {
     return _suppliersRef.snapshots().map((snapshot) {
       final suppliers = snapshot.docs.map(Supplier.fromDoc).toList()
@@ -1074,6 +1197,226 @@ class TacoPosRepository {
     });
   }
 
+  Future<List<Partner>> getPartnersOnce({bool activeOnly = false}) async {
+    final snapshot = await _partnersRef.get();
+    final partners = snapshot.docs.map(Partner.fromDoc).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    return activeOnly
+        ? partners.where((partner) => partner.active).toList()
+        : partners;
+  }
+
+  Stream<GeneralDiscountConfig> watchGeneralDiscountConfig() {
+    return _discountSettingsRef.snapshots().map(
+      (doc) => _generalDiscountFromData(doc.data()),
+    );
+  }
+
+  Future<GeneralDiscountConfig> getGeneralDiscountConfigOnce() async {
+    final doc = await _discountSettingsRef.get();
+    return _generalDiscountFromData(doc.data());
+  }
+
+  Future<void> saveGeneralDiscountConfig({
+    required bool active,
+    required String name,
+    required double percent,
+    String description = '',
+    String branchId = 'all',
+  }) async {
+    _requireAdminPermission(
+      AppSession.instance.employee?.hasAdminAccess == true,
+      'No tienes permiso para configurar descuentos.',
+    );
+    if (percent < 0 || percent > 100) {
+      throw ArgumentError('Captura un porcentaje entre 0 y 100.');
+    }
+    await _discountSettingsRef.set({
+      'active': active,
+      'name': name.trim().isEmpty ? 'Descuento general' : name.trim(),
+      'percent': percent,
+      'description': description.trim(),
+      'branchId': branchId.trim().isEmpty ? 'all' : branchId.trim(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      ..._employeeAuditFields(prefix: 'updatedBy'),
+    }, SetOptions(merge: true));
+  }
+
+  Stream<List<DiscountUsageRow>> watchDiscountUsage() {
+    return _discountUsageRef
+        .orderBy('createdAt', descending: true)
+        .snapshots()
+        .map(
+          (snapshot) => snapshot.docs
+              .map(DiscountUsageRow.fromDoc)
+              .where((row) => _matchesCurrentBranch(row.branchId))
+              .toList(),
+        );
+  }
+
+  Future<AppliedDiscountDetails?> authorizeDiscount({
+    required PosOrder order,
+    required double amountBeforeDiscount,
+    required String discountType,
+    String? employeeId,
+    String pin = '',
+    String? partnerId,
+    String reason = '',
+  }) async {
+    if (amountBeforeDiscount <= 0 || order.paymentStatus == 'paid') {
+      throw StateError('No hay saldo pendiente para aplicar descuento.');
+    }
+    final cashSession = await _requireOpenCashSessionForPayment();
+    final type = discountType.trim();
+
+    if (type == 'general') {
+      final config = await getGeneralDiscountConfigOnce();
+      if (!config.appliesToCurrentBranch(AppSession.instance.currentBranchId)) {
+        throw StateError('El descuento general no esta activo.');
+      }
+      return _discountDetails(
+        type: 'general',
+        name: config.name,
+        percent: config.percent,
+        amountBeforeDiscount: amountBeforeDiscount,
+      );
+    }
+
+    if (type == 'employee_free_meal' || type == 'employee_30') {
+      if (type == 'employee_free_meal' && order.orderType == 'takeout') {
+        throw StateError('La comida del dia solo aplica en consumo local.');
+      }
+      final employee = await _employeeById(employeeId);
+      if (employee == null || !employee.active || employee.pin != pin.trim()) {
+        throw StateError('PIN incorrecto. No se aplico descuento.');
+      }
+      await _ensureEmployeeDiscountNotUsed(
+        employeeId: employee.id,
+        discountType: type,
+        businessDate: cashSession.businessDate,
+        branchId: order.branchId,
+      );
+      final percent = type == 'employee_free_meal' ? 100.0 : 30.0;
+      final name = type == 'employee_free_meal'
+          ? 'Comida empleado del dia'
+          : 'Descuento empleado 30%';
+      return _discountDetails(
+        type: type,
+        name: name,
+        percent: percent,
+        amountBeforeDiscount: amountBeforeDiscount,
+        employeeBeneficiaryId: employee.id,
+        employeeBeneficiaryName: employee.name,
+      );
+    }
+
+    if (type == 'family_friend_20' || type == 'partner_50') {
+      final partner = await _partnerById(partnerId);
+      if (partner == null || !partner.active || partner.pin != pin.trim()) {
+        throw StateError(
+          type == 'family_friend_20'
+              ? 'No se pudo autorizar el descuento.'
+              : 'PIN incorrecto. No se aplico descuento.',
+        );
+      }
+      final percent = type == 'family_friend_20' ? 20.0 : 50.0;
+      final name = type == 'family_friend_20'
+          ? 'Familia / amigos 20%'
+          : 'Socio 50%';
+      return _discountDetails(
+        type: type,
+        name: name,
+        percent: percent,
+        amountBeforeDiscount: amountBeforeDiscount,
+        authorizedByPartnerId: partner.id,
+        authorizedByPartnerName: partner.name,
+        reason: reason.trim(),
+      );
+    }
+
+    throw ArgumentError('Selecciona un descuento valido.');
+  }
+
+  GeneralDiscountConfig _generalDiscountFromData(Map<String, dynamic>? data) {
+    final values = data ?? const {};
+    return GeneralDiscountConfig(
+      active: values['active'] as bool? ?? false,
+      name: values['name'] as String? ?? 'Descuento general',
+      percent: _numberToDouble(values['percent']),
+      description: values['description'] as String? ?? '',
+      branchId: values['branchId'] as String? ?? 'all',
+    );
+  }
+
+  AppliedDiscountDetails _discountDetails({
+    required String type,
+    required String name,
+    required double percent,
+    required double amountBeforeDiscount,
+    String? authorizedByPartnerId,
+    String? authorizedByPartnerName,
+    String? employeeBeneficiaryId,
+    String? employeeBeneficiaryName,
+    String reason = '',
+  }) {
+    final cleanPercent = percent.clamp(0, 100).toDouble();
+    final discountAmount = amountBeforeDiscount * cleanPercent / 100;
+    final totalAfterDiscount = (amountBeforeDiscount - discountAmount).clamp(
+      0,
+      double.infinity,
+    );
+    return AppliedDiscountDetails(
+      type: type,
+      name: name,
+      percent: cleanPercent,
+      amountBeforeDiscount: amountBeforeDiscount,
+      discountAmount: discountAmount,
+      totalAfterDiscount: totalAfterDiscount.toDouble(),
+      authorizedByPartnerId: authorizedByPartnerId,
+      authorizedByPartnerName: authorizedByPartnerName,
+      employeeBeneficiaryId: employeeBeneficiaryId,
+      employeeBeneficiaryName: employeeBeneficiaryName,
+      reason: reason,
+    );
+  }
+
+  Future<Employee?> _employeeById(String? employeeId) async {
+    final cleanId = employeeId?.trim();
+    if (cleanId == null || cleanId.isEmpty) return null;
+    final doc = await _employeesRef.doc(cleanId).get();
+    return doc.exists ? Employee.fromDoc(doc) : null;
+  }
+
+  Future<Partner?> _partnerById(String? partnerId) async {
+    final cleanId = partnerId?.trim();
+    if (cleanId == null || cleanId.isEmpty) return null;
+    final doc = await _partnersRef.doc(cleanId).get();
+    return doc.exists ? Partner.fromDoc(doc) : null;
+  }
+
+  Future<void> _ensureEmployeeDiscountNotUsed({
+    required String employeeId,
+    required String discountType,
+    required String businessDate,
+    required String branchId,
+  }) async {
+    final snapshot = await _discountUsageRef
+        .where('employeeId', isEqualTo: employeeId)
+        .where('discountType', isEqualTo: discountType)
+        .where('businessDate', isEqualTo: businessDate)
+        .where('branchId', isEqualTo: branchId)
+        .where('status', isEqualTo: 'active')
+        .limit(1)
+        .get();
+    if (snapshot.docs.isNotEmpty) {
+      throw StateError(
+        discountType == 'employee_free_meal'
+            ? 'Este empleado ya uso su comida del dia.'
+            : 'Este empleado ya uso su descuento del 30% hoy.',
+      );
+    }
+  }
+
   Stream<List<PartnerContribution>> watchPartnerContributions({
     bool currentBranchOnly = true,
   }) {
@@ -1110,6 +1453,7 @@ class TacoPosRepository {
         'active': true,
         'ownershipPercent': 0.0,
         'phone': '',
+        'pin': '',
         'notes': '',
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
@@ -1127,6 +1471,7 @@ class TacoPosRepository {
     required bool active,
     double ownershipPercent = 0,
     String phone = '',
+    String pin = '',
     String notes = '',
   }) async {
     _requirePurchaseAccess(manage: true);
@@ -1143,6 +1488,7 @@ class TacoPosRepository {
       'active': active,
       'ownershipPercent': ownershipPercent < 0 ? 0 : ownershipPercent,
       'phone': phone.trim(),
+      if (pin.trim().isNotEmpty) 'pin': pin.trim(),
       'notes': notes.trim(),
       if (partnerId == null || partnerId.trim().isEmpty)
         'createdAt': FieldValue.serverTimestamp(),
@@ -5120,6 +5466,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
     CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
   }) async {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
@@ -5158,6 +5505,7 @@ class TacoPosRepository {
       employeeId: employeeId,
       employeeName: employeeName,
       cashDetails: cashDetails,
+      discount: discount,
     );
 
     for (final doc in itemsSnapshot.docs) {
@@ -5172,7 +5520,20 @@ class TacoPosRepository {
       }
     }
 
-    _closeOrderInBatch(batch, order, paidTotal: order.total);
+    _recordDiscountUsageInBatch(
+      batch,
+      usageRef: _discountUsageRef.doc(),
+      order: order,
+      paymentId: paymentRef.id,
+      cashSession: cashSession,
+      discount: discount,
+    );
+    _closeOrderInBatch(
+      batch,
+      order,
+      paidTotal: order.total,
+      discount: discount,
+    );
     await batch.commit();
     return const PaymentResult(allPaid: true);
   }
@@ -5184,6 +5545,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
     CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
   }) async {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
@@ -5232,6 +5594,7 @@ class TacoPosRepository {
       employeeId: employeeId,
       employeeName: employeeName,
       cashDetails: cashDetails,
+      discount: discount,
     );
 
     for (final doc in itemsSnapshot.docs) {
@@ -5253,6 +5616,15 @@ class TacoPosRepository {
       order,
       baseAmount: baseAmount,
       closeItemsSnapshot: itemsSnapshot,
+      discount: discount,
+    );
+    _recordDiscountUsageInBatch(
+      batch,
+      usageRef: _discountUsageRef.doc(),
+      order: order,
+      paymentId: paymentRef.id,
+      cashSession: cashSession,
+      discount: discount,
     );
     await batch.commit();
     return PaymentResult(allPaid: allPaid);
@@ -5265,6 +5637,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
     CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
   }) async {
     final selectedPeople = personNumbers.toSet().toList()..sort();
     if (selectedPeople.isEmpty) {
@@ -5278,6 +5651,7 @@ class TacoPosRepository {
         employeeId: employeeId,
         employeeName: employeeName,
         cashDetails: cashDetails,
+        discount: discount,
       );
     }
 
@@ -5325,6 +5699,7 @@ class TacoPosRepository {
       employeeId: employeeId,
       employeeName: employeeName,
       cashDetails: cashDetails,
+      discount: discount,
     );
 
     for (final doc in itemsSnapshot.docs) {
@@ -5346,6 +5721,15 @@ class TacoPosRepository {
       order,
       baseAmount: baseAmount,
       closeItemsSnapshot: itemsSnapshot,
+      discount: discount,
+    );
+    _recordDiscountUsageInBatch(
+      batch,
+      usageRef: _discountUsageRef.doc(),
+      order: order,
+      paymentId: paymentRef.id,
+      cashSession: cashSession,
+      discount: discount,
     );
     await batch.commit();
     return PaymentResult(allPaid: allPaid);
@@ -5358,6 +5742,7 @@ class TacoPosRepository {
     String? employeeId,
     String? employeeName,
     CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
   }) async {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
@@ -5388,6 +5773,7 @@ class TacoPosRepository {
       employeeId: employeeId,
       employeeName: employeeName,
       cashDetails: cashDetails,
+      discount: discount,
     );
 
     final allPaid = _updateOrderPaymentTotalsInBatch(
@@ -5396,6 +5782,15 @@ class TacoPosRepository {
       baseAmount: baseAmount,
       closeItemsSnapshot: itemsSnapshot,
       markItemsOnlyIfClosed: true,
+      discount: discount,
+    );
+    _recordDiscountUsageInBatch(
+      batch,
+      usageRef: _discountUsageRef.doc(),
+      order: order,
+      paymentId: paymentRef.id,
+      cashSession: cashSession,
+      discount: discount,
     );
     await batch.commit();
     return PaymentResult(allPaid: allPaid);
@@ -5465,6 +5860,7 @@ class TacoPosRepository {
     required double baseAmount,
     required QuerySnapshot<Map<String, dynamic>> closeItemsSnapshot,
     bool markItemsOnlyIfClosed = false,
+    AppliedDiscountDetails? discount,
   }) {
     final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
     final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
@@ -5484,6 +5880,11 @@ class TacoPosRepository {
         'paymentStatus': 'partial',
         'paidTotal': paidTotal,
         'pendingTotal': pendingTotal,
+        if (discount != null) ...{
+          'totalDiscountAmount': FieldValue.increment(discount.discountAmount),
+          'lastAppliedDiscountType': discount.type,
+          'lastAppliedDiscountName': discount.name,
+        },
         'updatedAt': FieldValue.serverTimestamp(),
       });
       if (!markItemsOnlyIfClosed) {
@@ -5498,12 +5899,18 @@ class TacoPosRepository {
     WriteBatch batch,
     PosOrder order, {
     required double paidTotal,
+    AppliedDiscountDetails? discount,
   }) {
     batch.update(_ordersRef.doc(order.id), {
       'status': 'paid',
       'paymentStatus': 'paid',
       'paidTotal': paidTotal,
       'pendingTotal': 0.0,
+      if (discount != null) ...{
+        'totalDiscountAmount': FieldValue.increment(discount.discountAmount),
+        'lastAppliedDiscountType': discount.type,
+        'lastAppliedDiscountName': discount.name,
+      },
       'paidAt': FieldValue.serverTimestamp(),
       ..._currentBranchFields,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -5533,6 +5940,7 @@ class TacoPosRepository {
     String? platformId,
     String? platformName,
     CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
   }) {
     if (method == 'employee_consumption' &&
         (employeeId == null || employeeName == null)) {
@@ -5540,10 +5948,14 @@ class TacoPosRepository {
     }
 
     final cardFeeRate = method == 'card' ? cardSurchargeRate : 0.0;
-    final cardFeeAbsorbedAmount = baseAmount * cardFeeRate;
+    final discountAmount = (discount?.discountAmount ?? 0).clamp(0, baseAmount);
+    final chargedAmount = (baseAmount - discountAmount).clamp(
+      0,
+      double.infinity,
+    );
+    final cardFeeAbsorbedAmount = chargedAmount * cardFeeRate;
     final surchargeRate = 0.0;
     final surchargeAmount = 0.0;
-    final chargedAmount = baseAmount;
     if (method == 'cash' &&
         cashDetails != null &&
         cashDetails.receivedAmount + 0.01 < chargedAmount) {
@@ -5559,10 +5971,25 @@ class TacoPosRepository {
       'branchId': order.branchId,
       'branchName': order.branchName,
       'type': type,
+      'paymentType': type,
       'personNumber': personNumber,
       'personName': personName,
       'method': method,
       'status': 'active',
+      'subtotalBeforeDiscount': baseAmount,
+      'discountAmount': discountAmount,
+      'totalAfterDiscount': chargedAmount,
+      'appliedDiscountType': discount?.type,
+      'appliedDiscountName': discount?.name,
+      'appliedDiscountPercent': discount?.percent ?? 0.0,
+      'discountAuthorizedByPartnerId': discount?.authorizedByPartnerId,
+      'discountAuthorizedByPartnerName': discount?.authorizedByPartnerName,
+      'discountEmployeeBeneficiaryId': discount?.employeeBeneficiaryId,
+      'discountEmployeeBeneficiaryName': discount?.employeeBeneficiaryName,
+      if (discount != null) ...{
+        'discountAppliedAt': FieldValue.serverTimestamp(),
+        ..._employeeAuditFields(prefix: 'discountAppliedBy'),
+      },
       'baseAmount': baseAmount,
       'amount': baseAmount,
       'surchargeRate': surchargeRate,
@@ -5582,6 +6009,41 @@ class TacoPosRepository {
       'businessDate': cashSession.businessDate,
       'createdAt': FieldValue.serverTimestamp(),
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      ..._employeeAuditFields(prefix: 'createdBy'),
+    });
+  }
+
+  void _recordDiscountUsageInBatch(
+    WriteBatch batch, {
+    required DocumentReference<Map<String, dynamic>> usageRef,
+    required PosOrder order,
+    required String paymentId,
+    required CashSession cashSession,
+    required AppliedDiscountDetails? discount,
+  }) {
+    if (discount == null || discount.discountAmount <= 0) {
+      return;
+    }
+    batch.set(usageRef, {
+      'restaurantId': order.restaurantId,
+      'restaurantName': order.restaurantName,
+      'branchId': order.branchId,
+      'branchName': order.branchName,
+      'businessDate': cashSession.businessDate,
+      'employeeId': discount.employeeBeneficiaryId,
+      'employeeName': discount.employeeBeneficiaryName,
+      'partnerId': discount.authorizedByPartnerId,
+      'partnerName': discount.authorizedByPartnerName,
+      'discountType': discount.type,
+      'discountName': discount.name,
+      'orderId': order.id,
+      'paymentId': paymentId,
+      'amountBeforeDiscount': discount.amountBeforeDiscount,
+      'discountAmount': discount.discountAmount,
+      'totalAfterDiscount': discount.totalAfterDiscount,
+      'reason': discount.reason,
+      'status': 'active',
+      'createdAt': FieldValue.serverTimestamp(),
       ..._employeeAuditFields(prefix: 'createdBy'),
     });
   }
@@ -5616,6 +6078,9 @@ class TacoPosRepository {
     if (!payment.isActive) {
       throw StateError('El pago ya esta cancelado.');
     }
+    final cancelledDiscountAmount = _numberToDouble(
+      paymentDoc.data()?['discountAmount'],
+    );
 
     final paymentsSnapshot = await orderRef.collection('payments').get();
     final paidTotal = paymentsSnapshot.docs
@@ -5634,6 +6099,18 @@ class TacoPosRepository {
       ..._employeeAuditFields(prefix: 'cancelledBy'),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    final discountUsageSnapshot = await _discountUsageRef
+        .where('paymentId', isEqualTo: paymentId)
+        .where('status', isEqualTo: 'active')
+        .get();
+    for (final doc in discountUsageSnapshot.docs) {
+      batch.update(doc.reference, {
+        'status': 'cancelled',
+        'cancelledAt': FieldValue.serverTimestamp(),
+        'cancelReason': cleanReason,
+        ..._employeeAuditFields(prefix: 'cancelledBy'),
+      });
+    }
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
       if (item.paymentId == paymentId) {
@@ -5649,6 +6126,8 @@ class TacoPosRepository {
       'paymentStatus': paymentStatus,
       'paidTotal': paidTotal,
       'pendingTotal': pendingTotal,
+      if (cancelledDiscountAmount > 0)
+        'totalDiscountAmount': FieldValue.increment(-cancelledDiscountAmount),
       'paidAt': FieldValue.delete(),
       'updatedAt': FieldValue.serverTimestamp(),
     });

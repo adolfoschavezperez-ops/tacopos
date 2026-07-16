@@ -1886,7 +1886,7 @@ class _OrderItemRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '${item.qty} ${item.productName}',
+                    formatOrderItemDisplayName(item),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -1897,19 +1897,17 @@ class _OrderItemRow extends StatelessWidget {
                       fontWeight: FontWeight.w900,
                     ),
                   ),
-                  SizedBox(height: compact ? 1 : 2),
-                  Text(
-                    '${item.category} | ${formatKitchenStatus(item.kitchenStatus)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: BrandColors.textMuted.withValues(
-                        alpha: cancelled ? 0.75 : 1,
+                  if (!cancelled &&
+                      !locked &&
+                      !item.hasCancellationRequested) ...[
+                    SizedBox(height: compact ? 3 : 5),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: StatusBadge(
+                        style: kitchenStatusStyle(item.kitchenStatus),
                       ),
-                      fontSize: compact ? 10.5 : 12,
-                      decoration: textDecoration,
                     ),
-                  ),
+                  ],
                   if (cancelled)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),

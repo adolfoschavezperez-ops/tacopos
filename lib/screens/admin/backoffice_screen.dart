@@ -23,6 +23,7 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import 'cash_admin_screen.dart';
 import 'branch_catalog_screen.dart';
+import 'discount_admin_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'finance_admin_screen.dart';
 import 'kitchen_admin_screen.dart';
@@ -1350,6 +1351,16 @@ class _SettingsSection extends StatelessWidget {
           () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const EmployeeCatalogScreen()),
+          ),
+        ),
+      if (employee?.hasAdminAccess == true)
+        _SettingsLink(
+          'Descuentos',
+          'Promocion general e historial de descuentos.',
+          Icons.percent_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const DiscountAdminScreen()),
           ),
         ),
       if (employee?.canManageKitchenStock == true)

@@ -409,6 +409,7 @@ class Partner {
     required this.active,
     this.ownershipPercent = 0,
     this.phone = '',
+    this.pin = '',
     this.notes = '',
     this.createdAt,
     this.updatedAt,
@@ -419,6 +420,7 @@ class Partner {
   final bool active;
   final double ownershipPercent;
   final String phone;
+  final String pin;
   final String notes;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -431,6 +433,7 @@ class Partner {
       active: data['active'] as bool? ?? true,
       ownershipPercent: _toDouble(data['ownershipPercent']),
       phone: data['phone'] as String? ?? '',
+      pin: data['pin'] as String? ?? '',
       notes: data['notes'] as String? ?? '',
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),

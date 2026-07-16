@@ -1,3 +1,27 @@
+import '../models/order_item.dart';
+
+String formatOrderItemDisplayName(
+  OrderItem item, {
+  bool includeQuantity = true,
+}) {
+  final quantity = _formatQuantity(item.qty);
+  final category = item.category.trim();
+  final productName = item.productName.trim().isEmpty
+      ? 'Producto'
+      : item.productName.trim();
+  final name = category.isEmpty ? productName : '$category - $productName';
+
+  return includeQuantity ? '$quantity $name' : name;
+}
+
+String _formatQuantity(num value) {
+  final number = value.toDouble();
+  if (number == number.roundToDouble()) {
+    return number.toInt().toString();
+  }
+  return number.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+}
+
 String formatKitchenStatus(String status) {
   return switch (status) {
     'pending' => 'Pendiente',

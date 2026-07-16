@@ -10,6 +10,7 @@ import '../../models/order_item.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
+import '../../utils/formatters.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
@@ -384,7 +385,7 @@ class _KitchenItemRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      item.productName,
+                      formatOrderItemDisplayName(item, includeQuantity: false),
                       maxLines: compact ? 2 : 3,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
