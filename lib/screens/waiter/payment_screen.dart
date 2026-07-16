@@ -27,10 +27,15 @@ class PaymentScreen extends StatefulWidget {
   State<PaymentScreen> createState() => _PaymentScreenState();
 }
 
+enum _ChargeMode { table, person }
+
 class _PaymentScreenState extends State<PaymentScreen> {
   final _repository = TacoPosRepository();
   final _partialController = TextEditingController();
+  final _cashReceivedController = TextEditingController();
   String _method = 'cash';
+  _ChargeMode? _chargeMode;
+  int? _selectedPersonNumber;
   Employee? _selectedEmployee;
   bool _busy = false;
 
@@ -43,24 +48,36 @@ class _PaymentScreenState extends State<PaymentScreen> {
       currentOrderId: widget.orderId,
       currentAction: 'Cobrando',
     );
+    _cashReceivedController.addListener(_handleCashChanged);
   }
 
   @override
   void dispose() {
     _partialController.dispose();
+    _cashReceivedController.removeListener(_handleCashChanged);
+    _cashReceivedController.dispose();
     super.dispose();
   }
 
-  Future<void> _payFullTable(PosOrder order, {required String method}) async {
+  void _handleCashChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _payFullTable(
+    PosOrder order, {
+    required String method,
+    CashPaymentDetails? cashDetails,
+  }) async {
     if (!_validateEmployee(method)) {
       return;
     }
 
-    final cashDetails = await _cashDetailsIfNeeded(
-      method: method,
-      total: order.pendingTotal,
-    );
-    if (cashDetails == null && method == 'cash') {
+    final resolvedCashDetails =
+        cashDetails ??
+        await _cashDetailsIfNeeded(method: method, total: order.pendingTotal);
+    if (resolvedCashDetails == null && method == 'cash') {
       return;
     }
     if (method != 'cash') {
@@ -83,7 +100,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
-        cashDetails: cashDetails,
+        cashDetails: resolvedCashDetails,
       ),
     );
   }
@@ -93,16 +110,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
     String personName, {
     required String method,
     required double total,
+    CashPaymentDetails? cashDetails,
   }) async {
     if (!_validateEmployee(method)) {
       return;
     }
 
-    final cashDetails = await _cashDetailsIfNeeded(
-      method: method,
-      total: total,
-    );
-    if (cashDetails == null && method == 'cash') {
+    final resolvedCashDetails =
+        cashDetails ?? await _cashDetailsIfNeeded(method: method, total: total);
+    if (resolvedCashDetails == null && method == 'cash') {
       return;
     }
     if (method != 'cash') {
@@ -126,12 +142,16 @@ class _PaymentScreenState extends State<PaymentScreen> {
         method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
-        cashDetails: cashDetails,
+        cashDetails: resolvedCashDetails,
       ),
     );
   }
 
-  Future<void> _payPartial(PosOrder order, {required String method}) async {
+  Future<void> _payPartial(
+    PosOrder order, {
+    required String method,
+    CashPaymentDetails? cashDetails,
+  }) async {
     if (!_validateEmployee(method)) {
       return;
     }
@@ -144,11 +164,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
       return;
     }
 
-    final cashDetails = await _cashDetailsIfNeeded(
-      method: method,
-      total: amount,
-    );
-    if (cashDetails == null && method == 'cash') {
+    final resolvedCashDetails =
+        cashDetails ??
+        await _cashDetailsIfNeeded(method: method, total: amount);
+    if (resolvedCashDetails == null && method == 'cash') {
       return;
     }
     if (method != 'cash') {
@@ -172,10 +191,34 @@ class _PaymentScreenState extends State<PaymentScreen> {
         method: method,
         employeeId: _selectedEmployee?.id,
         employeeName: _selectedEmployee?.name,
-        cashDetails: cashDetails,
+        cashDetails: resolvedCashDetails,
       ),
       afterSuccess: () => _partialController.clear(),
     );
+  }
+
+  CashPaymentDetails? _cashDetailsFromInline(double total) {
+    final received = double.tryParse(
+      _cashReceivedController.text.trim().replaceAll(',', '.'),
+    );
+    if (received == null || received + 0.01 < total) {
+      _showMessage('El efectivo recibido no cubre el total.');
+      return null;
+    }
+    return CashPaymentDetails(
+      receivedAmount: received,
+      changeAmount: received - total,
+    );
+  }
+
+  void _prepareCashAmount(double total) {
+    _cashReceivedController.removeListener(_handleCashChanged);
+    _cashReceivedController.text = total.toStringAsFixed(2);
+    _cashReceivedController.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: _cashReceivedController.text.length,
+    );
+    _cashReceivedController.addListener(_handleCashChanged);
   }
 
   Future<void> _payPlatformOrder(PosOrder order) async {
@@ -425,143 +468,310 @@ class _PaymentScreenState extends State<PaymentScreen> {
                         );
                       }
 
-                      return ListView(
-                        padding: const EdgeInsets.all(22),
-                        children: [
-                          _TotalsPanel(order: order),
-                          const SizedBox(height: 16),
-                          _PaymentMethodSelector(
-                            selected: selectedMethod,
-                            employees: employees,
-                            selectedEmployee: _selectedEmployee,
-                            employeeDisabled: hasClientPayment,
-                            onMethodChanged: (value) {
-                              setState(() {
-                                _method = value;
-                                if (value != 'employee_consumption') {
-                                  _selectedEmployee = null;
-                                }
-                              });
-                              LivePresenceService.instance.update(
-                                currentAction:
-                                    'Cobrando con ${formatPaymentMethod(value)}',
-                              );
-                            },
-                            onEmployeeChanged: (employee) {
-                              setState(() {
-                                _selectedEmployee = employee;
-                              });
-                            },
-                          ),
-                          const SizedBox(height: 16),
-                          _ChargePreview(
-                            baseAmount: order.pendingTotal,
-                            method: selectedMethod,
-                          ),
-                          const SizedBox(height: 16),
-                          GlassButton(
-                            icon: Icons.point_of_sale_outlined,
-                            label: _busy
-                                ? 'Cobrando...'
-                                : hasPersonPayments
-                                ? 'Cobro por persona iniciado'
-                                : 'Cobrar mesa completa',
-                            prominent: true,
-                            onTap:
-                                _busy ||
-                                    order.pendingTotal <= 0.01 ||
-                                    hasPersonPayments
-                                ? null
-                                : () => _payFullTable(
-                                    order,
-                                    method: selectedMethod,
-                                  ),
-                          ),
-                          const SizedBox(height: 20),
-                          _PartialPaymentPanel(
-                            controller: _partialController,
-                            order: order,
-                            method: selectedMethod,
-                            busy: _busy,
-                            onPay: () =>
-                                _payPartial(order, method: selectedMethod),
-                            disabledReason: hasPersonPayments
-                                ? 'Esta cuenta ya inicio cobro por persona. Termina el cobro por persona.'
-                                : null,
-                          ),
-                          const SizedBox(height: 20),
-                          SectionHeader(
-                            title: 'Por persona',
-                            subtitle:
-                                '${_people(items).length} cuentas separadas',
-                          ),
-                          const SizedBox(height: 12),
-                          if (hasPartialPayments) ...[
-                            const GlassPanel(
-                              child: Text(
-                                'Esta cuenta ya tiene pagos parciales. Termina el cobro por parcialidades.',
-                                style: TextStyle(
-                                  color: BrandColors.textMuted,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                          ],
-                          ..._people(items).map((person) {
-                            final personItems = items
-                                .where((item) => item.personNumber == person)
+                      final people = _people(items);
+                      final selectedPerson =
+                          _selectedPersonNumber != null &&
+                              people.contains(_selectedPersonNumber)
+                          ? _selectedPersonNumber
+                          : null;
+                      final selectedPersonItems = selectedPerson == null
+                          ? <OrderItem>[]
+                          : items
+                                .where(
+                                  (item) => item.personNumber == selectedPerson,
+                                )
                                 .toList();
-                            final personName = _personName(
-                              person,
-                              personItems,
+                      final selectedPersonName = selectedPerson == null
+                          ? null
+                          : _personName(
+                              selectedPerson,
+                              selectedPersonItems,
                               order,
                             );
-                            return _PersonPaymentCard(
-                              key: ValueKey('payment-person-$person'),
-                              personNumber: person,
-                              personName: personName,
-                              items: personItems,
-                              method: selectedMethod,
-                              busy: _busy,
-                              disabled: hasPartialPayments,
-                              onPay: () => _payPerson(
-                                person,
-                                personName,
-                                method: selectedMethod,
-                                total: personItems
-                                    .where(
-                                      (item) =>
-                                          item.paymentStatus != 'paid' &&
-                                          !item.isCancelled,
-                                    )
-                                    .fold<double>(
-                                      0,
-                                      (runningTotal, item) =>
-                                          runningTotal + item.total,
-                                    ),
+                      final selectedPersonPending = _pendingForItems(
+                        selectedPersonItems,
+                      );
+                      final partialAmount =
+                          double.tryParse(
+                            _partialController.text.replaceAll(',', '.'),
+                          ) ??
+                          0;
+
+                      return LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact =
+                              constraints.maxWidth < 650 ||
+                              MediaQuery.sizeOf(context).height < 750;
+                          final padding = compact ? 12.0 : 22.0;
+                          final gap = compact ? 10.0 : 16.0;
+
+                          return ListView(
+                            keyboardDismissBehavior:
+                                ScrollViewKeyboardDismissBehavior.onDrag,
+                            padding: EdgeInsets.fromLTRB(
+                              padding,
+                              padding,
+                              padding,
+                              padding +
+                                  MediaQuery.viewInsetsOf(context).bottom +
+                                  12,
+                            ),
+                            children: [
+                              _TotalsPanel(order: order, compact: compact),
+                              SizedBox(height: gap),
+                              _ChargeModeSelector(
+                                selected: _chargeMode,
+                                peopleCount: people.length,
+                                tableDisabled:
+                                    hasPersonPayments ||
+                                    order.pendingTotal <= 0.01,
+                                personDisabled: hasPartialPayments,
+                                onTableSelected: () {
+                                  setState(() {
+                                    _chargeMode = _ChargeMode.table;
+                                    _selectedPersonNumber = null;
+                                    _method = selectedMethod;
+                                    if (_method != 'employee_consumption') {
+                                      _selectedEmployee = null;
+                                    }
+                                    _prepareCashAmount(order.pendingTotal);
+                                  });
+                                  LivePresenceService.instance.update(
+                                    currentAction: 'Cobrando mesa completa',
+                                  );
+                                },
+                                onPersonSelected: () {
+                                  setState(() {
+                                    _chargeMode = _ChargeMode.person;
+                                    _selectedPersonNumber = null;
+                                    _method = selectedMethod;
+                                    if (_method != 'employee_consumption') {
+                                      _selectedEmployee = null;
+                                    }
+                                  });
+                                  LivePresenceService.instance.update(
+                                    currentAction: 'Cobrando por persona',
+                                  );
+                                },
                               ),
-                            );
-                          }),
-                          const SizedBox(height: 20),
-                          _PaymentsHistory(
-                            payments: payments,
-                            canCancel:
-                                order.paymentStatus != 'paid' &&
-                                order.status != 'paid' &&
-                                (AppSession
-                                            .instance
-                                            .employee
-                                            ?.canCancelPayments ==
-                                        true ||
-                                    AppSession
-                                            .instance
-                                            .employee
-                                            ?.canViewAdmin ==
-                                        true),
-                            onCancel: _cancelPayment,
-                          ),
-                        ],
+                              if (_chargeMode == null) ...[
+                                SizedBox(height: gap),
+                                const _NextStepHint(),
+                              ],
+                              if (_chargeMode == _ChargeMode.table) ...[
+                                SizedBox(height: gap),
+                                _PaymentStepPanel(
+                                  title: 'Mesa completa',
+                                  subtitle:
+                                      'Primero elige la forma de pago y confirma el pendiente.',
+                                  total: order.pendingTotal,
+                                  method: selectedMethod,
+                                  employees: employees,
+                                  selectedEmployee: _selectedEmployee,
+                                  employeeDisabled: hasClientPayment,
+                                  cashReceivedController:
+                                      _cashReceivedController,
+                                  busy: _busy,
+                                  primaryLabel: _busy
+                                      ? 'Cobrando...'
+                                      : hasPersonPayments
+                                      ? 'Cobro por persona iniciado'
+                                      : 'Confirmar pago',
+                                  primaryIcon: Icons.point_of_sale_outlined,
+                                  primaryDisabled:
+                                      _busy ||
+                                      order.pendingTotal <= 0.01 ||
+                                      hasPersonPayments,
+                                  onMethodChanged: (value) {
+                                    setState(() {
+                                      _method = value;
+                                      if (value != 'employee_consumption') {
+                                        _selectedEmployee = null;
+                                      }
+                                      if (value == 'cash') {
+                                        _prepareCashAmount(order.pendingTotal);
+                                      }
+                                    });
+                                    LivePresenceService.instance.update(
+                                      currentAction:
+                                          'Cobrando con ${formatPaymentMethod(value)}',
+                                    );
+                                  },
+                                  onEmployeeChanged: (employee) {
+                                    setState(() {
+                                      _selectedEmployee = employee;
+                                    });
+                                  },
+                                  onConfirm: () {
+                                    final cashDetails = selectedMethod == 'cash'
+                                        ? _cashDetailsFromInline(
+                                            order.pendingTotal,
+                                          )
+                                        : null;
+                                    if (selectedMethod == 'cash' &&
+                                        cashDetails == null) {
+                                      return;
+                                    }
+                                    _payFullTable(
+                                      order,
+                                      method: selectedMethod,
+                                      cashDetails: cashDetails,
+                                    );
+                                  },
+                                ),
+                                SizedBox(height: gap),
+                                _PartialPaymentPanel(
+                                  controller: _partialController,
+                                  order: order,
+                                  method: selectedMethod,
+                                  busy: _busy,
+                                  onPay: () {
+                                    final cashDetails =
+                                        selectedMethod == 'cash' &&
+                                            partialAmount > 0
+                                        ? _cashDetailsFromInline(partialAmount)
+                                        : null;
+                                    if (selectedMethod == 'cash' &&
+                                        cashDetails == null) {
+                                      return;
+                                    }
+                                    _payPartial(
+                                      order,
+                                      method: selectedMethod,
+                                      cashDetails: cashDetails,
+                                    );
+                                  },
+                                  disabledReason: hasPersonPayments
+                                      ? 'Esta cuenta ya inicio cobro por persona. Termina el cobro por persona.'
+                                      : null,
+                                ),
+                              ],
+                              if (_chargeMode == _ChargeMode.person) ...[
+                                SizedBox(height: gap),
+                                if (hasPartialPayments) ...[
+                                  const GlassPanel(
+                                    child: Text(
+                                      'Esta cuenta ya tiene pagos parciales. Termina el cobro por parcialidades.',
+                                      style: TextStyle(
+                                        color: BrandColors.textMuted,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(height: gap),
+                                ],
+                                _PersonPickerPanel(
+                                  people: people,
+                                  items: items,
+                                  order: order,
+                                  selectedPerson: selectedPerson,
+                                  disabled: hasPartialPayments,
+                                  onSelected: (person) {
+                                    final personItems = items
+                                        .where(
+                                          (item) => item.personNumber == person,
+                                        )
+                                        .toList();
+                                    setState(() {
+                                      _selectedPersonNumber = person;
+                                      _method = selectedMethod;
+                                      if (_method != 'employee_consumption') {
+                                        _selectedEmployee = null;
+                                      }
+                                      _prepareCashAmount(
+                                        _pendingForItems(personItems),
+                                      );
+                                    });
+                                  },
+                                ),
+                                if (selectedPerson != null &&
+                                    selectedPersonName != null) ...[
+                                  SizedBox(height: gap),
+                                  _PaymentStepPanel(
+                                    title: selectedPersonName,
+                                    subtitle:
+                                        'Resumen de persona y forma de pago.',
+                                    total: selectedPersonPending,
+                                    method: selectedMethod,
+                                    employees: employees,
+                                    selectedEmployee: _selectedEmployee,
+                                    employeeDisabled: hasClientPayment,
+                                    cashReceivedController:
+                                        _cashReceivedController,
+                                    busy: _busy,
+                                    primaryLabel: _busy
+                                        ? 'Cobrando...'
+                                        : 'Confirmar pago',
+                                    primaryIcon: Icons.person_outline,
+                                    primaryDisabled:
+                                        _busy ||
+                                        selectedPersonPending <= 0.01 ||
+                                        hasPartialPayments,
+                                    onMethodChanged: (value) {
+                                      setState(() {
+                                        _method = value;
+                                        if (value != 'employee_consumption') {
+                                          _selectedEmployee = null;
+                                        }
+                                        if (value == 'cash') {
+                                          _prepareCashAmount(
+                                            selectedPersonPending,
+                                          );
+                                        }
+                                      });
+                                      LivePresenceService.instance.update(
+                                        currentAction:
+                                            'Cobrando $selectedPersonName con ${formatPaymentMethod(value)}',
+                                      );
+                                    },
+                                    onEmployeeChanged: (employee) {
+                                      setState(() {
+                                        _selectedEmployee = employee;
+                                      });
+                                    },
+                                    onConfirm: () {
+                                      final cashDetails =
+                                          selectedMethod == 'cash'
+                                          ? _cashDetailsFromInline(
+                                              selectedPersonPending,
+                                            )
+                                          : null;
+                                      if (selectedMethod == 'cash' &&
+                                          cashDetails == null) {
+                                        return;
+                                      }
+                                      _payPerson(
+                                        selectedPerson,
+                                        selectedPersonName,
+                                        method: selectedMethod,
+                                        total: selectedPersonPending,
+                                        cashDetails: cashDetails,
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ],
+                              const SizedBox(height: 20),
+                              _PaymentsHistory(
+                                payments: payments,
+                                canCancel:
+                                    order.paymentStatus != 'paid' &&
+                                    order.status != 'paid' &&
+                                    (AppSession
+                                                .instance
+                                                .employee
+                                                ?.canCancelPayments ==
+                                            true ||
+                                        AppSession
+                                                .instance
+                                                .employee
+                                                ?.canViewAdmin ==
+                                            true),
+                                onCancel: _cancelPayment,
+                              ),
+                            ],
+                          );
+                        },
                       );
                     },
                   );
@@ -595,12 +805,471 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     return orderName;
   }
+
+  double _pendingForItems(List<OrderItem> items) {
+    return items
+        .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
+        .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
+  }
+}
+
+class _ChargeModeSelector extends StatelessWidget {
+  const _ChargeModeSelector({
+    required this.selected,
+    required this.peopleCount,
+    required this.tableDisabled,
+    required this.personDisabled,
+    required this.onTableSelected,
+    required this.onPersonSelected,
+  });
+
+  final _ChargeMode? selected;
+  final int peopleCount;
+  final bool tableDisabled;
+  final bool personDisabled;
+  final VoidCallback onTableSelected;
+  final VoidCallback onPersonSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 650;
+    final children = [
+      Expanded(
+        child: _ChargeModeCard(
+          title: 'Cobrar mesa completa',
+          subtitle: 'Liquida todo el pendiente.',
+          icon: Icons.table_restaurant_outlined,
+          selected: selected == _ChargeMode.table,
+          disabled: tableDisabled,
+          onTap: onTableSelected,
+        ),
+      ),
+      SizedBox(width: compact ? 0 : 12, height: compact ? 10 : 0),
+      Expanded(
+        child: _ChargeModeCard(
+          title: 'Cobrar por persona',
+          subtitle: '$peopleCount personas con cuenta.',
+          icon: Icons.groups_2_outlined,
+          selected: selected == _ChargeMode.person,
+          disabled: personDisabled,
+          onTap: onPersonSelected,
+        ),
+      ),
+    ];
+
+    return GlassPanel(
+      padding: EdgeInsets.all(compact ? 14 : 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionHeader(
+            title: 'Que quieres cobrar?',
+            subtitle: 'Elige primero el tipo de cobro.',
+          ),
+          const SizedBox(height: 12),
+          compact
+              ? Column(children: children)
+              : Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: children,
+                ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChargeModeCard extends StatelessWidget {
+  const _ChargeModeCard({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.selected,
+    required this.disabled,
+    required this.onTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final bool selected;
+  final bool disabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      selected: selected,
+      accent: selected ? BrandColors.accentYellow : BrandColors.accentOrange,
+      onTap: disabled ? null : onTap,
+      padding: const EdgeInsets.all(13),
+      child: Opacity(
+        opacity: disabled ? 0.48 : 1,
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              color: selected
+                  ? BrandColors.accentYellow
+                  : BrandColors.textMuted,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    subtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: BrandColors.textMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NextStepHint extends StatelessWidget {
+  const _NextStepHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return const GlassPanel(
+      padding: EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Icon(Icons.touch_app_outlined, color: BrandColors.textMuted),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Selecciona mesa completa o por persona para mostrar las formas de pago.',
+              style: TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PaymentStepPanel extends StatelessWidget {
+  const _PaymentStepPanel({
+    required this.title,
+    required this.subtitle,
+    required this.total,
+    required this.method,
+    required this.employees,
+    required this.selectedEmployee,
+    required this.employeeDisabled,
+    required this.cashReceivedController,
+    required this.busy,
+    required this.primaryLabel,
+    required this.primaryIcon,
+    required this.primaryDisabled,
+    required this.onMethodChanged,
+    required this.onEmployeeChanged,
+    required this.onConfirm,
+  });
+
+  final String title;
+  final String subtitle;
+  final double total;
+  final String method;
+  final List<Employee> employees;
+  final Employee? selectedEmployee;
+  final bool employeeDisabled;
+  final TextEditingController cashReceivedController;
+  final bool busy;
+  final String primaryLabel;
+  final IconData primaryIcon;
+  final bool primaryDisabled;
+  final ValueChanged<String> onMethodChanged;
+  final ValueChanged<Employee?> onEmployeeChanged;
+  final VoidCallback onConfirm;
+
+  @override
+  Widget build(BuildContext context) {
+    final received =
+        double.tryParse(
+          cashReceivedController.text.trim().replaceAll(',', '.'),
+        ) ??
+        0;
+    final canConfirmCash = method != 'cash' || received + 0.01 >= total;
+    final actionDisabled = primaryDisabled || !canConfirmCash;
+
+    return GlassPanel(
+      padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 650 ? 14 : 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SectionHeader(title: title, subtitle: subtitle),
+          const SizedBox(height: 12),
+          _PaymentMethodSelector(
+            selected: method,
+            employees: employees,
+            selectedEmployee: selectedEmployee,
+            employeeDisabled: employeeDisabled,
+            onMethodChanged: onMethodChanged,
+            onEmployeeChanged: onEmployeeChanged,
+          ),
+          const SizedBox(height: 12),
+          _ChargePreview(baseAmount: total, method: method),
+          if (method == 'cash') ...[
+            const SizedBox(height: 12),
+            _CashInlinePanel(total: total, controller: cashReceivedController),
+          ],
+          const SizedBox(height: 12),
+          GlassButton(
+            icon: primaryIcon,
+            label: primaryLabel,
+            prominent: true,
+            onTap: actionDisabled || busy ? null : onConfirm,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashInlinePanel extends StatelessWidget {
+  const _CashInlinePanel({required this.total, required this.controller});
+
+  final double total;
+  final TextEditingController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final received =
+        double.tryParse(controller.text.trim().replaceAll(',', '.')) ?? 0;
+    final change = (received - total).clamp(0, double.infinity);
+    final compact = MediaQuery.sizeOf(context).width < 650;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: BrandColors.success.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: BrandColors.success.withValues(alpha: 0.28)),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(compact ? 12 : 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Total a cobrar',
+                    style: TextStyle(
+                      color: BrandColors.textMuted,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                MoneyText(
+                  value: total,
+                  style: TextStyle(
+                    color: BrandColors.accentYellow,
+                    fontSize: compact ? 22 : 28,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              textInputAction: TextInputAction.done,
+              style: TextStyle(
+                fontSize: compact ? 22 : 28,
+                fontWeight: FontWeight.w900,
+              ),
+              decoration: const InputDecoration(
+                labelText: 'Con cuanto pagan?',
+                prefixText: '\$ ',
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Cambio',
+                    style: TextStyle(
+                      color: BrandColors.textMuted,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                MoneyText(
+                  value: change.toDouble(),
+                  style: TextStyle(
+                    color: BrandColors.success,
+                    fontSize: compact ? 30 : 38,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PersonPickerPanel extends StatelessWidget {
+  const _PersonPickerPanel({
+    required this.people,
+    required this.items,
+    required this.order,
+    required this.selectedPerson,
+    required this.disabled,
+    required this.onSelected,
+  });
+
+  final List<int> people;
+  final List<OrderItem> items;
+  final PosOrder order;
+  final int? selectedPerson;
+  final bool disabled;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: EdgeInsets.all(MediaQuery.sizeOf(context).width < 650 ? 14 : 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SectionHeader(
+            title: 'Elige persona',
+            subtitle: '${people.length} cuentas separadas.',
+          ),
+          const SizedBox(height: 12),
+          if (people.isEmpty)
+            const Text(
+              'No hay personas con articulos en esta cuenta.',
+              style: TextStyle(color: BrandColors.textMuted),
+            )
+          else
+            ...people.map((person) {
+              final personItems = items
+                  .where((item) => item.personNumber == person)
+                  .toList();
+              final name = _personNameStatic(person, personItems, order);
+              final subtotal = personItems.fold<double>(
+                0,
+                (runningTotal, item) =>
+                    item.isCancelled ? runningTotal : runningTotal + item.total,
+              );
+              final pending = personItems
+                  .where(
+                    (item) => item.paymentStatus != 'paid' && !item.isCancelled,
+                  )
+                  .fold<double>(
+                    0,
+                    (runningTotal, item) => runningTotal + item.total,
+                  );
+              final paid = pending <= 0.01;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: GlassCard(
+                  selected: selectedPerson == person,
+                  accent: paid ? BrandColors.success : BrandColors.accentOrange,
+                  onTap: disabled || paid ? null : () => onSelected(person),
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              paid
+                                  ? 'Pagado'
+                                  : 'Pendiente \$${pending.toStringAsFixed(2)}',
+                              style: TextStyle(
+                                color: paid
+                                    ? BrandColors.success
+                                    : BrandColors.textMuted,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      MoneyText(
+                        value: subtotal,
+                        style: const TextStyle(
+                          color: BrandColors.accentYellow,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  static String _personNameStatic(
+    int person,
+    List<OrderItem> items,
+    PosOrder order,
+  ) {
+    final orderName = order.personName(person);
+    if (orderName != 'Persona $person') {
+      return orderName;
+    }
+    for (final item in items) {
+      final itemName = item.personName.trim();
+      if (itemName.isNotEmpty && itemName != 'Persona $person') {
+        return itemName;
+      }
+    }
+    return orderName;
+  }
 }
 
 class _TotalsPanel extends StatelessWidget {
-  const _TotalsPanel({required this.order});
+  const _TotalsPanel({required this.order, this.compact = false});
 
   final PosOrder order;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -619,7 +1288,7 @@ class _TotalsPanel extends StatelessWidget {
               StatusBadge(style: tableStatusStyle(order.status)),
             ],
           ),
-          const SizedBox(height: 18),
+          SizedBox(height: compact ? 12 : 18),
           Row(
             children: [
               Expanded(
@@ -770,7 +1439,7 @@ class _PlatformPaymentView extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               _PreviewRow(label: 'Plataforma', textValue: order.platformName),
-              _PreviewRow(label: 'Monto base', value: order.pendingTotal),
+              _PreviewRow(label: 'Total pendiente', value: order.pendingTotal),
               const Divider(height: 18),
               _PreviewRow(
                 label: 'Total a registrar',
@@ -819,57 +1488,55 @@ class _PaymentMethodSelector extends StatelessWidget {
       'employee_consumption': 'Consumo empleado',
     };
 
-    return GlassPanel(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Con que quieres pagar?',
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: methods.entries.map((entry) {
+            return ChoiceChip(
+              selected: selected == entry.key,
+              label: Text(entry.value),
+              onSelected:
+                  entry.key == 'employee_consumption' && employeeDisabled
+                  ? null
+                  : (_) => onMethodChanged(entry.key),
+            );
+          }).toList(),
+        ),
+        if (employeeDisabled) ...[
+          const SizedBox(height: 10),
           const Text(
-            'Metodo de pago',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: methods.entries.map((entry) {
-              return ChoiceChip(
-                selected: selected == entry.key,
-                label: Text(entry.value),
-                onSelected:
-                    entry.key == 'employee_consumption' && employeeDisabled
-                    ? null
-                    : (_) => onMethodChanged(entry.key),
-              );
-            }).toList(),
-          ),
-          if (employeeDisabled) ...[
-            const SizedBox(height: 10),
-            const Text(
-              'Consumo empleado no disponible porque ya existe un pago de cliente',
-              style: TextStyle(
-                color: BrandColors.textMuted,
-                fontWeight: FontWeight.w700,
-              ),
+            'Consumo empleado no disponible porque ya existe un pago de cliente.',
+            style: TextStyle(
+              color: BrandColors.textMuted,
+              fontWeight: FontWeight.w700,
             ),
-          ],
-          if (selected == 'employee_consumption') ...[
-            const SizedBox(height: 14),
-            DropdownButtonFormField<Employee>(
-              initialValue: selectedValue,
-              decoration: const InputDecoration(labelText: 'Empleado'),
-              items: employees
-                  .map(
-                    (employee) => DropdownMenuItem(
-                      value: employee,
-                      child: Text(employee.name),
-                    ),
-                  )
-                  .toList(),
-              onChanged: onEmployeeChanged,
-            ),
-          ],
+          ),
         ],
-      ),
+        if (selected == 'employee_consumption') ...[
+          const SizedBox(height: 12),
+          DropdownButtonFormField<Employee>(
+            initialValue: selectedValue,
+            decoration: const InputDecoration(labelText: 'Empleado'),
+            items: employees
+                .map(
+                  (employee) => DropdownMenuItem(
+                    value: employee,
+                    child: Text(employee.name),
+                  ),
+                )
+                .toList(),
+            onChanged: onEmployeeChanged,
+          ),
+        ],
+      ],
     );
   }
 
@@ -897,30 +1564,31 @@ class _ChargePreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final absorbedFee = method == 'card'
-        ? baseAmount * TacoPosRepository.cardSurchargeRate
-        : 0.0;
-
-    return GlassPanel(
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: BrandColors.glassFill.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: BrandColors.glassBorder),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Resumen de cobro',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 12),
-          _PreviewRow(label: 'Monto base', value: baseAmount),
-          if (method == 'card')
-            _PreviewRow(
-              label: 'Comision absorbida por negocio',
-              value: absorbedFee,
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              children: [
+                _PreviewRow(
+                  label: 'Forma de pago',
+                  textValue: formatPaymentMethod(method),
+                ),
+                const Divider(height: 16),
+                _PreviewRow(
+                  label: 'Total a cobrar',
+                  value: baseAmount,
+                  highlight: true,
+                ),
+              ],
             ),
-          const Divider(height: 18),
-          _PreviewRow(
-            label: 'Total a cobrar',
-            value: baseAmount,
-            highlight: true,
           ),
         ],
       ),
@@ -1219,7 +1887,7 @@ class _PartialPaymentPanelState extends State<_PartialPaymentPanel> {
             enabled: disabledReason == null,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: 'Monto base a cubrir',
+              labelText: 'Monto a cubrir',
               helperText:
                   'Pendiente maximo: \$${widget.order.pendingTotal.toStringAsFixed(2)}',
             ),
@@ -1234,153 +1902,6 @@ class _PartialPaymentPanelState extends State<_PartialPaymentPanel> {
             label: 'Agregar pago parcial',
             prominent: false,
             onTap: widget.busy || disabledReason != null ? null : widget.onPay,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PersonPaymentCard extends StatelessWidget {
-  const _PersonPaymentCard({
-    super.key,
-    required this.personNumber,
-    required this.personName,
-    required this.items,
-    required this.method,
-    required this.busy,
-    required this.disabled,
-    required this.onPay,
-  });
-
-  final int personNumber;
-  final String personName;
-  final List<OrderItem> items;
-  final String method;
-  final bool busy;
-  final bool disabled;
-  final VoidCallback onPay;
-
-  @override
-  Widget build(BuildContext context) {
-    final subtotal = items.fold<double>(
-      0,
-      (runningTotal, item) =>
-          item.isCancelled ? runningTotal : runningTotal + item.total,
-    );
-    final pending = items
-        .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
-        .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
-    final paid = pending <= 0.01;
-    final absorbedFee = method == 'card'
-        ? pending * TacoPosRepository.cardSurchargeRate
-        : 0.0;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: GlassCard(
-        selected: paid,
-        accent: paid ? BrandColors.success : BrandColors.accentOrange,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    personName,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-                MoneyText(
-                  value: subtotal,
-                  style: const TextStyle(
-                    color: BrandColors.accentYellow,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                paid
-                    ? const StatusBadge(
-                        style: StatusStyle(
-                          label: 'Pagado',
-                          color: BrandColors.success,
-                          background: Color(0x1F55D98B),
-                        ),
-                      )
-                    : OutlinedButton.icon(
-                        onPressed: busy || disabled ? null : onPay,
-                        icon: const Icon(Icons.payments_outlined),
-                        label: const Text('Cobrar persona'),
-                      ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            if (paid)
-              const Text(
-                'Pagado',
-                style: TextStyle(color: BrandColors.textMuted),
-              )
-            else ...[
-              _PersonChargeRow(label: 'Subtotal base', value: pending),
-              if (method == 'card')
-                _PersonChargeRow(
-                  label: 'Comision absorbida por negocio',
-                  value: absorbedFee,
-                ),
-              const Divider(height: 14),
-              _PersonChargeRow(
-                label: 'Total a cobrar',
-                value: pending,
-                highlight: true,
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PersonChargeRow extends StatelessWidget {
-  const _PersonChargeRow({
-    required this.label,
-    required this.value,
-    this.highlight = false,
-  });
-
-  final String label;
-  final double value;
-  final bool highlight;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: TextStyle(
-                color: highlight
-                    ? BrandColors.textPrimary
-                    : BrandColors.textMuted,
-                fontWeight: highlight ? FontWeight.w800 : FontWeight.w600,
-              ),
-            ),
-          ),
-          MoneyText(
-            value: value,
-            style: TextStyle(
-              color: highlight
-                  ? BrandColors.accentYellow
-                  : BrandColors.textSecondary,
-              fontWeight: FontWeight.w800,
-            ),
           ),
         ],
       ),
@@ -1464,26 +1985,20 @@ class _PaymentsHistory extends StatelessWidget {
       'partial' => 'Pago parcial',
       _ => 'Mesa completa',
     };
-    return '$type · $method';
+    return '$type | $method';
   }
 
   String _paymentSubtitle(Payment payment) {
     final employee = payment.employeeName == null
         ? ''
-        : ' · ${payment.employeeName}';
-    final absorbedFee = payment.cardFeeAbsorbedAmount <= 0
-        ? ''
-        : ' · Comision absorbida \$${payment.cardFeeAbsorbedAmount.toStringAsFixed(2)}';
-    final legacySurcharge = payment.surchargeAmount <= 0
-        ? ''
-        : ' · Recargo cliente \$${payment.surchargeAmount.toStringAsFixed(2)}';
+        : ' | ${payment.employeeName}';
     final cashChange =
         payment.method == 'cash' && payment.cashReceivedAmount != null
-        ? ' · Recibido \$${payment.cashReceivedAmount!.toStringAsFixed(2)} · Cambio \$${(payment.cashChangeAmount ?? 0).toStringAsFixed(2)}'
+        ? ' | Recibido \$${payment.cashReceivedAmount!.toStringAsFixed(2)} | Cambio \$${(payment.cashChangeAmount ?? 0).toStringAsFixed(2)}'
         : '';
     final cancelled = payment.isCancelled
         ? ' | Anulado: ${payment.cancelReason ?? 'Sin motivo'}'
         : '';
-    return 'Base \$${payment.baseAmount.toStringAsFixed(2)}$absorbedFee$legacySurcharge$cashChange$employee$cancelled';
+    return 'Total \$${payment.baseAmount.toStringAsFixed(2)}$cashChange$employee$cancelled';
   }
 }
