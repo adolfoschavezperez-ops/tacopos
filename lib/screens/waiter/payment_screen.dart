@@ -855,18 +855,21 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
                 setState(() => _employee = employee),
           ),
           if (method != null) ...[
-            const SizedBox(height: 12),
-            _ChargePreview(baseAmount: widget.total, method: method),
+            const SizedBox(height: 8),
+            _SelectedMethodChip(method: method),
             if (method == 'cash') ...[
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               _CashInlinePanel(
                 total: widget.total,
                 controller: _cashController,
               ),
+            ] else ...[
+              const SizedBox(height: 8),
+              _CompactTotalLine(total: widget.total),
             ],
           ],
           if (_error.isNotEmpty) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Text(
               _error,
               style: const TextStyle(
@@ -875,7 +878,7 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
               ),
             ),
           ],
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
@@ -986,6 +989,68 @@ class _CashInlinePanel extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _SelectedMethodChip extends StatelessWidget {
+  const _SelectedMethodChip({required this.method});
+
+  final String method;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: BrandColors.accentYellow.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: BrandColors.accentYellow.withValues(alpha: 0.36),
+          ),
+        ),
+        child: Text(
+          formatPaymentMethod(method),
+          style: const TextStyle(
+            color: BrandColors.accentYellow,
+            fontSize: 12,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactTotalLine extends StatelessWidget {
+  const _CompactTotalLine({required this.total});
+
+  final double total;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Expanded(
+          child: Text(
+            'Total a cobrar',
+            style: TextStyle(
+              color: BrandColors.textMuted,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        MoneyText(
+          value: total,
+          style: const TextStyle(
+            color: BrandColors.accentYellow,
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1518,46 +1583,6 @@ class _PaymentMethodSelector extends StatelessWidget {
     }
 
     return null;
-  }
-}
-
-class _ChargePreview extends StatelessWidget {
-  const _ChargePreview({required this.baseAmount, required this.method});
-
-  final double baseAmount;
-  final String method;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: BrandColors.glassFill.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: BrandColors.glassBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              children: [
-                _PreviewRow(
-                  label: 'Forma de pago',
-                  textValue: formatPaymentMethod(method),
-                ),
-                const Divider(height: 16),
-                _PreviewRow(
-                  label: 'Total a cobrar',
-                  value: baseAmount,
-                  highlight: true,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 
