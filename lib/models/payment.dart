@@ -32,6 +32,14 @@ class Payment {
     this.appliedDiscountType,
     this.appliedDiscountName,
     this.appliedDiscountPercent = 0,
+    this.discountAuthorizedByPartnerId,
+    this.discountAuthorizedByPartnerName,
+    this.discountAuthorizedByPartnerLinkedEmployeeId,
+    this.discountAuthorizedByPartnerLinkedEmployeeName,
+    this.discountEmployeeBeneficiaryId,
+    this.discountEmployeeBeneficiaryName,
+    this.discountAuthorizationRequestId,
+    this.discountReason,
     this.createdAt,
     this.createdBy,
     this.status = 'active',
@@ -73,6 +81,14 @@ class Payment {
   final String? appliedDiscountType;
   final String? appliedDiscountName;
   final double appliedDiscountPercent;
+  final String? discountAuthorizedByPartnerId;
+  final String? discountAuthorizedByPartnerName;
+  final String? discountAuthorizedByPartnerLinkedEmployeeId;
+  final String? discountAuthorizedByPartnerLinkedEmployeeName;
+  final String? discountEmployeeBeneficiaryId;
+  final String? discountEmployeeBeneficiaryName;
+  final String? discountAuthorizationRequestId;
+  final String? discountReason;
   final DateTime? createdAt;
   final String? createdBy;
   final String status;
@@ -141,6 +157,21 @@ class Payment {
       appliedDiscountName: data['appliedDiscountName'] as String?,
       appliedDiscountPercent:
           (data['appliedDiscountPercent'] as num?)?.toDouble() ?? 0,
+      discountAuthorizedByPartnerId:
+          data['discountAuthorizedByPartnerId'] as String?,
+      discountAuthorizedByPartnerName:
+          data['discountAuthorizedByPartnerName'] as String?,
+      discountAuthorizedByPartnerLinkedEmployeeId:
+          data['discountAuthorizedByPartnerLinkedEmployeeId'] as String?,
+      discountAuthorizedByPartnerLinkedEmployeeName:
+          data['discountAuthorizedByPartnerLinkedEmployeeName'] as String?,
+      discountEmployeeBeneficiaryId:
+          data['discountEmployeeBeneficiaryId'] as String?,
+      discountEmployeeBeneficiaryName:
+          data['discountEmployeeBeneficiaryName'] as String?,
+      discountAuthorizationRequestId:
+          data['discountAuthorizationRequestId'] as String?,
+      discountReason: data['discountReason'] as String?,
       createdAt: _toDate(data['createdAt']),
       createdBy: data['createdBy'] as String?,
       status: data['status'] as String? ?? 'active',

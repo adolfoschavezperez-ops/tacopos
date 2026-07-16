@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
+import '../../models/discount_authorization_request.dart';
 import '../../models/employee.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
@@ -548,132 +549,150 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   }
 
                   final employees = employeeSnapshot.data ?? [];
-                  return StreamBuilder<List<Payment>>(
-                    stream: _repository.watchOrderPayments(widget.orderId),
-                    builder: (context, paymentSnapshot) {
-                      if (paymentSnapshot.hasError) {
+                  return StreamBuilder<List<Partner>>(
+                    stream: _repository.watchPartners(activeOnly: true),
+                    builder: (context, partnerSnapshot) {
+                      if (partnerSnapshot.hasError) {
                         return EmptyState(
                           icon: Icons.error_outline,
-                          title: 'No se pudieron cargar pagos',
-                          message: '${paymentSnapshot.error}',
+                          title: 'No se pudieron cargar socios',
+                          message: '${partnerSnapshot.error}',
                         );
                       }
 
-                      final payments = paymentSnapshot.data ?? [];
-                      final activePayments = payments
-                          .where((payment) => payment.isActive)
-                          .toList();
-                      final hasPartialPayments = activePayments.any(
-                        (payment) => payment.type == 'partial',
-                      );
-                      final hasPersonPayments = activePayments.any(
-                        (payment) => payment.type == 'person',
-                      );
-                      final hasClientPayment = activePayments.any(
-                        (payment) =>
-                            payment.method == 'cash' ||
-                            payment.method == 'card',
-                      );
-                      final platformOnlyPayment =
-                          order.orderType == 'takeout' &&
-                          order.platformId != null &&
-                          order.platformId != 'en_persona';
+                      final employeeBenefitOptions =
+                          _employeesWithoutActivePartner(
+                            employees,
+                            partnerSnapshot.data ?? const [],
+                          );
+                      return StreamBuilder<List<Payment>>(
+                        stream: _repository.watchOrderPayments(widget.orderId),
+                        builder: (context, paymentSnapshot) {
+                          if (paymentSnapshot.hasError) {
+                            return EmptyState(
+                              icon: Icons.error_outline,
+                              title: 'No se pudieron cargar pagos',
+                              message: '${paymentSnapshot.error}',
+                            );
+                          }
 
-                      if (platformOnlyPayment) {
-                        return _PlatformPaymentView(
-                          order: order,
-                          busy: _busy,
-                          onPay: () => _payPlatformOrder(order),
-                        );
-                      }
+                          final payments = paymentSnapshot.data ?? [];
+                          final activePayments = payments
+                              .where((payment) => payment.isActive)
+                              .toList();
+                          final hasPartialPayments = activePayments.any(
+                            (payment) => payment.type == 'partial',
+                          );
+                          final hasPersonPayments = activePayments.any(
+                            (payment) => payment.type == 'person',
+                          );
+                          final hasClientPayment = activePayments.any(
+                            (payment) =>
+                                payment.method == 'cash' ||
+                                payment.method == 'card',
+                          );
+                          final platformOnlyPayment =
+                              order.orderType == 'takeout' &&
+                              order.platformId != null &&
+                              order.platformId != 'en_persona';
 
-                      final people = _people(items);
-                      return LayoutBuilder(
-                        builder: (context, constraints) {
-                          final compact =
-                              constraints.maxWidth < 650 ||
-                              MediaQuery.sizeOf(context).height < 750;
-                          final padding = compact ? 12.0 : 22.0;
-                          final gap = compact ? 10.0 : 16.0;
+                          if (platformOnlyPayment) {
+                            return _PlatformPaymentView(
+                              order: order,
+                              busy: _busy,
+                              onPay: () => _payPlatformOrder(order),
+                            );
+                          }
 
-                          return ListView(
-                            keyboardDismissBehavior:
-                                ScrollViewKeyboardDismissBehavior.onDrag,
-                            padding: EdgeInsets.fromLTRB(
-                              padding,
-                              padding,
-                              padding,
-                              padding +
-                                  MediaQuery.viewInsetsOf(context).bottom +
-                                  12,
-                            ),
-                            children: [
-                              _TotalsPanel(order: order, compact: compact),
-                              SizedBox(height: gap),
-                              _PaymentMainActions(
-                                peopleCount: people.length,
-                                tableDisabled:
-                                    hasPersonPayments ||
-                                    order.pendingTotal <= 0.01,
-                                personDisabled: hasPartialPayments,
-                                partialDisabled:
-                                    hasPersonPayments ||
-                                    order.pendingTotal <= 0.01,
-                                onTableSelected: () {
-                                  LivePresenceService.instance.update(
-                                    currentAction: 'Cobrando mesa completa',
-                                  );
-                                  _openFullTableSheet(
-                                    order: order,
-                                    employees: employees,
-                                    hasClientPayment: hasClientPayment,
-                                    hasPersonPayments: hasPersonPayments,
-                                  );
-                                },
-                                onPersonSelected: () {
-                                  LivePresenceService.instance.update(
-                                    currentAction: 'Cobrando por persona',
-                                  );
-                                  _openPeopleSheet(
-                                    order: order,
-                                    items: items,
-                                    employees: employees,
-                                    hasClientPayment: hasClientPayment,
-                                    hasPartialPayments: hasPartialPayments,
-                                  );
-                                },
-                                onPartialSelected: () {
-                                  LivePresenceService.instance.update(
-                                    currentAction: 'Cobrando pago parcial',
-                                  );
-                                  _openPartialSheet(
-                                    order: order,
-                                    hasPersonPayments: hasPersonPayments,
-                                  );
-                                },
-                              ),
-                              if (payments.isNotEmpty) ...[
-                                SizedBox(height: gap),
-                                _PaymentsHistory(
-                                  payments: payments,
-                                  compact: true,
-                                  canCancel:
-                                      order.paymentStatus != 'paid' &&
-                                      order.status != 'paid' &&
-                                      (AppSession
-                                                  .instance
-                                                  .employee
-                                                  ?.canCancelPayments ==
-                                              true ||
-                                          AppSession
-                                                  .instance
-                                                  .employee
-                                                  ?.canViewAdmin ==
-                                              true),
-                                  onCancel: _cancelPayment,
+                          final people = _people(items);
+                          return LayoutBuilder(
+                            builder: (context, constraints) {
+                              final compact =
+                                  constraints.maxWidth < 650 ||
+                                  MediaQuery.sizeOf(context).height < 750;
+                              final padding = compact ? 12.0 : 22.0;
+                              final gap = compact ? 10.0 : 16.0;
+
+                              return ListView(
+                                keyboardDismissBehavior:
+                                    ScrollViewKeyboardDismissBehavior.onDrag,
+                                padding: EdgeInsets.fromLTRB(
+                                  padding,
+                                  padding,
+                                  padding,
+                                  padding +
+                                      MediaQuery.viewInsetsOf(context).bottom +
+                                      12,
                                 ),
-                              ],
-                            ],
+                                children: [
+                                  _TotalsPanel(order: order, compact: compact),
+                                  SizedBox(height: gap),
+                                  _PaymentMainActions(
+                                    peopleCount: people.length,
+                                    tableDisabled:
+                                        hasPersonPayments ||
+                                        order.pendingTotal <= 0.01,
+                                    personDisabled: hasPartialPayments,
+                                    partialDisabled:
+                                        hasPersonPayments ||
+                                        order.pendingTotal <= 0.01,
+                                    onTableSelected: () {
+                                      LivePresenceService.instance.update(
+                                        currentAction: 'Cobrando mesa completa',
+                                      );
+                                      _openFullTableSheet(
+                                        order: order,
+                                        employees: employeeBenefitOptions,
+                                        hasClientPayment: hasClientPayment,
+                                        hasPersonPayments: hasPersonPayments,
+                                      );
+                                    },
+                                    onPersonSelected: () {
+                                      LivePresenceService.instance.update(
+                                        currentAction: 'Cobrando por persona',
+                                      );
+                                      _openPeopleSheet(
+                                        order: order,
+                                        items: items,
+                                        employees: employeeBenefitOptions,
+                                        hasClientPayment: hasClientPayment,
+                                        hasPartialPayments: hasPartialPayments,
+                                      );
+                                    },
+                                    onPartialSelected: () {
+                                      LivePresenceService.instance.update(
+                                        currentAction: 'Cobrando pago parcial',
+                                      );
+                                      _openPartialSheet(
+                                        order: order,
+                                        hasPersonPayments: hasPersonPayments,
+                                      );
+                                    },
+                                  ),
+                                  if (payments.isNotEmpty) ...[
+                                    SizedBox(height: gap),
+                                    _PaymentsHistory(
+                                      payments: payments,
+                                      compact: true,
+                                      canCancel:
+                                          order.paymentStatus != 'paid' &&
+                                          order.status != 'paid' &&
+                                          (AppSession
+                                                      .instance
+                                                      .employee
+                                                      ?.canCancelPayments ==
+                                                  true ||
+                                              AppSession
+                                                      .instance
+                                                      .employee
+                                                      ?.canViewAdmin ==
+                                                  true),
+                                      onCancel: _cancelPayment,
+                                    ),
+                                  ],
+                                ],
+                              );
+                            },
                           );
                         },
                       );
@@ -692,6 +711,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final people = items.map((item) => item.personNumber).toSet().toList()
       ..sort();
     return people;
+  }
+
+  List<Employee> _employeesWithoutActivePartner(
+    List<Employee> employees,
+    List<Partner> partners,
+  ) {
+    final linkedEmployeeIds = partners
+        .where((partner) => partner.active)
+        .map((partner) => partner.linkedEmployeeId.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    return employees
+        .where((employee) => !linkedEmployeeIds.contains(employee.id))
+        .toList();
   }
 
   String _personName(int person, List<OrderItem> items, PosOrder order) {
@@ -1028,6 +1061,12 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
     final method = _method;
     if (method == null) {
       setState(() => _error = 'Selecciona una forma de pago.');
+      return;
+    }
+    if (method == 'employee_consumption' && widget.employees.isEmpty) {
+      setState(
+        () => _error = 'No hay empleados disponibles para este beneficio.',
+      );
       return;
     }
     if (method == 'employee_consumption' && _employee == null) {
@@ -1516,7 +1555,19 @@ class _DiscountDialogState extends State<_DiscountDialog> {
   final _pinController = TextEditingController();
   final _reasonController = TextEditingController();
   String _error = '';
+  String _info = '';
   bool _busy = false;
+
+  List<Employee> get _employeeBenefitOptions {
+    final linkedIds = widget.partners
+        .where((partner) => partner.active)
+        .map((partner) => partner.linkedEmployeeId.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    return widget.employees
+        .where((employee) => !linkedIds.contains(employee.id))
+        .toList();
+  }
 
   @override
   void dispose() {
@@ -1527,6 +1578,21 @@ class _DiscountDialogState extends State<_DiscountDialog> {
 
   @override
   Widget build(BuildContext context) {
+    return StreamBuilder<List<DiscountAuthorizationRequest>>(
+      stream: widget.repository.watchDiscountAuthorizationRequestsForOrder(
+        widget.order.id,
+      ),
+      builder: (context, requestSnapshot) {
+        final requests = requestSnapshot.data ?? const [];
+        return _buildDialog(context, requests);
+      },
+    );
+  }
+
+  Widget _buildDialog(
+    BuildContext context,
+    List<DiscountAuthorizationRequest> requests,
+  ) {
     final options = <DropdownMenuItem<String>>[
       if (widget.generalDiscount.appliesToCurrentBranch(
         AppSession.instance.currentBranchId,
@@ -1553,7 +1619,29 @@ class _DiscountDialogState extends State<_DiscountDialog> {
     }
     final needsEmployee =
         _type == 'employee_free_meal' || _type == 'employee_30';
-    final needsPartner = _type == 'family_friend_20' || _type == 'partner_50';
+    final isFamilyFriend = _type == 'family_friend_20';
+    final needsPartner = isFamilyFriend || _type == 'partner_50';
+    final employeeOptions = _employeeBenefitOptions;
+    final canRequestPin =
+        _type == 'partner_50' || (needsEmployee && employeeOptions.isNotEmpty);
+    final matchingRequests = _familyRequestsForSelectedPartner(requests);
+    final approvedRequest = matchingRequests
+        .where((request) => request.isUsable)
+        .cast<DiscountAuthorizationRequest?>()
+        .firstOrNull;
+    final pendingRequest = matchingRequests
+        .where((request) => request.isPending)
+        .cast<DiscountAuthorizationRequest?>()
+        .firstOrNull;
+    final rejectedRequest = matchingRequests
+        .where((request) => request.isRejected)
+        .cast<DiscountAuthorizationRequest?>()
+        .firstOrNull;
+    if (needsEmployee &&
+        _employee != null &&
+        !employeeOptions.any((employee) => employee.id == _employee!.id)) {
+      _employee = null;
+    }
 
     return AlertDialog(
       title: const Text('Aplicar descuento'),
@@ -1570,23 +1658,33 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                 onChanged: (value) => setState(() {
                   _type = value ?? _type;
                   _error = '';
+                  _info = '';
                 }),
               ),
               if (needsEmployee) ...[
                 const SizedBox(height: 12),
-                DropdownButtonFormField<Employee>(
-                  initialValue: _employee,
-                  decoration: const InputDecoration(labelText: 'Empleado'),
-                  items: widget.employees
-                      .map(
-                        (employee) => DropdownMenuItem(
-                          value: employee,
-                          child: Text(employee.name),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() => _employee = value),
-                ),
+                if (employeeOptions.isEmpty)
+                  const Text(
+                    'No hay empleados disponibles para este beneficio.',
+                    style: TextStyle(
+                      color: BrandColors.textMuted,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  )
+                else
+                  DropdownButtonFormField<Employee>(
+                    initialValue: _employee,
+                    decoration: const InputDecoration(labelText: 'Empleado'),
+                    items: employeeOptions
+                        .map(
+                          (employee) => DropdownMenuItem(
+                            value: employee,
+                            child: Text(employee.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) => setState(() => _employee = value),
+                  ),
               ],
               if (needsPartner) ...[
                 const SizedBox(height: 12),
@@ -1604,7 +1702,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                   onChanged: (value) => setState(() => _partner = value),
                 ),
               ],
-              if (needsEmployee || needsPartner) ...[
+              if (canRequestPin) ...[
                 const SizedBox(height: 12),
                 TextField(
                   controller: _pinController,
@@ -1617,7 +1715,35 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _reasonController,
-                  decoration: const InputDecoration(labelText: 'Motivo'),
+                  minLines: 2,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Motivo de la autorización',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                _FamilyFriendAuthorizationStatus(
+                  approvedRequest: approvedRequest,
+                  pendingRequest: pendingRequest,
+                  rejectedRequest: rejectedRequest,
+                  totalChanged:
+                      approvedRequest != null &&
+                      (approvedRequest.amountBeforeDiscount - widget.amount)
+                              .abs() >
+                          0.01,
+                  onCancelPending: pendingRequest == null || _busy
+                      ? null
+                      : () => _cancelFamilyRequest(pendingRequest),
+                ),
+              ],
+              if (_info.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _info,
+                  style: const TextStyle(
+                    color: BrandColors.success,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ],
               if (_error.isNotEmpty) ...[
@@ -1640,17 +1766,60 @@ class _DiscountDialogState extends State<_DiscountDialog> {
           child: const Text('Cancelar'),
         ),
         FilledButton(
-          onPressed: _busy ? null : _apply,
-          child: Text(_busy ? 'Validando...' : 'Aplicar'),
+          onPressed: _busy
+              ? null
+              : isFamilyFriend && pendingRequest != null
+              ? null
+              : () => _apply(approvedFamilyRequest: approvedRequest),
+          child: Text(
+            _busy
+                ? 'Validando...'
+                : isFamilyFriend && pendingRequest != null
+                ? 'Esperando autorización'
+                : isFamilyFriend && approvedRequest == null
+                ? 'Solicitar autorización'
+                : 'Aplicar',
+          ),
         ),
       ],
     );
   }
 
-  Future<void> _apply() async {
+  List<DiscountAuthorizationRequest> _familyRequestsForSelectedPartner(
+    List<DiscountAuthorizationRequest> requests,
+  ) {
+    final partnerId = _partner?.id;
+    final filtered = requests.where((request) {
+      if (request.requestedDiscountType != 'family_friend_20') return false;
+      if (partnerId == null) return true;
+      return request.requestedPartnerId == partnerId;
+    }).toList();
+    filtered.sort((a, b) {
+      final aDate = a.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bDate = b.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bDate.compareTo(aDate);
+    });
+    return filtered;
+  }
+
+  Future<void> _apply({
+    DiscountAuthorizationRequest? approvedFamilyRequest,
+  }) async {
+    if ((_type == 'employee_free_meal' || _type == 'employee_30') &&
+        _employeeBenefitOptions.isEmpty) {
+      setState(() {
+        _error = 'No hay empleados disponibles para este beneficio.';
+      });
+      return;
+    }
+    if (_type == 'family_friend_20' && approvedFamilyRequest == null) {
+      await _requestFamilyAuthorization();
+      return;
+    }
     setState(() {
       _busy = true;
       _error = '';
+      _info = '';
     });
     try {
       final discount = await widget.repository.authorizeDiscount(
@@ -1659,6 +1828,7 @@ class _DiscountDialogState extends State<_DiscountDialog> {
         discountType: _type,
         employeeId: _employee?.id,
         partnerId: _partner?.id,
+        discountAuthorizationRequestId: approvedFamilyRequest?.id,
         pin: _pinController.text,
         reason: _reasonController.text,
       );
@@ -1671,6 +1841,174 @@ class _DiscountDialogState extends State<_DiscountDialog> {
         _busy = false;
       });
     }
+  }
+
+  Future<void> _requestFamilyAuthorization() async {
+    if (_partner == null) {
+      setState(() => _error = 'Selecciona el socio autorizador.');
+      return;
+    }
+    if (_reasonController.text.trim().isEmpty) {
+      setState(() => _error = 'Captura el motivo de la autorización.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = '';
+      _info = '';
+    });
+    try {
+      await widget.repository.requestFamilyFriendDiscountAuthorization(
+        order: widget.order,
+        amountBeforeDiscount: widget.amount,
+        requestedPartnerId: _partner!.id,
+        reason: _reasonController.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _info = 'Solicitud enviada. Espera autorización del socio.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString().replaceFirst('Bad state: ', '');
+        _busy = false;
+      });
+    }
+  }
+
+  Future<void> _cancelFamilyRequest(
+    DiscountAuthorizationRequest request,
+  ) async {
+    setState(() {
+      _busy = true;
+      _error = '';
+      _info = '';
+    });
+    try {
+      await widget.repository.cancelDiscountAuthorizationRequest(
+        requestId: request.id,
+      );
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _info = 'Solicitud cancelada.';
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString().replaceFirst('Bad state: ', '');
+        _busy = false;
+      });
+    }
+  }
+}
+
+class _FamilyFriendAuthorizationStatus extends StatelessWidget {
+  const _FamilyFriendAuthorizationStatus({
+    required this.approvedRequest,
+    required this.pendingRequest,
+    required this.rejectedRequest,
+    required this.totalChanged,
+    required this.onCancelPending,
+  });
+
+  final DiscountAuthorizationRequest? approvedRequest;
+  final DiscountAuthorizationRequest? pendingRequest;
+  final DiscountAuthorizationRequest? rejectedRequest;
+  final bool totalChanged;
+  final VoidCallback? onCancelPending;
+
+  @override
+  Widget build(BuildContext context) {
+    if (approvedRequest != null) {
+      return _statusPanel(
+        color: BrandColors.success,
+        icon: Icons.verified_outlined,
+        text:
+            'Descuento autorizado por ${approvedRequest!.approvedByPartnerName.isEmpty ? approvedRequest!.requestedPartnerName : approvedRequest!.approvedByPartnerName}.',
+        extra: totalChanged
+            ? 'El total cambió desde que se solicitó la autorización.'
+            : '',
+      );
+    }
+    if (pendingRequest != null) {
+      return _statusPanel(
+        color: BrandColors.accentYellow,
+        icon: Icons.hourglass_top_outlined,
+        text: 'Solicitud pendiente de autorización.',
+        action: TextButton.icon(
+          onPressed: onCancelPending,
+          icon: const Icon(Icons.cancel_outlined),
+          label: const Text('Cancelar solicitud'),
+        ),
+      );
+    }
+    if (rejectedRequest != null) {
+      return _statusPanel(
+        color: BrandColors.danger,
+        icon: Icons.block_outlined,
+        text: 'Descuento rechazado.',
+        extra: rejectedRequest!.rejectReason.isEmpty
+            ? ''
+            : 'Motivo: ${rejectedRequest!.rejectReason}',
+      );
+    }
+    return const Text(
+      'Se enviará una solicitud al socio seleccionado. No se aplica descuento hasta que sea autorizada.',
+      style: TextStyle(
+        color: BrandColors.textMuted,
+        fontWeight: FontWeight.w700,
+      ),
+    );
+  }
+
+  Widget _statusPanel({
+    required Color color,
+    required IconData icon,
+    required String text,
+    String extra = '',
+    Widget? action,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.10),
+        border: Border.all(color: color.withValues(alpha: 0.55)),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  text,
+                  style: TextStyle(color: color, fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+          if (extra.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              extra,
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+          if (action != null) ...[const SizedBox(height: 6), action],
+        ],
+      ),
+    );
   }
 }
 
@@ -2176,7 +2514,8 @@ class _PaymentMethodSelector extends StatelessWidget {
               selected: selected == entry.key,
               label: Text(entry.value),
               onSelected:
-                  entry.key == 'employee_consumption' && employeeDisabled
+                  entry.key == 'employee_consumption' &&
+                      (employeeDisabled || employees.isEmpty)
                   ? null
                   : (_) => onMethodChanged(entry.key),
             );
@@ -2192,21 +2531,42 @@ class _PaymentMethodSelector extends StatelessWidget {
             ),
           ),
         ],
+        if (allowEmployeeConsumption &&
+            !employeeDisabled &&
+            employees.isEmpty) ...[
+          const SizedBox(height: 10),
+          const Text(
+            'No hay empleados disponibles para este beneficio.',
+            style: TextStyle(
+              color: BrandColors.textMuted,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
         if (allowEmployeeConsumption && selected == 'employee_consumption') ...[
           const SizedBox(height: 12),
-          DropdownButtonFormField<Employee>(
-            initialValue: selectedValue,
-            decoration: const InputDecoration(labelText: 'Empleado'),
-            items: employees
-                .map(
-                  (employee) => DropdownMenuItem(
-                    value: employee,
-                    child: Text(employee.name),
-                  ),
-                )
-                .toList(),
-            onChanged: onEmployeeChanged,
-          ),
+          if (employees.isEmpty)
+            const Text(
+              'No hay empleados disponibles para este beneficio.',
+              style: TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          else
+            DropdownButtonFormField<Employee>(
+              initialValue: selectedValue,
+              decoration: const InputDecoration(labelText: 'Empleado'),
+              items: employees
+                  .map(
+                    (employee) => DropdownMenuItem(
+                      value: employee,
+                      child: Text(employee.name),
+                    ),
+                  )
+                  .toList(),
+              onChanged: onEmployeeChanged,
+            ),
         ],
       ],
     );

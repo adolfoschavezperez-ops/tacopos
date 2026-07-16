@@ -129,7 +129,8 @@ class _DiscountAdminScreenState extends State<DiscountAdminScreen> {
                           subtitle: Text(
                             '${row.businessDate} | ${row.branchName} | ${row.status}'
                             '${row.employeeName.isEmpty ? '' : ' | ${row.employeeName}'}'
-                            '${row.partnerName.isEmpty ? '' : ' | ${row.partnerName}'}',
+                            '${row.partnerName.isEmpty ? '' : ' | ${row.partnerName}'}'
+                            '${row.linkedEmployeeName.isEmpty ? '' : ' | Empleado ligado: ${row.linkedEmployeeName}'}',
                           ),
                           trailing: Column(
                             mainAxisSize: MainAxisSize.min,

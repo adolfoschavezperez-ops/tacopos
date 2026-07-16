@@ -17,6 +17,13 @@ class CashWithdrawalRequest {
     this.authorizedByEmployeeName,
     this.authorizedAt,
     this.adminNotes,
+    this.approvedByEmployeeId,
+    this.approvedByEmployeeName,
+    this.approvedAt,
+    this.rejectedByEmployeeId,
+    this.rejectedByEmployeeName,
+    this.rejectedAt,
+    this.rejectReason,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -36,6 +43,13 @@ class CashWithdrawalRequest {
   final String? authorizedByEmployeeName;
   final DateTime? authorizedAt;
   final String? adminNotes;
+  final String? approvedByEmployeeId;
+  final String? approvedByEmployeeName;
+  final DateTime? approvedAt;
+  final String? rejectedByEmployeeId;
+  final String? rejectedByEmployeeName;
+  final DateTime? rejectedAt;
+  final String? rejectReason;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -64,6 +78,14 @@ class CashWithdrawalRequest {
       authorizedByEmployeeName: data['authorizedByEmployeeName'] as String?,
       authorizedAt: _toDate(data['authorizedAt']),
       adminNotes: data['adminNotes'] as String?,
+      approvedByEmployeeId: data['approvedByEmployeeId'] as String?,
+      approvedByEmployeeName: data['approvedByEmployeeName'] as String?,
+      approvedAt: _toDate(data['approvedAt']),
+      rejectedByEmployeeId: data['rejectedByEmployeeId'] as String?,
+      rejectedByEmployeeName: data['rejectedByEmployeeName'] as String?,
+      rejectedAt: _toDate(data['rejectedAt']),
+      rejectReason:
+          data['rejectReason'] as String? ?? data['adminNotes'] as String?,
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:

@@ -410,6 +410,8 @@ class Partner {
     this.ownershipPercent = 0,
     this.phone = '',
     this.pin = '',
+    this.linkedEmployeeId = '',
+    this.linkedEmployeeName = '',
     this.notes = '',
     this.createdAt,
     this.updatedAt,
@@ -421,6 +423,8 @@ class Partner {
   final double ownershipPercent;
   final String phone;
   final String pin;
+  final String linkedEmployeeId;
+  final String linkedEmployeeName;
   final String notes;
   final DateTime? createdAt;
   final DateTime? updatedAt;
@@ -434,6 +438,8 @@ class Partner {
       ownershipPercent: _toDouble(data['ownershipPercent']),
       phone: data['phone'] as String? ?? '',
       pin: data['pin'] as String? ?? '',
+      linkedEmployeeId: data['linkedEmployeeId'] as String? ?? '',
+      linkedEmployeeName: data['linkedEmployeeName'] as String? ?? '',
       notes: data['notes'] as String? ?? '',
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),

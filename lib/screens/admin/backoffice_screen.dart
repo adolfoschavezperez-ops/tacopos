@@ -22,6 +22,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import 'cash_admin_screen.dart';
+import 'authorization_admin_screen.dart';
 import 'branch_catalog_screen.dart';
 import 'discount_admin_screen.dart';
 import 'employee_catalog_screen.dart';
@@ -40,6 +41,7 @@ enum _BackofficeSection {
   live,
   sales,
   reports,
+  authorizations,
   cash,
   kitchen,
   purchases,
@@ -472,6 +474,9 @@ class _BackofficeBody extends StatelessWidget {
     if (section == _BackofficeSection.cash) {
       return withBranchHeader(const CashAdminScreen());
     }
+    if (section == _BackofficeSection.authorizations) {
+      return withBranchHeader(const AuthorizationAdminScreen());
+    }
     if (section == _BackofficeSection.kitchen) {
       return withBranchHeader(const KitchenAdminScreen());
     }
@@ -567,6 +572,7 @@ class _BackofficeBody extends StatelessWidget {
                     endBusinessDate: endBusinessDate,
                     onReportChanged: onReportChanged,
                   ),
+                  _BackofficeSection.authorizations => const SizedBox.shrink(),
                   _BackofficeSection.live => const SizedBox.shrink(),
                   _BackofficeSection.cash => const SizedBox.shrink(),
                   _BackofficeSection.kitchen => const SizedBox.shrink(),
@@ -1912,6 +1918,12 @@ List<_NavItem> _navItems(Employee? employee) {
         Icons.analytics_outlined,
         'Reportes',
       ),
+    if (_canUseBackoffice(employee))
+      const _NavItem(
+        _BackofficeSection.authorizations,
+        Icons.verified_user_outlined,
+        'Autorizaciones',
+      ),
     if (employee?.canManageCash == true ||
         employee?.canAuthorizeCashWithdrawals == true)
       const _NavItem(
@@ -1985,6 +1997,7 @@ String _sectionTitle(_BackofficeSection section) {
     _BackofficeSection.live => 'Visor operativo',
     _BackofficeSection.sales => 'Ventas',
     _BackofficeSection.reports => 'Reportes',
+    _BackofficeSection.authorizations => 'Autorizaciones',
     _BackofficeSection.cash => 'Caja',
     _BackofficeSection.kitchen => 'Control de cocina',
     _BackofficeSection.purchases => 'Compras',

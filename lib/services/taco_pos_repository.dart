@@ -9,6 +9,7 @@ import '../models/cash_withdrawal_request.dart';
 import '../models/active_session.dart';
 import '../models/activity_event.dart';
 import '../models/branch.dart';
+import '../models/discount_authorization_request.dart';
 import '../models/employee.dart';
 import '../models/kitchen_session.dart';
 import '../models/kitchen_stock_item.dart';
@@ -134,8 +135,11 @@ class AppliedDiscountDetails {
     required this.totalAfterDiscount,
     this.authorizedByPartnerId,
     this.authorizedByPartnerName,
+    this.authorizedByPartnerLinkedEmployeeId,
+    this.authorizedByPartnerLinkedEmployeeName,
     this.employeeBeneficiaryId,
     this.employeeBeneficiaryName,
+    this.discountAuthorizationRequestId,
     this.reason = '',
   });
 
@@ -147,8 +151,11 @@ class AppliedDiscountDetails {
   final double totalAfterDiscount;
   final String? authorizedByPartnerId;
   final String? authorizedByPartnerName;
+  final String? authorizedByPartnerLinkedEmployeeId;
+  final String? authorizedByPartnerLinkedEmployeeName;
   final String? employeeBeneficiaryId;
   final String? employeeBeneficiaryName;
+  final String? discountAuthorizationRequestId;
   final String reason;
 }
 
@@ -186,6 +193,9 @@ class DiscountUsageRow {
     required this.status,
     this.employeeName = '',
     this.partnerName = '',
+    this.linkedEmployeeId = '',
+    this.linkedEmployeeName = '',
+    this.discountAuthorizationRequestId = '',
     this.orderId = '',
     this.createdByEmployeeName = '',
     this.branchId = '',
@@ -202,6 +212,9 @@ class DiscountUsageRow {
   final String status;
   final String employeeName;
   final String partnerName;
+  final String linkedEmployeeId;
+  final String linkedEmployeeName;
+  final String discountAuthorizationRequestId;
   final String orderId;
   final String createdByEmployeeName;
   final String branchId;
@@ -220,6 +233,10 @@ class DiscountUsageRow {
       status: data['status'] as String? ?? 'active',
       employeeName: data['employeeName'] as String? ?? '',
       partnerName: data['partnerName'] as String? ?? '',
+      linkedEmployeeId: data['linkedEmployeeId'] as String? ?? '',
+      linkedEmployeeName: data['linkedEmployeeName'] as String? ?? '',
+      discountAuthorizationRequestId:
+          data['discountAuthorizationRequestId'] as String? ?? '',
       orderId: data['orderId'] as String? ?? '',
       createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
       branchId: data['branchId'] as String? ?? '',
@@ -402,6 +419,10 @@ class TacoPosRepository {
 
   CollectionReference<Map<String, dynamic>> get _discountUsageRef =>
       _restaurantRef.collection('discountUsage');
+
+  CollectionReference<Map<String, dynamic>>
+  get _discountAuthorizationRequestsRef =>
+      _restaurantRef.collection('discountAuthorizationRequests');
 
   DocumentReference<Map<String, dynamic>> get _discountSettingsRef =>
       _restaurantRef.collection('settings').doc('discounts');
@@ -1206,6 +1227,222 @@ class TacoPosRepository {
         : partners;
   }
 
+  Stream<List<DiscountAuthorizationRequest>>
+  watchDiscountAuthorizationRequests({
+    String? status,
+    String? startBusinessDate,
+    String? endBusinessDate,
+    String? partnerId,
+    String? requestedByEmployeeId,
+  }) {
+    return _discountAuthorizationRequestsRef.snapshots().map((snapshot) {
+      final requests =
+          snapshot.docs.map(DiscountAuthorizationRequest.fromDoc).where((
+            request,
+          ) {
+            if (!_matchesCurrentBranch(request.branchId)) return false;
+            if (status != null &&
+                status.trim().isNotEmpty &&
+                request.status != status.trim()) {
+              return false;
+            }
+            if (startBusinessDate != null &&
+                startBusinessDate.isNotEmpty &&
+                request.businessDate.compareTo(startBusinessDate) < 0) {
+              return false;
+            }
+            if (endBusinessDate != null &&
+                endBusinessDate.isNotEmpty &&
+                request.businessDate.compareTo(endBusinessDate) > 0) {
+              return false;
+            }
+            if (partnerId != null &&
+                partnerId.trim().isNotEmpty &&
+                request.requestedPartnerId != partnerId.trim() &&
+                request.approvedByPartnerId != partnerId.trim() &&
+                request.rejectedByPartnerId != partnerId.trim()) {
+              return false;
+            }
+            if (requestedByEmployeeId != null &&
+                requestedByEmployeeId.trim().isNotEmpty &&
+                request.requestedByEmployeeId != requestedByEmployeeId.trim()) {
+              return false;
+            }
+            return true;
+          }).toList()..sort((a, b) {
+            final aDate =
+                a.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate =
+                b.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
+      return requests;
+    });
+  }
+
+  Stream<List<DiscountAuthorizationRequest>>
+  watchDiscountAuthorizationRequestsForOrder(String orderId) {
+    final cleanOrderId = orderId.trim();
+    return watchDiscountAuthorizationRequests().map(
+      (requests) => requests
+          .where(
+            (request) =>
+                request.orderId == cleanOrderId &&
+                request.requestedDiscountType == 'family_friend_20',
+          )
+          .toList(),
+    );
+  }
+
+  Future<String> requestFamilyFriendDiscountAuthorization({
+    required PosOrder order,
+    required double amountBeforeDiscount,
+    required String requestedPartnerId,
+    required String reason,
+  }) async {
+    _requireCharge();
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de la autorización.');
+    }
+    if (amountBeforeDiscount <= 0 || order.paymentStatus == 'paid') {
+      throw StateError('No hay saldo pendiente para solicitar descuento.');
+    }
+    final partner = await _partnerById(requestedPartnerId);
+    if (partner == null || !partner.active) {
+      throw StateError('Selecciona un socio activo.');
+    }
+    final cashSession = await _requireOpenCashSessionForPayment();
+    final employee = AppSession.instance.employee;
+    final estimatedDiscount = (amountBeforeDiscount * 0.20).clamp(
+      0,
+      amountBeforeDiscount,
+    );
+    final docRef = _discountAuthorizationRequestsRef.doc();
+    await docRef.set({
+      'id': docRef.id,
+      'restaurantId': order.restaurantId,
+      'restaurantName': order.restaurantName,
+      'branchId': order.branchId,
+      'branchName': order.branchName,
+      'businessDate': cashSession.businessDate,
+      'orderId': order.id,
+      'tableId': order.tableId,
+      'tableName': order.tableName,
+      'orderType': order.orderType,
+      'requestedDiscountType': 'family_friend_20',
+      'requestedDiscountName': 'Familia / amigos 20%',
+      'requestedDiscountPercent': 20.0,
+      'amountBeforeDiscount': amountBeforeDiscount,
+      'estimatedDiscountAmount': estimatedDiscount,
+      'estimatedTotalAfterDiscount': amountBeforeDiscount - estimatedDiscount,
+      'requestedPartnerId': partner.id,
+      'requestedPartnerName': partner.name,
+      'requestReason': cleanReason,
+      'status': 'pending',
+      'requestedAt': FieldValue.serverTimestamp(),
+      'requestedByEmployeeId': employee?.id ?? '',
+      'requestedByEmployeeName': employee?.name ?? '',
+      'approvedAt': null,
+      'approvedByEmployeeId': '',
+      'approvedByEmployeeName': '',
+      'approvedByPartnerId': '',
+      'approvedByPartnerName': '',
+      'rejectedAt': null,
+      'rejectedByEmployeeId': '',
+      'rejectedByEmployeeName': '',
+      'rejectedByPartnerId': '',
+      'rejectedByPartnerName': '',
+      'rejectReason': '',
+      'cancelledAt': null,
+      'cancelledByEmployeeId': '',
+      'cancelledByEmployeeName': '',
+      'cancelReason': '',
+      'usedAt': null,
+      'usedPaymentId': '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return docRef.id;
+  }
+
+  Future<void> cancelDiscountAuthorizationRequest({
+    required String requestId,
+    String reason = '',
+  }) async {
+    _requireCharge();
+    final docRef = _discountAuthorizationRequestsRef.doc(requestId.trim());
+    final doc = await docRef.get();
+    if (!doc.exists) {
+      throw StateError('La solicitud ya no existe.');
+    }
+    final request = DiscountAuthorizationRequest.fromDoc(doc);
+    if (!request.isPending) {
+      throw StateError('Solo se pueden cancelar solicitudes pendientes.');
+    }
+    final employee = AppSession.instance.employee;
+    await docRef.update({
+      'status': 'cancelled',
+      'cancelledAt': FieldValue.serverTimestamp(),
+      'cancelledByEmployeeId': employee?.id ?? '',
+      'cancelledByEmployeeName': employee?.name ?? '',
+      'cancelReason': reason.trim(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<Partner?> currentEmployeeActivePartner() {
+    final employeeId = AppSession.instance.employee?.id ?? '';
+    return _activePartnerLinkedToEmployee(employeeId);
+  }
+
+  Future<void> resolveDiscountAuthorizationRequest({
+    required String requestId,
+    required bool approved,
+    String rejectReason = '',
+  }) async {
+    final employee = AppSession.instance.employee;
+    if (employee == null) {
+      throw StateError('Inicia sesión para revisar autorizaciones.');
+    }
+    final partner = await _activePartnerLinkedToEmployee(employee.id);
+    if (partner == null) {
+      throw StateError('Solo un socio puede autorizar este descuento.');
+    }
+    final cleanRejectReason = rejectReason.trim();
+    if (!approved && cleanRejectReason.isEmpty) {
+      throw ArgumentError('Captura el motivo del rechazo.');
+    }
+    final docRef = _discountAuthorizationRequestsRef.doc(requestId.trim());
+    final doc = await docRef.get();
+    if (!doc.exists) {
+      throw StateError('La solicitud ya no existe.');
+    }
+    final request = DiscountAuthorizationRequest.fromDoc(doc);
+    if (!request.isPending) {
+      throw StateError('La solicitud ya fue atendida.');
+    }
+
+    await docRef.update({
+      'status': approved ? 'approved' : 'rejected',
+      if (approved) ...{
+        'approvedAt': FieldValue.serverTimestamp(),
+        'approvedByEmployeeId': employee.id,
+        'approvedByEmployeeName': employee.name,
+        'approvedByPartnerId': partner.id,
+        'approvedByPartnerName': partner.name,
+      } else ...{
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'rejectedByEmployeeId': employee.id,
+        'rejectedByEmployeeName': employee.name,
+        'rejectedByPartnerId': partner.id,
+        'rejectedByPartnerName': partner.name,
+        'rejectReason': cleanRejectReason,
+      },
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
   Stream<GeneralDiscountConfig> watchGeneralDiscountConfig() {
     return _discountSettingsRef.snapshots().map(
       (doc) => _generalDiscountFromData(doc.data()),
@@ -1261,6 +1498,7 @@ class TacoPosRepository {
     String? employeeId,
     String pin = '',
     String? partnerId,
+    String? discountAuthorizationRequestId,
     String reason = '',
   }) async {
     if (amountBeforeDiscount <= 0 || order.paymentStatus == 'paid') {
@@ -1287,7 +1525,16 @@ class TacoPosRepository {
         throw StateError('La comida del dia solo aplica en consumo local.');
       }
       final employee = await _employeeById(employeeId);
-      if (employee == null || !employee.active || employee.pin != pin.trim()) {
+      if (employee == null || !employee.active) {
+        throw StateError('PIN incorrecto. No se aplico descuento.');
+      }
+      final linkedPartner = await _activePartnerLinkedToEmployee(employee.id);
+      if (linkedPartner != null) {
+        throw StateError(
+          'Este usuario está registrado como socio. No aplica beneficio de empleado.',
+        );
+      }
+      if (employee.pin != pin.trim()) {
         throw StateError('PIN incorrecto. No se aplico descuento.');
       }
       await _ensureEmployeeDiscountNotUsed(
@@ -1310,26 +1557,66 @@ class TacoPosRepository {
       );
     }
 
-    if (type == 'family_friend_20' || type == 'partner_50') {
-      final partner = await _partnerById(partnerId);
-      if (partner == null || !partner.active || partner.pin != pin.trim()) {
+    if (type == 'family_friend_20') {
+      final cleanRequestId = discountAuthorizationRequestId?.trim();
+      if (cleanRequestId == null || cleanRequestId.isEmpty) {
         throw StateError(
-          type == 'family_friend_20'
-              ? 'No se pudo autorizar el descuento.'
-              : 'PIN incorrecto. No se aplico descuento.',
+          'Solicita autorización antes de aplicar este descuento.',
         );
       }
-      final percent = type == 'family_friend_20' ? 20.0 : 50.0;
-      final name = type == 'family_friend_20'
-          ? 'Familia / amigos 20%'
-          : 'Socio 50%';
+      final requestDoc = await _discountAuthorizationRequestsRef
+          .doc(cleanRequestId)
+          .get();
+      if (!requestDoc.exists) {
+        throw StateError('La autorización ya no existe.');
+      }
+      final request = DiscountAuthorizationRequest.fromDoc(requestDoc);
+      if (request.orderId != order.id ||
+          request.requestedDiscountType != 'family_friend_20') {
+        throw StateError('La autorización no corresponde a esta orden.');
+      }
+      if (!request.isUsable) {
+        throw StateError(
+          request.isRejected
+              ? 'Descuento rechazado.'
+              : 'La autorización no está disponible.',
+        );
+      }
+      final approvedPartnerId = request.approvedByPartnerId.isNotEmpty
+          ? request.approvedByPartnerId
+          : request.requestedPartnerId;
+      final approvedPartner = await _partnerById(approvedPartnerId);
       return _discountDetails(
         type: type,
-        name: name,
-        percent: percent,
+        name: 'Familia / amigos 20%',
+        percent: 20.0,
+        amountBeforeDiscount: amountBeforeDiscount,
+        authorizedByPartnerId: approvedPartnerId,
+        authorizedByPartnerName: request.approvedByPartnerName.isNotEmpty
+            ? request.approvedByPartnerName
+            : request.requestedPartnerName,
+        authorizedByPartnerLinkedEmployeeId: approvedPartner?.linkedEmployeeId,
+        authorizedByPartnerLinkedEmployeeName:
+            approvedPartner?.linkedEmployeeName,
+        discountAuthorizationRequestId: request.id,
+        reason: request.requestReason,
+      );
+    }
+
+    if (type == 'partner_50') {
+      final partner = await _partnerById(partnerId);
+      if (partner == null || !partner.active || partner.pin != pin.trim()) {
+        throw StateError('PIN incorrecto. No se aplico descuento.');
+      }
+      return _discountDetails(
+        type: type,
+        name: 'Socio 50%',
+        percent: 50.0,
         amountBeforeDiscount: amountBeforeDiscount,
         authorizedByPartnerId: partner.id,
         authorizedByPartnerName: partner.name,
+        authorizedByPartnerLinkedEmployeeId: partner.linkedEmployeeId,
+        authorizedByPartnerLinkedEmployeeName: partner.linkedEmployeeName,
         reason: reason.trim(),
       );
     }
@@ -1355,8 +1642,11 @@ class TacoPosRepository {
     required double amountBeforeDiscount,
     String? authorizedByPartnerId,
     String? authorizedByPartnerName,
+    String? authorizedByPartnerLinkedEmployeeId,
+    String? authorizedByPartnerLinkedEmployeeName,
     String? employeeBeneficiaryId,
     String? employeeBeneficiaryName,
+    String? discountAuthorizationRequestId,
     String reason = '',
   }) {
     final cleanPercent = percent.clamp(0, 100).toDouble();
@@ -1374,8 +1664,12 @@ class TacoPosRepository {
       totalAfterDiscount: totalAfterDiscount.toDouble(),
       authorizedByPartnerId: authorizedByPartnerId,
       authorizedByPartnerName: authorizedByPartnerName,
+      authorizedByPartnerLinkedEmployeeId: authorizedByPartnerLinkedEmployeeId,
+      authorizedByPartnerLinkedEmployeeName:
+          authorizedByPartnerLinkedEmployeeName,
       employeeBeneficiaryId: employeeBeneficiaryId,
       employeeBeneficiaryName: employeeBeneficiaryName,
+      discountAuthorizationRequestId: discountAuthorizationRequestId,
       reason: reason,
     );
   }
@@ -1392,6 +1686,18 @@ class TacoPosRepository {
     if (cleanId == null || cleanId.isEmpty) return null;
     final doc = await _partnersRef.doc(cleanId).get();
     return doc.exists ? Partner.fromDoc(doc) : null;
+  }
+
+  Future<Partner?> _activePartnerLinkedToEmployee(String employeeId) async {
+    final cleanId = employeeId.trim();
+    if (cleanId.isEmpty) return null;
+    final snapshot = await _partnersRef
+        .where('active', isEqualTo: true)
+        .where('linkedEmployeeId', isEqualTo: cleanId)
+        .limit(1)
+        .get();
+    if (snapshot.docs.isEmpty) return null;
+    return Partner.fromDoc(snapshot.docs.first);
   }
 
   Future<void> _ensureEmployeeDiscountNotUsed({
@@ -1454,6 +1760,8 @@ class TacoPosRepository {
         'ownershipPercent': 0.0,
         'phone': '',
         'pin': '',
+        'linkedEmployeeId': '',
+        'linkedEmployeeName': '',
         'notes': '',
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
@@ -1472,6 +1780,8 @@ class TacoPosRepository {
     double ownershipPercent = 0,
     String phone = '',
     String pin = '',
+    String linkedEmployeeId = '',
+    String linkedEmployeeName = '',
     String notes = '',
   }) async {
     _requirePurchaseAccess(manage: true);
@@ -1489,6 +1799,8 @@ class TacoPosRepository {
       'ownershipPercent': ownershipPercent < 0 ? 0 : ownershipPercent,
       'phone': phone.trim(),
       if (pin.trim().isNotEmpty) 'pin': pin.trim(),
+      'linkedEmployeeId': linkedEmployeeId.trim(),
+      'linkedEmployeeName': linkedEmployeeName.trim(),
       'notes': notes.trim(),
       if (partnerId == null || partnerId.trim().isEmpty)
         'createdAt': FieldValue.serverTimestamp(),
@@ -3784,6 +4096,13 @@ class TacoPosRepository {
       'authorizedByEmployeeName': null,
       'authorizedAt': null,
       'adminNotes': null,
+      'approvedAt': null,
+      'approvedByEmployeeId': null,
+      'approvedByEmployeeName': null,
+      'rejectedAt': null,
+      'rejectedByEmployeeId': null,
+      'rejectedByEmployeeName': null,
+      'rejectReason': null,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
@@ -3804,6 +4123,10 @@ class TacoPosRepository {
     if (!request.isPending) {
       throw StateError('La solicitud ya fue atendida.');
     }
+    final cleanNotes = adminNotes.trim();
+    if (!approved && cleanNotes.isEmpty) {
+      throw ArgumentError('Captura el motivo del rechazo.');
+    }
 
     final employee = AppSession.instance.employee;
     await docRef.update({
@@ -3811,7 +4134,17 @@ class TacoPosRepository {
       'authorizedByEmployeeId': employee?.id ?? '',
       'authorizedByEmployeeName': employee?.name ?? '',
       'authorizedAt': FieldValue.serverTimestamp(),
-      'adminNotes': adminNotes.trim(),
+      'adminNotes': cleanNotes,
+      if (approved) ...{
+        'approvedByEmployeeId': employee?.id ?? '',
+        'approvedByEmployeeName': employee?.name ?? '',
+        'approvedAt': FieldValue.serverTimestamp(),
+      } else ...{
+        'rejectedByEmployeeId': employee?.id ?? '',
+        'rejectedByEmployeeName': employee?.name ?? '',
+        'rejectedAt': FieldValue.serverTimestamp(),
+        'rejectReason': cleanNotes,
+      },
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
@@ -5471,7 +5804,11 @@ class TacoPosRepository {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureNoPaymentType(orderId, blockedType: 'person');
-    await _ensureEmployeeConsumptionAllowed(orderId, method);
+    await _ensureEmployeeConsumptionAllowed(
+      orderId,
+      method,
+      employeeId: employeeId,
+    );
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -5492,6 +5829,7 @@ class TacoPosRepository {
       return const PaymentResult(allPaid: true);
     }
 
+    await _ensureDiscountAuthorizationStillUsable(discount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
     _setPayment(
@@ -5528,6 +5866,11 @@ class TacoPosRepository {
       cashSession: cashSession,
       discount: discount,
     );
+    _markDiscountAuthorizationUsedInBatch(
+      batch,
+      discount: discount,
+      paymentId: paymentRef.id,
+    );
     _closeOrderInBatch(
       batch,
       order,
@@ -5550,7 +5893,11 @@ class TacoPosRepository {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureNoPaymentType(orderId, blockedType: 'partial');
-    await _ensureEmployeeConsumptionAllowed(orderId, method);
+    await _ensureEmployeeConsumptionAllowed(
+      orderId,
+      method,
+      employeeId: employeeId,
+    );
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -5579,6 +5926,7 @@ class TacoPosRepository {
       return PaymentResult(allPaid: order.pendingTotal <= 0.01);
     }
 
+    await _ensureDiscountAuthorizationStillUsable(discount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
     _setPayment(
@@ -5626,6 +5974,11 @@ class TacoPosRepository {
       cashSession: cashSession,
       discount: discount,
     );
+    _markDiscountAuthorizationUsedInBatch(
+      batch,
+      discount: discount,
+      paymentId: paymentRef.id,
+    );
     await batch.commit();
     return PaymentResult(allPaid: allPaid);
   }
@@ -5658,7 +6011,11 @@ class TacoPosRepository {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureNoPaymentType(orderId, blockedType: 'partial');
-    await _ensureEmployeeConsumptionAllowed(orderId, method);
+    await _ensureEmployeeConsumptionAllowed(
+      orderId,
+      method,
+      employeeId: employeeId,
+    );
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -5685,6 +6042,7 @@ class TacoPosRepository {
     }
 
     final names = selectedPeople.map((person) => order.personName(person));
+    await _ensureDiscountAuthorizationStillUsable(discount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
     _setPayment(
@@ -5731,6 +6089,11 @@ class TacoPosRepository {
       cashSession: cashSession,
       discount: discount,
     );
+    _markDiscountAuthorizationUsedInBatch(
+      batch,
+      discount: discount,
+      paymentId: paymentRef.id,
+    );
     await batch.commit();
     return PaymentResult(allPaid: allPaid);
   }
@@ -5747,7 +6110,11 @@ class TacoPosRepository {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureNoPaymentType(orderId, blockedType: 'person');
-    await _ensureEmployeeConsumptionAllowed(orderId, method);
+    await _ensureEmployeeConsumptionAllowed(
+      orderId,
+      method,
+      employeeId: employeeId,
+    );
     await _ensureKitchenReadyForPayment(orderId);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = PosOrder.fromDoc(orderDoc);
@@ -5760,6 +6127,7 @@ class TacoPosRepository {
         .doc(orderId)
         .collection('items')
         .get();
+    await _ensureDiscountAuthorizationStillUsable(discount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
     _setPayment(
@@ -5791,6 +6159,11 @@ class TacoPosRepository {
       paymentId: paymentRef.id,
       cashSession: cashSession,
       discount: discount,
+    );
+    _markDiscountAuthorizationUsedInBatch(
+      batch,
+      discount: discount,
+      paymentId: paymentRef.id,
     );
     await batch.commit();
     return PaymentResult(allPaid: allPaid);
@@ -5874,7 +6247,12 @@ class TacoPosRepository {
           'updatedAt': FieldValue.serverTimestamp(),
         });
       }
-      _closeOrderInBatch(batch, order, paidTotal: order.total);
+      _closeOrderInBatch(
+        batch,
+        order,
+        paidTotal: order.total,
+        discount: discount,
+      );
     } else {
       batch.update(_ordersRef.doc(order.id), {
         'paymentStatus': 'partial',
@@ -5984,8 +6362,15 @@ class TacoPosRepository {
       'appliedDiscountPercent': discount?.percent ?? 0.0,
       'discountAuthorizedByPartnerId': discount?.authorizedByPartnerId,
       'discountAuthorizedByPartnerName': discount?.authorizedByPartnerName,
+      'discountAuthorizedByPartnerLinkedEmployeeId':
+          discount?.authorizedByPartnerLinkedEmployeeId,
+      'discountAuthorizedByPartnerLinkedEmployeeName':
+          discount?.authorizedByPartnerLinkedEmployeeName,
       'discountEmployeeBeneficiaryId': discount?.employeeBeneficiaryId,
       'discountEmployeeBeneficiaryName': discount?.employeeBeneficiaryName,
+      'discountAuthorizationRequestId':
+          discount?.discountAuthorizationRequestId,
+      'discountReason': discount?.reason,
       if (discount != null) ...{
         'discountAppliedAt': FieldValue.serverTimestamp(),
         ..._employeeAuditFields(prefix: 'discountAppliedBy'),
@@ -6034,6 +6419,9 @@ class TacoPosRepository {
       'employeeName': discount.employeeBeneficiaryName,
       'partnerId': discount.authorizedByPartnerId,
       'partnerName': discount.authorizedByPartnerName,
+      'linkedEmployeeId': discount.authorizedByPartnerLinkedEmployeeId,
+      'linkedEmployeeName': discount.authorizedByPartnerLinkedEmployeeName,
+      'discountAuthorizationRequestId': discount.discountAuthorizationRequestId,
       'discountType': discount.type,
       'discountName': discount.name,
       'orderId': order.id,
@@ -6045,6 +6433,41 @@ class TacoPosRepository {
       'status': 'active',
       'createdAt': FieldValue.serverTimestamp(),
       ..._employeeAuditFields(prefix: 'createdBy'),
+    });
+  }
+
+  Future<void> _ensureDiscountAuthorizationStillUsable(
+    AppliedDiscountDetails? discount,
+    PosOrder order,
+  ) async {
+    final requestId = discount?.discountAuthorizationRequestId?.trim();
+    if (requestId == null || requestId.isEmpty) {
+      return;
+    }
+    final doc = await _discountAuthorizationRequestsRef.doc(requestId).get();
+    if (!doc.exists) {
+      throw StateError('La autorización ya no existe.');
+    }
+    final request = DiscountAuthorizationRequest.fromDoc(doc);
+    if (request.orderId != order.id || !request.isUsable) {
+      throw StateError('La autorización ya fue usada o ya no está vigente.');
+    }
+  }
+
+  void _markDiscountAuthorizationUsedInBatch(
+    WriteBatch batch, {
+    required AppliedDiscountDetails? discount,
+    required String paymentId,
+  }) {
+    final requestId = discount?.discountAuthorizationRequestId?.trim();
+    if (requestId == null || requestId.isEmpty) {
+      return;
+    }
+    batch.update(_discountAuthorizationRequestsRef.doc(requestId), {
+      'status': 'used',
+      'usedAt': FieldValue.serverTimestamp(),
+      'usedPaymentId': paymentId,
+      'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
@@ -6110,6 +6533,19 @@ class TacoPosRepository {
         'cancelReason': cleanReason,
         ..._employeeAuditFields(prefix: 'cancelledBy'),
       });
+    }
+    final authorizationRequestId = payment.discountAuthorizationRequestId
+        ?.trim();
+    if (authorizationRequestId != null && authorizationRequestId.isNotEmpty) {
+      batch.update(
+        _discountAuthorizationRequestsRef.doc(authorizationRequestId),
+        {
+          'status': 'approved',
+          'usedAt': FieldValue.delete(),
+          'usedPaymentId': '',
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
     }
     for (final doc in itemsSnapshot.docs) {
       final item = OrderItem.fromDoc(doc);
@@ -6417,10 +6853,22 @@ class TacoPosRepository {
 
   Future<void> _ensureEmployeeConsumptionAllowed(
     String orderId,
-    String method,
-  ) async {
+    String method, {
+    String? employeeId,
+  }) async {
     if (method != 'employee_consumption') {
       return;
+    }
+
+    final cleanEmployeeId = employeeId?.trim() ?? '';
+    if (cleanEmployeeId.isEmpty) {
+      throw StateError('Selecciona un empleado.');
+    }
+    final linkedPartner = await _activePartnerLinkedToEmployee(cleanEmployeeId);
+    if (linkedPartner != null) {
+      throw StateError(
+        'Este usuario está registrado como socio. No aplica beneficio de empleado.',
+      );
     }
 
     final paymentsSnapshot = await _ordersRef

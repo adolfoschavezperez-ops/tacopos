@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_withdrawal_request.dart';
+import '../../models/employee.dart';
 import '../../models/payment.dart';
 import '../../models/purchase_models.dart';
 import '../../services/taco_pos_repository.dart';
@@ -567,8 +568,7 @@ class _PartnerContributionsTab extends StatelessWidget {
           ...partners.map(
             (partner) => _FinanceTile(
               title: partner.name,
-              subtitle:
-                  '${partner.active ? 'Activo' : 'Inactivo'} · ${partner.phone}',
+              subtitle: _partnerSubtitle(partner),
               amount: partner.ownershipPercent,
               amountSuffix: '%',
               onTap: () => _openPartnerDialog(context, partner),
@@ -595,6 +595,16 @@ class _PartnerContributionsTab extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  String _partnerSubtitle(Partner partner) {
+    final parts = <String>[
+      partner.active ? 'Activo' : 'Inactivo',
+      if (partner.phone.trim().isNotEmpty) partner.phone.trim(),
+      if (partner.linkedEmployeeName.trim().isNotEmpty)
+        'Empleado ligado: ${partner.linkedEmployeeName.trim()}',
+    ];
+    return parts.join(' · ');
   }
 
   Future<void> _openPartnerDialog(
@@ -944,6 +954,9 @@ class _PartnerDialogState extends State<_PartnerDialog> {
   late final TextEditingController _pinController;
   late final TextEditingController _notesController;
   late bool _active;
+  List<Employee> _employees = const [];
+  String? _linkedEmployeeId;
+  bool _employeesLoading = true;
   bool _saving = false;
 
   @override
@@ -960,6 +973,10 @@ class _PartnerDialogState extends State<_PartnerDialog> {
     _pinController = TextEditingController();
     _notesController = TextEditingController(text: partner?.notes ?? '');
     _active = partner?.active ?? true;
+    _linkedEmployeeId = partner?.linkedEmployeeId.trim().isEmpty == true
+        ? null
+        : partner?.linkedEmployeeId.trim();
+    _loadEmployees();
   }
 
   @override
@@ -974,6 +991,9 @@ class _PartnerDialogState extends State<_PartnerDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final selectedLinkedEmployeeId = _employeeIdInOptions(_linkedEmployeeId)
+        ? _linkedEmployeeId
+        : null;
     return AlertDialog(
       title: Text(widget.partner == null ? 'Nuevo socio' : 'Editar socio'),
       content: SizedBox(
@@ -986,6 +1006,33 @@ class _PartnerDialogState extends State<_PartnerDialog> {
             _field(_ownershipController, 'Participacion %', 140),
             _field(_phoneController, 'Telefono', 180),
             _field(_pinController, 'Nuevo PIN', 140, obscure: true),
+            SizedBox(
+              width: 390,
+              child: DropdownButtonFormField<String?>(
+                initialValue: selectedLinkedEmployeeId,
+                decoration: InputDecoration(
+                  labelText: 'Empleado ligado del sistema',
+                  helperText: _employeesLoading
+                      ? 'Cargando empleados...'
+                      : 'Opcional',
+                ),
+                items: [
+                  const DropdownMenuItem<String?>(
+                    value: null,
+                    child: Text('Sin empleado ligado'),
+                  ),
+                  ..._employees.map(
+                    (employee) => DropdownMenuItem<String?>(
+                      value: employee.id,
+                      child: Text(employee.name),
+                    ),
+                  ),
+                ],
+                onChanged: _employeesLoading
+                    ? null
+                    : (value) => setState(() => _linkedEmployeeId = value),
+              ),
+            ),
             SizedBox(
               width: 160,
               child: SwitchListTile(
@@ -1012,6 +1059,41 @@ class _PartnerDialogState extends State<_PartnerDialog> {
     );
   }
 
+  Future<void> _loadEmployees() async {
+    try {
+      final employees = await widget.repository.getEmployeesOnce();
+      if (!mounted) return;
+      setState(() {
+        _employees = employees;
+        if (!_employeeIdInOptions(_linkedEmployeeId)) {
+          _linkedEmployeeId = null;
+        }
+        _employeesLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _employees = const [];
+        _linkedEmployeeId = null;
+        _employeesLoading = false;
+      });
+    }
+  }
+
+  bool _employeeIdInOptions(String? employeeId) {
+    if (employeeId == null || employeeId.trim().isEmpty) return false;
+    return _employees.any((employee) => employee.id == employeeId.trim());
+  }
+
+  Employee? _selectedLinkedEmployee() {
+    final employeeId = _linkedEmployeeId?.trim();
+    if (employeeId == null || employeeId.isEmpty) return null;
+    for (final employee in _employees) {
+      if (employee.id == employeeId) return employee;
+    }
+    return null;
+  }
+
   Widget _field(
     TextEditingController controller,
     String label,
@@ -1031,6 +1113,7 @@ class _PartnerDialogState extends State<_PartnerDialog> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
+      final linkedEmployee = _selectedLinkedEmployee();
       await widget.repository.savePartner(
         partnerId: widget.partner?.id,
         name: _nameController.text,
@@ -1038,6 +1121,8 @@ class _PartnerDialogState extends State<_PartnerDialog> {
         ownershipPercent: _parse(_ownershipController.text),
         phone: _phoneController.text,
         pin: _pinController.text,
+        linkedEmployeeId: linkedEmployee?.id ?? '',
+        linkedEmployeeName: linkedEmployee?.name ?? '',
         notes: _notesController.text,
       );
       if (!mounted) return;
