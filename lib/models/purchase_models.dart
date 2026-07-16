@@ -281,6 +281,10 @@ class SupplierPayment {
     this.fundingSourceName = 'Venta del negocio - efectivo',
     this.partnerId,
     this.partnerName,
+    this.cancelledAt,
+    this.cancelledByEmployeeId,
+    this.cancelledByEmployeeName,
+    this.cancelReason,
     this.createdAt,
   });
 
@@ -305,7 +309,14 @@ class SupplierPayment {
   final String reference;
   final String notes;
   final String status;
+  final DateTime? cancelledAt;
+  final String? cancelledByEmployeeId;
+  final String? cancelledByEmployeeName;
+  final String? cancelReason;
   final DateTime? createdAt;
+
+  bool get isActive => status == 'active' && cancelledAt == null;
+  bool get isCancelled => status == 'cancelled' || cancelledAt != null;
 
   factory SupplierPayment.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -342,6 +353,10 @@ class SupplierPayment {
       reference: data['reference'] as String? ?? '',
       notes: data['notes'] as String? ?? '',
       status: data['status'] as String? ?? 'active',
+      cancelledAt: _toDate(data['cancelledAt']),
+      cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
+      cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
+      cancelReason: data['cancelReason'] as String?,
       createdAt: _toDate(data['createdAt']),
     );
   }
@@ -362,6 +377,10 @@ class SupplierStatementRow {
     this.fundingSourceName = '',
     this.partnerName,
     this.reference = '',
+    this.status = 'active',
+    this.cancelReason,
+    this.cancelledByEmployeeName,
+    this.cancelledAt,
   });
 
   final DateTime date;
@@ -377,6 +396,10 @@ class SupplierStatementRow {
   final String fundingSourceName;
   final String? partnerName;
   final String reference;
+  final String status;
+  final String? cancelReason;
+  final String? cancelledByEmployeeName;
+  final DateTime? cancelledAt;
 }
 
 class Partner {
@@ -436,6 +459,11 @@ class PartnerContribution {
     this.branchName = AppConstants.defaultBranchName,
     this.createdByEmployeeId = '',
     this.createdByEmployeeName = '',
+    this.status = 'active',
+    this.cancelledAt,
+    this.cancelledByEmployeeId,
+    this.cancelledByEmployeeName,
+    this.cancelReason,
     this.createdAt,
   });
 
@@ -458,7 +486,15 @@ class PartnerContribution {
   final String? purchaseFolio;
   final String createdByEmployeeId;
   final String createdByEmployeeName;
+  final String status;
+  final DateTime? cancelledAt;
+  final String? cancelledByEmployeeId;
+  final String? cancelledByEmployeeName;
+  final String? cancelReason;
   final DateTime? createdAt;
+
+  bool get isActive => status == 'active' && cancelledAt == null;
+  bool get isCancelled => status == 'cancelled' || cancelledAt != null;
 
   factory PartnerContribution.fromDoc(
     DocumentSnapshot<Map<String, dynamic>> doc,
@@ -488,6 +524,11 @@ class PartnerContribution {
       purchaseFolio: data['purchaseFolio'] as String?,
       createdByEmployeeId: data['createdByEmployeeId'] as String? ?? '',
       createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
+      status: data['status'] as String? ?? 'active',
+      cancelledAt: _toDate(data['cancelledAt']),
+      cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
+      cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
+      cancelReason: data['cancelReason'] as String?,
       createdAt: _toDate(data['createdAt']),
     );
   }

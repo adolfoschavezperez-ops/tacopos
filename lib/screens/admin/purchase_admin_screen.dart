@@ -56,7 +56,7 @@ class _PurchaseAdminScreenState extends State<PurchaseAdminScreen> {
                   _PurchaseItemsTab(repository: _repository, data: data),
                   _RegisterPurchaseTab(repository: _repository, data: data),
                   _AccountsPayableTab(repository: _repository, data: data),
-                  _SupplierPaymentsTab(data: data),
+                  _SupplierPaymentsTab(repository: _repository, data: data),
                   _SupplierStatementTab(repository: _repository, data: data),
                   _PurchaseKardexTab(repository: _repository, data: data),
                   _PurchaseReportsTab(repository: _repository, data: data),
@@ -787,8 +787,9 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
 }
 
 class _SupplierPaymentsTab extends StatelessWidget {
-  const _SupplierPaymentsTab({required this.data});
+  const _SupplierPaymentsTab({required this.repository, required this.data});
 
+  final TacoPosRepository repository;
   final _PurchaseData data;
 
   @override
@@ -812,7 +813,9 @@ class _SupplierPaymentsTab extends StatelessWidget {
             (payment) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: GlassCard(
-                accent: BrandColors.success,
+                accent: payment.isCancelled
+                    ? BrandColors.textMuted
+                    : BrandColors.success,
                 child: ListTile(
                   title: Text(payment.supplierName),
                   subtitle: Text(
@@ -821,7 +824,24 @@ class _SupplierPaymentsTab extends StatelessWidget {
                     '${payment.partnerName == null ? '' : ' · ${payment.partnerName}'}'
                     '${payment.reference.isEmpty ? '' : ' · Ref: ${payment.reference}'}',
                   ),
-                  trailing: MoneyText(value: payment.amount),
+                  trailing: Wrap(
+                    spacing: 10,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      if (payment.isCancelled)
+                        const Chip(label: Text('Cancelado'))
+                      else
+                        TextButton(
+                          onPressed: () => _cancelSupplierPayment(
+                            context,
+                            repository: repository,
+                            payment: payment,
+                          ),
+                          child: const Text('Cancelar pago'),
+                        ),
+                      MoneyText(value: payment.amount),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -889,6 +909,7 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
           _StatementTable(
             rows: rows,
             onViewPurchase: (purchaseId) => _openPurchaseDetail(purchaseId),
+            onCancelPayment: (paymentId) => _openCancelPayment(paymentId),
           ),
       ],
     );
@@ -912,6 +933,25 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
       purchase: purchase,
       payments: widget.data.payments,
       partners: widget.data.partners,
+    );
+  }
+
+  void _openCancelPayment(String paymentId) {
+    final payment = widget.data.payments
+        .where((payment) => payment.id == paymentId)
+        .firstOrNull;
+    if (payment == null) {
+      showAppSnackBar(
+        context,
+        'No se encontro el pago seleccionado.',
+        type: AppSnackBarType.error,
+      );
+      return;
+    }
+    _cancelSupplierPayment(
+      context,
+      repository: widget.repository,
+      payment: payment,
     );
   }
 }
@@ -974,6 +1014,24 @@ class _PurchaseKardexTab extends StatelessWidget {
         else
           _StatementTable(
             rows: rows,
+            onCancelPayment: (paymentId) {
+              final payment = data.payments
+                  .where((payment) => payment.id == paymentId)
+                  .firstOrNull;
+              if (payment == null) {
+                showAppSnackBar(
+                  context,
+                  'No se encontro el pago seleccionado.',
+                  type: AppSnackBarType.error,
+                );
+                return;
+              }
+              _cancelSupplierPayment(
+                context,
+                repository: repository,
+                payment: payment,
+              );
+            },
             onViewPurchase: (purchaseId) {
               final purchase = data.purchases
                   .where((purchase) => purchase.id == purchaseId)
@@ -1891,6 +1949,107 @@ void _showPurchaseDetail(
   );
 }
 
+Future<void> _cancelSupplierPayment(
+  BuildContext context, {
+  required TacoPosRepository repository,
+  required SupplierPayment payment,
+  bool closeAfterSuccess = false,
+}) async {
+  if (payment.isCancelled) {
+    showAppSnackBar(
+      context,
+      'Este pago ya fue cancelado.',
+      type: AppSnackBarType.warning,
+    );
+    return;
+  }
+  final reason = await showDialog<String>(
+    context: context,
+    builder: (_) => const _CancelSupplierPaymentDialog(),
+  );
+  if (!context.mounted || reason == null) return;
+  try {
+    await repository.cancelSupplierPayment(payment: payment, reason: reason);
+    if (!context.mounted) return;
+    showAppSnackBar(context, 'Pago cancelado.', type: AppSnackBarType.success);
+    if (closeAfterSuccess && context.mounted) {
+      Navigator.pop(context);
+    }
+  } catch (error) {
+    if (!context.mounted) return;
+    showAppSnackBar(
+      context,
+      error.toString().replaceFirst('Bad state: ', ''),
+      type: AppSnackBarType.error,
+    );
+  }
+}
+
+class _CancelSupplierPaymentDialog extends StatefulWidget {
+  const _CancelSupplierPaymentDialog();
+
+  @override
+  State<_CancelSupplierPaymentDialog> createState() =>
+      _CancelSupplierPaymentDialogState();
+}
+
+class _CancelSupplierPaymentDialogState
+    extends State<_CancelSupplierPaymentDialog> {
+  final _reasonController = TextEditingController();
+  String _error = '';
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cancelar pago a proveedor'),
+      content: SizedBox(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Esta accion anulara el pago y regresara el saldo a la cuenta por pagar.',
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: _reasonController,
+              maxLines: 3,
+              decoration: InputDecoration(
+                labelText: 'Motivo de cancelacion',
+                errorText: _error.isEmpty ? null : _error,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final reason = _reasonController.text.trim();
+            if (reason.isEmpty) {
+              setState(() => _error = 'Captura el motivo de cancelacion.');
+              return;
+            }
+            Navigator.pop(context, reason);
+          },
+          child: const Text('Confirmar cancelacion'),
+        ),
+      ],
+    );
+  }
+}
+
 class _PurchaseDetailDialog extends StatelessWidget {
   const _PurchaseDetailDialog({
     required this.repository,
@@ -1961,6 +2120,7 @@ class _PurchaseDetailDialog extends StatelessWidget {
                       _PurchaseItemsDetail(items: items, compact: compact),
                       const SizedBox(height: 14),
                       _PurchasePaymentsDetail(
+                        repository: repository,
                         payments: appliedPayments,
                         compact: compact,
                       ),
@@ -2166,10 +2326,12 @@ class _PurchaseItemsDetail extends StatelessWidget {
 
 class _PurchasePaymentsDetail extends StatelessWidget {
   const _PurchasePaymentsDetail({
+    required this.repository,
     required this.payments,
     required this.compact,
   });
 
+  final TacoPosRepository repository;
   final List<SupplierPayment> payments;
   final bool compact;
 
@@ -2191,7 +2353,7 @@ class _PurchasePaymentsDetail extends StatelessWidget {
               style: TextStyle(color: BrandColors.textMuted),
             )
           else if (compact)
-            ...payments.map(_paymentCard)
+            ...payments.map((payment) => _paymentCard(context, payment))
           else
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -2205,7 +2367,7 @@ class _PurchasePaymentsDetail extends StatelessWidget {
                   DataColumn(label: Text('Socio')),
                   DataColumn(label: Text('Usuario')),
                   DataColumn(label: Text('Observaciones')),
-                  DataColumn(label: Text('Estado')),
+                  DataColumn(label: Text('Estado / accion')),
                 ],
                 rows: payments
                     .map(
@@ -2218,8 +2380,26 @@ class _PurchasePaymentsDetail extends StatelessWidget {
                           DataCell(Text(payment.reference)),
                           DataCell(Text(payment.partnerName ?? '')),
                           DataCell(Text(_paymentUser(payment))),
-                          DataCell(Text(payment.notes)),
-                          DataCell(Text(_paymentStatusLabel(payment.status))),
+                          DataCell(
+                            Text(
+                              payment.isCancelled
+                                  ? '${payment.cancelReason ?? ''}\nCancelado por: ${payment.cancelledByEmployeeName ?? ''}\nFecha: ${_dateTimeLabel(payment.cancelledAt)}'
+                                  : payment.notes,
+                            ),
+                          ),
+                          DataCell(
+                            payment.isCancelled
+                                ? const Chip(label: Text('Cancelado'))
+                                : TextButton(
+                                    onPressed: () => _cancelSupplierPayment(
+                                      context,
+                                      repository: repository,
+                                      payment: payment,
+                                      closeAfterSuccess: true,
+                                    ),
+                                    child: const Text('Cancelar pago'),
+                                  ),
+                          ),
                         ],
                       ),
                     )
@@ -2231,7 +2411,7 @@ class _PurchasePaymentsDetail extends StatelessWidget {
     );
   }
 
-  Widget _paymentCard(SupplierPayment payment) {
+  Widget _paymentCard(BuildContext context, SupplierPayment payment) {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       title: Text(
@@ -2243,18 +2423,38 @@ class _PurchasePaymentsDetail extends StatelessWidget {
         '\nOrigen: ${payment.fundingSourceName}'
         '${payment.partnerName == null ? '' : '\nSocio: ${payment.partnerName}'}'
         '${payment.reference.trim().isEmpty ? '' : '\nRef: ${payment.reference}'}'
-        '${payment.notes.trim().isEmpty ? '' : '\n${payment.notes}'}',
+        '${payment.isCancelled
+            ? '\nMotivo: ${payment.cancelReason ?? ''}\nCancelado por: ${payment.cancelledByEmployeeName ?? ''}'
+                  '\nFecha: ${_dateTimeLabel(payment.cancelledAt)}'
+            : payment.notes.trim().isEmpty
+            ? ''
+            : '\n${payment.notes}'}',
       ),
-      trailing: Text(_paymentStatusLabel(payment.status)),
+      trailing: payment.isCancelled
+          ? const Chip(label: Text('Cancelado'))
+          : TextButton(
+              onPressed: () => _cancelSupplierPayment(
+                context,
+                repository: repository,
+                payment: payment,
+                closeAfterSuccess: true,
+              ),
+              child: const Text('Cancelar'),
+            ),
     );
   }
 }
 
 class _StatementTable extends StatelessWidget {
-  const _StatementTable({required this.rows, this.onViewPurchase});
+  const _StatementTable({
+    required this.rows,
+    this.onViewPurchase,
+    this.onCancelPayment,
+  });
 
   final List<SupplierStatementRow> rows;
   final ValueChanged<String>? onViewPurchase;
+  final ValueChanged<String>? onCancelPayment;
 
   @override
   Widget build(BuildContext context) {
@@ -2292,14 +2492,27 @@ class _StatementTable extends StatelessWidget {
                     DataCell(Text(row.reference)),
                     DataCell(Text(row.notes)),
                     DataCell(
-                      row.type == 'Compra' &&
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          if (row.type == 'Compra' &&
                               row.purchaseId != null &&
-                              onViewPurchase != null
-                          ? TextButton(
+                              onViewPurchase != null)
+                            TextButton(
                               onPressed: () => onViewPurchase!(row.purchaseId!),
                               child: const Text('Ver detalle'),
-                            )
-                          : const SizedBox.shrink(),
+                            ),
+                          if (row.status == 'cancelled')
+                            const Chip(label: Text('Pago cancelado'))
+                          else if (row.paymentId != null &&
+                              row.type.startsWith('Pago') &&
+                              onCancelPayment != null)
+                            TextButton(
+                              onPressed: () => onCancelPayment!(row.paymentId!),
+                              child: const Text('Cancelar pago'),
+                            ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -2489,14 +2702,6 @@ String _purchaseStatusLabel(String status) {
     'partial' => 'Parcial',
     'paid' => 'Pagada',
     'cancelled' => 'Cancelada',
-    _ => status,
-  };
-}
-
-String _paymentStatusLabel(String status) {
-  return switch (status) {
-    'active' => 'Activo',
-    'cancelled' => 'Cancelado',
     _ => status,
   };
 }

@@ -32,6 +32,7 @@ class Employee {
     this.canManageSuppliers = false,
     this.canRegisterPurchases = false,
     this.canPaySuppliers = false,
+    this.canCancelSupplierPayments = false,
     this.canViewAccountsPayable = false,
     this.canViewPurchaseReports = false,
     this.isSuperAdmin = false,
@@ -69,6 +70,7 @@ class Employee {
   final bool canManageSuppliers;
   final bool canRegisterPurchases;
   final bool canPaySuppliers;
+  final bool canCancelSupplierPayments;
   final bool canViewAccountsPayable;
   final bool canViewPurchaseReports;
   final bool isSuperAdmin;
@@ -123,6 +125,7 @@ class Employee {
     'canManageSuppliers': canManageSuppliers,
     'canRegisterPurchases': canRegisterPurchases,
     'canPaySuppliers': canPaySuppliers,
+    'canCancelSupplierPayments': canCancelSupplierPayments,
     'canViewAccountsPayable': canViewAccountsPayable,
     'canViewPurchaseReports': canViewPurchaseReports,
   };
@@ -183,6 +186,10 @@ class Employee {
       canManageSuppliers: read('canManageSuppliers', canManageSuppliers),
       canRegisterPurchases: read('canRegisterPurchases', canRegisterPurchases),
       canPaySuppliers: read('canPaySuppliers', canPaySuppliers),
+      canCancelSupplierPayments: read(
+        'canCancelSupplierPayments',
+        canCancelSupplierPayments,
+      ),
       canViewAccountsPayable: read(
         'canViewAccountsPayable',
         canViewAccountsPayable,
@@ -261,6 +268,11 @@ class Employee {
           data['canViewAdmin'] as bool? ??
           false,
       canPaySuppliers:
+          data['canPaySuppliers'] as bool? ??
+          data['canViewAdmin'] as bool? ??
+          false,
+      canCancelSupplierPayments:
+          data['canCancelSupplierPayments'] as bool? ??
           data['canPaySuppliers'] as bool? ??
           data['canViewAdmin'] as bool? ??
           false,

@@ -290,6 +290,7 @@ class _FinanceSummary {
         return _dateInRange(payment.paymentDate, data.startDate, data.endDate);
       }).toList(),
       contributions = data.contributions.where((contribution) {
+        if (!contribution.isActive) return false;
         if (data.supplierId != null &&
             contribution.supplierId != data.supplierId) {
           return false;

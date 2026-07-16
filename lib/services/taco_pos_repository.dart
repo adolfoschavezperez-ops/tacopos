@@ -1398,6 +1398,7 @@ class TacoPosRepository {
         'method': method,
         'reference': reference.trim(),
         'notes': notes.trim(),
+        'status': 'active',
         'linkedSupplierPaymentId': paymentRef.id,
         'supplierId': purchase.supplierId,
         'supplierName': purchase.supplierName,
@@ -1408,6 +1409,123 @@ class TacoPosRepository {
         'createdByEmployeeName': employee?.name ?? '',
       });
     }
+    await batch.commit();
+  }
+
+  Future<void> cancelSupplierPayment({
+    required SupplierPayment payment,
+    required String reason,
+  }) async {
+    _requireCancelSupplierPaymentAccess();
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de cancelacion.');
+    }
+    final paymentRef = _supplierPaymentsRef.doc(payment.id);
+    final paymentDoc = await paymentRef.get();
+    if (!paymentDoc.exists) {
+      throw StateError('No se encontro el pago a proveedor.');
+    }
+    final currentPayment = SupplierPayment.fromDoc(paymentDoc);
+    if (currentPayment.isCancelled) {
+      throw StateError('Este pago ya fue cancelado.');
+    }
+    final purchaseRef = _supplierPurchasesRef.doc(currentPayment.purchaseId);
+    final purchaseDoc = await purchaseRef.get();
+    if (!purchaseDoc.exists) {
+      throw StateError('No se encontro la compra relacionada.');
+    }
+    final purchase = SupplierPurchase.fromDoc(purchaseDoc);
+    final employee = AppSession.instance.employee;
+    final activePaymentsSnapshot = await _supplierPaymentsRef
+        .where('purchaseId', isEqualTo: currentPayment.purchaseId)
+        .get();
+    final activePaidTotal = activePaymentsSnapshot.docs
+        .map(SupplierPayment.fromDoc)
+        .where((item) => item.id != currentPayment.id && item.isActive)
+        .fold<double>(0, (runningTotal, item) => runningTotal + item.amount);
+    final nextBalance = (purchase.total - activePaidTotal).clamp(
+      0,
+      double.infinity,
+    );
+    final nextStatus = purchase.status == 'cancelled'
+        ? 'cancelled'
+        : activePaidTotal <= 0.01
+        ? 'pending'
+        : nextBalance <= 0.01
+        ? 'paid'
+        : 'partial';
+    final batch = _db.batch();
+    batch.set(paymentRef, {
+      'status': 'cancelled',
+      'cancelledAt': FieldValue.serverTimestamp(),
+      'cancelledByEmployeeId': employee?.id ?? '',
+      'cancelledByEmployeeName': employee?.name ?? '',
+      'cancelReason': cleanReason,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    batch.set(purchaseRef, {
+      'paidTotal': activePaidTotal,
+      'balance': nextBalance,
+      'status': nextStatus,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    if (currentPayment.fundingSource.startsWith('partner_')) {
+      final contributionsSnapshot = await _partnerContributionsRef
+          .where('linkedSupplierPaymentId', isEqualTo: currentPayment.id)
+          .get();
+      for (final doc in contributionsSnapshot.docs) {
+        final contribution = PartnerContribution.fromDoc(doc);
+        if (contribution.isCancelled) {
+          continue;
+        }
+        batch.set(doc.reference, {
+          'status': 'cancelled',
+          'cancelledAt': FieldValue.serverTimestamp(),
+          'cancelledByEmployeeId': employee?.id ?? '',
+          'cancelledByEmployeeName': employee?.name ?? '',
+          'cancelReason': cleanReason,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    }
+
+    if (currentPayment.fundingSource == 'business_cash') {
+      final withdrawalsSnapshot = await _cashWithdrawalRequestsRef
+          .where('supplierPaymentId', isEqualTo: currentPayment.id)
+          .get();
+      if (withdrawalsSnapshot.docs.isEmpty) {
+        final logRef = _restaurantRef.collection('activityLog').doc();
+        batch.set(logRef, {
+          'id': logRef.id,
+          ..._currentBranchFields,
+          'type': 'supplier_payment_cancelled_cash_review',
+          'message':
+              'Pago a proveedor cancelado; revisar caja si ya se habia retirado efectivo.',
+          'supplierPaymentId': currentPayment.id,
+          'purchaseId': currentPayment.purchaseId,
+          'amount': currentPayment.amount,
+          'reason': cleanReason,
+          'createdAt': FieldValue.serverTimestamp(),
+          'createdByEmployeeId': employee?.id ?? '',
+          'createdByEmployeeName': employee?.name ?? '',
+        });
+      } else {
+        for (final doc in withdrawalsSnapshot.docs) {
+          batch.set(doc.reference, {
+            'status': 'cancelled',
+            'cancelledSupplierPaymentId': currentPayment.id,
+            'cancelReason': cleanReason,
+            'cancelledAt': FieldValue.serverTimestamp(),
+            'cancelledByEmployeeId': employee?.id ?? '',
+            'cancelledByEmployeeName': employee?.name ?? '',
+            'updatedAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        }
+      }
+    }
+
     await batch.commit();
   }
 
@@ -1436,26 +1554,38 @@ class TacoPosRepository {
       );
     }
     for (final payment in payments.where(
-      (payment) =>
-          payment.supplierId == supplierId && payment.status == 'active',
+      (payment) => payment.supplierId == supplierId,
     )) {
+      final isCancelled = payment.isCancelled;
       events.add(
         SupplierStatementRow(
-          date: payment.paymentDate,
-          type: payment.fundingSource.startsWith('partner_')
+          date: isCancelled
+              ? payment.cancelledAt ?? payment.paymentDate
+              : payment.paymentDate,
+          type: isCancelled
+              ? 'Pago cancelado'
+              : payment.fundingSource.startsWith('partner_')
               ? 'Pago con inversion de socio'
               : 'Pago con venta del negocio',
           folio: payment.purchaseFolio,
           charge: 0,
-          credit: payment.amount,
+          credit: isCancelled ? 0 : payment.amount,
           balance: 0,
           method: payment.method,
-          notes: payment.notes,
+          notes: isCancelled
+              ? 'Pago cancelado. Monto original: \$${payment.amount.toStringAsFixed(2)}. '
+                    'Motivo: ${payment.cancelReason ?? ''}. '
+                    'Cancelado por: ${payment.cancelledByEmployeeName ?? ''}.'
+              : payment.notes,
           purchaseId: payment.purchaseId,
           paymentId: payment.id,
           fundingSourceName: payment.fundingSourceName,
           partnerName: payment.partnerName,
           reference: payment.reference,
+          status: payment.status,
+          cancelReason: payment.cancelReason,
+          cancelledByEmployeeName: payment.cancelledByEmployeeName,
+          cancelledAt: payment.cancelledAt,
         ),
       );
     }
@@ -1477,6 +1607,10 @@ class TacoPosRepository {
         fundingSourceName: event.fundingSourceName,
         partnerName: event.partnerName,
         reference: event.reference,
+        status: event.status,
+        cancelReason: event.cancelReason,
+        cancelledByEmployeeName: event.cancelledByEmployeeName,
+        cancelledAt: event.cancelledAt,
       );
     }).toList();
   }
@@ -5592,6 +5726,17 @@ class TacoPosRepository {
     throw StateError('No tienes permiso para administrar compras.');
   }
 
+  void _requireCancelSupplierPaymentAccess() {
+    final employee = AppSession.instance.employee;
+    if (employee?.hasAdminAccess == true ||
+        employee?.canCancelSupplierPayments == true ||
+        employee?.canViewAdmin == true ||
+        employee?.name.toLowerCase().trim() == 'admin') {
+      return;
+    }
+    throw StateError('No tienes permiso para cancelar pagos a proveedores.');
+  }
+
   void _requireOpenKitchen() {
     final employee = AppSession.instance.employee;
     if (employee?.canOpenKitchen == true ||
@@ -5925,6 +6070,7 @@ class TacoPosRepository {
     required bool canManageKitchenStock,
     required bool canCancelOrders,
     required bool canCancelPayments,
+    bool canCancelSupplierPayments = false,
     required bool canCancelItems,
     required bool canApproveKitchenCancellations,
     required bool canViewLiveOperations,
@@ -5957,6 +6103,7 @@ class TacoPosRepository {
       'canManageKitchenStock': canManageKitchenStock,
       'canCancelOrders': canCancelOrders,
       'canCancelPayments': canCancelPayments,
+      'canCancelSupplierPayments': canCancelSupplierPayments,
       'canCancelItems': canCancelItems,
       'canApproveKitchenCancellations': canApproveKitchenCancellations,
       'canViewLiveOperations': canViewLiveOperations,
@@ -5996,6 +6143,7 @@ class TacoPosRepository {
       'canManageKitchenStock': canManageKitchenStock,
       'canCancelOrders': canCancelOrders,
       'canCancelPayments': canCancelPayments,
+      'canCancelSupplierPayments': canCancelSupplierPayments,
       'canCancelItems': canCancelItems,
       'canApproveKitchenCancellations': canApproveKitchenCancellations,
       'canViewLiveOperations': canViewLiveOperations,

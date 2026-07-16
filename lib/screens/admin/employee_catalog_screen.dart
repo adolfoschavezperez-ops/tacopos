@@ -158,6 +158,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canManageKitchenStock;
   late bool _canCancelOrders;
   late bool _canCancelPayments;
+  late bool _canCancelSupplierPayments;
   late bool _canCancelItems;
   late bool _canApproveKitchenCancellations;
   late bool _canViewLiveOperations;
@@ -191,6 +192,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canManageKitchenStock = widget.employee?.canManageKitchenStock ?? false;
     _canCancelOrders = widget.employee?.canCancelOrders ?? false;
     _canCancelPayments = widget.employee?.canCancelPayments ?? false;
+    _canCancelSupplierPayments =
+        widget.employee?.canCancelSupplierPayments ?? false;
     _canCancelItems = widget.employee?.canCancelItems ?? false;
     _canApproveKitchenCancellations =
         widget.employee?.canApproveKitchenCancellations ?? false;
@@ -297,6 +300,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canManageKitchenStock: _canManageKitchenStock,
         canCancelOrders: _canCancelOrders,
         canCancelPayments: _canCancelPayments,
+        canCancelSupplierPayments: _canCancelSupplierPayments,
         canCancelItems: _canCancelItems,
         canApproveKitchenCancellations: _canApproveKitchenCancellations,
         canViewLiveOperations: _canViewLiveOperations,
@@ -474,6 +478,13 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                 enabled: !_saving,
                 onChanged: (value) =>
                     setState(() => _canCancelPayments = value),
+              ),
+              _PermissionSwitch(
+                title: 'Puede cancelar pagos a proveedor',
+                value: _canCancelSupplierPayments,
+                enabled: !_saving,
+                onChanged: (value) =>
+                    setState(() => _canCancelSupplierPayments = value),
               ),
               _PermissionSwitch(
                 title: 'Puede cancelar articulos',
