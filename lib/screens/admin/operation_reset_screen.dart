@@ -73,7 +73,8 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
           'Vas a reiniciar la operacion POS de la sucursal ${branch.name}. '
           'Se borraran ventas, ordenes, pagos de clientes, caja, cocina, '
           'gastos/retiros y sesiones activas. Se conservaran proveedores, '
-          'compras, cuentas por pagar, pagos a proveedores y catalogos.',
+          'compras, cuentas por pagar, pagos a proveedores, socios, '
+          'aportaciones y catalogos.',
         ),
         actions: [
           TextButton(
@@ -315,6 +316,8 @@ class _ResetScopePanel extends StatelessWidget {
                 'compras',
                 'cuentas por pagar',
                 'pagos a proveedores',
+                'socios',
+                'aportaciones de socios',
                 'productos',
                 'insumos',
                 'empleados',

@@ -277,6 +277,10 @@ class SupplierPayment {
     this.branchName = AppConstants.defaultBranchName,
     this.createdByEmployeeId = '',
     this.createdByEmployeeName = '',
+    this.fundingSource = 'business_cash',
+    this.fundingSourceName = 'Venta del negocio - efectivo',
+    this.partnerId,
+    this.partnerName,
     this.createdAt,
   });
 
@@ -287,6 +291,10 @@ class SupplierPayment {
   final String branchName;
   final String createdByEmployeeId;
   final String createdByEmployeeName;
+  final String fundingSource;
+  final String fundingSourceName;
+  final String? partnerId;
+  final String? partnerName;
   final String supplierId;
   final String supplierName;
   final String purchaseId;
@@ -301,6 +309,13 @@ class SupplierPayment {
 
   factory SupplierPayment.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
+    final method = data['method'] as String? ?? 'transfer';
+    final fallbackFundingSource = method == 'cash'
+        ? 'business_cash'
+        : 'business_transfer';
+    final fallbackFundingSourceName = method == 'cash'
+        ? 'Venta del negocio - efectivo'
+        : 'Venta del negocio - transferencia';
     return SupplierPayment(
       id: doc.id,
       restaurantId:
@@ -312,13 +327,18 @@ class SupplierPayment {
           data['branchName'] as String? ?? AppConstants.defaultBranchName,
       createdByEmployeeId: data['createdByEmployeeId'] as String? ?? '',
       createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
+      fundingSource: data['fundingSource'] as String? ?? fallbackFundingSource,
+      fundingSourceName:
+          data['fundingSourceName'] as String? ?? fallbackFundingSourceName,
+      partnerId: data['partnerId'] as String?,
+      partnerName: data['partnerName'] as String?,
       supplierId: data['supplierId'] as String? ?? '',
       supplierName: data['supplierName'] as String? ?? 'Proveedor',
       purchaseId: data['purchaseId'] as String? ?? '',
       purchaseFolio: data['purchaseFolio'] as String? ?? '',
       paymentDate: _toDate(data['paymentDate']) ?? DateTime.now(),
       amount: _toDouble(data['amount']),
-      method: data['method'] as String? ?? 'transfer',
+      method: method,
       reference: data['reference'] as String? ?? '',
       notes: data['notes'] as String? ?? '',
       status: data['status'] as String? ?? 'active',
@@ -339,6 +359,9 @@ class SupplierStatementRow {
     required this.notes,
     this.purchaseId,
     this.paymentId,
+    this.fundingSourceName = '',
+    this.partnerName,
+    this.reference = '',
   });
 
   final DateTime date;
@@ -351,6 +374,123 @@ class SupplierStatementRow {
   final String notes;
   final String? purchaseId;
   final String? paymentId;
+  final String fundingSourceName;
+  final String? partnerName;
+  final String reference;
+}
+
+class Partner {
+  const Partner({
+    required this.id,
+    required this.name,
+    required this.active,
+    this.ownershipPercent = 0,
+    this.phone = '',
+    this.notes = '',
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  final String id;
+  final String name;
+  final bool active;
+  final double ownershipPercent;
+  final String phone;
+  final String notes;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  factory Partner.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data() ?? {};
+    return Partner(
+      id: doc.id,
+      name: data['name'] as String? ?? 'Socio',
+      active: data['active'] as bool? ?? true,
+      ownershipPercent: _toDouble(data['ownershipPercent']),
+      phone: data['phone'] as String? ?? '',
+      notes: data['notes'] as String? ?? '',
+      createdAt: _toDate(data['createdAt']),
+      updatedAt: _toDate(data['updatedAt']),
+    );
+  }
+}
+
+class PartnerContribution {
+  const PartnerContribution({
+    required this.id,
+    required this.partnerId,
+    required this.partnerName,
+    required this.date,
+    required this.amount,
+    required this.method,
+    this.reference = '',
+    this.notes = '',
+    this.linkedSupplierPaymentId,
+    this.supplierId,
+    this.supplierName,
+    this.purchaseId,
+    this.purchaseFolio,
+    this.restaurantId = AppConstants.restaurantId,
+    this.restaurantName = AppConstants.restaurantName,
+    this.branchId = AppConstants.defaultBranchId,
+    this.branchName = AppConstants.defaultBranchName,
+    this.createdByEmployeeId = '',
+    this.createdByEmployeeName = '',
+    this.createdAt,
+  });
+
+  final String id;
+  final String restaurantId;
+  final String restaurantName;
+  final String branchId;
+  final String branchName;
+  final String partnerId;
+  final String partnerName;
+  final DateTime date;
+  final double amount;
+  final String method;
+  final String reference;
+  final String notes;
+  final String? linkedSupplierPaymentId;
+  final String? supplierId;
+  final String? supplierName;
+  final String? purchaseId;
+  final String? purchaseFolio;
+  final String createdByEmployeeId;
+  final String createdByEmployeeName;
+  final DateTime? createdAt;
+
+  factory PartnerContribution.fromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data() ?? {};
+    return PartnerContribution(
+      id: doc.id,
+      restaurantId:
+          data['restaurantId'] as String? ?? AppConstants.restaurantId,
+      restaurantName:
+          data['restaurantName'] as String? ?? AppConstants.restaurantName,
+      branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
+      branchName:
+          data['branchName'] as String? ?? AppConstants.defaultBranchName,
+      partnerId: data['partnerId'] as String? ?? '',
+      partnerName: data['partnerName'] as String? ?? 'Socio',
+      date:
+          _toDate(data['date']) ?? _toDate(data['createdAt']) ?? DateTime.now(),
+      amount: _toDouble(data['amount']),
+      method: data['method'] as String? ?? 'cash',
+      reference: data['reference'] as String? ?? '',
+      notes: data['notes'] as String? ?? '',
+      linkedSupplierPaymentId: data['linkedSupplierPaymentId'] as String?,
+      supplierId: data['supplierId'] as String?,
+      supplierName: data['supplierName'] as String?,
+      purchaseId: data['purchaseId'] as String?,
+      purchaseFolio: data['purchaseFolio'] as String?,
+      createdByEmployeeId: data['createdByEmployeeId'] as String? ?? '',
+      createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
+      createdAt: _toDate(data['createdAt']),
+    );
+  }
 }
 
 class PurchaseSupplierReportRow {

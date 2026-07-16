@@ -286,6 +286,12 @@ class TacoPosRepository {
   CollectionReference<Map<String, dynamic>> get _supplierPaymentsRef =>
       _restaurantRef.collection('supplierPayments');
 
+  CollectionReference<Map<String, dynamic>> get _partnersRef =>
+      _restaurantRef.collection('partners');
+
+  CollectionReference<Map<String, dynamic>> get _partnerContributionsRef =>
+      _restaurantRef.collection('partnerContributions');
+
   Map<String, Object?> get _currentBranchFields {
     final session = AppSession.instance;
     return {
@@ -1058,6 +1064,92 @@ class TacoPosRepository {
         });
   }
 
+  Stream<List<Partner>> watchPartners({bool activeOnly = false}) {
+    return _partnersRef.snapshots().map((snapshot) {
+      final partners = snapshot.docs.map(Partner.fromDoc).toList()
+        ..sort((a, b) => a.name.compareTo(b.name));
+      return activeOnly
+          ? partners.where((partner) => partner.active).toList()
+          : partners;
+    });
+  }
+
+  Stream<List<PartnerContribution>> watchPartnerContributions({
+    bool currentBranchOnly = true,
+  }) {
+    return _partnerContributionsRef
+        .orderBy('date', descending: true)
+        .snapshots()
+        .map((snapshot) {
+          final contributions = snapshot.docs.map(PartnerContribution.fromDoc);
+          return currentBranchOnly
+              ? _filterCurrentBranch(
+                  contributions,
+                  (contribution) => contribution.branchId,
+                )
+              : contributions.toList();
+        });
+  }
+
+  Future<void> ensureDefaultPartners() async {
+    _requirePurchaseAccess(manage: true);
+    final snapshot = await _partnersRef.get();
+    final existingNames = snapshot.docs
+        .map((doc) => (doc.data()['name'] ?? '').toString().toLowerCase())
+        .toSet();
+    final batch = _db.batch();
+    var hasUpdates = false;
+    for (final name in const ['Adolfo', 'Gabriel', 'Cristian']) {
+      if (existingNames.contains(name.toLowerCase())) {
+        continue;
+      }
+      final ref = _partnersRef.doc();
+      batch.set(ref, {
+        'id': ref.id,
+        'name': name,
+        'active': true,
+        'ownershipPercent': 0.0,
+        'phone': '',
+        'notes': '',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      hasUpdates = true;
+    }
+    if (hasUpdates) {
+      await batch.commit();
+    }
+  }
+
+  Future<void> savePartner({
+    String? partnerId,
+    required String name,
+    required bool active,
+    double ownershipPercent = 0,
+    String phone = '',
+    String notes = '',
+  }) async {
+    _requirePurchaseAccess(manage: true);
+    final cleanName = name.trim();
+    if (cleanName.isEmpty) {
+      throw ArgumentError('Captura el nombre del socio.');
+    }
+    final docRef = partnerId == null || partnerId.trim().isEmpty
+        ? _partnersRef.doc()
+        : _partnersRef.doc(partnerId.trim());
+    await docRef.set({
+      'id': docRef.id,
+      'name': cleanName,
+      'active': active,
+      'ownershipPercent': ownershipPercent < 0 ? 0 : ownershipPercent,
+      'phone': phone.trim(),
+      'notes': notes.trim(),
+      if (partnerId == null || partnerId.trim().isEmpty)
+        'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
   Stream<List<SupplierPurchaseItem>> watchSupplierPurchaseItems(
     String purchaseId,
   ) {
@@ -1192,9 +1284,11 @@ class TacoPosRepository {
   Future<void> registerSupplierPayment({
     required SupplierPurchase purchase,
     required double amount,
-    required String method,
+    required String fundingSource,
     String reference = '',
     String notes = '',
+    String? partnerId,
+    String? partnerName,
   }) async {
     _requirePurchaseAccess(pay: true);
     if (amount <= 0) {
@@ -1203,18 +1297,37 @@ class TacoPosRepository {
     if (amount > purchase.balance + 0.01) {
       throw ArgumentError('No puedes pagar mas del saldo pendiente.');
     }
+    if (!_fundingSourceLabels.containsKey(fundingSource)) {
+      throw ArgumentError('Selecciona el origen del dinero.');
+    }
+    final isPartnerFunding = fundingSource.startsWith('partner_');
+    if (isPartnerFunding &&
+        ((partnerId ?? '').trim().isEmpty ||
+            (partnerName ?? '').trim().isEmpty)) {
+      throw ArgumentError('Selecciona el socio que aporta el dinero.');
+    }
+    if (fundingSource.endsWith('transfer') && reference.trim().isEmpty) {
+      throw ArgumentError('Captura la referencia de la transferencia.');
+    }
+    final method = switch (fundingSource) {
+      'business_cash' || 'partner_cash' => 'cash',
+      _ => 'transfer',
+    };
     CashSession? openCash;
-    if (method == 'cash') {
+    if (fundingSource == 'business_cash') {
       openCash = await getOpenCashSession();
       if (openCash == null || !_matchesCurrentBranch(openCash.branchId)) {
         throw StateError(
-          'No hay caja abierta para registrar pago en efectivo.',
+          'No hay caja abierta para registrar un pago en efectivo del negocio.',
         );
       }
     }
 
     final employee = AppSession.instance.employee;
     final paymentRef = _supplierPaymentsRef.doc();
+    final contributionRef = isPartnerFunding
+        ? _partnerContributionsRef.doc()
+        : null;
     final purchaseRef = _supplierPurchasesRef.doc(purchase.id);
     final nextPaidTotal = purchase.paidTotal + amount;
     final nextBalance = (purchase.total - nextPaidTotal).clamp(
@@ -1233,6 +1346,10 @@ class TacoPosRepository {
       'paymentDate': FieldValue.serverTimestamp(),
       'amount': amount,
       'method': method,
+      'fundingSource': fundingSource,
+      'fundingSourceName': _fundingSourceLabels[fundingSource],
+      'partnerId': isPartnerFunding ? partnerId : null,
+      'partnerName': isPartnerFunding ? partnerName : null,
       'reference': reference.trim(),
       'notes': notes.trim(),
       'status': 'active',
@@ -1246,7 +1363,7 @@ class TacoPosRepository {
       'status': nextStatus,
       'updatedAt': FieldValue.serverTimestamp(),
     });
-    if (method == 'cash' && openCash != null) {
+    if (fundingSource == 'business_cash' && openCash != null) {
       final withdrawalRef = _cashWithdrawalRequestsRef.doc();
       batch.set(withdrawalRef, {
         'id': withdrawalRef.id,
@@ -1266,6 +1383,29 @@ class TacoPosRepository {
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
         'supplierPaymentId': paymentRef.id,
+        'fundingSource': fundingSource,
+        'fundingSourceName': _fundingSourceLabels[fundingSource],
+      });
+    }
+    if (contributionRef != null) {
+      batch.set(contributionRef, {
+        'id': contributionRef.id,
+        ..._currentBranchFields,
+        'partnerId': partnerId,
+        'partnerName': partnerName,
+        'date': FieldValue.serverTimestamp(),
+        'amount': amount,
+        'method': method,
+        'reference': reference.trim(),
+        'notes': notes.trim(),
+        'linkedSupplierPaymentId': paymentRef.id,
+        'supplierId': purchase.supplierId,
+        'supplierName': purchase.supplierName,
+        'purchaseId': purchase.id,
+        'purchaseFolio': purchase.folio,
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdByEmployeeId': employee?.id ?? '',
+        'createdByEmployeeName': employee?.name ?? '',
       });
     }
     await batch.commit();
@@ -1302,7 +1442,9 @@ class TacoPosRepository {
       events.add(
         SupplierStatementRow(
           date: payment.paymentDate,
-          type: 'Pago',
+          type: payment.fundingSource.startsWith('partner_')
+              ? 'Pago con inversion de socio'
+              : 'Pago con venta del negocio',
           folio: payment.purchaseFolio,
           charge: 0,
           credit: payment.amount,
@@ -1311,6 +1453,9 @@ class TacoPosRepository {
           notes: payment.notes,
           purchaseId: payment.purchaseId,
           paymentId: payment.id,
+          fundingSourceName: payment.fundingSourceName,
+          partnerName: payment.partnerName,
+          reference: payment.reference,
         ),
       );
     }
@@ -1329,6 +1474,9 @@ class TacoPosRepository {
         notes: event.notes,
         purchaseId: event.purchaseId,
         paymentId: event.paymentId,
+        fundingSourceName: event.fundingSourceName,
+        partnerName: event.partnerName,
+        reference: event.reference,
       );
     }).toList();
   }
@@ -1835,6 +1983,8 @@ class TacoPosRepository {
     'suppliers',
     'supplierPurchases',
     'supplierPayments',
+    'partnerContributions',
+    'partners',
     'purchaseItems',
     'kitchenStockItems',
     'products',
@@ -6070,6 +6220,13 @@ String? _cleanColorHex(String? value) {
   if (parsed == null) return null;
   return '#${clean.toUpperCase()}';
 }
+
+const _fundingSourceLabels = {
+  'business_cash': 'Venta del negocio - efectivo',
+  'business_transfer': 'Venta del negocio - transferencia',
+  'partner_cash': 'Inversion de socio - efectivo',
+  'partner_transfer': 'Inversion de socio - transferencia',
+};
 
 const _defaultKitchenStockItems = [
   {

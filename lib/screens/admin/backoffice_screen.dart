@@ -24,6 +24,7 @@ import '../../widgets/loading_panel.dart';
 import 'cash_admin_screen.dart';
 import 'branch_catalog_screen.dart';
 import 'employee_catalog_screen.dart';
+import 'finance_admin_screen.dart';
 import 'kitchen_admin_screen.dart';
 import 'live_operations_screen.dart';
 import 'order_platform_catalog_screen.dart';
@@ -41,6 +42,7 @@ enum _BackofficeSection {
   cash,
   kitchen,
   purchases,
+  finance,
   settings,
 }
 
@@ -475,6 +477,9 @@ class _BackofficeBody extends StatelessWidget {
     if (section == _BackofficeSection.purchases) {
       return withBranchHeader(const PurchaseAdminScreen());
     }
+    if (section == _BackofficeSection.finance) {
+      return withBranchHeader(const FinanceAdminScreen());
+    }
     if (section == _BackofficeSection.settings) {
       return withBranchHeader(_SettingsSection(repository: repository));
     }
@@ -565,6 +570,7 @@ class _BackofficeBody extends StatelessWidget {
                   _BackofficeSection.cash => const SizedBox.shrink(),
                   _BackofficeSection.kitchen => const SizedBox.shrink(),
                   _BackofficeSection.purchases => const SizedBox.shrink(),
+                  _BackofficeSection.finance => const SizedBox.shrink(),
                   _BackofficeSection.settings => const SizedBox.shrink(),
                 },
               ],
@@ -1284,7 +1290,7 @@ class _SettingsSection extends StatelessWidget {
       if (canResetOperation)
         _SettingsLink(
           'Reiniciar operacion',
-          'Limpia ventas, ordenes, pagos de clientes, caja, cocina, gastos y sesiones activas. Conserva compras y proveedores.',
+          'Limpia ventas, ordenes, pagos de clientes, caja, cocina, gastos y sesiones activas. Conserva compras, proveedores y socios.',
           Icons.restart_alt_outlined,
           () => Navigator.push(
             context,
@@ -1922,6 +1928,17 @@ List<_NavItem> _navItems(Employee? employee) {
         Icons.local_shipping_outlined,
         'Compras',
       ),
+    if (kIsWeb &&
+        (employee?.hasAdminAccess == true ||
+            employee?.canViewPurchases == true ||
+            employee?.canPaySuppliers == true ||
+            employee?.canViewAccountsPayable == true ||
+            employee?.canViewPurchaseReports == true))
+      const _NavItem(
+        _BackofficeSection.finance,
+        Icons.account_balance_wallet_outlined,
+        'Finanzas',
+      ),
     if (employee?.hasAdminAccess == true ||
         employee?.canManageProducts == true ||
         employee?.canManageTables == true ||
@@ -1960,6 +1977,7 @@ String _sectionTitle(_BackofficeSection section) {
     _BackofficeSection.cash => 'Caja',
     _BackofficeSection.kitchen => 'Control de cocina',
     _BackofficeSection.purchases => 'Compras',
+    _BackofficeSection.finance => 'Finanzas',
     _BackofficeSection.settings => 'Configuracion',
   };
 }

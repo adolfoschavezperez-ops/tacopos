@@ -23,6 +23,12 @@ class _PurchaseAdminScreenState extends State<PurchaseAdminScreen> {
   final _repository = TacoPosRepository();
 
   @override
+  void initState() {
+    super.initState();
+    _repository.ensureDefaultPartners().catchError((_) {});
+  }
+
+  @override
   Widget build(BuildContext context) {
     return DefaultTabController(
       length: 8,
@@ -67,15 +73,19 @@ class _PurchaseAdminScreenState extends State<PurchaseAdminScreen> {
 class _PurchaseData {
   const _PurchaseData({
     required this.suppliers,
+    required this.partners,
     required this.kitchenStockItems,
     required this.purchases,
     required this.payments,
+    required this.contributions,
   });
 
   final List<Supplier> suppliers;
+  final List<Partner> partners;
   final List<KitchenStockItem> kitchenStockItems;
   final List<SupplierPurchase> purchases;
   final List<SupplierPayment> payments;
+  final List<PartnerContribution> contributions;
 }
 
 class _PurchaseDataScope extends StatelessWidget {
@@ -112,19 +122,33 @@ class _PurchaseDataScope extends StatelessWidget {
             if (!kitchenSnapshot.hasData) {
               return const LoadingPanel(message: 'Cargando insumos...');
             }
-            return StreamBuilder<List<SupplierPurchase>>(
-              stream: repository.watchSupplierPurchases(),
-              builder: (context, purchasesSnapshot) {
-                return StreamBuilder<List<SupplierPayment>>(
-                  stream: repository.watchSupplierPayments(),
-                  builder: (context, paymentsSnapshot) {
-                    final data = _PurchaseData(
-                      suppliers: suppliersSnapshot.data ?? const [],
-                      kitchenStockItems: kitchenSnapshot.data ?? const [],
-                      purchases: purchasesSnapshot.data ?? const [],
-                      payments: paymentsSnapshot.data ?? const [],
+            return StreamBuilder<List<Partner>>(
+              stream: repository.watchPartners(),
+              builder: (context, partnersSnapshot) {
+                return StreamBuilder<List<SupplierPurchase>>(
+                  stream: repository.watchSupplierPurchases(),
+                  builder: (context, purchasesSnapshot) {
+                    return StreamBuilder<List<SupplierPayment>>(
+                      stream: repository.watchSupplierPayments(),
+                      builder: (context, paymentsSnapshot) {
+                        return StreamBuilder<List<PartnerContribution>>(
+                          stream: repository.watchPartnerContributions(),
+                          builder: (context, contributionsSnapshot) {
+                            final data = _PurchaseData(
+                              suppliers: suppliersSnapshot.data ?? const [],
+                              partners: partnersSnapshot.data ?? const [],
+                              kitchenStockItems:
+                                  kitchenSnapshot.data ?? const [],
+                              purchases: purchasesSnapshot.data ?? const [],
+                              payments: paymentsSnapshot.data ?? const [],
+                              contributions:
+                                  contributionsSnapshot.data ?? const [],
+                            );
+                            return builder(context, data);
+                          },
+                        );
+                      },
                     );
-                    return builder(context, data);
                   },
                 );
               },
@@ -632,6 +656,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
             repository: widget.repository,
             purchase: purchase,
             payments: widget.data.payments,
+            partners: widget.data.partners,
           ),
         ),
       );
@@ -727,6 +752,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
                           repository: widget.repository,
                           purchase: purchase,
                           payments: widget.data.payments,
+                          partners: widget.data.partners,
                         ),
                         child: const Text('Ver detalle'),
                       ),
@@ -752,6 +778,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       builder: (_) => _SupplierPaymentDialog(
         repository: widget.repository,
         purchase: purchase,
+        partners: widget.data.partners,
       ),
     );
     if (!mounted || paid != true) return;
@@ -790,7 +817,9 @@ class _SupplierPaymentsTab extends StatelessWidget {
                   title: Text(payment.supplierName),
                   subtitle: Text(
                     '${DateFormat('dd/MM/yyyy').format(payment.paymentDate)} · '
-                    '${_paymentMethodLabel(payment.method)} · ${payment.purchaseFolio}',
+                    '${payment.fundingSourceName} · ${_paymentMethodLabel(payment.method)} · ${payment.purchaseFolio}'
+                    '${payment.partnerName == null ? '' : ' · ${payment.partnerName}'}'
+                    '${payment.reference.isEmpty ? '' : ' · Ref: ${payment.reference}'}',
                   ),
                   trailing: MoneyText(value: payment.amount),
                 ),
@@ -882,6 +911,7 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
       repository: widget.repository,
       purchase: purchase,
       payments: widget.data.payments,
+      partners: widget.data.partners,
     );
   }
 }
@@ -908,6 +938,24 @@ class _PurchaseKardexTab extends StatelessWidget {
         ),
       );
     }
+    rows.addAll(
+      data.contributions.map(
+        (contribution) => SupplierStatementRow(
+          date: contribution.date,
+          type: 'Aportacion de socio',
+          folio: contribution.purchaseFolio ?? '',
+          charge: 0,
+          credit: contribution.amount,
+          balance: 0,
+          method: contribution.method,
+          notes:
+              '${contribution.partnerName}${contribution.supplierName == null ? '' : ' · ${contribution.supplierName}'}',
+          paymentId: contribution.linkedSupplierPaymentId,
+          partnerName: contribution.partnerName,
+          reference: contribution.reference,
+        ),
+      ),
+    );
     rows.sort((a, b) => b.date.compareTo(a.date));
     return ListView(
       padding: const EdgeInsets.all(18),
@@ -943,6 +991,7 @@ class _PurchaseKardexTab extends StatelessWidget {
                 repository: repository,
                 purchase: purchase,
                 payments: data.payments,
+                partners: data.partners,
               );
             },
           ),
@@ -1645,10 +1694,12 @@ class _SupplierPaymentDialog extends StatefulWidget {
   const _SupplierPaymentDialog({
     required this.repository,
     required this.purchase,
+    required this.partners,
   });
 
   final TacoPosRepository repository;
   final SupplierPurchase purchase;
+  final List<Partner> partners;
 
   @override
   State<_SupplierPaymentDialog> createState() => _SupplierPaymentDialogState();
@@ -1658,7 +1709,8 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
   late final TextEditingController _amountController;
   final _referenceController = TextEditingController();
   final _notesController = TextEditingController();
-  String _method = 'transfer';
+  String _fundingSource = 'business_cash';
+  String? _partnerId;
   bool _saving = false;
 
   @override
@@ -1699,21 +1751,66 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
               ),
             ),
             SizedBox(
-              width: 190,
+              width: 390,
               child: DropdownButtonFormField<String>(
-                initialValue: _method,
-                decoration: const InputDecoration(labelText: 'Metodo'),
+                initialValue: _fundingSource,
+                decoration: const InputDecoration(
+                  labelText: 'Origen del dinero',
+                ),
                 items: const [
                   DropdownMenuItem(
-                    value: 'transfer',
-                    child: Text('Transferencia'),
+                    value: 'business_cash',
+                    child: Text('Venta del negocio - efectivo'),
                   ),
-                  DropdownMenuItem(value: 'cash', child: Text('Efectivo')),
+                  DropdownMenuItem(
+                    value: 'business_transfer',
+                    child: Text('Venta del negocio - transferencia'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'partner_cash',
+                    child: Text('Inversion de socio - efectivo'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'partner_transfer',
+                    child: Text('Inversion de socio - transferencia'),
+                  ),
                 ],
-                onChanged: (value) =>
-                    setState(() => _method = value ?? 'transfer'),
+                onChanged: (value) => setState(() {
+                  _fundingSource = value ?? 'business_cash';
+                  if (!_fundingSource.startsWith('partner_')) {
+                    _partnerId = null;
+                  }
+                }),
               ),
             ),
+            SizedBox(
+              width: 390,
+              child: Text(
+                'Metodo real: ${_fundingSourceMethodLabel(_fundingSource)}',
+                style: const TextStyle(
+                  color: BrandColors.textMuted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            if (_fundingSource.startsWith('partner_'))
+              SizedBox(
+                width: 390,
+                child: DropdownButtonFormField<String>(
+                  initialValue: _partnerId,
+                  decoration: const InputDecoration(labelText: 'Socio'),
+                  items: widget.partners
+                      .where((partner) => partner.active)
+                      .map(
+                        (partner) => DropdownMenuItem(
+                          value: partner.id,
+                          child: Text(partner.name),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => setState(() => _partnerId = value),
+                ),
+              ),
             _dialogText(_referenceController, 'Referencia', 390),
             _dialogText(_notesController, 'Notas', 390),
           ],
@@ -1747,12 +1844,17 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
   }
 
   Future<void> _save() async {
+    final partner = widget.partners
+        .where((partner) => partner.id == _partnerId)
+        .firstOrNull;
     setState(() => _saving = true);
     try {
       await widget.repository.registerSupplierPayment(
         purchase: widget.purchase,
         amount: _parse(_amountController.text),
-        method: _method,
+        fundingSource: _fundingSource,
+        partnerId: partner?.id,
+        partnerName: partner?.name,
         reference: _referenceController.text,
         notes: _notesController.text,
       );
@@ -1776,6 +1878,7 @@ void _showPurchaseDetail(
   required TacoPosRepository repository,
   required SupplierPurchase purchase,
   required List<SupplierPayment> payments,
+  required List<Partner> partners,
 }) {
   showDialog<void>(
     context: context,
@@ -1783,6 +1886,7 @@ void _showPurchaseDetail(
       repository: repository,
       purchase: purchase,
       payments: payments,
+      partners: partners,
     ),
   );
 }
@@ -1792,11 +1896,13 @@ class _PurchaseDetailDialog extends StatelessWidget {
     required this.repository,
     required this.purchase,
     required this.payments,
+    required this.partners,
   });
 
   final TacoPosRepository repository;
   final SupplierPurchase purchase;
   final List<SupplierPayment> payments;
+  final List<Partner> partners;
 
   @override
   Widget build(BuildContext context) {
@@ -1867,6 +1973,28 @@ class _PurchaseDetailDialog extends StatelessWidget {
         ),
       ),
       actions: [
+        if (purchase.hasBalance)
+          FilledButton.icon(
+            onPressed: () async {
+              final paid = await showDialog<bool>(
+                context: context,
+                builder: (_) => _SupplierPaymentDialog(
+                  repository: repository,
+                  purchase: purchase,
+                  partners: partners,
+                ),
+              );
+              if (!context.mounted || paid != true) return;
+              Navigator.pop(context);
+              showAppSnackBar(
+                context,
+                'Pago registrado.',
+                type: AppSnackBarType.success,
+              );
+            },
+            icon: const Icon(Icons.payments_outlined),
+            label: const Text('Registrar pago'),
+          ),
         TextButton(
           onPressed: () => Navigator.pop(context),
           child: const Text('Cerrar'),
@@ -2070,9 +2198,11 @@ class _PurchasePaymentsDetail extends StatelessWidget {
               child: DataTable(
                 columns: const [
                   DataColumn(label: Text('Fecha')),
+                  DataColumn(label: Text('Origen')),
                   DataColumn(label: Text('Metodo')),
                   DataColumn(label: Text('Monto')),
                   DataColumn(label: Text('Referencia')),
+                  DataColumn(label: Text('Socio')),
                   DataColumn(label: Text('Usuario')),
                   DataColumn(label: Text('Observaciones')),
                   DataColumn(label: Text('Estado')),
@@ -2082,9 +2212,11 @@ class _PurchasePaymentsDetail extends StatelessWidget {
                       (payment) => DataRow(
                         cells: [
                           DataCell(Text(_dateTimeLabel(payment.paymentDate))),
+                          DataCell(Text(payment.fundingSourceName)),
                           DataCell(Text(_paymentMethodLabel(payment.method))),
                           DataCell(Text(_money(payment.amount))),
                           DataCell(Text(payment.reference)),
+                          DataCell(Text(payment.partnerName ?? '')),
                           DataCell(Text(_paymentUser(payment))),
                           DataCell(Text(payment.notes)),
                           DataCell(Text(_paymentStatusLabel(payment.status))),
@@ -2108,6 +2240,8 @@ class _PurchasePaymentsDetail extends StatelessWidget {
       ),
       subtitle: Text(
         '${_dateTimeLabel(payment.paymentDate)} · ${_paymentUser(payment)}'
+        '\nOrigen: ${payment.fundingSourceName}'
+        '${payment.partnerName == null ? '' : '\nSocio: ${payment.partnerName}'}'
         '${payment.reference.trim().isEmpty ? '' : '\nRef: ${payment.reference}'}'
         '${payment.notes.trim().isEmpty ? '' : '\n${payment.notes}'}',
       ),
@@ -2135,7 +2269,10 @@ class _StatementTable extends StatelessWidget {
             DataColumn(label: Text('Cargo')),
             DataColumn(label: Text('Abono')),
             DataColumn(label: Text('Saldo')),
+            DataColumn(label: Text('Origen')),
             DataColumn(label: Text('Metodo')),
+            DataColumn(label: Text('Socio')),
+            DataColumn(label: Text('Referencia')),
             DataColumn(label: Text('Notas')),
             DataColumn(label: Text('Acciones')),
           ],
@@ -2149,7 +2286,10 @@ class _StatementTable extends StatelessWidget {
                     DataCell(Text(_money(row.charge))),
                     DataCell(Text(_money(row.credit))),
                     DataCell(Text(_money(row.balance))),
+                    DataCell(Text(row.fundingSourceName)),
                     DataCell(Text(_paymentMethodLabel(row.method))),
+                    DataCell(Text(row.partnerName ?? '')),
+                    DataCell(Text(row.reference)),
                     DataCell(Text(row.notes)),
                     DataCell(
                       row.type == 'Compra' &&
@@ -2337,6 +2477,10 @@ String _paymentMethodLabel(String method) {
     '' => '',
     _ => method,
   };
+}
+
+String _fundingSourceMethodLabel(String fundingSource) {
+  return fundingSource.endsWith('cash') ? 'Efectivo' : 'Transferencia';
 }
 
 String _purchaseStatusLabel(String status) {
