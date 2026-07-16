@@ -5258,6 +5258,99 @@ class TacoPosRepository {
     return PaymentResult(allPaid: allPaid);
   }
 
+  Future<PaymentResult> payPeople({
+    required String orderId,
+    required List<int> personNumbers,
+    required String method,
+    String? employeeId,
+    String? employeeName,
+    CashPaymentDetails? cashDetails,
+  }) async {
+    final selectedPeople = personNumbers.toSet().toList()..sort();
+    if (selectedPeople.isEmpty) {
+      throw ArgumentError('Selecciona al menos una persona.');
+    }
+    if (selectedPeople.length == 1) {
+      return payPerson(
+        orderId: orderId,
+        personNumber: selectedPeople.first,
+        method: method,
+        employeeId: employeeId,
+        employeeName: employeeName,
+        cashDetails: cashDetails,
+      );
+    }
+
+    _requireCharge();
+    final cashSession = await _requireOpenCashSessionForPayment();
+    await _ensureNoPaymentType(orderId, blockedType: 'partial');
+    await _ensureEmployeeConsumptionAllowed(orderId, method);
+    await _ensureKitchenReadyForPayment(orderId);
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    final order = PosOrder.fromDoc(orderDoc);
+    final itemsSnapshot = await _ordersRef
+        .doc(orderId)
+        .collection('items')
+        .get();
+    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    final personItems = items
+        .where(
+          (item) =>
+              selectedPeople.contains(item.personNumber) &&
+              item.paymentStatus != 'paid' &&
+              !item.isCancelled,
+        )
+        .toList();
+    final baseAmount = personItems.fold<double>(
+      0,
+      (runningTotal, item) => runningTotal + item.total,
+    );
+
+    if (baseAmount <= 0) {
+      return PaymentResult(allPaid: order.pendingTotal <= 0.01);
+    }
+
+    final names = selectedPeople.map((person) => order.personName(person));
+    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final batch = _db.batch();
+    _setPayment(
+      batch: batch,
+      paymentRef: paymentRef,
+      order: order,
+      cashSession: cashSession,
+      type: 'person',
+      method: method,
+      baseAmount: baseAmount,
+      personName: names.join(', '),
+      employeeId: employeeId,
+      employeeName: employeeName,
+      cashDetails: cashDetails,
+    );
+
+    for (final doc in itemsSnapshot.docs) {
+      final item = OrderItem.fromDoc(doc);
+      if (selectedPeople.contains(item.personNumber) &&
+          item.paymentStatus != 'paid' &&
+          !item.isCancelled) {
+        batch.update(doc.reference, {
+          'paymentStatus': 'paid',
+          'paidAt': FieldValue.serverTimestamp(),
+          'paymentId': paymentRef.id,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    final allPaid = _updateOrderPaymentTotalsInBatch(
+      batch,
+      order,
+      baseAmount: baseAmount,
+      closeItemsSnapshot: itemsSnapshot,
+    );
+    await batch.commit();
+    return PaymentResult(allPaid: allPaid);
+  }
+
   Future<PaymentResult> payPartialAmount({
     required String orderId,
     required double baseAmount,
