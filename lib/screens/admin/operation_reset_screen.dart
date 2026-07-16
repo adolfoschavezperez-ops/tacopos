@@ -51,12 +51,12 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
       if (!mounted) {
         return;
       }
-      _showMessage('Operación de ${branch.name} reiniciada correctamente.');
+      _showMessage('Operacion de ${branch.name} reiniciada correctamente.');
     } catch (_) {
       if (!mounted) {
         return;
       }
-      _showMessage('No se pudo reiniciar la operación. Intenta nuevamente.');
+      _showMessage('No se pudo reiniciar la operacion. Intenta nuevamente.');
     } finally {
       if (mounted) {
         setState(() => _running = false);
@@ -70,8 +70,10 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
       builder: (context) => AlertDialog(
         title: const Text('Confirmar reinicio'),
         content: Text(
-          'Vas a reiniciar la operación de la sucursal ${branch.name}. '
-          'Esta acción no elimina catálogos.',
+          'Vas a reiniciar la operacion POS de la sucursal ${branch.name}. '
+          'Se borraran ventas, ordenes, pagos de clientes, caja, cocina, '
+          'gastos/retiros y sesiones activas. Se conservaran proveedores, '
+          'compras, cuentas por pagar, pagos a proveedores y catalogos.',
         ),
         actions: [
           TextButton(
@@ -164,7 +166,7 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
   @override
   Widget build(BuildContext context) {
     return BrandedScaffold(
-      title: 'Reiniciar operación',
+      title: 'Reiniciar operacion',
       body: FutureBuilder<List<Branch>>(
         future: _branchesFuture,
         builder: (context, snapshot) {
@@ -184,7 +186,7 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
             return const EmptyState(
               icon: Icons.storefront_outlined,
               title: 'Sin sucursales',
-              message: 'Crea una sucursal antes de reiniciar operación.',
+              message: 'Crea una sucursal antes de reiniciar operacion.',
             );
           }
 
@@ -205,7 +207,7 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'La limpieza se aplicará únicamente a la sucursal seleccionada.',
+                      'La limpieza se aplicara solo a la sucursal seleccionada.',
                       style: TextStyle(color: BrandColors.textMuted),
                     ),
                     const SizedBox(height: 16),
@@ -240,7 +242,7 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
                     if (_selectedBranch != null) ...[
                       const SizedBox(height: 14),
                       Text(
-                        'Se limpiará únicamente la operación de la sucursal ${_selectedBranch!.name}.',
+                        'Se limpiara solo la operacion POS de la sucursal ${_selectedBranch!.name}.',
                         style: const TextStyle(
                           color: BrandColors.accentYellow,
                           fontWeight: FontWeight.w900,
@@ -267,7 +269,7 @@ class _OperationResetScreenState extends State<OperationResetScreen> {
                         )
                       : const Icon(Icons.restart_alt_outlined),
                   label: Text(
-                    _running ? 'Reiniciando...' : 'Reiniciar operación',
+                    _running ? 'Reiniciando...' : 'Reiniciar operacion',
                   ),
                 ),
               ),
@@ -296,11 +298,11 @@ class _ResetScopePanel extends StatelessWidget {
               color: BrandColors.danger,
               items: [
                 'ventas',
-                'órdenes',
-                'pagos',
+                'ordenes',
+                'pagos de clientes',
                 'caja',
                 'cocina',
-                'gastos',
+                'gastos/retiros de caja',
                 'sesiones activas',
               ],
             ),
@@ -309,12 +311,16 @@ class _ResetScopePanel extends StatelessWidget {
               icon: Icons.inventory_2_outlined,
               color: BrandColors.success,
               items: [
+                'proveedores',
+                'compras',
+                'cuentas por pagar',
+                'pagos a proveedores',
                 'productos',
+                'insumos',
                 'empleados',
                 'mesas',
                 'sucursales',
                 'plataformas',
-                'insumos',
               ],
             ),
           ];

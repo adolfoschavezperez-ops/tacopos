@@ -133,6 +133,8 @@ class SupplierPurchase {
     this.branchName = AppConstants.defaultBranchName,
     this.paymentWeekdaySnapshot = 'none',
     this.paymentWeekdayNameSnapshot = 'Sin dia fijo',
+    this.createdByEmployeeId = '',
+    this.createdByEmployeeName = '',
     this.createdAt,
     this.updatedAt,
   });
@@ -148,6 +150,8 @@ class SupplierPurchase {
   final DateTime dueDate;
   final String paymentWeekdaySnapshot;
   final String paymentWeekdayNameSnapshot;
+  final String createdByEmployeeId;
+  final String createdByEmployeeName;
   final String folio;
   final String documentType;
   final String status;
@@ -181,6 +185,8 @@ class SupplierPurchase {
           data['paymentWeekdaySnapshot'] as String? ?? 'none',
       paymentWeekdayNameSnapshot:
           data['paymentWeekdayNameSnapshot'] as String? ?? 'Sin dia fijo',
+      createdByEmployeeId: data['createdByEmployeeId'] as String? ?? '',
+      createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
       folio: data['folio'] as String? ?? '',
       documentType: data['documentType'] as String? ?? 'note',
       status: data['status'] as String? ?? 'pending',
@@ -269,6 +275,8 @@ class SupplierPayment {
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
     this.branchName = AppConstants.defaultBranchName,
+    this.createdByEmployeeId = '',
+    this.createdByEmployeeName = '',
     this.createdAt,
   });
 
@@ -277,6 +285,8 @@ class SupplierPayment {
   final String restaurantName;
   final String branchId;
   final String branchName;
+  final String createdByEmployeeId;
+  final String createdByEmployeeName;
   final String supplierId;
   final String supplierName;
   final String purchaseId;
@@ -300,6 +310,8 @@ class SupplierPayment {
       branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
       branchName:
           data['branchName'] as String? ?? AppConstants.defaultBranchName,
+      createdByEmployeeId: data['createdByEmployeeId'] as String? ?? '',
+      createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
       supplierId: data['supplierId'] as String? ?? '',
       supplierName: data['supplierName'] as String? ?? 'Proveedor',
       purchaseId: data['purchaseId'] as String? ?? '',
@@ -325,6 +337,8 @@ class SupplierStatementRow {
     required this.balance,
     required this.method,
     required this.notes,
+    this.purchaseId,
+    this.paymentId,
   });
 
   final DateTime date;
@@ -335,6 +349,8 @@ class SupplierStatementRow {
   final double balance;
   final String method;
   final String notes;
+  final String? purchaseId;
+  final String? paymentId;
 }
 
 class PurchaseSupplierReportRow {

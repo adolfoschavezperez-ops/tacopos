@@ -607,7 +607,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
     }
     setState(() => _saving = true);
     try {
-      await widget.repository.createSupplierPurchase(
+      final purchase = await widget.repository.createSupplierPurchase(
         supplier: supplier,
         purchaseDate: _purchaseDate,
         folio: _folioController.text,
@@ -625,6 +625,15 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
         context,
         'Compra registrada.',
         type: AppSnackBarType.success,
+        action: SnackBarAction(
+          label: 'Ver detalle',
+          onPressed: () => _showPurchaseDetail(
+            context,
+            repository: widget.repository,
+            purchase: purchase,
+            payments: widget.data.payments,
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
@@ -712,6 +721,15 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
                       _Metric(label: 'Total', value: purchase.total),
                       _Metric(label: 'Pagado', value: purchase.paidTotal),
                       _Metric(label: 'Saldo', value: purchase.balance),
+                      OutlinedButton(
+                        onPressed: () => _showPurchaseDetail(
+                          context,
+                          repository: widget.repository,
+                          purchase: purchase,
+                          payments: widget.data.payments,
+                        ),
+                        child: const Text('Ver detalle'),
+                      ),
                       FilledButton(
                         onPressed: purchase.hasBalance
                             ? () => _payPurchase(purchase)
@@ -839,8 +857,31 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
             message: 'Selecciona proveedor con compras o pagos.',
           )
         else
-          _StatementTable(rows: rows),
+          _StatementTable(
+            rows: rows,
+            onViewPurchase: (purchaseId) => _openPurchaseDetail(purchaseId),
+          ),
       ],
+    );
+  }
+
+  void _openPurchaseDetail(String purchaseId) {
+    final purchase = widget.data.purchases
+        .where((purchase) => purchase.id == purchaseId)
+        .firstOrNull;
+    if (purchase == null) {
+      showAppSnackBar(
+        context,
+        'No se encontro la compra seleccionada.',
+        type: AppSnackBarType.error,
+      );
+      return;
+    }
+    _showPurchaseDetail(
+      context,
+      repository: widget.repository,
+      purchase: purchase,
+      payments: widget.data.payments,
     );
   }
 }
@@ -883,7 +924,28 @@ class _PurchaseKardexTab extends StatelessWidget {
             message: 'Las compras y pagos apareceran aqui.',
           )
         else
-          _StatementTable(rows: rows),
+          _StatementTable(
+            rows: rows,
+            onViewPurchase: (purchaseId) {
+              final purchase = data.purchases
+                  .where((purchase) => purchase.id == purchaseId)
+                  .firstOrNull;
+              if (purchase == null) {
+                showAppSnackBar(
+                  context,
+                  'No se encontro la compra seleccionada.',
+                  type: AppSnackBarType.error,
+                );
+                return;
+              }
+              _showPurchaseDetail(
+                context,
+                repository: repository,
+                purchase: purchase,
+                payments: data.payments,
+              );
+            },
+          ),
       ],
     );
   }
@@ -1709,10 +1771,356 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
   }
 }
 
+void _showPurchaseDetail(
+  BuildContext context, {
+  required TacoPosRepository repository,
+  required SupplierPurchase purchase,
+  required List<SupplierPayment> payments,
+}) {
+  showDialog<void>(
+    context: context,
+    builder: (_) => _PurchaseDetailDialog(
+      repository: repository,
+      purchase: purchase,
+      payments: payments,
+    ),
+  );
+}
+
+class _PurchaseDetailDialog extends StatelessWidget {
+  const _PurchaseDetailDialog({
+    required this.repository,
+    required this.purchase,
+    required this.payments,
+  });
+
+  final TacoPosRepository repository;
+  final SupplierPurchase purchase;
+  final List<SupplierPayment> payments;
+
+  @override
+  Widget build(BuildContext context) {
+    final appliedPayments =
+        payments.where((payment) => payment.purchaseId == purchase.id).toList()
+          ..sort((a, b) => b.paymentDate.compareTo(a.paymentDate));
+    return AlertDialog(
+      title: const Text('Detalle de compra'),
+      content: SizedBox(
+        width: MediaQuery.sizeOf(context).width.clamp(320, 980).toDouble(),
+        child: StreamBuilder<List<SupplierPurchaseItem>>(
+          stream: repository.watchSupplierPurchaseItems(purchase.id),
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return EmptyState(
+                icon: Icons.error_outline,
+                title: 'No se pudieron cargar productos',
+                message: '${snapshot.error}',
+              );
+            }
+            if (!snapshot.hasData) {
+              return const LoadingPanel(message: 'Cargando detalle...');
+            }
+            final items = snapshot.data ?? const <SupplierPurchaseItem>[];
+            final itemsTotal = items.fold<double>(
+              0,
+              (sum, item) => sum + item.total,
+            );
+            final totalsMatch = (itemsTotal - purchase.total).abs() <= 0.01;
+            return LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 720;
+                return SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _PurchaseDetailSummary(
+                        purchase: purchase,
+                        itemsTotal: itemsTotal,
+                      ),
+                      if (!totalsMatch) ...[
+                        const SizedBox(height: 12),
+                        const GlassPanel(
+                          padding: EdgeInsets.all(12),
+                          child: Text(
+                            'El total de los productos no coincide con el total registrado.',
+                            style: TextStyle(
+                              color: BrandColors.danger,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 14),
+                      _PurchaseItemsDetail(items: items, compact: compact),
+                      const SizedBox(height: 14),
+                      _PurchasePaymentsDetail(
+                        payments: appliedPayments,
+                        compact: compact,
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cerrar'),
+        ),
+      ],
+    );
+  }
+}
+
+class _PurchaseDetailSummary extends StatelessWidget {
+  const _PurchaseDetailSummary({
+    required this.purchase,
+    required this.itemsTotal,
+  });
+
+  final SupplierPurchase purchase;
+  final double itemsTotal;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      child: Wrap(
+        spacing: 18,
+        runSpacing: 12,
+        children: [
+          _DetailValue(label: 'Proveedor', value: purchase.supplierName),
+          _DetailValue(label: 'Sucursal', value: purchase.branchName),
+          _DetailValue(
+            label: 'Fecha compra',
+            value: DateFormat('dd/MM/yyyy').format(purchase.purchaseDate),
+          ),
+          _DetailValue(
+            label: 'Folio',
+            value: purchase.folio.isEmpty ? 'Sin folio' : purchase.folio,
+          ),
+          _DetailValue(
+            label: 'Documento',
+            value: _documentTypeLabel(purchase.documentType),
+          ),
+          _DetailValue(
+            label: 'Estado',
+            value: _purchaseStatusLabel(purchase.status),
+          ),
+          _DetailValue(
+            label: 'Total registrado',
+            value: _money(purchase.total),
+          ),
+          _DetailValue(label: 'Total renglones', value: _money(itemsTotal)),
+          _DetailValue(label: 'Pagado', value: _money(purchase.paidTotal)),
+          _DetailValue(label: 'Saldo', value: _money(purchase.balance)),
+          _DetailValue(
+            label: 'Usuario',
+            value: purchase.createdByEmployeeName.isEmpty
+                ? 'Sin usuario'
+                : purchase.createdByEmployeeName,
+          ),
+          _DetailValue(
+            label: 'Registro',
+            value: _dateTimeLabel(purchase.createdAt),
+          ),
+          if (purchase.notes.trim().isNotEmpty)
+            _DetailValue(label: 'Observaciones', value: purchase.notes),
+        ],
+      ),
+    );
+  }
+}
+
+class _DetailValue extends StatelessWidget {
+  const _DetailValue({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 210,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: BrandColors.textMuted, fontSize: 11),
+          ),
+          const SizedBox(height: 2),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
+        ],
+      ),
+    );
+  }
+}
+
+class _PurchaseItemsDetail extends StatelessWidget {
+  const _PurchaseItemsDetail({required this.items, required this.compact});
+
+  final List<SupplierPurchaseItem> items;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Productos',
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 10),
+          if (items.isEmpty)
+            const Text(
+              'Sin productos guardados en esta compra.',
+              style: TextStyle(color: BrandColors.textMuted),
+            )
+          else if (compact)
+            ...items.map(_itemCard)
+          else
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Insumo')),
+                  DataColumn(label: Text('Cantidad')),
+                  DataColumn(label: Text('Unidad')),
+                  DataColumn(label: Text('Costo unitario')),
+                  DataColumn(label: Text('Total')),
+                  DataColumn(label: Text('Notas')),
+                ],
+                rows: items
+                    .map(
+                      (item) => DataRow(
+                        cells: [
+                          DataCell(Text(_purchaseItemName(item))),
+                          DataCell(Text(_formatQty(item.quantity))),
+                          DataCell(Text(item.unit)),
+                          DataCell(Text(_money(item.unitCost))),
+                          DataCell(Text(_money(item.total))),
+                          DataCell(Text(item.notes)),
+                        ],
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _itemCard(SupplierPurchaseItem item) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(
+        _purchaseItemName(item),
+        style: const TextStyle(fontWeight: FontWeight.w900),
+      ),
+      subtitle: Text(
+        '${_formatQty(item.quantity)} ${item.unit} x ${_money(item.unitCost)}'
+        '${item.notes.trim().isEmpty ? '' : '\n${item.notes}'}',
+      ),
+      trailing: MoneyText(value: item.total),
+    );
+  }
+}
+
+class _PurchasePaymentsDetail extends StatelessWidget {
+  const _PurchasePaymentsDetail({
+    required this.payments,
+    required this.compact,
+  });
+
+  final List<SupplierPayment> payments;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Pagos aplicados',
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 10),
+          if (payments.isEmpty)
+            const Text(
+              'Sin pagos aplicados.',
+              style: TextStyle(color: BrandColors.textMuted),
+            )
+          else if (compact)
+            ...payments.map(_paymentCard)
+          else
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                columns: const [
+                  DataColumn(label: Text('Fecha')),
+                  DataColumn(label: Text('Metodo')),
+                  DataColumn(label: Text('Monto')),
+                  DataColumn(label: Text('Referencia')),
+                  DataColumn(label: Text('Usuario')),
+                  DataColumn(label: Text('Observaciones')),
+                  DataColumn(label: Text('Estado')),
+                ],
+                rows: payments
+                    .map(
+                      (payment) => DataRow(
+                        cells: [
+                          DataCell(Text(_dateTimeLabel(payment.paymentDate))),
+                          DataCell(Text(_paymentMethodLabel(payment.method))),
+                          DataCell(Text(_money(payment.amount))),
+                          DataCell(Text(payment.reference)),
+                          DataCell(Text(_paymentUser(payment))),
+                          DataCell(Text(payment.notes)),
+                          DataCell(Text(_paymentStatusLabel(payment.status))),
+                        ],
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _paymentCard(SupplierPayment payment) {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      title: Text(
+        '${_paymentMethodLabel(payment.method)} · ${_money(payment.amount)}',
+        style: const TextStyle(fontWeight: FontWeight.w900),
+      ),
+      subtitle: Text(
+        '${_dateTimeLabel(payment.paymentDate)} · ${_paymentUser(payment)}'
+        '${payment.reference.trim().isEmpty ? '' : '\nRef: ${payment.reference}'}'
+        '${payment.notes.trim().isEmpty ? '' : '\n${payment.notes}'}',
+      ),
+      trailing: Text(_paymentStatusLabel(payment.status)),
+    );
+  }
+}
+
 class _StatementTable extends StatelessWidget {
-  const _StatementTable({required this.rows});
+  const _StatementTable({required this.rows, this.onViewPurchase});
 
   final List<SupplierStatementRow> rows;
+  final ValueChanged<String>? onViewPurchase;
 
   @override
   Widget build(BuildContext context) {
@@ -1729,6 +2137,7 @@ class _StatementTable extends StatelessWidget {
             DataColumn(label: Text('Saldo')),
             DataColumn(label: Text('Metodo')),
             DataColumn(label: Text('Notas')),
+            DataColumn(label: Text('Acciones')),
           ],
           rows: rows
               .map(
@@ -1742,6 +2151,16 @@ class _StatementTable extends StatelessWidget {
                     DataCell(Text(_money(row.balance))),
                     DataCell(Text(_paymentMethodLabel(row.method))),
                     DataCell(Text(row.notes)),
+                    DataCell(
+                      row.type == 'Compra' &&
+                              row.purchaseId != null &&
+                              onViewPurchase != null
+                          ? TextButton(
+                              onPressed: () => onViewPurchase!(row.purchaseId!),
+                              child: const Text('Ver detalle'),
+                            )
+                          : const SizedBox.shrink(),
+                    ),
                   ],
                 ),
               )
@@ -1918,6 +2337,55 @@ String _paymentMethodLabel(String method) {
     '' => '',
     _ => method,
   };
+}
+
+String _purchaseStatusLabel(String status) {
+  return switch (status) {
+    'pending' => 'Pendiente',
+    'partial' => 'Parcial',
+    'paid' => 'Pagada',
+    'cancelled' => 'Cancelada',
+    _ => status,
+  };
+}
+
+String _paymentStatusLabel(String status) {
+  return switch (status) {
+    'active' => 'Activo',
+    'cancelled' => 'Cancelado',
+    _ => status,
+  };
+}
+
+String _documentTypeLabel(String type) {
+  return switch (type) {
+    'note' => 'Nota',
+    'invoice' => 'Factura',
+    'ticket' => 'Ticket',
+    'remision' => 'Remision',
+    _ => type,
+  };
+}
+
+String _dateTimeLabel(DateTime? value) {
+  if (value == null) {
+    return 'Sin fecha';
+  }
+  return DateFormat('dd/MM/yyyy HH:mm').format(value);
+}
+
+String _paymentUser(SupplierPayment payment) {
+  return payment.createdByEmployeeName.trim().isEmpty
+      ? 'Sin usuario'
+      : payment.createdByEmployeeName;
+}
+
+String _purchaseItemName(SupplierPurchaseItem item) {
+  final kitchenName = item.kitchenStockItemName?.trim();
+  if (kitchenName != null && kitchenName.isNotEmpty) {
+    return kitchenName;
+  }
+  return item.purchaseItemName;
 }
 
 double _parse(String value) {

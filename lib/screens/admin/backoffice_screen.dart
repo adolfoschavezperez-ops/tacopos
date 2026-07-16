@@ -1283,8 +1283,8 @@ class _SettingsSection extends StatelessWidget {
         ),
       if (canResetOperation)
         _SettingsLink(
-          'Reiniciar operación',
-          'Limpia ventas, órdenes, pagos, caja, cocina, gastos y sesiones activas por sucursal.',
+          'Reiniciar operacion',
+          'Limpia ventas, ordenes, pagos de clientes, caja, cocina, gastos y sesiones activas. Conserva compras y proveedores.',
           Icons.restart_alt_outlined,
           () => Navigator.push(
             context,

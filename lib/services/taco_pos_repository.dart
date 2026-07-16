@@ -1088,7 +1088,7 @@ class TacoPosRepository {
     return items;
   }
 
-  Future<void> createSupplierPurchase({
+  Future<SupplierPurchase> createSupplierPurchase({
     required Supplier supplier,
     required DateTime purchaseDate,
     required String folio,
@@ -1117,9 +1117,10 @@ class TacoPosRepository {
     final purchaseRef = _supplierPurchasesRef.doc();
     final batch = _db.batch();
     final dueDate = purchaseDate.add(Duration(days: supplier.creditDays));
+    final branchFields = _currentBranchFields;
     batch.set(purchaseRef, {
       'id': purchaseRef.id,
-      ..._currentBranchFields,
+      ...branchFields,
       'supplierId': supplier.id,
       'supplierName': supplier.commercialName,
       'purchaseDate': Timestamp.fromDate(purchaseDate),
@@ -1161,6 +1162,31 @@ class TacoPosRepository {
       });
     }
     await batch.commit();
+    return SupplierPurchase(
+      id: purchaseRef.id,
+      restaurantId: branchFields['restaurantId']?.toString() ?? '',
+      restaurantName: branchFields['restaurantName']?.toString() ?? '',
+      branchId: branchFields['branchId']?.toString() ?? '',
+      branchName: branchFields['branchName']?.toString() ?? '',
+      supplierId: supplier.id,
+      supplierName: supplier.commercialName,
+      purchaseDate: purchaseDate,
+      dueDate: dueDate,
+      paymentWeekdaySnapshot: supplier.paymentWeekday,
+      paymentWeekdayNameSnapshot: supplier.paymentWeekdayName,
+      folio: folio.trim(),
+      documentType: documentType,
+      status: 'pending',
+      subtotal: total,
+      total: total,
+      paidTotal: 0,
+      balance: total,
+      notes: notes.trim(),
+      createdByEmployeeId: employee?.id ?? '',
+      createdByEmployeeName: employee?.name ?? '',
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
   }
 
   Future<void> registerSupplierPayment({
@@ -1265,6 +1291,7 @@ class TacoPosRepository {
           balance: 0,
           method: '',
           notes: purchase.notes,
+          purchaseId: purchase.id,
         ),
       );
     }
@@ -1282,6 +1309,8 @@ class TacoPosRepository {
           balance: 0,
           method: payment.method,
           notes: payment.notes,
+          purchaseId: payment.purchaseId,
+          paymentId: payment.id,
         ),
       );
     }
@@ -1298,6 +1327,8 @@ class TacoPosRepository {
         balance: balance,
         method: event.method,
         notes: event.notes,
+        purchaseId: event.purchaseId,
+        paymentId: event.paymentId,
       );
     }).toList();
   }
@@ -1724,9 +1755,13 @@ class TacoPosRepository {
       await deleteDoc(doc.reference);
     }
 
-    Future<void> deleteMatchingCollection(
-      CollectionReference<Map<String, dynamic>> collection,
-    ) async {
+    Future<void> deleteMatchingCollection(String collectionName) async {
+      if (_operationResetProtectedCollections.contains(collectionName)) {
+        throw StateError(
+          'La coleccion $collectionName no forma parte del reinicio operativo.',
+        );
+      }
+      final collection = _restaurantRef.collection(collectionName);
       final snapshot = await collection.get();
       for (final doc in snapshot.docs) {
         if (_belongsToResetBranch(doc.data(), cleanBranchId)) {
@@ -1756,15 +1791,8 @@ class TacoPosRepository {
       }
     }
 
-    for (final collectionName in [
-      'payments',
-      'cashSessions',
-      'cashWithdrawalRequests',
-      'activeSessions',
-      'activityLog',
-      'interventions',
-    ]) {
-      await deleteMatchingCollection(_restaurantRef.collection(collectionName));
+    for (final collectionName in _operationResetCollections) {
+      await deleteMatchingCollection(collectionName);
     }
 
     final tablesSnapshot = await _tablesRef.get();
@@ -1793,6 +1821,31 @@ class TacoPosRepository {
     }
     return branchId == AppConstants.defaultBranchId;
   }
+
+  static const Set<String> _operationResetCollections = {
+    'payments',
+    'cashSessions',
+    'cashWithdrawalRequests',
+    'activeSessions',
+    'activityLog',
+    'interventions',
+  };
+
+  static const Set<String> _operationResetProtectedCollections = {
+    'suppliers',
+    'supplierPurchases',
+    'supplierPayments',
+    'purchaseItems',
+    'kitchenStockItems',
+    'products',
+    'productCategories',
+    'employees',
+    'tables',
+    'branches',
+    'orderPlatforms',
+    'settings',
+    'config',
+  };
 
   Stream<List<PosOrder>> watchOpenOrders() {
     return _ordersRef.snapshots().map((snapshot) {
