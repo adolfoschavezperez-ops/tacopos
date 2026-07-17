@@ -75,6 +75,7 @@ class _CloseKitchenSessionScreenState extends State<CloseKitchenSessionScreen> {
         context,
         'Cierre de cocina realizado.',
         type: AppSnackBarType.success,
+        position: AppSnackBarPosition.top,
       );
       Navigator.pop(context);
     } catch (error) {
@@ -83,6 +84,7 @@ class _CloseKitchenSessionScreenState extends State<CloseKitchenSessionScreen> {
         context,
         error.toString().replaceFirst('Bad state: ', ''),
         type: AppSnackBarType.error,
+        position: AppSnackBarPosition.top,
       );
     } finally {
       if (mounted) setState(() => _closing = false);
@@ -225,7 +227,7 @@ class _CloseKitchenFormState extends State<_CloseKitchenForm> {
   }
 
   void _message(String text) {
-    showAppSnackBar(context, text);
+    showAppSnackBar(context, text, position: AppSnackBarPosition.top);
   }
 
   @override

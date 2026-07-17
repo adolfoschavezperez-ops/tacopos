@@ -230,7 +230,12 @@ class _KitchenScreenState extends State<KitchenScreen> {
   Future<void> _testKitchenBeep(BuildContext context) async {
     await KitchenSoundService.instance.playNewOrderBeep();
     if (!context.mounted) return;
-    showAppSnackBar(context, 'Timbre probado', type: AppSnackBarType.success);
+    showAppSnackBar(
+      context,
+      'Timbre probado',
+      type: AppSnackBarType.success,
+      position: AppSnackBarPosition.top,
+    );
   }
 
   Future<void> _testKitchenExpressBeep(BuildContext context) async {
@@ -240,6 +245,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
       context,
       'Timbre express probado',
       type: AppSnackBarType.success,
+      position: AppSnackBarPosition.top,
     );
   }
 }

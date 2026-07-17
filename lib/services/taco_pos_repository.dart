@@ -2,6 +2,7 @@ import 'dart:developer' as developer;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
 import '../models/cash_session.dart';
@@ -28,6 +29,11 @@ import 'app_session.dart';
 
 double _numberToDouble(Object? value) {
   return value is num ? value.toDouble() : 0.0;
+}
+
+DateTime? _timestampToDate(Object? value) {
+  if (value is Timestamp) return value.toDate();
+  return null;
 }
 
 class KitchenOrderBundle {
@@ -273,6 +279,83 @@ class DiscountUsageRow {
   }
 }
 
+class ProductStockOutRow {
+  const ProductStockOutRow({
+    required this.id,
+    required this.businessDate,
+    required this.branchId,
+    required this.branchName,
+    required this.productId,
+    required this.productName,
+    required this.categoryId,
+    required this.categoryName,
+    required this.status,
+    required this.reason,
+    required this.soldOutTimeLabel,
+    required this.soldOutByEmployeeId,
+    required this.soldOutByEmployeeName,
+    this.soldOutAt,
+    this.clearedAt,
+    this.clearedByEmployeeId = '',
+    this.clearedByEmployeeName = '',
+    this.clearedReason = '',
+  });
+
+  final String id;
+  final String businessDate;
+  final String branchId;
+  final String branchName;
+  final String productId;
+  final String productName;
+  final String categoryId;
+  final String categoryName;
+  final String status;
+  final String reason;
+  final DateTime? soldOutAt;
+  final String soldOutTimeLabel;
+  final String soldOutByEmployeeId;
+  final String soldOutByEmployeeName;
+  final DateTime? clearedAt;
+  final String clearedByEmployeeId;
+  final String clearedByEmployeeName;
+  final String clearedReason;
+
+  bool get isActive => status == 'active';
+  bool get isCleared => status == 'cleared';
+
+  factory ProductStockOutRow.fromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+  ) {
+    final data = doc.data() ?? {};
+    return ProductStockOutRow(
+      id: doc.id,
+      businessDate: data['businessDate'] as String? ?? '',
+      branchId: data['branchId'] as String? ?? '',
+      branchName: data['branchName'] as String? ?? '',
+      productId: data['productId'] as String? ?? '',
+      productName: data['productName'] as String? ?? '',
+      categoryId: data['categoryId'] as String? ?? '',
+      categoryName: data['categoryName'] as String? ?? '',
+      status: data['status'] as String? ?? 'active',
+      reason: data['reason'] as String? ?? '',
+      soldOutAt: _timestampToDate(data['soldOutAt'] ?? data['createdAt']),
+      soldOutTimeLabel: data['soldOutTimeLabel'] as String? ?? '',
+      soldOutByEmployeeId:
+          data['soldOutByEmployeeId'] as String? ??
+          data['createdByEmployeeId'] as String? ??
+          '',
+      soldOutByEmployeeName:
+          data['soldOutByEmployeeName'] as String? ??
+          data['createdByEmployeeName'] as String? ??
+          '',
+      clearedAt: _timestampToDate(data['clearedAt']),
+      clearedByEmployeeId: data['clearedByEmployeeId'] as String? ?? '',
+      clearedByEmployeeName: data['clearedByEmployeeName'] as String? ?? '',
+      clearedReason: data['clearedReason'] as String? ?? '',
+    );
+  }
+}
+
 class KitchenCloseInput {
   const KitchenCloseInput({
     required this.finalRemainingQty,
@@ -423,6 +506,9 @@ class TacoPosRepository {
 
   CollectionReference<Map<String, dynamic>> get _kitchenSessionsRef =>
       _restaurantRef.collection('kitchenSessions');
+
+  CollectionReference<Map<String, dynamic>> get _productStockOutsRef =>
+      _restaurantRef.collection('productStockOuts');
 
   CollectionReference<Map<String, dynamic>> get _branchesRef =>
       _restaurantRef.collection('branches');
@@ -1071,6 +1157,119 @@ class TacoPosRepository {
           ? products.where((product) => product.active).toList()
           : products;
     });
+  }
+
+  Stream<Map<String, ProductStockOutRow>> watchActiveProductStockOuts() {
+    return _productStockOutsRef.snapshots().asyncMap((snapshot) async {
+      final businessDate = await currentKitchenBusinessDate();
+      final branchId = AppSession.instance.currentBranchId;
+      final rows = snapshot.docs
+          .map(ProductStockOutRow.fromDoc)
+          .where(
+            (row) =>
+                row.branchId == branchId &&
+                row.businessDate == businessDate &&
+                row.isActive,
+          );
+      return {for (final row in rows) row.productId: row};
+    });
+  }
+
+  Stream<List<ProductStockOutRow>> watchProductStockOutReport({
+    String? startBusinessDate,
+    String? endBusinessDate,
+  }) {
+    return _productStockOutsRef.snapshots().map((snapshot) {
+      final start = startBusinessDate?.trim();
+      final end = endBusinessDate?.trim();
+      final rows =
+          snapshot.docs.map(ProductStockOutRow.fromDoc).where((row) {
+            if (!_matchesCurrentBranch(row.branchId)) return false;
+            if (start != null &&
+                start.isNotEmpty &&
+                row.businessDate.compareTo(start) < 0) {
+              return false;
+            }
+            if (end != null &&
+                end.isNotEmpty &&
+                row.businessDate.compareTo(end) > 0) {
+              return false;
+            }
+            return true;
+          }).toList()..sort((a, b) {
+            final dateCompare = b.businessDate.compareTo(a.businessDate);
+            if (dateCompare != 0) return dateCompare;
+            final aTime = a.soldOutAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bTime = b.soldOutAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bTime.compareTo(aTime);
+          });
+      return rows;
+    });
+  }
+
+  Future<void> markProductStockOut(Product product) async {
+    _requireTakeOrders();
+    final businessDate = await currentKitchenBusinessDate();
+    final branchId = AppSession.instance.currentBranchId;
+    final branchName = AppSession.instance.currentBranchName;
+    final employee = AppSession.instance.employee;
+    final docRef = _productStockOutsRef.doc(
+      _productStockOutId(branchId, businessDate, product.id),
+    );
+    final existing = await docRef.get();
+    if (existing.exists && existing.data()?['status'] == 'active') {
+      throw StateError('Este producto ya esta marcado como agotado.');
+    }
+    final soldOutAt = Timestamp.now();
+    final soldOutTimeLabel = DateFormat('HH:mm').format(soldOutAt.toDate());
+    await docRef.set({
+      'id': docRef.id,
+      'restaurantId': AppConstants.restaurantId,
+      'restaurantName': AppConstants.restaurantName,
+      'branchId': branchId,
+      'branchName': branchName,
+      'businessDate': businessDate,
+      'productId': product.id,
+      'productName': product.name,
+      'categoryId': product.categoryId,
+      'categoryName': product.categoryName,
+      'status': 'active',
+      'reason': 'agotado',
+      'soldOutAt': soldOutAt,
+      'soldOutTimeLabel': soldOutTimeLabel,
+      'soldOutByEmployeeId': employee?.id ?? '',
+      'soldOutByEmployeeName': employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdByEmployeeId': employee?.id ?? '',
+      'createdByEmployeeName': employee?.name ?? '',
+      'clearedAt': null,
+      'clearedByEmployeeId': '',
+      'clearedByEmployeeName': '',
+      'clearedReason': '',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> clearProductStockOut(
+    Product product, {
+    String reason = 'manual',
+  }) async {
+    _requireTakeOrders();
+    final businessDate = await currentKitchenBusinessDate();
+    final branchId = AppSession.instance.currentBranchId;
+    final docRef = _productStockOutsRef.doc(
+      _productStockOutId(branchId, businessDate, product.id),
+    );
+    await _clearProductStockOutRef(docRef, reason: reason);
+  }
+
+  Future<bool> isProductStockedOut(Product product) async {
+    final businessDate = await currentKitchenBusinessDate();
+    final branchId = AppSession.instance.currentBranchId;
+    final doc = await _productStockOutsRef
+        .doc(_productStockOutId(branchId, businessDate, product.id))
+        .get();
+    return doc.exists && doc.data()?['status'] == 'active';
   }
 
   Stream<List<Employee>> watchEmployees({bool activeOnly = true}) {
@@ -4110,6 +4309,20 @@ class TacoPosRepository {
       'notes': notes.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    final stockOutsSnapshot = await _productStockOutsRef.get();
+    for (final stockOutDoc in stockOutsSnapshot.docs) {
+      final data = stockOutDoc.data();
+      if (data['branchId'] != session.branchId ||
+          data['businessDate'] != session.businessDate ||
+          data['status'] != 'active') {
+        continue;
+      }
+      _clearProductStockOutInBatch(
+        batch,
+        stockOutDoc.reference,
+        reason: 'kitchen_closed',
+      );
+    }
     await batch.commit();
     // TODO: Registrar kitchen_session_closed en activityLog.
     final updated = await docRef.get();
@@ -4834,6 +5047,45 @@ class TacoPosRepository {
     return _businessDateFor(DateTime.now());
   }
 
+  String _productStockOutId(
+    String branchId,
+    String businessDate,
+    String productId,
+  ) {
+    String clean(String value) => value
+        .trim()
+        .replaceAll(RegExp(r'[^A-Za-z0-9_-]+'), '_')
+        .replaceAll(RegExp(r'_+'), '_');
+    return '${clean(branchId)}_${clean(businessDate)}_${clean(productId)}';
+  }
+
+  Future<void> _clearProductStockOutRef(
+    DocumentReference<Map<String, dynamic>> docRef, {
+    required String reason,
+  }) async {
+    final doc = await docRef.get();
+    if (!doc.exists || doc.data()?['status'] != 'active') return;
+    final batch = _db.batch();
+    _clearProductStockOutInBatch(batch, docRef, reason: reason);
+    await batch.commit();
+  }
+
+  void _clearProductStockOutInBatch(
+    WriteBatch batch,
+    DocumentReference<Map<String, dynamic>> docRef, {
+    required String reason,
+  }) {
+    final employee = AppSession.instance.employee;
+    batch.update(docRef, {
+      'status': 'cleared',
+      'clearedAt': FieldValue.serverTimestamp(),
+      'clearedByEmployeeId': employee?.id ?? '',
+      'clearedByEmployeeName': employee?.name ?? '',
+      'clearedReason': reason,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
   bool _dateInRange(DateTime? date, DateTime startDate, DateTime endDate) {
     if (date == null) {
       return false;
@@ -5098,6 +5350,9 @@ class TacoPosRepository {
     );
     final orderDoc = await _ordersRef.doc(cleanOrderId).get();
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
+    if (await isProductStockedOut(product)) {
+      throw StateError('Producto agotado hasta cierre de cocina.');
+    }
     final personName =
         order?.personName(personNumber) ?? 'Persona $personNumber';
     final platformId = order?.orderType == 'takeout' ? order?.platformId : null;

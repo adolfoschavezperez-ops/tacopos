@@ -107,7 +107,11 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       return;
     }
     _returningToList = true;
-    showAppSnackBar(context, 'Comanda sin articulos pendientes.');
+    showAppSnackBar(
+      context,
+      'Comanda sin articulos pendientes.',
+      position: AppSnackBarPosition.top,
+    );
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) {
         Navigator.pop(context);
@@ -144,6 +148,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
           context,
           error.toString().replaceFirst('Bad state: ', ''),
           type: AppSnackBarType.error,
+          position: AppSnackBarPosition.top,
         );
       }
     } finally {
@@ -536,6 +541,7 @@ class _ExpressOrderDialogState extends State<_ExpressOrderDialog> {
         context,
         error.toString().replaceFirst('Bad state: ', ''),
         type: AppSnackBarType.error,
+        position: AppSnackBarPosition.top,
       );
       setState(() => _busy = false);
     }

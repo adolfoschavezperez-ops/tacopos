@@ -63,6 +63,7 @@ enum _ReportKind {
   kitchenYield,
   cancellations,
   cancelledPayments,
+  productStockOuts,
 }
 
 class BackofficeScreen extends StatefulWidget {
@@ -1193,7 +1194,7 @@ class _SaleTile extends StatelessWidget {
   }
 }
 
-class _ReportsSection extends StatelessWidget {
+class _ReportsSection extends StatefulWidget {
   const _ReportsSection({
     required this.repository,
     required this.orders,
@@ -1213,19 +1214,32 @@ class _ReportsSection extends StatelessWidget {
   final ValueChanged<_ReportKind> onReportChanged;
 
   @override
+  State<_ReportsSection> createState() => _ReportsSectionState();
+}
+
+class _ReportsSectionState extends State<_ReportsSection> {
+  String _stockOutBranchId = '';
+  String _stockOutCategory = '';
+  String _stockOutProduct = '';
+  String _stockOutStatus = 'all';
+
+  @override
   Widget build(BuildContext context) {
+    if (widget.reportKind == _ReportKind.productStockOuts) {
+      return _buildProductStockOutReport(context);
+    }
     return FutureBuilder<List<List<String>>>(
       future: _reportRows(
-        repository,
-        orders,
-        payments,
-        reportKind,
-        startBusinessDate,
-        endBusinessDate,
+        widget.repository,
+        widget.orders,
+        widget.payments,
+        widget.reportKind,
+        widget.startBusinessDate,
+        widget.endBusinessDate,
       ),
       builder: (context, snapshot) {
         final rows = snapshot.data ?? const <List<String>>[];
-        final headers = _reportHeaders(reportKind);
+        final headers = _reportHeaders(widget.reportKind);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1237,7 +1251,7 @@ class _ReportsSection extends StatelessWidget {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   DropdownButton<_ReportKind>(
-                    value: reportKind,
+                    value: widget.reportKind,
                     items: _ReportKind.values
                         .map(
                           (kind) => DropdownMenuItem(
@@ -1247,7 +1261,7 @@ class _ReportsSection extends StatelessWidget {
                         )
                         .toList(),
                     onChanged: (value) {
-                      if (value != null) onReportChanged(value);
+                      if (value != null) widget.onReportChanged(value);
                     },
                   ),
                   FilledButton.icon(
@@ -1262,6 +1276,139 @@ class _ReportsSection extends StatelessWidget {
             ),
             const SizedBox(height: 14),
             _ReportTable(headers: headers, rows: rows),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildProductStockOutReport(BuildContext context) {
+    return StreamBuilder<List<ProductStockOutRow>>(
+      stream: widget.repository.watchProductStockOutReport(
+        startBusinessDate: widget.startBusinessDate,
+        endBusinessDate: widget.endBusinessDate,
+      ),
+      builder: (context, snapshot) {
+        final allRows = snapshot.data ?? const <ProductStockOutRow>[];
+        final branches = _stockOutOptions(
+          allRows.map((row) => MapEntry(row.branchId, row.branchName)),
+        );
+        final categories = _stockOutTextOptions(
+          allRows.map((row) => row.categoryName),
+        );
+        final products = _stockOutTextOptions(
+          allRows.map((row) => row.productName),
+        );
+        final rows = allRows.where((row) {
+          if (_stockOutBranchId.isNotEmpty &&
+              row.branchId != _stockOutBranchId) {
+            return false;
+          }
+          if (_stockOutCategory.isNotEmpty &&
+              row.categoryName != _stockOutCategory) {
+            return false;
+          }
+          if (_stockOutProduct.isNotEmpty &&
+              row.productName != _stockOutProduct) {
+            return false;
+          }
+          if (_stockOutStatus == 'active' && !row.isActive) return false;
+          if (_stockOutStatus == 'cleared' && !row.isCleared) return false;
+          return true;
+        }).toList();
+        final headers = _reportHeaders(_ReportKind.productStockOuts);
+        final tableRows = rows.map(_stockOutReportRow).toList();
+        final activeCount = rows.where((row) => row.isActive).length;
+        final clearedCount = rows.where((row) => row.isCleared).length;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            GlassPanel(
+              padding: const EdgeInsets.all(14),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  DropdownButton<_ReportKind>(
+                    value: widget.reportKind,
+                    items: _ReportKind.values
+                        .map(
+                          (kind) => DropdownMenuItem(
+                            value: kind,
+                            child: Text(_reportTitle(kind)),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) widget.onReportChanged(value);
+                    },
+                  ),
+                  _SmallMetric('Total registros', '${rows.length}'),
+                  _SmallMetric('Agotados activos', '$activeCount'),
+                  _SmallMetric('Liberados', '$clearedCount'),
+                  FilledButton.icon(
+                    onPressed: rows.isEmpty
+                        ? null
+                        : () => _copyCsv(
+                            context,
+                            _stockOutCsvHeaders,
+                            rows.map(_stockOutCsvRow).toList(),
+                          ),
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text('Exportar CSV'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 10),
+            GlassPanel(
+              padding: const EdgeInsets.all(12),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _StockOutDropdown(
+                    label: 'Sucursal',
+                    value: _stockOutBranchId,
+                    options: branches,
+                    onChanged: (value) =>
+                        setState(() => _stockOutBranchId = value ?? ''),
+                  ),
+                  _StockOutDropdown(
+                    label: 'Categoria',
+                    value: _stockOutCategory,
+                    options: categories,
+                    onChanged: (value) =>
+                        setState(() => _stockOutCategory = value ?? ''),
+                  ),
+                  _StockOutDropdown(
+                    label: 'Producto',
+                    value: _stockOutProduct,
+                    options: products,
+                    onChanged: (value) =>
+                        setState(() => _stockOutProduct = value ?? ''),
+                  ),
+                  _StockOutDropdown(
+                    label: 'Estado',
+                    value: _stockOutStatus,
+                    options: const {
+                      'all': 'Todos',
+                      'active': 'Activos',
+                      'cleared': 'Liberados',
+                    },
+                    onChanged: (value) =>
+                        setState(() => _stockOutStatus = value ?? 'all'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            if (snapshot.connectionState == ConnectionState.waiting)
+              const LoadingPanel(message: 'Cargando productos agotados...')
+            else
+              _ReportTable(headers: headers, rows: tableRows),
           ],
         );
       },
@@ -1419,6 +1566,81 @@ class _SettingsSection extends StatelessWidget {
               .toList(),
         ),
       ],
+    );
+  }
+}
+
+class _SmallMetric extends StatelessWidget {
+  const _SmallMetric(this.label, this.value);
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: BrandColors.glassFill,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: BrandColors.glassBorder),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: BrandColors.textMuted,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StockOutDropdown extends StatelessWidget {
+  const _StockOutDropdown({
+    required this.label,
+    required this.value,
+    required this.options,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String value;
+  final Map<String, String> options;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final safeValue = options.containsKey(value) ? value : '';
+    return SizedBox(
+      width: 210,
+      child: DropdownButtonFormField<String>(
+        initialValue: safeValue,
+        decoration: InputDecoration(labelText: label),
+        items: [
+          const DropdownMenuItem(value: '', child: Text('Todos')),
+          ...options.entries
+              .where((entry) => entry.key.isNotEmpty)
+              .map(
+                (entry) => DropdownMenuItem(
+                  value: entry.key,
+                  child: Text(entry.value),
+                ),
+              ),
+        ],
+        onChanged: onChanged,
+      ),
     );
   }
 }
@@ -2021,6 +2243,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.kitchenYield => 'Rendimiento de cocina',
     _ReportKind.cancellations => 'Cancelaciones de tickets',
     _ReportKind.cancelledPayments => 'Pagos cancelados',
+    _ReportKind.productStockOuts => 'Productos agotados',
   };
 }
 
@@ -2142,6 +2365,17 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Motivo',
       'Cancelado por',
       'Hora',
+    ],
+    _ReportKind.productStockOuts => [
+      'Fecha operativa',
+      'Hora agotado',
+      'Sucursal',
+      'Categoria',
+      'Producto',
+      'Marco',
+      'Estado',
+      'Hora liberado',
+      'Motivo liberacion',
     ],
   };
 }
@@ -2439,7 +2673,108 @@ Future<List<List<String>>> _reportRows(
           _dateTimeText(payment.cancelledAt),
         ];
       }).toList();
+    case _ReportKind.productStockOuts:
+      final rows = await repository
+          .watchProductStockOutReport(
+            startBusinessDate: startBusinessDate,
+            endBusinessDate: endBusinessDate,
+          )
+          .first;
+      return rows.map(_stockOutReportRow).toList();
   }
+}
+
+List<String> _stockOutReportRow(ProductStockOutRow row) {
+  return [
+    row.businessDate,
+    row.soldOutTimeLabel.isEmpty
+        ? _timeText(row.soldOutAt)
+        : row.soldOutTimeLabel,
+    row.branchName,
+    row.categoryName,
+    row.productName,
+    row.soldOutByEmployeeName,
+    _stockOutStatusText(row),
+    _timeText(row.clearedAt),
+    _stockOutClearedReason(row.clearedReason),
+  ];
+}
+
+const _stockOutCsvHeaders = [
+  'businessDate',
+  'soldOutTimeLabel',
+  'branchName',
+  'categoryName',
+  'productName',
+  'soldOutByEmployeeName',
+  'status',
+  'clearedAt',
+  'clearedReason',
+];
+
+List<String> _stockOutCsvRow(ProductStockOutRow row) {
+  return [
+    row.businessDate,
+    row.soldOutTimeLabel.isEmpty
+        ? _timeText(row.soldOutAt)
+        : row.soldOutTimeLabel,
+    row.branchName,
+    row.categoryName,
+    row.productName,
+    row.soldOutByEmployeeName,
+    row.status,
+    _dateTimeText(row.clearedAt),
+    row.clearedReason,
+  ];
+}
+
+Map<String, String> _stockOutOptions(
+  Iterable<MapEntry<String, String>> values,
+) {
+  final result = <String, String>{};
+  for (final entry in values) {
+    final key = entry.key.trim();
+    final value = entry.value.trim();
+    if (key.isNotEmpty) {
+      result[key] = value.isEmpty ? key : value;
+    }
+  }
+  return Map.fromEntries(
+    result.entries.toList()..sort((a, b) => a.value.compareTo(b.value)),
+  );
+}
+
+Map<String, String> _stockOutTextOptions(Iterable<String> values) {
+  final result = <String>{};
+  for (final value in values) {
+    final clean = value.trim();
+    if (clean.isNotEmpty) result.add(clean);
+  }
+  final sorted = result.toList()..sort();
+  return {for (final value in sorted) value: value};
+}
+
+String _stockOutStatusText(ProductStockOutRow row) {
+  if (row.isActive) return 'Agotado activo';
+  if (row.clearedReason == 'kitchen_closed') {
+    return 'Liberado por cierre de cocina';
+  }
+  if (row.clearedReason == 'manual') return 'Liberado manualmente';
+  return 'Liberado';
+}
+
+String _stockOutClearedReason(String reason) {
+  return switch (reason) {
+    'kitchen_closed' => 'Cierre de cocina',
+    'manual' => 'Manual',
+    '' => '-',
+    _ => reason,
+  };
+}
+
+String _timeText(DateTime? value) {
+  if (value == null) return '-';
+  return DateFormat('HH:mm').format(value);
 }
 
 Future<_ItemsSummary> _itemsSummary(

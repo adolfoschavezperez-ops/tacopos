@@ -602,6 +602,7 @@ class _OrderScreenState extends State<OrderScreen> {
         final menu = _ProductMenu(
           productsStream: _productsStream,
           categoriesStream: _productCategoriesStream,
+          stockOutsStream: _repository.watchActiveProductStockOuts(),
           selectedCategory: _selectedCategory,
           platformId: order?.orderType == 'takeout' ? order?.platformId : null,
           onCategoryChanged: (category) {
@@ -614,6 +615,9 @@ class _OrderScreenState extends State<OrderScreen> {
             product: product,
             personNumber: selectedPerson,
           ),
+          onMarkProductStockOut: _repository.markProductStockOut,
+          onClearProductStockOut: (product) =>
+              _repository.clearProductStockOut(product),
           canAddProducts: canTakeOrders,
           onBlockedAddProduct: () =>
               _showMessage('No tienes permiso para levantar pedidos'),
@@ -2051,20 +2055,26 @@ class _ProductMenu extends StatelessWidget {
   const _ProductMenu({
     required this.productsStream,
     required this.categoriesStream,
+    required this.stockOutsStream,
     required this.selectedCategory,
     required this.platformId,
     required this.onCategoryChanged,
     required this.onAddProduct,
+    required this.onMarkProductStockOut,
+    required this.onClearProductStockOut,
     required this.canAddProducts,
     required this.onBlockedAddProduct,
   });
 
   final Stream<List<Product>> productsStream;
   final Stream<List<ProductCategory>> categoriesStream;
+  final Stream<Map<String, ProductStockOutRow>> stockOutsStream;
   final String selectedCategory;
   final String? platformId;
   final ValueChanged<String> onCategoryChanged;
   final ValueChanged<Product> onAddProduct;
+  final Future<void> Function(Product product) onMarkProductStockOut;
+  final Future<void> Function(Product product) onClearProductStockOut;
   final bool canAddProducts;
   final VoidCallback onBlockedAddProduct;
 
@@ -2129,120 +2139,187 @@ class _ProductMenu extends StatelessWidget {
               orElse: () => categories.first,
             );
 
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: EdgeInsets.fromLTRB(
-                    compact ? 8 : 18,
-                    compact ? 7 : 18,
-                    compact ? 8 : 18,
-                    compact ? 2 : 8,
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          currentCategory.name,
-                          style: TextStyle(
-                            fontSize: compact ? 16 : 28,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
+            return StreamBuilder<Map<String, ProductStockOutRow>>(
+              stream: stockOutsStream,
+              builder: (context, stockOutSnapshot) {
+                final stockOuts =
+                    stockOutSnapshot.data ??
+                    const <String, ProductStockOutRow>{};
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        compact ? 8 : 18,
+                        compact ? 7 : 18,
+                        compact ? 8 : 18,
+                        compact ? 2 : 8,
                       ),
-                      Text(
-                        '${visibleProducts.length} productos',
-                        style: TextStyle(
-                          color: BrandColors.textMuted,
-                          fontSize: compact ? 11 : null,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                SizedBox(
-                  height: compact ? 34 : 54,
-                  child: ListView.separated(
-                    padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 18),
-                    scrollDirection: Axis.horizontal,
-                    itemCount: categories.length,
-                    separatorBuilder: (_, _) =>
-                        SizedBox(width: compact ? 6 : 10),
-                    itemBuilder: (context, index) {
-                      final category = categories[index];
-                      final accent = categoryColorFromModel(category);
-                      final selected = effectiveCategory == category.id;
-                      return ChoiceChip(
-                        visualDensity: compact ? VisualDensity.compact : null,
-                        selected: selected,
-                        onSelected: (_) => onCategoryChanged(category.id),
-                        backgroundColor: accent.withValues(alpha: 0.08),
-                        selectedColor: accent.withValues(alpha: 0.22),
-                        side: BorderSide(
-                          color: accent.withValues(
-                            alpha: selected ? 0.72 : 0.32,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              currentCategory.name,
+                              style: TextStyle(
+                                fontSize: compact ? 16 : 28,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
                           ),
+                          Text(
+                            '${visibleProducts.length} productos',
+                            style: TextStyle(
+                              color: BrandColors.textMuted,
+                              fontSize: compact ? 11 : null,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(
+                      height: compact ? 34 : 54,
+                      child: ListView.separated(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: compact ? 8 : 18,
                         ),
-                        labelStyle: TextStyle(
-                          color: selected ? accent : BrandColors.textMuted,
-                          fontWeight: selected
-                              ? FontWeight.w900
-                              : FontWeight.w700,
-                        ),
-                        label: Text(category.name),
-                      );
-                    },
-                  ),
-                ),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final columns = constraints.maxWidth >= 1100
-                          ? 5
-                          : constraints.maxWidth >= 760
-                          ? 4
-                          : constraints.maxWidth >= 430
-                          ? 3
-                          : constraints.maxWidth >= 300
-                          ? 2
-                          : 1;
-
-                      return GridView.builder(
-                        padding: EdgeInsets.all(compact ? 8 : 18),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: columns,
-                          crossAxisSpacing: compact ? 7 : 12,
-                          mainAxisSpacing: compact ? 7 : 12,
-                          childAspectRatio: compact ? 2.15 : 1.9,
-                        ),
-                        itemCount: visibleProducts.length,
+                        scrollDirection: Axis.horizontal,
+                        itemCount: categories.length,
+                        separatorBuilder: (_, _) =>
+                            SizedBox(width: compact ? 6 : 10),
                         itemBuilder: (context, index) {
-                          final product = visibleProducts[index];
-                          final category = findCategoryById(
-                            categories,
-                            product.categoryId,
-                          );
-                          return _ProductTile(
-                            key: ValueKey('product-${product.id}'),
-                            product: product,
-                            category: category,
-                            platformId: platformId,
-                            compact: compact,
-                            onTap: canAddProducts
-                                ? () => onAddProduct(product)
-                                : onBlockedAddProduct,
+                          final category = categories[index];
+                          final accent = categoryColorFromModel(category);
+                          final selected = effectiveCategory == category.id;
+                          return ChoiceChip(
+                            visualDensity: compact
+                                ? VisualDensity.compact
+                                : null,
+                            selected: selected,
+                            onSelected: (_) => onCategoryChanged(category.id),
+                            backgroundColor: accent.withValues(alpha: 0.08),
+                            selectedColor: accent.withValues(alpha: 0.22),
+                            side: BorderSide(
+                              color: accent.withValues(
+                                alpha: selected ? 0.72 : 0.32,
+                              ),
+                            ),
+                            labelStyle: TextStyle(
+                              color: selected ? accent : BrandColors.textMuted,
+                              fontWeight: selected
+                                  ? FontWeight.w900
+                                  : FontWeight.w700,
+                            ),
+                            label: Text(category.name),
                           );
                         },
-                      );
-                    },
-                  ),
-                ),
-              ],
+                      ),
+                    ),
+                    Expanded(
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final columns = constraints.maxWidth >= 1100
+                              ? 5
+                              : constraints.maxWidth >= 760
+                              ? 4
+                              : constraints.maxWidth >= 430
+                              ? 3
+                              : constraints.maxWidth >= 300
+                              ? 2
+                              : 1;
+
+                          return GridView.builder(
+                            padding: EdgeInsets.all(compact ? 8 : 18),
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                                  crossAxisCount: columns,
+                                  crossAxisSpacing: compact ? 7 : 12,
+                                  mainAxisSpacing: compact ? 7 : 12,
+                                  childAspectRatio: compact ? 2.15 : 1.9,
+                                ),
+                            itemCount: visibleProducts.length,
+                            itemBuilder: (context, index) {
+                              final product = visibleProducts[index];
+                              final category = findCategoryById(
+                                categories,
+                                product.categoryId,
+                              );
+                              final stockOut = stockOuts[product.id];
+                              final stockedOut = stockOut != null;
+                              return _ProductTile(
+                                key: ValueKey('product-${product.id}'),
+                                product: product,
+                                category: category,
+                                platformId: platformId,
+                                compact: compact,
+                                stockedOut: stockedOut,
+                                stockOutTimeLabel:
+                                    stockOut?.soldOutTimeLabel ?? '',
+                                onTap: canAddProducts
+                                    ? () {
+                                        if (stockedOut) {
+                                          showAppSnackBar(
+                                            context,
+                                            'Producto agotado hasta cierre de cocina.',
+                                          );
+                                          return;
+                                        }
+                                        onAddProduct(product);
+                                      }
+                                    : onBlockedAddProduct,
+                                onLongPressCompleted: canAddProducts
+                                    ? () => _toggleStockOut(
+                                        context,
+                                        product,
+                                        stockedOut,
+                                      )
+                                    : null,
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
             );
           },
         );
       },
     );
+  }
+
+  Future<void> _toggleStockOut(
+    BuildContext context,
+    Product product,
+    bool stockedOut,
+  ) async {
+    try {
+      if (stockedOut) {
+        await onClearProductStockOut(product);
+        if (!context.mounted) return;
+        showAppSnackBar(
+          context,
+          'Producto disponible nuevamente.',
+          type: AppSnackBarType.success,
+        );
+      } else {
+        await onMarkProductStockOut(product);
+        if (!context.mounted) return;
+        showAppSnackBar(
+          context,
+          'Producto marcado como agotado hasta cierre de cocina.',
+          type: AppSnackBarType.warning,
+        );
+      }
+    } catch (error) {
+      if (!context.mounted) return;
+      showAppSnackBar(
+        context,
+        error.toString().replaceFirst('Bad state: ', ''),
+        type: AppSnackBarType.error,
+      );
+    }
   }
 }
 
@@ -2280,87 +2357,228 @@ List<ProductCategory> _menuCategories(
   return categories;
 }
 
-class _ProductTile extends StatelessWidget {
+class _ProductTile extends StatefulWidget {
   const _ProductTile({
     super.key,
     required this.product,
     required this.category,
     required this.platformId,
     required this.compact,
+    required this.stockedOut,
+    required this.stockOutTimeLabel,
     required this.onTap,
+    this.onLongPressCompleted,
   });
 
   final Product product;
   final ProductCategory? category;
   final String? platformId;
   final bool compact;
+  final bool stockedOut;
+  final String stockOutTimeLabel;
   final VoidCallback onTap;
+  final Future<void> Function()? onLongPressCompleted;
+
+  @override
+  State<_ProductTile> createState() => _ProductTileState();
+}
+
+class _ProductTileState extends State<_ProductTile>
+    with SingleTickerProviderStateMixin {
+  Timer? _stockOutTimer;
+  late final AnimationController _holdController;
+  bool _completingLongPress = false;
+  bool _suppressNextTap = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _holdController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    );
+  }
+
+  @override
+  void dispose() {
+    _stockOutTimer?.cancel();
+    _holdController.dispose();
+    super.dispose();
+  }
+
+  void _startStockOutHold() {
+    if (widget.onLongPressCompleted == null || _completingLongPress) return;
+    _stockOutTimer?.cancel();
+    _holdController
+      ..reset()
+      ..forward();
+    _stockOutTimer = Timer(const Duration(seconds: 4), () async {
+      if (!mounted || _completingLongPress) return;
+      setState(() {
+        _completingLongPress = true;
+        _suppressNextTap = true;
+      });
+      await widget.onLongPressCompleted?.call();
+      if (!mounted) return;
+      setState(() => _completingLongPress = false);
+      _holdController.reset();
+    });
+  }
+
+  void _cancelStockOutHold() {
+    _stockOutTimer?.cancel();
+    if (!_completingLongPress) {
+      _holdController.reset();
+    }
+  }
+
+  void _handleTap() {
+    if (_suppressNextTap) {
+      _suppressNextTap = false;
+      return;
+    }
+    widget.onTap();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final accent = category == null
+    final product = widget.product;
+    final compact = widget.compact;
+    final accent = widget.category == null
         ? categoryAccent(
             categoryId: product.categoryId,
             categoryName: product.categoryName,
           )
-        : categoryColorFromModel(category!);
-    return GlassCard(
-      onTap: onTap,
-      padding: EdgeInsets.all(compact ? 7 : 12),
-      accent: accent,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: compact ? 2 : 3,
-            decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.72),
-              borderRadius: BorderRadius.circular(999),
+        : categoryColorFromModel(widget.category!);
+    final fadedAccent = widget.stockedOut ? BrandColors.textMuted : accent;
+    return GestureDetector(
+      onTapDown: (_) => _startStockOutHold(),
+      onTapUp: (_) => _cancelStockOutHold(),
+      onTapCancel: _cancelStockOutHold,
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 160),
+        opacity: widget.stockedOut ? 0.58 : 1,
+        child: Stack(
+          children: [
+            GlassCard(
+              onTap: _handleTap,
+              padding: EdgeInsets.all(compact ? 7 : 12),
+              accent: fadedAccent,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AnimatedBuilder(
+                    animation: _holdController,
+                    builder: (context, child) {
+                      return LinearProgressIndicator(
+                        minHeight: compact ? 2 : 3,
+                        value: _holdController.value,
+                        backgroundColor: fadedAccent.withValues(alpha: 0.20),
+                        valueColor: AlwaysStoppedAnimation<Color>(fadedAccent),
+                      );
+                    },
+                  ),
+                  SizedBox(height: compact ? 5 : 7),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          product.categoryName.toUpperCase(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: fadedAccent,
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      Icon(
+                        widget.stockedOut
+                            ? Icons.block_outlined
+                            : Icons.add_circle_outline,
+                        color: fadedAccent,
+                        size: compact ? 16 : 22,
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  Text(
+                    product.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: widget.stockedOut
+                          ? BrandColors.textMuted
+                          : BrandColors.textPrimary,
+                      fontSize: compact ? 12.5 : 16,
+                      fontWeight: FontWeight.w800,
+                      height: 1.05,
+                    ),
+                  ),
+                  SizedBox(height: compact ? 2 : 6),
+                  MoneyText(
+                    value: product.priceForPlatform(widget.platformId),
+                    style: TextStyle(
+                      color: widget.stockedOut
+                          ? BrandColors.textMuted
+                          : BrandColors.accentYellow,
+                      fontSize: compact ? 12.5 : 16,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-          SizedBox(height: compact ? 5 : 7),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  product.categoryName.toUpperCase(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: accent,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
+            if (widget.stockedOut)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(8),
+                      color: Colors.black.withValues(alpha: 0.20),
+                    ),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: BrandColors.danger.withValues(alpha: 0.92),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: const Text(
+                              'AGOTADO',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0,
+                              ),
+                            ),
+                          ),
+                          if (widget.stockOutTimeLabel.isNotEmpty) ...[
+                            const SizedBox(height: 5),
+                            Text(
+                              'desde ${widget.stockOutTimeLabel}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
-              Icon(
-                Icons.add_circle_outline,
-                color: accent,
-                size: compact ? 16 : 22,
-              ),
-            ],
-          ),
-          const Spacer(),
-          Text(
-            product.name,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: compact ? 12.5 : 16,
-              fontWeight: FontWeight.w800,
-              height: 1.05,
-            ),
-          ),
-          SizedBox(height: compact ? 2 : 6),
-          MoneyText(
-            value: product.priceForPlatform(platformId),
-            style: TextStyle(
-              color: BrandColors.accentYellow,
-              fontSize: compact ? 12.5 : 16,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

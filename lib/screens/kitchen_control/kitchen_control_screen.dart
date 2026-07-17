@@ -76,7 +76,7 @@ class _KitchenControlScreenState extends State<KitchenControlScreen> {
   }
 
   void _showMessage(String message) {
-    showAppSnackBar(context, message);
+    showAppSnackBar(context, message, position: AppSnackBarPosition.top);
   }
 
   String _errorText(Object error) {
@@ -235,7 +235,7 @@ class _KitchenOpeningFormState extends State<_KitchenOpeningForm> {
   }
 
   void _message(String text) {
-    showAppSnackBar(context, text);
+    showAppSnackBar(context, text, position: AppSnackBarPosition.top);
   }
 
   @override
@@ -446,7 +446,7 @@ class _KitchenOpenInputsPanelState extends State<_KitchenOpenInputsPanel> {
   }
 
   void _message(String text) {
-    showAppSnackBar(context, text);
+    showAppSnackBar(context, text, position: AppSnackBarPosition.top);
   }
 
   @override
