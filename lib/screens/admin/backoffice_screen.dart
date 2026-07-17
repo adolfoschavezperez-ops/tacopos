@@ -1777,27 +1777,32 @@ class _ReportTable extends StatelessWidget {
       );
     }
     return GlassPanel(
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          columns: headers
-              .map((header) => DataColumn(label: Text(header)))
-              .toList(),
-          rows: rows
-              .map(
-                (row) => DataRow(
-                  cells: headers
-                      .asMap()
-                      .keys
-                      .map(
-                        (index) => DataCell(
-                          Text(index < row.length ? row[index] : ''),
-                        ),
-                      )
-                      .toList(),
-                ),
-              )
-              .toList(),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 620),
+        child: SingleChildScrollView(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columns: headers
+                  .map((header) => DataColumn(label: Text(header)))
+                  .toList(),
+              rows: rows
+                  .map(
+                    (row) => DataRow(
+                      cells: headers
+                          .asMap()
+                          .keys
+                          .map(
+                            (index) => DataCell(
+                              Text(index < row.length ? row[index] : ''),
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  )
+                  .toList(),
+            ),
+          ),
         ),
       ),
     );
@@ -2109,11 +2114,58 @@ List<DashboardChartDatum> _chartData(List<_BarRow> rows) {
 }
 
 class _ItemsSummary {
-  const _ItemsSummary({required this.totalQty, required this.topProducts});
-  const _ItemsSummary.empty() : totalQty = 0, topProducts = const [];
+  const _ItemsSummary({required this.totalQty, required this.products});
+  const _ItemsSummary.empty() : totalQty = 0, products = const [];
 
   final int totalQty;
-  final List<_BarRow> topProducts;
+  final List<_ProductSalesRow> products;
+
+  List<_BarRow> get topProducts => products
+      .take(5)
+      .map((row) => _BarRow(row.productName, row.value, '${row.qty} vendidos'))
+      .toList();
+}
+
+class _ProductSalesAccumulator {
+  _ProductSalesAccumulator({
+    required this.productName,
+    required this.categoryName,
+  });
+
+  final String productName;
+  final String categoryName;
+  int qty = 0;
+  double value = 0;
+
+  void add({required int qty, required double value}) {
+    this.qty += qty;
+    this.value += value;
+  }
+
+  _ProductSalesRow toRow() {
+    return _ProductSalesRow(
+      productName: productName,
+      categoryName: categoryName,
+      qty: qty,
+      value: value,
+    );
+  }
+}
+
+class _ProductSalesRow {
+  const _ProductSalesRow({
+    required this.productName,
+    required this.categoryName,
+    required this.qty,
+    required this.value,
+  });
+
+  final String productName;
+  final String categoryName;
+  final int qty;
+  final double value;
+
+  double get averagePrice => qty <= 0 ? 0 : value / qty;
 }
 
 List<_NavItem> _navItems(Employee? employee) {
@@ -2391,18 +2443,18 @@ Future<List<List<String>>> _reportRows(
   switch (kind) {
     case _ReportKind.products:
       final summary = await _itemsSummary(repository, orders);
-      final totalSales = summary.topProducts.fold<double>(
+      final totalSales = summary.products.fold<double>(
         0,
         (total, row) => total + row.value,
       );
-      return summary.topProducts.map((row) {
+      return summary.products.map((row) {
         final percent = totalSales <= 0 ? 0 : (row.value / totalSales) * 100;
         return [
-          row.label,
-          '-',
-          row.displayValue,
+          row.productName,
+          row.categoryName,
+          '${row.qty} vendidos',
           _money(row.value),
-          '-',
+          _money(row.averagePrice),
           '${percent.toStringAsFixed(1)}%',
         ];
       }).toList();
@@ -2781,26 +2833,36 @@ Future<_ItemsSummary> _itemsSummary(
   TacoPosRepository repository,
   List<PosOrder> orders,
 ) async {
-  final qtyByProduct = <String, int>{};
-  final salesByProduct = <String, double>{};
+  final products = <String, _ProductSalesAccumulator>{};
   var totalQty = 0;
   for (final order in orders.where((order) => order.status != 'cancelled')) {
     final items = await repository.getOrderItemsOnce(order.id);
-    for (final item in items.where(
-      (item) => item.paymentStatus != 'cancelled',
-    )) {
-      qtyByProduct[item.productName] =
-          (qtyByProduct[item.productName] ?? 0) + item.qty;
-      salesByProduct[item.productName] =
-          (salesByProduct[item.productName] ?? 0) + item.total;
+    for (final item in items.where((item) => !item.isCancelled)) {
+      final productName = _reportValue(item.productName, fallback: 'Producto');
+      final categoryName = _reportValue(item.category);
+      final key = item.productId.trim().isNotEmpty
+          ? 'id:${item.productId.trim()}'
+          : 'legacy:${productName.toLowerCase()}|${categoryName.toLowerCase()}';
+      final accumulator = products.putIfAbsent(
+        key,
+        () => _ProductSalesAccumulator(
+          productName: productName,
+          categoryName: categoryName,
+        ),
+      );
+      accumulator.add(qty: item.qty, value: item.total);
       totalQty += item.qty;
     }
   }
-  final rows = salesByProduct.entries.map((entry) {
-    final qty = qtyByProduct[entry.key] ?? 0;
-    return _BarRow(entry.key, entry.value, '$qty vendidos');
-  }).toList()..sort((a, b) => b.value.compareTo(a.value));
-  return _ItemsSummary(totalQty: totalQty, topProducts: rows.take(5).toList());
+  final rows = products.values.map((product) => product.toRow()).toList()
+    ..sort((a, b) {
+      final salesCompare = b.value.compareTo(a.value);
+      if (salesCompare != 0) return salesCompare;
+      final qtyCompare = b.qty.compareTo(a.qty);
+      if (qtyCompare != 0) return qtyCompare;
+      return a.productName.compareTo(b.productName);
+    });
+  return _ItemsSummary(totalQty: totalQty, products: rows);
 }
 
 List<_BarRow> _salesByHour(List<Payment> payments) {
@@ -3176,6 +3238,11 @@ String? _businessDateFor(DateTime? date) {
 }
 
 String _money(double value) => '\$${value.toStringAsFixed(2)}';
+
+String _reportValue(String value, {String fallback = '-'}) {
+  final clean = value.trim();
+  return clean.isEmpty ? fallback : clean;
+}
 
 String _qty(double value) {
   if (value == value.roundToDouble()) return value.toStringAsFixed(0);
