@@ -52,30 +52,6 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
   }
 
   Future<void> _markReady(List<OrderItem> activeItems) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Marcar comanda lista'),
-        content: const Text(
-          'Se marcaran listos todos los productos activos de esta comanda.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Listo'),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) {
-      return;
-    }
-
     await _run(() {
       return _repository.updateKitchenItemsStatus(
         orderId: widget.orderId,
@@ -116,6 +92,9 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       return;
     }
 
+    if (popAfter) {
+      _returningToList = true;
+    }
     setState(() {
       _busy = true;
     });
@@ -124,6 +103,17 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       await action();
       if (mounted && popAfter) {
         Navigator.pop(context);
+      }
+    } catch (error) {
+      if (popAfter) {
+        _returningToList = false;
+      }
+      if (mounted) {
+        showAppSnackBar(
+          context,
+          error.toString().replaceFirst('Bad state: ', ''),
+          type: AppSnackBarType.error,
+        );
       }
     } finally {
       if (mounted) {
@@ -201,6 +191,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                   );
                   final isLastPerson = _personIndex >= people.length - 1;
                   final elapsedSince = _elapsedStart(items);
+                  final plateAccent = _plateAccent(_personIndex);
 
                   return LayoutBuilder(
                     builder: (context, constraints) {
@@ -228,24 +219,28 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                               child: GlassPanel(
                                 blur: 8,
                                 padding: EdgeInsets.all(compact ? 14 : 24),
+                                fill: plateAccent.withValues(alpha: 0.13),
+                                borderColor: plateAccent.withValues(
+                                  alpha: 0.80,
+                                ),
+                                glowColor: plateAccent.withValues(alpha: 0.22),
                                 child: Column(
                                   crossAxisAlignment:
                                       CrossAxisAlignment.stretch,
                                   children: [
-                                    Text(
-                                      personName,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: compact ? 24 : 36,
-                                        fontWeight: FontWeight.w800,
-                                      ),
+                                    _PlateHeader(
+                                      personName: personName,
+                                      current: _personIndex + 1,
+                                      total: people.length,
+                                      accent: plateAccent,
+                                      compact: compact,
                                     ),
-                                    Text(
-                                      '${_personIndex + 1} de ${people.length}',
-                                      style: TextStyle(
-                                        color: BrandColors.textMuted,
-                                        fontSize: compact ? 14 : 18,
+                                    SizedBox(height: compact ? 12 : 20),
+                                    Container(
+                                      height: compact ? 8 : 12,
+                                      decoration: BoxDecoration(
+                                        color: plateAccent,
+                                        borderRadius: BorderRadius.circular(99),
                                       ),
                                     ),
                                     SizedBox(height: compact ? 12 : 24),
@@ -296,6 +291,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                                   _personIndex += 1;
                                 });
                               },
+                              accent: plateAccent,
                               onReady: () => _markReady(items),
                             ),
                           ],
@@ -321,6 +317,103 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
           (min, date) => min == null || date.isBefore(min) ? date : min,
         );
   }
+}
+
+class _PlateHeader extends StatelessWidget {
+  const _PlateHeader({
+    required this.personName,
+    required this.current,
+    required this.total,
+    required this.accent,
+    required this.compact,
+  });
+
+  final String personName;
+  final int current;
+  final int total;
+  final Color accent;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 14 : 20,
+        vertical: compact ? 12 : 18,
+      ),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.26),
+        borderRadius: BorderRadius.circular(compact ? 16 : 22),
+        border: Border.all(color: accent.withValues(alpha: 0.85), width: 2),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: compact ? 46 : 64,
+            height: compact ? 46 : 64,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: accent,
+              borderRadius: BorderRadius.circular(compact ? 14 : 18),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withValues(alpha: 0.34),
+                  blurRadius: 18,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Text(
+              '$current',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: compact ? 24 : 34,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          SizedBox(width: compact ? 12 : 18),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  personName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: compact ? 24 : 36,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                Text(
+                  'Plato $current de $total',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.82),
+                    fontSize: compact ? 14 : 18,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Color _plateAccent(int index) {
+  const colors = [
+    Color(0xFFE56A2C),
+    Color(0xFF2577D7),
+    Color(0xFF178A5A),
+    Color(0xFF7B4DD8),
+    Color(0xFFB8324A),
+    Color(0xFF008B8B),
+  ];
+  return colors[index % colors.length];
 }
 
 class _KitchenItemRow extends StatelessWidget {
@@ -475,6 +568,7 @@ class _KitchenDetailActions extends StatelessWidget {
     required this.elapsedSince,
     required this.onPrevious,
     required this.onNext,
+    required this.accent,
     required this.onReady,
   });
 
@@ -485,6 +579,7 @@ class _KitchenDetailActions extends StatelessWidget {
   final DateTime? elapsedSince;
   final VoidCallback onPrevious;
   final VoidCallback onNext;
+  final Color accent;
   final VoidCallback onReady;
 
   @override
@@ -494,6 +589,8 @@ class _KitchenDetailActions extends StatelessWidget {
             onPressed: busy ? null : onReady,
             style: FilledButton.styleFrom(
               minimumSize: Size.fromHeight(compact ? 72 : 84),
+              backgroundColor: accent,
+              foregroundColor: Colors.white,
               textStyle: TextStyle(
                 fontSize: compact ? 20 : 24,
                 fontWeight: FontWeight.w900,
@@ -510,8 +607,8 @@ class _KitchenDetailActions extends StatelessWidget {
                 fontSize: compact ? 22 : 28,
                 fontWeight: FontWeight.w900,
               ),
-              backgroundColor: BrandColors.accentOrange,
-              foregroundColor: Colors.black,
+              backgroundColor: accent,
+              foregroundColor: Colors.white,
             ),
             icon: const Icon(Icons.chevron_right, size: 34),
             label: const Text('Siguiente plato'),

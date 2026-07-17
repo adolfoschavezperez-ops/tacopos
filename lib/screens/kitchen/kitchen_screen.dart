@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
@@ -27,6 +28,8 @@ class _KitchenScreenState extends State<KitchenScreen> {
   late final TacoPosRepository _repository;
   late final Stream<List<KitchenOrderBundle>> _bundlesStream;
   late final Future<bool> _kitchenIsOpenFuture;
+  final Set<String> _seenKitchenBundleKeys = <String>{};
+  bool _beepPrimed = false;
 
   @override
   void initState() {
@@ -93,6 +96,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
               }
 
               final bundles = snapshot.data ?? [];
+              _handleNewKitchenBundles(bundles);
               if (bundles.isEmpty) {
                 return const EmptyState(
                   icon: Icons.room_service_outlined,
@@ -162,6 +166,36 @@ class _KitchenScreenState extends State<KitchenScreen> {
         },
       ),
     );
+  }
+
+  void _handleNewKitchenBundles(List<KitchenOrderBundle> bundles) {
+    final currentKeys = <String>{};
+    for (final bundle in bundles) {
+      for (final item in bundle.items) {
+        final batchId = item.kitchenBatchId?.trim();
+        currentKeys.add(
+          batchId == null || batchId.isEmpty
+              ? 'order:${bundle.order.id}'
+              : 'batch:$batchId',
+        );
+      }
+    }
+
+    if (!_beepPrimed) {
+      _seenKitchenBundleKeys.addAll(currentKeys);
+      _beepPrimed = true;
+      return;
+    }
+
+    final hasNew = currentKeys.any(
+      (key) => !_seenKitchenBundleKeys.contains(key),
+    );
+    _seenKitchenBundleKeys.addAll(currentKeys);
+    if (hasNew) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        SystemSound.play(SystemSoundType.alert);
+      });
+    }
   }
 }
 
