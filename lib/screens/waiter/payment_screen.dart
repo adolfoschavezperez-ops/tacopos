@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
-import '../../models/discount_authorization_request.dart';
 import '../../models/employee.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
@@ -1578,21 +1577,10 @@ class _DiscountDialogState extends State<_DiscountDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<DiscountAuthorizationRequest>>(
-      stream: widget.repository.watchDiscountAuthorizationRequestsForOrder(
-        widget.order.id,
-      ),
-      builder: (context, requestSnapshot) {
-        final requests = requestSnapshot.data ?? const [];
-        return _buildDialog(context, requests);
-      },
-    );
+    return _buildDialog(context);
   }
 
-  Widget _buildDialog(
-    BuildContext context,
-    List<DiscountAuthorizationRequest> requests,
-  ) {
+  Widget _buildDialog(BuildContext context) {
     final options = <DropdownMenuItem<String>>[
       if (widget.generalDiscount.appliesToCurrentBranch(
         AppSession.instance.currentBranchId,
@@ -1619,24 +1607,10 @@ class _DiscountDialogState extends State<_DiscountDialog> {
     }
     final needsEmployee =
         _type == 'employee_free_meal' || _type == 'employee_30';
-    final isFamilyFriend = _type == 'family_friend_20';
-    final needsPartner = isFamilyFriend || _type == 'partner_50';
+    final needsPartner = _type == 'partner_50';
     final employeeOptions = _employeeBenefitOptions;
     final canRequestPin =
         _type == 'partner_50' || (needsEmployee && employeeOptions.isNotEmpty);
-    final matchingRequests = _familyRequestsForSelectedPartner(requests);
-    final approvedRequest = matchingRequests
-        .where((request) => request.isUsable)
-        .cast<DiscountAuthorizationRequest?>()
-        .firstOrNull;
-    final pendingRequest = matchingRequests
-        .where((request) => request.isPending)
-        .cast<DiscountAuthorizationRequest?>()
-        .firstOrNull;
-    final rejectedRequest = matchingRequests
-        .where((request) => request.isRejected)
-        .cast<DiscountAuthorizationRequest?>()
-        .firstOrNull;
     if (needsEmployee &&
         _employee != null &&
         !employeeOptions.any((employee) => employee.id == _employee!.id)) {
@@ -1718,22 +1692,9 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                   minLines: 2,
                   maxLines: 3,
                   decoration: const InputDecoration(
-                    labelText: 'Motivo de la autorización',
+                    labelText: 'Motivo del descuento',
+                    hintText: 'Ej. Familia de Gabo',
                   ),
-                ),
-                const SizedBox(height: 10),
-                _FamilyFriendAuthorizationStatus(
-                  approvedRequest: approvedRequest,
-                  pendingRequest: pendingRequest,
-                  rejectedRequest: rejectedRequest,
-                  totalChanged:
-                      approvedRequest != null &&
-                      (approvedRequest.amountBeforeDiscount - widget.amount)
-                              .abs() >
-                          0.01,
-                  onCancelPending: pendingRequest == null || _busy
-                      ? null
-                      : () => _cancelFamilyRequest(pendingRequest),
                 ),
               ],
               if (_info.isNotEmpty) ...[
@@ -1766,45 +1727,14 @@ class _DiscountDialogState extends State<_DiscountDialog> {
           child: const Text('Cancelar'),
         ),
         FilledButton(
-          onPressed: _busy
-              ? null
-              : isFamilyFriend && pendingRequest != null
-              ? null
-              : () => _apply(approvedFamilyRequest: approvedRequest),
-          child: Text(
-            _busy
-                ? 'Validando...'
-                : isFamilyFriend && pendingRequest != null
-                ? 'Esperando autorización'
-                : isFamilyFriend && approvedRequest == null
-                ? 'Solicitar autorización'
-                : 'Aplicar',
-          ),
+          onPressed: _busy ? null : _apply,
+          child: Text(_busy ? 'Validando...' : 'Aplicar'),
         ),
       ],
     );
   }
 
-  List<DiscountAuthorizationRequest> _familyRequestsForSelectedPartner(
-    List<DiscountAuthorizationRequest> requests,
-  ) {
-    final partnerId = _partner?.id;
-    final filtered = requests.where((request) {
-      if (request.requestedDiscountType != 'family_friend_20') return false;
-      if (partnerId == null) return true;
-      return request.requestedPartnerId == partnerId;
-    }).toList();
-    filtered.sort((a, b) {
-      final aDate = a.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-      final bDate = b.requestedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-      return bDate.compareTo(aDate);
-    });
-    return filtered;
-  }
-
-  Future<void> _apply({
-    DiscountAuthorizationRequest? approvedFamilyRequest,
-  }) async {
+  Future<void> _apply() async {
     if ((_type == 'employee_free_meal' || _type == 'employee_30') &&
         _employeeBenefitOptions.isEmpty) {
       setState(() {
@@ -1812,8 +1742,8 @@ class _DiscountDialogState extends State<_DiscountDialog> {
       });
       return;
     }
-    if (_type == 'family_friend_20' && approvedFamilyRequest == null) {
-      await _requestFamilyAuthorization();
+    if (_type == 'family_friend_20' && _reasonController.text.trim().isEmpty) {
+      setState(() => _error = 'Captura el motivo del descuento.');
       return;
     }
     setState(() {
@@ -1828,7 +1758,6 @@ class _DiscountDialogState extends State<_DiscountDialog> {
         discountType: _type,
         employeeId: _employee?.id,
         partnerId: _partner?.id,
-        discountAuthorizationRequestId: approvedFamilyRequest?.id,
         pin: _pinController.text,
         reason: _reasonController.text,
       );
@@ -1841,174 +1770,6 @@ class _DiscountDialogState extends State<_DiscountDialog> {
         _busy = false;
       });
     }
-  }
-
-  Future<void> _requestFamilyAuthorization() async {
-    if (_partner == null) {
-      setState(() => _error = 'Selecciona el socio autorizador.');
-      return;
-    }
-    if (_reasonController.text.trim().isEmpty) {
-      setState(() => _error = 'Captura el motivo de la autorización.');
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _error = '';
-      _info = '';
-    });
-    try {
-      await widget.repository.requestFamilyFriendDiscountAuthorization(
-        order: widget.order,
-        amountBeforeDiscount: widget.amount,
-        requestedPartnerId: _partner!.id,
-        reason: _reasonController.text,
-      );
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _info = 'Solicitud enviada. Espera autorización del socio.';
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _error = error.toString().replaceFirst('Bad state: ', '');
-        _busy = false;
-      });
-    }
-  }
-
-  Future<void> _cancelFamilyRequest(
-    DiscountAuthorizationRequest request,
-  ) async {
-    setState(() {
-      _busy = true;
-      _error = '';
-      _info = '';
-    });
-    try {
-      await widget.repository.cancelDiscountAuthorizationRequest(
-        requestId: request.id,
-      );
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _info = 'Solicitud cancelada.';
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _error = error.toString().replaceFirst('Bad state: ', '');
-        _busy = false;
-      });
-    }
-  }
-}
-
-class _FamilyFriendAuthorizationStatus extends StatelessWidget {
-  const _FamilyFriendAuthorizationStatus({
-    required this.approvedRequest,
-    required this.pendingRequest,
-    required this.rejectedRequest,
-    required this.totalChanged,
-    required this.onCancelPending,
-  });
-
-  final DiscountAuthorizationRequest? approvedRequest;
-  final DiscountAuthorizationRequest? pendingRequest;
-  final DiscountAuthorizationRequest? rejectedRequest;
-  final bool totalChanged;
-  final VoidCallback? onCancelPending;
-
-  @override
-  Widget build(BuildContext context) {
-    if (approvedRequest != null) {
-      return _statusPanel(
-        color: BrandColors.success,
-        icon: Icons.verified_outlined,
-        text:
-            'Descuento autorizado por ${approvedRequest!.approvedByPartnerName.isEmpty ? approvedRequest!.requestedPartnerName : approvedRequest!.approvedByPartnerName}.',
-        extra: totalChanged
-            ? 'El total cambió desde que se solicitó la autorización.'
-            : '',
-      );
-    }
-    if (pendingRequest != null) {
-      return _statusPanel(
-        color: BrandColors.accentYellow,
-        icon: Icons.hourglass_top_outlined,
-        text: 'Solicitud pendiente de autorización.',
-        action: TextButton.icon(
-          onPressed: onCancelPending,
-          icon: const Icon(Icons.cancel_outlined),
-          label: const Text('Cancelar solicitud'),
-        ),
-      );
-    }
-    if (rejectedRequest != null) {
-      return _statusPanel(
-        color: BrandColors.danger,
-        icon: Icons.block_outlined,
-        text: 'Descuento rechazado.',
-        extra: rejectedRequest!.rejectReason.isEmpty
-            ? ''
-            : 'Motivo: ${rejectedRequest!.rejectReason}',
-      );
-    }
-    return const Text(
-      'Se enviará una solicitud al socio seleccionado. No se aplica descuento hasta que sea autorizada.',
-      style: TextStyle(
-        color: BrandColors.textMuted,
-        fontWeight: FontWeight.w700,
-      ),
-    );
-  }
-
-  Widget _statusPanel({
-    required Color color,
-    required IconData icon,
-    required String text,
-    String extra = '',
-    Widget? action,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        border: Border.all(color: color.withValues(alpha: 0.55)),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon, color: color, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  text,
-                  style: TextStyle(color: color, fontWeight: FontWeight.w900),
-                ),
-              ),
-            ],
-          ),
-          if (extra.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text(
-              extra,
-              style: const TextStyle(
-                color: BrandColors.textMuted,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ],
-          if (action != null) ...[const SizedBox(height: 6), action],
-        ],
-      ),
-    );
   }
 }
 

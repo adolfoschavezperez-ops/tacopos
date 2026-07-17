@@ -269,7 +269,7 @@ class _DiscountAuthorizations extends StatefulWidget {
 }
 
 class _DiscountAuthorizationsState extends State<_DiscountAuthorizations> {
-  String _status = 'pending';
+  String _status = 'all';
   String? _partnerId;
   String? _employeeId;
   DateTime? _startDate;
@@ -319,20 +319,8 @@ class _DiscountAuthorizationsState extends State<_DiscountAuthorizations> {
                     const SectionHeader(
                       title: 'Descuentos familia/amigos',
                       subtitle:
-                          'Solo socios ligados a un usuario activo pueden autorizar.',
+                          'Historial de descuentos y autorizaciones automaticas.',
                     ),
-                    const SizedBox(height: 12),
-                    if (currentPartner == null)
-                      const GlassPanel(
-                        borderColor: BrandColors.danger,
-                        child: Text(
-                          'Solo un socio puede autorizar este descuento.',
-                          style: TextStyle(
-                            color: BrandColors.danger,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
                     const SizedBox(height: 12),
                     _DiscountFilters(
                       status: _status,
@@ -595,7 +583,8 @@ class _DiscountAuthorizationCard extends StatelessWidget {
                 _InfoText('Sucursal', request.branchName),
                 _InfoText('Pedido', request.tableName),
                 _InfoText('Solicita', request.requestedByEmployeeName),
-                _InfoText('Socio solicitado', request.requestedPartnerName),
+                if (!request.isAutoApproved)
+                  _InfoText('Socio solicitado', request.requestedPartnerName),
                 _InfoText('Fecha', _dateTime(request.requestedAt)),
               ],
             ),
@@ -620,13 +609,23 @@ class _DiscountAuthorizationCard extends StatelessWidget {
             if (!request.isPending) ...[
               const SizedBox(height: 10),
               _InfoLine(
-                request.isRejected ? 'Rechazado por' : 'Autorizado por',
-                request.isRejected
+                request.isAutoApproved
+                    ? 'Modo'
+                    : request.isRejected
+                    ? 'Rechazado por'
+                    : 'Autorizado por',
+                request.isAutoApproved
+                    ? 'Autorizacion automatica'
+                    : request.isRejected
                     ? request.rejectedByPartnerName
                     : request.approvedByPartnerName,
               ),
               _InfoLine(
-                request.isRejected ? 'Rechazado' : 'Autorizado',
+                request.isAutoApproved
+                    ? 'Autorizada'
+                    : request.isRejected
+                    ? 'Rechazado'
+                    : 'Autorizado',
                 _dateTime(
                   request.isRejected ? request.rejectedAt : request.approvedAt,
                 ),
@@ -878,6 +877,7 @@ String _withdrawalStatus(CashWithdrawalRequest request) {
 }
 
 String _discountStatusText(DiscountAuthorizationRequest request) {
+  if (request.isAutoApproved) return 'Autorizacion automatica';
   if (request.isUsed) return 'Usada';
   if (request.isApproved) return 'Aprobada';
   if (request.isRejected) return 'Rechazada';

@@ -1,14 +1,15 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/sound/kitchen_sound_service.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -28,8 +29,8 @@ class _KitchenScreenState extends State<KitchenScreen> {
   late final TacoPosRepository _repository;
   late final Stream<List<KitchenOrderBundle>> _bundlesStream;
   late final Future<bool> _kitchenIsOpenFuture;
-  final Set<String> _seenKitchenBundleKeys = <String>{};
-  bool _beepPrimed = false;
+  final Set<String> _knownKitchenOrderIds = <String>{};
+  bool _hasInitializedKitchenOrders = false;
 
   @override
   void initState() {
@@ -98,10 +99,28 @@ class _KitchenScreenState extends State<KitchenScreen> {
               final bundles = snapshot.data ?? [];
               _handleNewKitchenBundles(bundles);
               if (bundles.isEmpty) {
-                return const EmptyState(
-                  icon: Icons.room_service_outlined,
-                  title: 'Sin comandas activas',
-                  message: 'Solo apareceran tacos y gringas enviados a cocina.',
+                return Padding(
+                  padding: const EdgeInsets.all(18),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _KitchenListHeader(
+                        activeCount: 0,
+                        onTestBeep: () => _testKitchenBeep(context),
+                        onTestExpressBeep: () =>
+                            _testKitchenExpressBeep(context),
+                      ),
+                      const SizedBox(height: 18),
+                      const Expanded(
+                        child: EmptyState(
+                          icon: Icons.room_service_outlined,
+                          title: 'Sin comandas activas',
+                          message:
+                              'Solo apareceran tacos y gringas enviados a cocina.',
+                        ),
+                      ),
+                    ],
+                  ),
                 );
               }
 
@@ -121,10 +140,11 @@ class _KitchenScreenState extends State<KitchenScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        SectionHeader(
-                          title: 'Comandas',
-                          subtitle:
-                              '${bundles.length} activas | primero la mas vieja',
+                        _KitchenListHeader(
+                          activeCount: bundles.length,
+                          onTestBeep: () => _testKitchenBeep(context),
+                          onTestExpressBeep: () =>
+                              _testKitchenExpressBeep(context),
                         ),
                         SizedBox(height: compact ? 10 : 18),
                         Expanded(
@@ -148,7 +168,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
                             itemBuilder: (context, index) {
                               return _KitchenOrderCard(
                                 key: ValueKey(
-                                  'kitchen-${bundles[index].order.id}',
+                                  'kitchen-${bundles[index].stableKitchenKey}',
                                 ),
                                 bundle: bundles[index],
                                 compact: compact,
@@ -169,33 +189,102 @@ class _KitchenScreenState extends State<KitchenScreen> {
   }
 
   void _handleNewKitchenBundles(List<KitchenOrderBundle> bundles) {
-    final currentKeys = <String>{};
-    for (final bundle in bundles) {
-      for (final item in bundle.items) {
-        final batchId = item.kitchenBatchId?.trim();
-        currentKeys.add(
-          batchId == null || batchId.isEmpty
-              ? 'order:${bundle.order.id}'
-              : 'batch:$batchId',
-        );
-      }
-    }
+    final currentByKey = {
+      for (final bundle in bundles) bundle.stableKitchenKey: bundle,
+    };
 
-    if (!_beepPrimed) {
-      _seenKitchenBundleKeys.addAll(currentKeys);
-      _beepPrimed = true;
+    if (!_hasInitializedKitchenOrders) {
+      _knownKitchenOrderIds.addAll(currentByKey.keys);
+      _hasInitializedKitchenOrders = true;
+      debugPrint(
+        'Kitchen beep: comandas conocidas inicializadas ${currentByKey.length}',
+      );
       return;
     }
 
-    final hasNew = currentKeys.any(
-      (key) => !_seenKitchenBundleKeys.contains(key),
-    );
-    _seenKitchenBundleKeys.addAll(currentKeys);
-    if (hasNew) {
+    final newKeys = currentByKey.keys
+        .where((key) => !_knownKitchenOrderIds.contains(key))
+        .toList();
+    _knownKitchenOrderIds.addAll(currentByKey.keys);
+    if (newKeys.isNotEmpty) {
+      final hasExpress = newKeys.any(
+        (key) => currentByKey[key]?.isKitchenExpress == true,
+      );
+      for (final key in newKeys) {
+        final bundle = currentByKey[key];
+        debugPrint(
+          'Kitchen beep: nueva comanda detectada $key '
+          'express=${bundle?.isKitchenExpress == true}',
+        );
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        SystemSound.play(SystemSoundType.alert);
+        if (hasExpress) {
+          KitchenSoundService.instance.playExpressOrderBeep();
+        } else {
+          KitchenSoundService.instance.playNewOrderBeep();
+        }
       });
     }
+  }
+
+  Future<void> _testKitchenBeep(BuildContext context) async {
+    await KitchenSoundService.instance.playNewOrderBeep();
+    if (!context.mounted) return;
+    showAppSnackBar(context, 'Timbre probado', type: AppSnackBarType.success);
+  }
+
+  Future<void> _testKitchenExpressBeep(BuildContext context) async {
+    await KitchenSoundService.instance.playExpressOrderBeep();
+    if (!context.mounted) return;
+    showAppSnackBar(
+      context,
+      'Timbre express probado',
+      type: AppSnackBarType.success,
+    );
+  }
+}
+
+class _KitchenListHeader extends StatelessWidget {
+  const _KitchenListHeader({
+    required this.activeCount,
+    required this.onTestBeep,
+    required this.onTestExpressBeep,
+  });
+
+  final int activeCount;
+  final VoidCallback onTestBeep;
+  final VoidCallback onTestExpressBeep;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: SectionHeader(
+            title: 'Comandas',
+            subtitle: '$activeCount activas | primero la mas vieja',
+          ),
+        ),
+        const SizedBox(width: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          alignment: WrapAlignment.end,
+          children: [
+            OutlinedButton.icon(
+              onPressed: onTestBeep,
+              icon: const Icon(Icons.notifications_active_outlined, size: 18),
+              label: const Text('Probar timbre'),
+            ),
+            OutlinedButton.icon(
+              onPressed: onTestExpressBeep,
+              icon: const Icon(Icons.priority_high_rounded, size: 18),
+              label: const Text('Probar express'),
+            ),
+          ],
+        ),
+      ],
+    );
   }
 }
 
@@ -283,7 +372,10 @@ class _KitchenOrderCard extends StatelessWidget {
           context,
           MaterialPageRoute(
             fullscreenDialog: true,
-            builder: (_) => KitchenOrderDetailScreen(orderId: order.id),
+            builder: (_) => KitchenOrderDetailScreen(
+              orderId: order.id,
+              kitchenBatchId: bundle.kitchenBatchId,
+            ),
           ),
         );
       },
@@ -307,6 +399,10 @@ class _KitchenOrderCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: compact ? 4 : 8),
+          if (bundle.isKitchenExpress) ...[
+            _ExpressChip(compact: compact),
+            SizedBox(height: compact ? 5 : 8),
+          ],
           Row(
             children: [
               Expanded(
@@ -390,6 +486,38 @@ class _KitchenOrderCard extends StatelessWidget {
     }
 
     return DateFormat('HH:mm').format(date);
+  }
+}
+
+class _ExpressChip extends StatelessWidget {
+  const _ExpressChip({required this.compact});
+
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 8 : 10,
+          vertical: compact ? 4 : 6,
+        ),
+        decoration: BoxDecoration(
+          color: BrandColors.danger.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: BrandColors.danger.withValues(alpha: 0.50)),
+        ),
+        child: Text(
+          'Surtido express',
+          style: TextStyle(
+            color: BrandColors.danger,
+            fontSize: compact ? 11 : 13,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
   }
 }
 

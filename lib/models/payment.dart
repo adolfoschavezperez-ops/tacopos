@@ -39,6 +39,8 @@ class Payment {
     this.discountEmployeeBeneficiaryId,
     this.discountEmployeeBeneficiaryName,
     this.discountAuthorizationRequestId,
+    this.discountAuthorizationMode,
+    this.discountAuthorizationStatus,
     this.discountReason,
     this.createdAt,
     this.createdBy,
@@ -88,6 +90,8 @@ class Payment {
   final String? discountEmployeeBeneficiaryId;
   final String? discountEmployeeBeneficiaryName;
   final String? discountAuthorizationRequestId;
+  final String? discountAuthorizationMode;
+  final String? discountAuthorizationStatus;
   final String? discountReason;
   final DateTime? createdAt;
   final String? createdBy;
@@ -171,6 +175,9 @@ class Payment {
           data['discountEmployeeBeneficiaryName'] as String?,
       discountAuthorizationRequestId:
           data['discountAuthorizationRequestId'] as String?,
+      discountAuthorizationMode: data['discountAuthorizationMode'] as String?,
+      discountAuthorizationStatus:
+          data['discountAuthorizationStatus'] as String?,
       discountReason: data['discountReason'] as String?,
       createdAt: _toDate(data['createdAt']),
       createdBy: data['createdBy'] as String?,

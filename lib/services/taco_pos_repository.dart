@@ -36,6 +36,30 @@ class KitchenOrderBundle {
   final PosOrder order;
   final List<OrderItem> items;
 
+  String get kitchenBatchId {
+    for (final item in items) {
+      final batchId = item.kitchenBatchId?.trim();
+      if (batchId != null && batchId.isNotEmpty) return batchId;
+    }
+    return '';
+  }
+
+  String get stableKitchenKey {
+    final batchId = kitchenBatchId;
+    return batchId.isEmpty ? 'order:${order.id}' : 'order:${order.id}:$batchId';
+  }
+
+  bool get isKitchenExpress {
+    return items.any(
+      (item) =>
+          item.isKitchenExpress ||
+          item.kitchenBatchType.trim().toLowerCase() == 'express',
+    );
+  }
+
+  String get kitchenBatchLabel =>
+      isKitchenExpress ? 'Surtido express' : 'Orden inicial';
+
   int get personCount => items.map((item) => item.personNumber).toSet().length;
 
   String get personLabel {
@@ -140,6 +164,8 @@ class AppliedDiscountDetails {
     this.employeeBeneficiaryId,
     this.employeeBeneficiaryName,
     this.discountAuthorizationRequestId,
+    this.authorizationMode = '',
+    this.authorizationStatus = '',
     this.reason = '',
   });
 
@@ -156,6 +182,8 @@ class AppliedDiscountDetails {
   final String? employeeBeneficiaryId;
   final String? employeeBeneficiaryName;
   final String? discountAuthorizationRequestId;
+  final String authorizationMode;
+  final String authorizationStatus;
   final String reason;
 }
 
@@ -1243,7 +1271,9 @@ class TacoPosRepository {
             if (!_matchesCurrentBranch(request.branchId)) return false;
             if (status != null &&
                 status.trim().isNotEmpty &&
-                request.status != status.trim()) {
+                request.status != status.trim() &&
+                !(status.trim() == 'approved' &&
+                    request.status == 'auto_approved')) {
               return false;
             }
             if (startBusinessDate != null &&
@@ -1498,7 +1528,6 @@ class TacoPosRepository {
     String? employeeId,
     String pin = '',
     String? partnerId,
-    String? discountAuthorizationRequestId,
     String reason = '',
   }) async {
     if (amountBeforeDiscount <= 0 || order.paymentStatus == 'paid') {
@@ -1558,8 +1587,17 @@ class TacoPosRepository {
     }
 
     if (type == 'family_friend_20') {
-      final cleanRequestId = discountAuthorizationRequestId?.trim();
-      if (cleanRequestId == null || cleanRequestId.isEmpty) {
+      final cleanReason = reason.trim();
+      if (cleanReason.isEmpty) {
+        throw ArgumentError('Captura el motivo del descuento.');
+      }
+      final cleanRequestId = await _createAutomaticFamilyFriendAuthorization(
+        order: order,
+        cashSession: cashSession,
+        amountBeforeDiscount: amountBeforeDiscount,
+        reason: cleanReason,
+      );
+      if (cleanRequestId.isEmpty) {
         throw StateError(
           'Solicita autorización antes de aplicar este descuento.',
         );
@@ -1599,6 +1637,8 @@ class TacoPosRepository {
         authorizedByPartnerLinkedEmployeeName:
             approvedPartner?.linkedEmployeeName,
         discountAuthorizationRequestId: request.id,
+        authorizationMode: 'automatic',
+        authorizationStatus: 'auto_approved',
         reason: request.requestReason,
       );
     }
@@ -1635,6 +1675,72 @@ class TacoPosRepository {
     );
   }
 
+  Future<String> _createAutomaticFamilyFriendAuthorization({
+    required PosOrder order,
+    required CashSession cashSession,
+    required double amountBeforeDiscount,
+    required String reason,
+  }) async {
+    final employee = AppSession.instance.employee;
+    final discountAmount = (amountBeforeDiscount * 0.20).clamp(
+      0,
+      amountBeforeDiscount,
+    );
+    final totalAfterDiscount = amountBeforeDiscount - discountAmount;
+    final docRef = _discountAuthorizationRequestsRef.doc();
+    await docRef.set({
+      'id': docRef.id,
+      'restaurantId': order.restaurantId,
+      'restaurantName': order.restaurantName,
+      'branchId': order.branchId,
+      'branchName': order.branchName,
+      'businessDate': cashSession.businessDate,
+      'orderId': order.id,
+      'tableId': order.tableId,
+      'tableName': order.tableName,
+      'orderType': order.orderType,
+      'requestedDiscountType': 'family_friend_20',
+      'type': 'family_friend_20',
+      'requestedDiscountName': 'Familia / amigos 20%',
+      'requestedDiscountPercent': 20.0,
+      'amountBeforeDiscount': amountBeforeDiscount,
+      'subtotal': amountBeforeDiscount,
+      'estimatedDiscountAmount': discountAmount,
+      'discountAmount': discountAmount,
+      'estimatedTotalAfterDiscount': totalAfterDiscount,
+      'totalAfterDiscount': totalAfterDiscount,
+      'requestedPartnerId': '',
+      'requestedPartnerName': '',
+      'requestReason': reason,
+      'discountReason': reason,
+      'status': 'auto_approved',
+      'authorizationMode': 'automatic',
+      'requestedAt': FieldValue.serverTimestamp(),
+      'approvedAt': FieldValue.serverTimestamp(),
+      'requestedByEmployeeId': employee?.id ?? '',
+      'requestedByEmployeeName': employee?.name ?? '',
+      'approvedByEmployeeId': employee?.id ?? '',
+      'approvedByEmployeeName': employee?.name ?? 'Autorizacion automatica',
+      'approvedByPartnerId': '',
+      'approvedByPartnerName': 'Autorizacion automatica',
+      'rejectedAt': null,
+      'rejectedByEmployeeId': '',
+      'rejectedByEmployeeName': '',
+      'rejectedByPartnerId': '',
+      'rejectedByPartnerName': '',
+      'rejectReason': '',
+      'cancelledAt': null,
+      'cancelledByEmployeeId': '',
+      'cancelledByEmployeeName': '',
+      'cancelReason': '',
+      'usedAt': null,
+      'usedPaymentId': '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return docRef.id;
+  }
+
   AppliedDiscountDetails _discountDetails({
     required String type,
     required String name,
@@ -1647,6 +1753,8 @@ class TacoPosRepository {
     String? employeeBeneficiaryId,
     String? employeeBeneficiaryName,
     String? discountAuthorizationRequestId,
+    String authorizationMode = '',
+    String authorizationStatus = '',
     String reason = '',
   }) {
     final cleanPercent = percent.clamp(0, 100).toDouble();
@@ -1670,6 +1778,8 @@ class TacoPosRepository {
       employeeBeneficiaryId: employeeBeneficiaryId,
       employeeBeneficiaryName: employeeBeneficiaryName,
       discountAuthorizationRequestId: discountAuthorizationRequestId,
+      authorizationMode: authorizationMode,
+      authorizationStatus: authorizationStatus,
       reason: reason,
     );
   }
@@ -2849,8 +2959,18 @@ class TacoPosRepository {
       final bundles = <KitchenOrderBundle>[];
       for (final order in orders) {
         final items = await getActiveKitchenItems(order.id);
-        if (items.isNotEmpty) {
-          bundles.add(KitchenOrderBundle(order: order, items: items));
+        final itemsByBatch = <String, List<OrderItem>>{};
+        for (final item in items) {
+          final batchId = item.kitchenBatchId?.trim();
+          final key = batchId == null || batchId.isEmpty
+              ? 'order:${order.id}'
+              : 'batch:$batchId';
+          itemsByBatch.putIfAbsent(key, () => <OrderItem>[]).add(item);
+        }
+        for (final batchItems in itemsByBatch.values) {
+          if (batchItems.isNotEmpty) {
+            bundles.add(KitchenOrderBundle(order: order, items: batchItems));
+          }
         }
       }
 
@@ -2950,17 +3070,36 @@ class TacoPosRepository {
     });
   }
 
-  Stream<List<OrderItem>> watchKitchenItems(String orderId) {
-    return watchOrderItems(orderId).map(_activeKitchenItems);
+  Stream<List<OrderItem>> watchKitchenItems(
+    String orderId, {
+    String? kitchenBatchId,
+  }) {
+    return watchOrderItems(orderId).map(
+      (items) => _activeKitchenItems(items, kitchenBatchId: kitchenBatchId),
+    );
   }
 
-  Future<List<OrderItem>> getActiveKitchenItems(String orderId) async {
+  Future<List<OrderItem>> getActiveKitchenItems(
+    String orderId, {
+    String? kitchenBatchId,
+  }) async {
     final snapshot = await _ordersRef.doc(orderId).collection('items').get();
-    return _activeKitchenItems(snapshot.docs.map(OrderItem.fromDoc).toList());
+    return _activeKitchenItems(
+      snapshot.docs.map(OrderItem.fromDoc).toList(),
+      kitchenBatchId: kitchenBatchId,
+    );
   }
 
-  List<OrderItem> _activeKitchenItems(List<OrderItem> items) {
-    return items.where(isKitchenQueueItem).toList()..sort((a, b) {
+  List<OrderItem> _activeKitchenItems(
+    List<OrderItem> items, {
+    String? kitchenBatchId,
+  }) {
+    final cleanBatchId = kitchenBatchId?.trim();
+    return items.where((item) {
+      if (!isKitchenQueueItem(item)) return false;
+      if (cleanBatchId == null || cleanBatchId.isEmpty) return true;
+      return item.kitchenBatchId?.trim() == cleanBatchId;
+    }).toList()..sort((a, b) {
       final personCompare = a.personNumber.compareTo(b.personNumber);
       return personCompare != 0
           ? personCompare
@@ -5545,6 +5684,19 @@ class TacoPosRepository {
         .doc()
         .id;
     final batchCreatedAt = Timestamp.now();
+    final allItems = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    final isExpressBatch = allItems.any((item) {
+      if (!item.sendToKitchen || item.isCancelled) return false;
+      final status = normalizeStatus(item.kitchenStatus);
+      final batchId = item.kitchenBatchId?.trim();
+      return batchId != null &&
+          batchId.isNotEmpty &&
+          {'sent', 'cooking', 'ready'}.contains(status);
+    });
+    final kitchenBatchType = isExpressBatch ? 'express' : 'initial';
+    final kitchenBatchLabel = isExpressBatch
+        ? 'Surtido express'
+        : 'Orden inicial';
     var sentCount = 0;
 
     for (final doc in itemsSnapshot.docs) {
@@ -5562,6 +5714,12 @@ class TacoPosRepository {
           'kitchenBatchId': kitchenBatchId,
           'kitchenBatchCreatedAt': batchCreatedAt,
           'batchCreatedAt': batchCreatedAt,
+          'isKitchenExpress': isExpressBatch,
+          'expressReason': isExpressBatch ? 'Orden extra' : '',
+          'expressPriority': isExpressBatch,
+          if (isExpressBatch) 'expressCreatedAt': batchCreatedAt,
+          'kitchenBatchType': kitchenBatchType,
+          'kitchenBatchLabel': kitchenBatchLabel,
           'sentToKitchenAt': batchCreatedAt,
           'updatedAt': FieldValue.serverTimestamp(),
         });
@@ -5570,6 +5728,11 @@ class TacoPosRepository {
           'kitchenBatchId': kitchenBatchId,
           'kitchenBatchCreatedAt': batchCreatedAt,
           'batchCreatedAt': batchCreatedAt,
+          'isKitchenExpress': false,
+          'expressReason': '',
+          'expressPriority': false,
+          'kitchenBatchType': kitchenBatchType,
+          'kitchenBatchLabel': kitchenBatchLabel,
           'sentToKitchenAt': batchCreatedAt,
           'updatedAt': FieldValue.serverTimestamp(),
         });
@@ -5587,6 +5750,9 @@ class TacoPosRepository {
     batch.update(_ordersRef.doc(orderId), {
       'status': 'sent',
       'kitchenStatus': 'sent',
+      'lastKitchenBatchId': kitchenBatchId,
+      'lastKitchenBatchType': kitchenBatchType,
+      'lastKitchenBatchLabel': kitchenBatchLabel,
       'sentToKitchenAt': batchCreatedAt,
       'updatedAt': FieldValue.serverTimestamp(),
     });
@@ -5605,8 +5771,10 @@ class TacoPosRepository {
   Future<void> updateKitchenStatus({
     required String orderId,
     required String status,
+    String? kitchenBatchId,
   }) async {
     final normalizedStatus = status == 'preparing' ? 'cooking' : status;
+    final cleanBatchId = kitchenBatchId?.trim();
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
@@ -5618,6 +5786,9 @@ class TacoPosRepository {
       final item = OrderItem.fromDoc(doc);
       if (item.sendToKitchen &&
           !item.isCancelled &&
+          (cleanBatchId == null ||
+              cleanBatchId.isEmpty ||
+              item.kitchenBatchId?.trim() == cleanBatchId) &&
           ['sent', 'cooking'].contains(item.kitchenStatus)) {
         changed += 1;
         batch.update(doc.reference, {
@@ -5789,8 +5960,15 @@ class TacoPosRepository {
     return 'not_required';
   }
 
-  Future<void> markActiveKitchenItemsCooking(String orderId) {
-    return updateKitchenStatus(orderId: orderId, status: 'cooking');
+  Future<void> markActiveKitchenItemsCooking(
+    String orderId, {
+    String? kitchenBatchId,
+  }) {
+    return updateKitchenStatus(
+      orderId: orderId,
+      status: 'cooking',
+      kitchenBatchId: kitchenBatchId,
+    );
   }
 
   Future<PaymentResult> payFullTable({
@@ -6262,6 +6440,9 @@ class TacoPosRepository {
           'totalDiscountAmount': FieldValue.increment(discount.discountAmount),
           'lastAppliedDiscountType': discount.type,
           'lastAppliedDiscountName': discount.name,
+          'lastDiscountReason': discount.reason,
+          'lastDiscountAuthorizationMode': discount.authorizationMode,
+          'lastDiscountAuthorizationStatus': discount.authorizationStatus,
         },
         'updatedAt': FieldValue.serverTimestamp(),
       });
@@ -6288,6 +6469,9 @@ class TacoPosRepository {
         'totalDiscountAmount': FieldValue.increment(discount.discountAmount),
         'lastAppliedDiscountType': discount.type,
         'lastAppliedDiscountName': discount.name,
+        'lastDiscountReason': discount.reason,
+        'lastDiscountAuthorizationMode': discount.authorizationMode,
+        'lastDiscountAuthorizationStatus': discount.authorizationStatus,
       },
       'paidAt': FieldValue.serverTimestamp(),
       ..._currentBranchFields,
@@ -6370,6 +6554,8 @@ class TacoPosRepository {
       'discountEmployeeBeneficiaryName': discount?.employeeBeneficiaryName,
       'discountAuthorizationRequestId':
           discount?.discountAuthorizationRequestId,
+      'discountAuthorizationMode': discount?.authorizationMode,
+      'discountAuthorizationStatus': discount?.authorizationStatus,
       'discountReason': discount?.reason,
       if (discount != null) ...{
         'discountAppliedAt': FieldValue.serverTimestamp(),
@@ -6422,6 +6608,8 @@ class TacoPosRepository {
       'linkedEmployeeId': discount.authorizedByPartnerLinkedEmployeeId,
       'linkedEmployeeName': discount.authorizedByPartnerLinkedEmployeeName,
       'discountAuthorizationRequestId': discount.discountAuthorizationRequestId,
+      'authorizationMode': discount.authorizationMode,
+      'authorizationStatus': discount.authorizationStatus,
       'discountType': discount.type,
       'discountName': discount.name,
       'orderId': order.id,

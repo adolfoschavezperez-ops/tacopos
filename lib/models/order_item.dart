@@ -20,6 +20,12 @@ class OrderItem {
     required this.paymentStatus,
     this.kitchenBatchId,
     this.kitchenBatchCreatedAt,
+    this.isKitchenExpress = false,
+    this.expressReason = '',
+    this.expressPriority = false,
+    this.expressCreatedAt,
+    this.kitchenBatchType = '',
+    this.kitchenBatchLabel = '',
     this.createdAt,
     this.updatedAt,
     this.sentToKitchenAt,
@@ -76,6 +82,12 @@ class OrderItem {
   final String paymentStatus;
   final String? kitchenBatchId;
   final DateTime? kitchenBatchCreatedAt;
+  final bool isKitchenExpress;
+  final String expressReason;
+  final bool expressPriority;
+  final DateTime? expressCreatedAt;
+  final String kitchenBatchType;
+  final String kitchenBatchLabel;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? sentToKitchenAt;
@@ -181,6 +193,12 @@ class OrderItem {
       kitchenBatchCreatedAt: _toDate(
         data['kitchenBatchCreatedAt'] ?? data['batchCreatedAt'],
       ),
+      isKitchenExpress: data['isKitchenExpress'] as bool? ?? false,
+      expressReason: data['expressReason'] as String? ?? '',
+      expressPriority: data['expressPriority'] as bool? ?? false,
+      expressCreatedAt: _toDate(data['expressCreatedAt']),
+      kitchenBatchType: data['kitchenBatchType'] as String? ?? '',
+      kitchenBatchLabel: data['kitchenBatchLabel'] as String? ?? '',
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),
       sentToKitchenAt: _toDate(data['sentToKitchenAt']),

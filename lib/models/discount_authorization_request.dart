@@ -16,6 +16,8 @@ class DiscountAuthorizationRequest {
     required this.requestedPartnerName,
     required this.requestReason,
     required this.status,
+    this.authorizationMode = '',
+    this.discountReason = '',
     this.businessDate = '',
     this.tableId = '',
     this.tableName = '',
@@ -66,6 +68,8 @@ class DiscountAuthorizationRequest {
   final String requestedPartnerName;
   final String requestReason;
   final String status;
+  final String authorizationMode;
+  final String discountReason;
   final DateTime? requestedAt;
   final String requestedByEmployeeId;
   final String requestedByEmployeeName;
@@ -88,7 +92,9 @@ class DiscountAuthorizationRequest {
   final String usedPaymentId;
 
   bool get isPending => status == 'pending';
-  bool get isApproved => status == 'approved';
+  bool get isApproved => status == 'approved' || status == 'auto_approved';
+  bool get isAutoApproved =>
+      status == 'auto_approved' || authorizationMode == 'automatic';
   bool get isRejected => status == 'rejected';
   bool get isCancelled => status == 'cancelled';
   bool get isUsed => status == 'used' || usedPaymentId.trim().isNotEmpty;
@@ -126,6 +132,11 @@ class DiscountAuthorizationRequest {
       requestedPartnerName: data['requestedPartnerName'] as String? ?? '',
       requestReason: data['requestReason'] as String? ?? '',
       status: data['status'] as String? ?? 'pending',
+      authorizationMode: data['authorizationMode'] as String? ?? '',
+      discountReason:
+          data['discountReason'] as String? ??
+          data['requestReason'] as String? ??
+          '',
       requestedAt: _toDate(data['requestedAt']),
       requestedByEmployeeId: data['requestedByEmployeeId'] as String? ?? '',
       requestedByEmployeeName: data['requestedByEmployeeName'] as String? ?? '',
