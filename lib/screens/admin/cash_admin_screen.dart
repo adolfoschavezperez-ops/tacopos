@@ -129,9 +129,22 @@ class _CashAdminScreenState extends State<CashAdminScreen> {
               onToday: _resetToday,
             ),
             const TabBar(
+              indicatorSize: TabBarIndicatorSize.tab,
+              labelPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 0),
+              dividerHeight: 0,
               tabs: [
-                Tab(icon: Icon(Icons.receipt_long), text: 'Cortes'),
-                Tab(icon: Icon(Icons.verified_user_outlined), text: 'Retiros'),
+                Tab(
+                  height: 42,
+                  iconMargin: EdgeInsets.only(bottom: 2),
+                  icon: Icon(Icons.receipt_long, size: 19),
+                  text: 'Cortes',
+                ),
+                Tab(
+                  height: 42,
+                  iconMargin: EdgeInsets.only(bottom: 2),
+                  icon: Icon(Icons.verified_user_outlined, size: 19),
+                  text: 'Retiros',
+                ),
               ],
             ),
             Expanded(
@@ -175,19 +188,23 @@ class _DateRangePanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(22, 16, 22, 8),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: GlassPanel(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        borderRadius: 14,
         child: Wrap(
-          spacing: 10,
-          runSpacing: 10,
+          spacing: 8,
+          runSpacing: 7,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 180),
+              constraints: const BoxConstraints(minWidth: 130),
               child: Text(
                 'Viendo: $label',
-                style: const TextStyle(fontWeight: FontWeight.w900),
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ),
             OutlinedButton.icon(
@@ -251,16 +268,16 @@ class _CashSessionsTab extends StatelessWidget {
         }
 
         return ListView(
-          padding: const EdgeInsets.all(22),
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
           children: [
             const SectionHeader(
               title: 'Cortes de caja',
               subtitle: 'Desglose completo para Admin / Socio.',
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 10),
             ...sessions.map(
               (session) => Padding(
-                padding: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.only(bottom: 12),
                 child: _CashSessionDetailCard(session: session),
               ),
             ),
@@ -281,7 +298,20 @@ class _CashSessionDetailCard extends StatelessWidget {
     final statusColor = session.isOpen
         ? BrandColors.success
         : BrandColors.textMuted;
+    final cashSalesAmount =
+        session.expectedCashAmount -
+        session.openingCashAmount +
+        session.approvedWithdrawalsTotal;
+    final netSalesAmount =
+        cashSalesAmount +
+        session.expectedCardChargedAmount +
+        session.expectedPlatformAmount +
+        session.expectedEmployeeConsumptionAmount;
+    final cardCommission = _cardCommission(session.expectedCardChargedAmount);
+    final estimatedCardNet = session.expectedCardChargedAmount - cardCommission;
     return GlassPanel(
+      padding: const EdgeInsets.all(16),
+      borderRadius: 16,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -291,84 +321,245 @@ class _CashSessionDetailCard extends StatelessWidget {
                 '${session.isOpen ? 'Abierta' : 'Cerrada'} | abre ${_employeeName(session.openedByEmployeeName)} | cierra ${_employeeName(session.closedByEmployeeName)}',
             trailing: Icon(Icons.point_of_sale_outlined, color: statusColor),
           ),
+          const SizedBox(height: 10),
+          _CashSection(
+            title: 'Resumen de venta',
+            icon: Icons.payments_outlined,
+            accent: BrandColors.accentYellow,
+            child: _MetricWrap(
+              children: [
+                _CashMetricCard(
+                  label: 'Venta total neta',
+                  value: netSalesAmount,
+                  accent: BrandColors.accentYellow,
+                  prominent: true,
+                ),
+                _CashMetricCard(
+                  label: 'Efectivo',
+                  value: cashSalesAmount,
+                  accent: BrandColors.success,
+                ),
+                _CashMetricCard(
+                  label: 'Tarjeta cobrada',
+                  value: session.expectedCardChargedAmount,
+                  accent: BrandColors.info,
+                ),
+                _CashMetricCard(
+                  label: 'Comision por pagar tarjeta',
+                  value: cardCommission,
+                  accent: BrandColors.accentOrange,
+                ),
+                _CashMetricCard(
+                  label: 'Plataforma',
+                  value: session.expectedPlatformAmount,
+                  accent: const Color(0xFFBCA7FF),
+                ),
+                _CashMetricCard(
+                  label: 'Consumo empleado',
+                  value: session.expectedEmployeeConsumptionAmount,
+                  accent: BrandColors.textSecondary,
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 14,
-            runSpacing: 10,
-            children: [
-              _MoneyChip(
-                label: 'Fondo inicial',
-                value: session.openingCashAmount,
-              ),
-              _MoneyChip(
-                label: 'Efectivo esperado',
-                value: session.expectedCashAmount,
-              ),
-              _MoneyChip(
-                label: 'Efectivo contado',
-                value: session.countedCashAmount,
-              ),
-              _MoneyChip(
-                label: 'Diferencia efectivo',
-                value: session.cashDifference,
-              ),
-              _MoneyChip(
-                label: 'Tarjeta esperada',
-                value: session.expectedCardChargedAmount,
-              ),
-              _MoneyChip(
-                label: 'Terminal reportada',
-                value: session.terminalReportedAmount,
-              ),
-              _MoneyChip(
-                label: 'Diferencia tarjeta',
-                value: session.cardDifference,
-              ),
-              _MoneyChip(
-                label: 'Comision absorbida',
-                value: session.expectedCardFeeAbsorbedAmount,
-              ),
-              _MoneyChip(
-                label: 'Neto estimado tarjeta',
-                value:
-                    session.expectedCardChargedAmount -
-                    session.expectedCardFeeAbsorbedAmount,
-              ),
-              _MoneyChip(
-                label: 'Plataforma',
-                value: session.expectedPlatformAmount,
-              ),
-              _MoneyChip(
-                label: 'Consumo empleado',
-                value: session.expectedEmployeeConsumptionAmount,
-              ),
-              _MoneyChip(
-                label: 'Retiros aprobados',
-                value: session.approvedWithdrawalsTotal,
-              ),
-              _MoneyChip(
-                label: 'Retiros pendientes',
-                value: session.pendingWithdrawalsTotal,
-              ),
-              _MoneyChip(label: 'Faltante', value: session.shortageAmount),
-              _MoneyChip(label: 'Sobrante', value: session.overAmount),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 860;
+              final sections = [
+                _CashSection(
+                  title: 'Efectivo / Arqueo',
+                  icon: Icons.account_balance_wallet_outlined,
+                  accent: BrandColors.success,
+                  child: _AmountLines(
+                    lines: [
+                      _AmountLineData(
+                        label: 'Fondo inicial',
+                        value: session.openingCashAmount,
+                        color: BrandColors.textSecondary,
+                      ),
+                      _AmountLineData(
+                        label: 'Efectivo cobrado por ventas',
+                        value: cashSalesAmount,
+                        color: BrandColors.success,
+                      ),
+                      _AmountLineData(
+                        label: 'Retiros aprobados',
+                        value: session.approvedWithdrawalsTotal,
+                        color: const Color(0xFFBCA7FF),
+                      ),
+                      _AmountLineData(
+                        label: 'Esperado sistema',
+                        value: session.expectedCashAmount,
+                        color: BrandColors.info,
+                        strong: true,
+                      ),
+                      _AmountLineData(
+                        label: 'Contado usuario',
+                        value: session.countedCashAmount,
+                        color: BrandColors.textPrimary,
+                        strong: true,
+                      ),
+                      _AmountLineData(
+                        label: 'Diferencia efectivo',
+                        value: session.cashDifference,
+                        color: _differenceColor(session.cashDifference),
+                        strong: true,
+                      ),
+                    ],
+                  ),
+                ),
+                _CashSection(
+                  title: 'Tarjeta / Terminal',
+                  icon: Icons.credit_card_outlined,
+                  accent: BrandColors.info,
+                  child: _AmountLines(
+                    lines: [
+                      _AmountLineData(
+                        label: 'Tarjeta esperada',
+                        value: session.expectedCardChargedAmount,
+                        color: BrandColors.info,
+                        strong: true,
+                      ),
+                      _AmountLineData(
+                        label: 'Terminal reportada',
+                        value: session.terminalReportedAmount,
+                        color: BrandColors.textPrimary,
+                        strong: true,
+                      ),
+                      _AmountLineData(
+                        label: 'Diferencia tarjeta',
+                        value: session.cardDifference,
+                        color: _differenceColor(session.cardDifference),
+                        strong: true,
+                      ),
+                      _AmountLineData(
+                        label: 'Comision por pagar tarjeta',
+                        value: cardCommission,
+                        color: BrandColors.accentOrange,
+                        strong: true,
+                      ),
+                      _AmountLineData(
+                        label: 'Neto estimado tarjeta',
+                        value: estimatedCardNet,
+                        color: BrandColors.textSecondary,
+                      ),
+                    ],
+                  ),
+                ),
+              ];
+              if (!wide) {
+                return Column(
+                  children: [
+                    sections.first,
+                    const SizedBox(height: 12),
+                    sections.last,
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: sections.first),
+                  const SizedBox(width: 12),
+                  Expanded(child: sections.last),
+                ],
+              );
+            },
           ),
-          const Divider(height: 24),
-          _InfoLine(
-            label: 'Usuario que abrio',
-            value: session.openedByEmployeeName,
+          const SizedBox(height: 12),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 760;
+              final withdrawals = _CashSection(
+                title: 'Retiros',
+                icon: Icons.request_quote_outlined,
+                accent: const Color(0xFFBCA7FF),
+                child: _AmountLines(
+                  lines: [
+                    _AmountLineData(
+                      label: 'Retiros aprobados',
+                      value: session.approvedWithdrawalsTotal,
+                      color: const Color(0xFFBCA7FF),
+                      strong: true,
+                    ),
+                    _AmountLineData(
+                      label: 'Retiros pendientes',
+                      value: session.pendingWithdrawalsTotal,
+                      color: BrandColors.accentOrange,
+                    ),
+                  ],
+                ),
+              );
+              final result = _CashSection(
+                title: 'Resultado final',
+                icon: Icons.summarize_outlined,
+                accent: _differenceColor(session.netDifference),
+                child: _AmountLines(
+                  lines: [
+                    _AmountLineData(
+                      label: 'Faltante',
+                      value: session.shortageAmount,
+                      color: BrandColors.danger,
+                      strong: true,
+                    ),
+                    _AmountLineData(
+                      label: 'Sobrante',
+                      value: session.overAmount,
+                      color: BrandColors.success,
+                      strong: true,
+                    ),
+                    _AmountLineData(
+                      label: 'Diferencia neta',
+                      value: session.netDifference,
+                      color: _differenceColor(session.netDifference),
+                      strong: true,
+                    ),
+                  ],
+                ),
+              );
+              if (!wide) {
+                return Column(
+                  children: [withdrawals, const SizedBox(height: 12), result],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: withdrawals),
+                  const SizedBox(width: 12),
+                  Expanded(child: result),
+                ],
+              );
+            },
           ),
-          _InfoLine(
-            label: 'Usuario que cerro',
-            value: session.closedByEmployeeName ?? 'Sin cierre',
+          const SizedBox(height: 12),
+          _CashSection(
+            title: 'Detalles del corte',
+            icon: Icons.info_outline,
+            accent: BrandColors.textSecondary,
+            child: Column(
+              children: [
+                _InfoLine(
+                  label: 'Usuario que abrio',
+                  value: session.openedByEmployeeName,
+                ),
+                _InfoLine(
+                  label: 'Usuario que cerro',
+                  value: session.closedByEmployeeName ?? 'Sin cierre',
+                ),
+                _InfoLine(
+                  label: 'Fecha operativa',
+                  value: session.businessDate,
+                ),
+                _InfoLine(
+                  label: 'Notas',
+                  value: session.notes.isEmpty ? 'Sin notas' : session.notes,
+                ),
+              ],
+            ),
           ),
-          _InfoLine(label: 'Fecha operativa', value: session.businessDate),
-          _InfoLine(
-            label: 'Notas',
-            value: session.notes.isEmpty ? 'Sin notas' : session.notes,
-          ),
-          const Divider(height: 24),
+          const SizedBox(height: 12),
           _CashCancellationSummary(session: session),
         ],
       ),
@@ -378,6 +569,218 @@ class _CashSessionDetailCard extends StatelessWidget {
   String _employeeName(String? name) {
     return name == null || name.isEmpty ? 'Empleado' : name;
   }
+
+  double _cardCommission(double cardTotal) {
+    return cardTotal * 0.035 * 1.16;
+  }
+
+  Color _differenceColor(double value) {
+    if (value < 0) {
+      return BrandColors.danger;
+    }
+    if (value > 0) {
+      return BrandColors.success;
+    }
+    return BrandColors.textSecondary;
+  }
+}
+
+class _CashSection extends StatelessWidget {
+  const _CashSection({
+    required this.title,
+    required this.icon,
+    required this.accent,
+    required this.child,
+  });
+
+  final String title;
+  final IconData icon;
+  final Color accent;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: BrandColors.surfaceHigh.withValues(alpha: 0.52),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: accent.withValues(alpha: 0.24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: accent.withValues(alpha: 0.24)),
+                ),
+                child: Icon(icon, size: 18, color: accent),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _MetricWrap extends StatelessWidget {
+  const _MetricWrap({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final itemWidth = width >= 980
+            ? (width - 30) / 4
+            : width >= 680
+            ? (width - 20) / 3
+            : width >= 440
+            ? (width - 10) / 2
+            : width;
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: children
+              .map((child) => SizedBox(width: itemWidth, child: child))
+              .toList(),
+        );
+      },
+    );
+  }
+}
+
+class _CashMetricCard extends StatelessWidget {
+  const _CashMetricCard({
+    required this.label,
+    required this.value,
+    required this.accent,
+    this.prominent = false,
+  });
+
+  final String label;
+  final double value;
+  final Color accent;
+  final bool prominent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.all(prominent ? 14 : 12),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: prominent ? 0.13 : 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accent.withValues(alpha: 0.24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: BrandColors.textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 7),
+          MoneyText(
+            value: value,
+            style: TextStyle(
+              color: accent,
+              fontSize: prominent ? 23 : 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AmountLines extends StatelessWidget {
+  const _AmountLines({required this.lines});
+
+  final List<_AmountLineData> lines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: lines
+          .map(
+            (line) => Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      line.label,
+                      style: TextStyle(
+                        color: line.strong
+                            ? BrandColors.textPrimary
+                            : BrandColors.textMuted,
+                        fontWeight: line.strong
+                            ? FontWeight.w800
+                            : FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  MoneyText(
+                    value: line.value,
+                    textAlign: TextAlign.end,
+                    style: TextStyle(
+                      color: line.color,
+                      fontSize: line.strong ? 16 : 14,
+                      fontWeight: line.strong
+                          ? FontWeight.w900
+                          : FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
+class _AmountLineData {
+  const _AmountLineData({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.strong = false,
+  });
+
+  final String label;
+  final double value;
+  final Color color;
+  final bool strong;
 }
 
 class _CashCancellationSummary extends StatelessWidget {
