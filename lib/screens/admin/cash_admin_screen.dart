@@ -302,6 +302,15 @@ class _CashSessionDetailCard extends StatelessWidget {
         session.expectedCashAmount -
         session.openingCashAmount +
         session.approvedWithdrawalsTotal;
+    final cashUserSalesAmount =
+        session.countedCashAmount - session.openingCashAmount;
+    final cashSalesExpectedAfterWithdrawals =
+        cashSalesAmount - session.approvedWithdrawalsTotal;
+    final cashDifference =
+        cashUserSalesAmount - cashSalesExpectedAfterWithdrawals;
+    final cardDifference =
+        session.terminalReportedAmount - session.expectedCardChargedAmount;
+    final netDifference = cashDifference + cardDifference;
     final netSalesAmount =
         cashSalesAmount +
         session.expectedCardChargedAmount +
@@ -371,40 +380,105 @@ class _CashSessionDetailCard extends StatelessWidget {
                   title: 'Efectivo / Arqueo',
                   icon: Icons.account_balance_wallet_outlined,
                   accent: BrandColors.success,
-                  child: _AmountLines(
-                    lines: [
-                      _AmountLineData(
-                        label: 'Fondo inicial',
-                        value: session.openingCashAmount,
-                        color: BrandColors.textSecondary,
+                  child: _AmountGroups(
+                    groups: [
+                      _AmountGroupData(
+                        title: 'Entradas',
+                        accent: BrandColors.success,
+                        lines: [
+                          _AmountLineData(
+                            label: 'Fondo inicial',
+                            value: session.openingCashAmount,
+                            color: BrandColors.textSecondary,
+                          ),
+                          _AmountLineData(
+                            label: 'Efectivo cobrado por ventas',
+                            value: cashSalesAmount,
+                            color: BrandColors.success,
+                            strong: true,
+                          ),
+                        ],
                       ),
-                      _AmountLineData(
-                        label: 'Efectivo cobrado por ventas',
-                        value: cashSalesAmount,
-                        color: BrandColors.success,
+                      _AmountGroupData(
+                        title: 'Salidas autorizadas',
+                        accent: const Color(0xFFBCA7FF),
+                        lines: [
+                          _AmountLineData(
+                            label: 'Retiros aprobados',
+                            value: session.approvedWithdrawalsTotal,
+                            color: const Color(0xFFBCA7FF),
+                            strong: true,
+                          ),
+                        ],
                       ),
-                      _AmountLineData(
-                        label: 'Retiros aprobados',
-                        value: session.approvedWithdrawalsTotal,
-                        color: const Color(0xFFBCA7FF),
+                      _AmountGroupData(
+                        title: 'Esperado en caja',
+                        accent: BrandColors.info,
+                        lines: [
+                          _AmountLineData(
+                            label: 'Total efectivo esperado',
+                            value: session.expectedCashAmount,
+                            color: BrandColors.info,
+                            strong: true,
+                          ),
+                        ],
                       ),
-                      _AmountLineData(
-                        label: 'Esperado sistema',
-                        value: session.expectedCashAmount,
-                        color: BrandColors.info,
-                        strong: true,
+                      _AmountGroupData(
+                        title: 'Capturado por usuario',
+                        accent: BrandColors.textPrimary,
+                        lines: [
+                          _AmountLineData(
+                            label: 'Efectivo contado usuario',
+                            value: session.countedCashAmount,
+                            color: BrandColors.textPrimary,
+                            strong: true,
+                          ),
+                          _AmountLineData(
+                            label: 'Menos fondo inicial',
+                            value: -session.openingCashAmount,
+                            color: BrandColors.textSecondary,
+                          ),
+                          _AmountLineData(
+                            label: 'Efectivo usuario venta',
+                            value: cashUserSalesAmount,
+                            color: BrandColors.info,
+                            strong: true,
+                          ),
+                        ],
                       ),
-                      _AmountLineData(
-                        label: 'Contado usuario',
-                        value: session.countedCashAmount,
-                        color: BrandColors.textPrimary,
-                        strong: true,
-                      ),
-                      _AmountLineData(
-                        label: 'Diferencia efectivo',
-                        value: session.cashDifference,
-                        color: _differenceColor(session.cashDifference),
-                        strong: true,
+                      _AmountGroupData(
+                        title: 'Comparacion de venta',
+                        accent: _differenceColor(cashDifference),
+                        lines: [
+                          _AmountLineData(
+                            label: 'Efectivo venta',
+                            value: cashSalesAmount,
+                            color: BrandColors.success,
+                          ),
+                          _AmountLineData(
+                            label: 'Menos retiros aprobados',
+                            value: -session.approvedWithdrawalsTotal,
+                            color: const Color(0xFFBCA7FF),
+                          ),
+                          _AmountLineData(
+                            label: 'Efectivo venta esperado',
+                            value: cashSalesExpectedAfterWithdrawals,
+                            color: BrandColors.info,
+                            strong: true,
+                          ),
+                          _AmountLineData(
+                            label: 'Efectivo usuario venta',
+                            value: cashUserSalesAmount,
+                            color: BrandColors.textPrimary,
+                            strong: true,
+                          ),
+                          _AmountLineData(
+                            label: 'Diferencia efectivo',
+                            value: cashDifference,
+                            color: _differenceColor(cashDifference),
+                            strong: true,
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -413,36 +487,60 @@ class _CashSessionDetailCard extends StatelessWidget {
                   title: 'Tarjeta / Terminal',
                   icon: Icons.credit_card_outlined,
                   accent: BrandColors.info,
-                  child: _AmountLines(
-                    lines: [
-                      _AmountLineData(
-                        label: 'Tarjeta esperada',
-                        value: session.expectedCardChargedAmount,
-                        color: BrandColors.info,
-                        strong: true,
+                  child: _AmountGroups(
+                    groups: [
+                      _AmountGroupData(
+                        title: 'Venta con tarjeta',
+                        accent: BrandColors.info,
+                        lines: [
+                          _AmountLineData(
+                            label: 'Tarjeta cobrada por ventas',
+                            value: session.expectedCardChargedAmount,
+                            color: BrandColors.info,
+                            strong: true,
+                          ),
+                        ],
                       ),
-                      _AmountLineData(
-                        label: 'Terminal reportada',
-                        value: session.terminalReportedAmount,
-                        color: BrandColors.textPrimary,
-                        strong: true,
+                      _AmountGroupData(
+                        title: 'Reportado por terminal',
+                        accent: BrandColors.textPrimary,
+                        lines: [
+                          _AmountLineData(
+                            label: 'Terminal reportada',
+                            value: session.terminalReportedAmount,
+                            color: BrandColors.textPrimary,
+                            strong: true,
+                          ),
+                        ],
                       ),
-                      _AmountLineData(
-                        label: 'Diferencia tarjeta',
-                        value: session.cardDifference,
-                        color: _differenceColor(session.cardDifference),
-                        strong: true,
+                      _AmountGroupData(
+                        title: 'Diferencia',
+                        accent: _differenceColor(cardDifference),
+                        lines: [
+                          _AmountLineData(
+                            label: 'Diferencia tarjeta',
+                            value: cardDifference,
+                            color: _differenceColor(cardDifference),
+                            strong: true,
+                          ),
+                        ],
                       ),
-                      _AmountLineData(
-                        label: 'Comision por pagar tarjeta',
-                        value: cardCommission,
-                        color: BrandColors.accentOrange,
-                        strong: true,
-                      ),
-                      _AmountLineData(
-                        label: 'Neto estimado tarjeta',
-                        value: estimatedCardNet,
-                        color: BrandColors.textSecondary,
+                      _AmountGroupData(
+                        title: 'Comision',
+                        accent: BrandColors.accentOrange,
+                        lines: [
+                          _AmountLineData(
+                            label: 'Comision por pagar tarjeta',
+                            value: cardCommission,
+                            color: BrandColors.accentOrange,
+                            strong: true,
+                          ),
+                          _AmountLineData(
+                            label: 'Neto estimado tarjeta',
+                            value: estimatedCardNet,
+                            color: BrandColors.textSecondary,
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -494,25 +592,33 @@ class _CashSessionDetailCard extends StatelessWidget {
               final result = _CashSection(
                 title: 'Resultado final',
                 icon: Icons.summarize_outlined,
-                accent: _differenceColor(session.netDifference),
+                accent: _differenceColor(netDifference),
                 child: _AmountLines(
                   lines: [
                     _AmountLineData(
-                      label: 'Faltante',
-                      value: session.shortageAmount,
-                      color: BrandColors.danger,
+                      label: cashDifference < 0
+                          ? 'Faltante efectivo'
+                          : cashDifference > 0
+                          ? 'Sobrante efectivo'
+                          : 'Efectivo cuadrado',
+                      value: cashDifference.abs(),
+                      color: _differenceColor(cashDifference),
                       strong: true,
                     ),
                     _AmountLineData(
-                      label: 'Sobrante',
-                      value: session.overAmount,
-                      color: BrandColors.success,
+                      label: cardDifference < 0
+                          ? 'Faltante tarjeta'
+                          : cardDifference > 0
+                          ? 'Sobrante tarjeta'
+                          : 'Tarjeta cuadrada',
+                      value: cardDifference.abs(),
+                      color: _differenceColor(cardDifference),
                       strong: true,
                     ),
                     _AmountLineData(
                       label: 'Diferencia neta',
-                      value: session.netDifference,
-                      color: _differenceColor(session.netDifference),
+                      value: netDifference,
+                      color: _differenceColor(netDifference),
                       strong: true,
                     ),
                   ],
@@ -767,6 +873,62 @@ class _AmountLines extends StatelessWidget {
           .toList(),
     );
   }
+}
+
+class _AmountGroups extends StatelessWidget {
+  const _AmountGroups({required this.groups});
+
+  final List<_AmountGroupData> groups;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: groups
+          .map(
+            (group) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 7),
+                decoration: BoxDecoration(
+                  color: group.accent.withValues(alpha: 0.055),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: group.accent.withValues(alpha: 0.16),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      group.title.toUpperCase(),
+                      style: TextStyle(
+                        color: group.accent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    _AmountLines(lines: group.lines),
+                  ],
+                ),
+              ),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
+class _AmountGroupData {
+  const _AmountGroupData({
+    required this.title,
+    required this.accent,
+    required this.lines,
+  });
+
+  final String title;
+  final Color accent;
+  final List<_AmountLineData> lines;
 }
 
 class _AmountLineData {
