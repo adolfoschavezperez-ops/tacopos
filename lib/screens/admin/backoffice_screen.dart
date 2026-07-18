@@ -519,7 +519,7 @@ class _BackofficeBody extends StatelessWidget {
             }
             final payments = _paymentsInRange(paymentsSnapshot.data ?? []);
             final activePayments = payments
-                .where((payment) => payment.isActive)
+                .where(_isDashboardActivePayment)
                 .toList();
 
             return ListView(
@@ -654,32 +654,25 @@ class _DashboardSection extends StatelessWidget {
     final partialOrders = orders
         .where((order) => order.paymentStatus == 'partial')
         .toList();
-    final baseSales = _sum(payments, (payment) => payment.baseAmount);
-    final charged = _sum(payments, (payment) => payment.chargedAmount);
+    final totalSales = _sum(payments, _dashboardCollectedAmount);
+    final collected = totalSales;
     final cash = _sum(
       payments.where((payment) => payment.method == 'cash'),
-      (payment) => payment.baseAmount,
+      _dashboardCollectedAmount,
     );
     final card = _sum(
       payments.where((payment) => payment.method == 'card'),
-      (payment) => payment.baseAmount,
+      _dashboardCollectedAmount,
     );
-    final cardFee = _sum(
-      payments.where((payment) => payment.method == 'card'),
-      (payment) => payment.cardFeeAbsorbedAmount,
-    );
-    final cardCharged = _sum(
-      payments.where((payment) => payment.method == 'card'),
-      (payment) => payment.chargedAmount,
-    );
-    final cardNet = cardCharged - cardFee;
+    final cardFee = _dashboardCardCommission(card);
+    final cardNet = card - cardFee;
     final platform = _sum(
       payments.where((payment) => payment.method == 'platform_paid'),
-      (payment) => payment.baseAmount,
+      _dashboardCollectedAmount,
     );
     final employeeConsumption = _sum(
       payments.where((payment) => payment.method == 'employee_consumption'),
-      (payment) => payment.baseAmount,
+      _dashboardCollectedAmount,
     );
     final takeoutOrders = orders.where((order) => order.orderType == 'takeout');
     final servedTables = orders
@@ -689,7 +682,7 @@ class _DashboardSection extends StatelessWidget {
         .map((order) => order.tableId)
         .toSet()
         .length;
-    final avgTicket = paidOrders.isEmpty ? 0.0 : baseSales / paidOrders.length;
+    final avgTicket = paidOrders.isEmpty ? 0.0 : totalSales / paidOrders.length;
     final attentionDurations = paidOrders
         .map((order) => _durationBetween(order.createdAt, order.paidAt))
         .whereType<Duration>()
@@ -741,13 +734,13 @@ class _DashboardSection extends StatelessWidget {
           children: [
             ExecutiveKpiCard(
               title: 'Venta total',
-              value: _money(baseSales),
+              value: _money(totalSales),
               detail: '${paidOrders.length} ordenes pagadas',
               icon: Icons.trending_up,
             ),
             ExecutiveKpiCard(
               title: 'Cobrado real',
-              value: _money(charged),
+              value: _money(collected),
               detail: 'Monto cobrado al cliente',
               icon: Icons.payments_outlined,
               accent: BrandColors.success,
@@ -2870,7 +2863,7 @@ List<_BarRow> _salesByHour(List<Payment> payments) {
   for (final payment in payments) {
     final hour = payment.createdAt?.hour;
     if (hour == null) continue;
-    totals[hour] = (totals[hour] ?? 0) + payment.baseAmount;
+    totals[hour] = (totals[hour] ?? 0) + _dashboardCollectedAmount(payment);
   }
   return totals.entries.map((entry) {
     return _BarRow(
@@ -2885,7 +2878,7 @@ List<_BarRow> _salesByMethod(List<Payment> payments) {
   final totals = <String, double>{};
   for (final payment in payments) {
     final label = _paymentMethodLabel(payment.method);
-    totals[label] = (totals[label] ?? 0) + payment.baseAmount;
+    totals[label] = (totals[label] ?? 0) + _dashboardCollectedAmount(payment);
   }
   return totals.entries
       .map((entry) => _BarRow(entry.key, entry.value, _money(entry.value)))
@@ -2899,7 +2892,7 @@ List<_BarRow> _salesByPlatform(List<Payment> payments) {
     final label =
         payment.platformName ??
         (payment.method == 'platform_paid' ? 'Plataforma' : 'En persona');
-    totals[label] = (totals[label] ?? 0) + payment.baseAmount;
+    totals[label] = (totals[label] ?? 0) + _dashboardCollectedAmount(payment);
   }
   return totals.entries
       .map((entry) => _BarRow(entry.key, entry.value, _money(entry.value)))
@@ -3188,6 +3181,22 @@ class _DetailTable extends StatelessWidget {
       ),
     );
   }
+}
+
+const double _dashboardCardCommissionFactor = 0.035 * 1.16;
+
+bool _isDashboardActivePayment(Payment payment) {
+  return isActivePayment(payment) && _dashboardCollectedAmount(payment) > 0;
+}
+
+double _dashboardCollectedAmount(Payment payment) {
+  if (payment.baseAmount > 0) return payment.baseAmount;
+  if (payment.chargedAmount > 0) return payment.chargedAmount;
+  return 0;
+}
+
+double _dashboardCardCommission(double grossCardAmount) {
+  return grossCardAmount * _dashboardCardCommissionFactor;
 }
 
 Map<String, List<Payment>> _paymentsByOrder(List<Payment> payments) {
