@@ -2,6 +2,7 @@ import 'dart:developer' as developer;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
@@ -4773,6 +4774,25 @@ class TacoPosRepository {
     required String adminPin,
     double? openingCashAmount,
   }) async {
+    return recalculateHistoricalCashSessionWithoutPaymentGroupIndex(
+      branch: branch,
+      businessDate: businessDate,
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+      adminPin: adminPin,
+      openingCashAmount: openingCashAmount,
+    );
+  }
+
+  Future<HistoricalCashCorrectionPreview>
+  recalculateHistoricalCashSessionWithoutPaymentGroupIndex({
+    required Branch branch,
+    required String businessDate,
+    required double countedCashAmount,
+    required double terminalReportedAmount,
+    required String adminPin,
+    double? openingCashAmount,
+  }) async {
     _requireHistoricalCashCorrectionAdmin();
     _requireHistoricalCashCorrectionPin(adminPin);
     _validateHistoricalCashCorrectionInput(
@@ -4902,6 +4922,10 @@ class TacoPosRepository {
     required double terminalReportedAmount,
     double? openingCashAmount,
   }) async {
+    debugPrint('REHACER CORTE HISTORICO SIN COLLECTION GROUP');
+    debugPrint(
+      'Recalculando corte historico fecha=$businessDate branchId=${branch.id}',
+    );
     developer.log(
       'Recalculando corte historico fecha=$businessDate branchId=${branch.id}',
       name: 'TacoPOS.cashCorrection',
@@ -4932,6 +4956,13 @@ class TacoPosRepository {
       'consumoEmpleado=${totals.expectedEmployeeConsumptionAmount} '
       'retirosAprobados=${totals.approvedWithdrawalsTotal}',
       name: 'TacoPOS.cashCorrection',
+    );
+    debugPrint(
+      'efectivo: ${totals.expectedCashAmount - resolvedOpeningCashAmount + totals.approvedWithdrawalsTotal} '
+      'tarjeta: ${totals.expectedCardChargedAmount} '
+      'plataforma: ${totals.expectedPlatformAmount} '
+      'consumo empleado: ${totals.expectedEmployeeConsumptionAmount} '
+      'retiros aprobados: ${totals.approvedWithdrawalsTotal}',
     );
     final cashSalesAmount =
         totals.expectedCashAmount -
@@ -5043,6 +5074,8 @@ class TacoPosRepository {
       'fecha=$businessDate branchId=${branch.id}',
       name: 'TacoPOS.cashCorrection',
     );
+    debugPrint('orders encontrados: ${orderDocs.length}');
+    debugPrint('payments encontrados: ${payments.length}');
     return payments;
   }
 

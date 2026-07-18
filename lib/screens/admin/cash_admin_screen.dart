@@ -416,14 +416,15 @@ class _HistoricalCashCorrectionDialogState
       _confirmNoMovements = false;
     });
     try {
-      final preview = await widget.repository.previewHistoricalCashCorrection(
-        branch: branch,
-        businessDate: _businessDateText,
-        countedCashAmount: cash!,
-        terminalReportedAmount: terminal!,
-        adminPin: pin,
-        openingCashAmount: openingCash,
-      );
+      final preview = await widget.repository
+          .recalculateHistoricalCashSessionWithoutPaymentGroupIndex(
+            branch: branch,
+            businessDate: _businessDateText,
+            countedCashAmount: cash!,
+            terminalReportedAmount: terminal!,
+            adminPin: pin,
+            openingCashAmount: openingCash,
+          );
       if (!mounted) return;
       setState(() => _preview = preview);
     } catch (error, stackTrace) {
@@ -432,8 +433,7 @@ class _HistoricalCashCorrectionDialogState
       );
       if (!mounted) return;
       setState(
-        () => _error =
-            'No se pudo recalcular el corte. Intenta nuevamente o revisa la conexión.',
+        () => _error = 'No se pudo recalcular el corte. Intenta nuevamente.',
       );
     } finally {
       if (mounted) {
@@ -492,8 +492,7 @@ class _HistoricalCashCorrectionDialogState
       );
       if (!mounted) return;
       setState(
-        () => _error =
-            'No se pudo recalcular el corte. Intenta nuevamente o revisa la conexión.',
+        () => _error = 'No se pudo recalcular el corte. Intenta nuevamente.',
       );
     } finally {
       if (mounted) {
