@@ -433,7 +433,7 @@ class _HistoricalCashCorrectionDialogState
       if (!mounted) return;
       setState(
         () => _error =
-            'No se pudo recalcular el corte. Revisa conexion o intenta nuevamente.',
+            'No se pudo recalcular el corte. Intenta nuevamente o revisa la conexión.',
       );
     } finally {
       if (mounted) {
@@ -493,7 +493,7 @@ class _HistoricalCashCorrectionDialogState
       if (!mounted) return;
       setState(
         () => _error =
-            'No se pudo recalcular el corte. Revisa conexion o intenta nuevamente.',
+            'No se pudo recalcular el corte. Intenta nuevamente o revisa la conexión.',
       );
     } finally {
       if (mounted) {
@@ -1809,10 +1809,19 @@ class _CashCancellationSummary extends StatelessWidget {
                       session.businessDate,
             )
             .toList();
-        return StreamBuilder<List<Payment>>(
-          stream: repository.watchPayments(
-            startBusinessDate: session.businessDate,
-            endBusinessDate: session.businessDate,
+        return FutureBuilder<List<Payment>>(
+          future: repository.getPaymentsForBranchBusinessDate(
+            branch: Branch(
+              id: session.branchId,
+              restaurantId: session.restaurantId,
+              restaurantName: session.restaurantName,
+              name: session.branchName,
+              normalizedName: session.branchId,
+              active: true,
+              sortOrder: 0,
+            ),
+            businessDate: session.businessDate,
+            activeOnly: false,
           ),
           builder: (context, paymentSnapshot) {
             final payments = (paymentSnapshot.data ?? const <Payment>[])

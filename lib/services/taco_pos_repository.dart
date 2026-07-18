@@ -3464,6 +3464,18 @@ class TacoPosRepository {
     return payments;
   }
 
+  Future<List<Payment>> getPaymentsForBranchBusinessDate({
+    required Branch branch,
+    required String businessDate,
+    bool activeOnly = true,
+  }) {
+    return _paymentsForBranchAndBusinessDate(
+      branch: branch,
+      businessDate: businessDate,
+      activeOnly: activeOnly,
+    );
+  }
+
   Stream<List<CashSession>> watchCashSessions({
     String? startBusinessDate,
     String? endBusinessDate,
@@ -4890,6 +4902,10 @@ class TacoPosRepository {
     required double terminalReportedAmount,
     double? openingCashAmount,
   }) async {
+    developer.log(
+      'Recalculando corte historico fecha=$businessDate branchId=${branch.id}',
+      name: 'TacoPOS.cashCorrection',
+    );
     final existingSession = await _cashSessionForBranchAndDate(
       branch: branch,
       businessDate: businessDate,
@@ -4908,6 +4924,14 @@ class TacoPosRepository {
       payments,
       openingCashAmount: resolvedOpeningCashAmount,
       withdrawals: withdrawals,
+    );
+    developer.log(
+      'Recalculo historico totales fecha=$businessDate branchId=${branch.id} '
+      'pagos=${payments.length} efectivo=${totals.expectedCashAmount - resolvedOpeningCashAmount + totals.approvedWithdrawalsTotal} '
+      'tarjeta=${totals.expectedCardChargedAmount} plataforma=${totals.expectedPlatformAmount} '
+      'consumoEmpleado=${totals.expectedEmployeeConsumptionAmount} '
+      'retirosAprobados=${totals.approvedWithdrawalsTotal}',
+      name: 'TacoPOS.cashCorrection',
     );
     final cashSalesAmount =
         totals.expectedCashAmount -
@@ -4986,6 +5010,7 @@ class TacoPosRepository {
   Future<List<Payment>> _paymentsForBranchAndBusinessDate({
     required Branch branch,
     required String businessDate,
+    bool activeOnly = true,
   }) async {
     final orderDocs = await _orderDocsForHistoricalCashCorrection(
       branch: branch,
@@ -4997,7 +5022,9 @@ class TacoPosRepository {
       final snapshot = await orderDoc.reference.collection('payments').get();
       payments.addAll(
         snapshot.docs.map(Payment.fromDoc).where((payment) {
-          if (!_isHistoricalCorrectionPaymentActive(payment)) return false;
+          if (activeOnly && !_isHistoricalCorrectionPaymentActive(payment)) {
+            return false;
+          }
           final paymentBusinessDate = payment.businessDate?.trim();
           if (paymentBusinessDate != null &&
               paymentBusinessDate.isNotEmpty &&
@@ -5011,6 +5038,11 @@ class TacoPosRepository {
         }),
       );
     }
+    developer.log(
+      'Recalculo historico ordenes=${orderDocs.length} pagos=${payments.length} '
+      'fecha=$businessDate branchId=${branch.id}',
+      name: 'TacoPOS.cashCorrection',
+    );
     return payments;
   }
 
@@ -5019,6 +5051,30 @@ class TacoPosRepository {
     required Branch branch,
     required String businessDate,
   }) async {
+    try {
+      final snapshot = await _ordersRef
+          .where('businessDate', isEqualTo: businessDate)
+          .where('branchId', isEqualTo: branch.id)
+          .get();
+      final filtered = snapshot.docs
+          .where(
+            (doc) => _orderDocMatchesHistoricalCashCorrection(
+              doc,
+              branch: branch,
+              businessDate: businessDate,
+            ),
+          )
+          .toList();
+      if (filtered.isNotEmpty) return filtered;
+    } catch (error, stackTrace) {
+      developer.log(
+        'Historical cash correction orders businessDate+branch query failed; trying businessDate only.',
+        name: 'TacoPOS.cashCorrection',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
     try {
       final snapshot = await _ordersRef
           .where('businessDate', isEqualTo: businessDate)
