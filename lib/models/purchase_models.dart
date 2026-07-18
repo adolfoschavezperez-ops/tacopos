@@ -135,6 +135,10 @@ class SupplierPurchase {
     this.paymentWeekdayNameSnapshot = 'Sin dia fijo',
     this.createdByEmployeeId = '',
     this.createdByEmployeeName = '',
+    this.cancelledAt,
+    this.cancelledByEmployeeId,
+    this.cancelledByEmployeeName,
+    this.cancelReason,
     this.createdAt,
     this.updatedAt,
   });
@@ -152,6 +156,10 @@ class SupplierPurchase {
   final String paymentWeekdayNameSnapshot;
   final String createdByEmployeeId;
   final String createdByEmployeeName;
+  final DateTime? cancelledAt;
+  final String? cancelledByEmployeeId;
+  final String? cancelledByEmployeeName;
+  final String? cancelReason;
   final String folio;
   final String documentType;
   final String status;
@@ -163,7 +171,8 @@ class SupplierPurchase {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
-  bool get hasBalance => balance > 0.01 && status != 'cancelled';
+  bool get isCancelled => status == 'cancelled' || cancelledAt != null;
+  bool get hasBalance => balance > 0.01 && !isCancelled;
 
   factory SupplierPurchase.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -187,6 +196,10 @@ class SupplierPurchase {
           data['paymentWeekdayNameSnapshot'] as String? ?? 'Sin dia fijo',
       createdByEmployeeId: data['createdByEmployeeId'] as String? ?? '',
       createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
+      cancelledAt: _toDate(data['cancelledAt']),
+      cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
+      cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
+      cancelReason: data['cancelReason'] as String?,
       folio: data['folio'] as String? ?? '',
       documentType: data['documentType'] as String? ?? 'note',
       status: data['status'] as String? ?? 'pending',
@@ -372,6 +385,7 @@ class SupplierStatementRow {
     required this.balance,
     required this.method,
     required this.notes,
+    this.supplierName = '',
     this.purchaseId,
     this.paymentId,
     this.fundingSourceName = '',
@@ -391,6 +405,7 @@ class SupplierStatementRow {
   final double balance;
   final String method;
   final String notes;
+  final String supplierName;
   final String? purchaseId;
   final String? paymentId;
   final String fundingSourceName;

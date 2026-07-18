@@ -2327,10 +2327,22 @@ class TacoPosRepository {
     String? partnerName,
   }) async {
     _requirePurchaseAccess(pay: true);
+    if (purchase.isCancelled) {
+      throw StateError('No puedes pagar una compra cancelada.');
+    }
+    final purchaseRef = _supplierPurchasesRef.doc(purchase.id);
+    final purchaseDoc = await purchaseRef.get();
+    if (!purchaseDoc.exists) {
+      throw StateError('No se encontro la compra a proveedor.');
+    }
+    final currentPurchase = SupplierPurchase.fromDoc(purchaseDoc);
+    if (currentPurchase.isCancelled) {
+      throw StateError('No puedes pagar una compra cancelada.');
+    }
     if (amount <= 0) {
       throw ArgumentError('Captura un monto de pago valido.');
     }
-    if (amount > purchase.balance + 0.01) {
+    if (amount > currentPurchase.balance + 0.01) {
       throw ArgumentError('No puedes pagar mas del saldo pendiente.');
     }
     if (!_fundingSourceLabels.containsKey(fundingSource)) {
@@ -2364,9 +2376,8 @@ class TacoPosRepository {
     final contributionRef = isPartnerFunding
         ? _partnerContributionsRef.doc()
         : null;
-    final purchaseRef = _supplierPurchasesRef.doc(purchase.id);
-    final nextPaidTotal = purchase.paidTotal + amount;
-    final nextBalance = (purchase.total - nextPaidTotal).clamp(
+    final nextPaidTotal = currentPurchase.paidTotal + amount;
+    final nextBalance = (currentPurchase.total - nextPaidTotal).clamp(
       0,
       double.infinity,
     );
@@ -2375,10 +2386,10 @@ class TacoPosRepository {
     batch.set(paymentRef, {
       'id': paymentRef.id,
       ..._currentBranchFields,
-      'supplierId': purchase.supplierId,
-      'supplierName': purchase.supplierName,
-      'purchaseId': purchase.id,
-      'purchaseFolio': purchase.folio,
+      'supplierId': currentPurchase.supplierId,
+      'supplierName': currentPurchase.supplierName,
+      'purchaseId': currentPurchase.id,
+      'purchaseFolio': currentPurchase.folio,
       'paymentDate': FieldValue.serverTimestamp(),
       'amount': amount,
       'method': method,
@@ -2407,7 +2418,8 @@ class TacoPosRepository {
         'businessDate': openCash.businessDate,
         ..._currentBranchFields,
         'amount': amount,
-        'reason': 'Pago proveedor ${purchase.supplierName} ${purchase.folio}',
+        'reason':
+            'Pago proveedor ${currentPurchase.supplierName} ${currentPurchase.folio}',
         'requestedByEmployeeId': employee?.id ?? '',
         'requestedByEmployeeName': employee?.name ?? '',
         'requestedAt': FieldValue.serverTimestamp(),
@@ -2436,15 +2448,85 @@ class TacoPosRepository {
         'notes': notes.trim(),
         'status': 'active',
         'linkedSupplierPaymentId': paymentRef.id,
-        'supplierId': purchase.supplierId,
-        'supplierName': purchase.supplierName,
-        'purchaseId': purchase.id,
-        'purchaseFolio': purchase.folio,
+        'supplierId': currentPurchase.supplierId,
+        'supplierName': currentPurchase.supplierName,
+        'purchaseId': currentPurchase.id,
+        'purchaseFolio': currentPurchase.folio,
         'createdAt': FieldValue.serverTimestamp(),
         'createdByEmployeeId': employee?.id ?? '',
         'createdByEmployeeName': employee?.name ?? '',
       });
     }
+    await batch.commit();
+  }
+
+  Future<void> cancelSupplierPurchase({
+    required SupplierPurchase purchase,
+    required String reason,
+  }) async {
+    _requireCancelSupplierPurchaseAccess();
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de cancelacion.');
+    }
+
+    final purchaseRef = _supplierPurchasesRef.doc(purchase.id);
+    final purchaseDoc = await purchaseRef.get();
+    if (!purchaseDoc.exists) {
+      throw StateError('No se encontro la compra a proveedor.');
+    }
+    final currentPurchase = SupplierPurchase.fromDoc(purchaseDoc);
+    if (currentPurchase.isCancelled) {
+      throw StateError('Esta compra ya fue cancelada.');
+    }
+
+    final paymentsSnapshot = await _supplierPaymentsRef
+        .where('purchaseId', isEqualTo: currentPurchase.id)
+        .get();
+    final activePayments = paymentsSnapshot.docs
+        .map(SupplierPayment.fromDoc)
+        .where((payment) => payment.isActive)
+        .toList();
+    if (activePayments.isNotEmpty) {
+      throw StateError(
+        'No puedes cancelar esta compra porque ya tiene pagos aplicados. '
+        'Cancela primero los pagos del proveedor y despues cancela la compra.',
+      );
+    }
+
+    final employee = AppSession.instance.employee;
+    final logRef = _restaurantRef.collection('activityLog').doc();
+    final batch = _db.batch();
+    batch.set(purchaseRef, {
+      'status': 'cancelled',
+      'balance': 0.0,
+      'cancelledAt': FieldValue.serverTimestamp(),
+      'cancelledByEmployeeId': employee?.id ?? '',
+      'cancelledByEmployeeName': employee?.name ?? '',
+      'cancelReason': cleanReason,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    batch.set(logRef, {
+      'id': logRef.id,
+      ..._currentBranchFields,
+      'type': 'supplier_purchase_cancelled',
+      'actionType': 'supplier_purchase_cancelled',
+      'message':
+          'Se cancelo la compra a proveedor ${currentPurchase.supplierName} '
+          'folio ${currentPurchase.folio} por '
+          '\$${currentPurchase.total.toStringAsFixed(2)}',
+      'supplierId': currentPurchase.supplierId,
+      'supplierName': currentPurchase.supplierName,
+      'purchaseId': currentPurchase.id,
+      'purchaseFolio': currentPurchase.folio,
+      'amount': currentPurchase.total,
+      'cancelReason': cleanReason,
+      'employeeId': employee?.id ?? '',
+      'employeeName': employee?.name ?? '',
+      'timestamp': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+    });
     await batch.commit();
   }
 
@@ -2574,20 +2656,49 @@ class TacoPosRepository {
     for (final purchase in purchases.where(
       (purchase) => purchase.supplierId == supplierId,
     )) {
-      if (purchase.status == 'cancelled') continue;
-      events.add(
-        SupplierStatementRow(
-          date: purchase.purchaseDate,
-          type: 'Compra',
-          folio: purchase.folio,
-          charge: purchase.total,
-          credit: 0,
-          balance: 0,
-          method: '',
-          notes: purchase.notes,
-          purchaseId: purchase.id,
-        ),
-      );
+      if (purchase.isCancelled) {
+        final cancelReason = purchase.cancelReason?.trim() ?? '';
+        final cancelledBy = purchase.cancelledByEmployeeName?.trim() ?? '';
+        events.add(
+          SupplierStatementRow(
+            date:
+                purchase.cancelledAt ??
+                purchase.updatedAt ??
+                purchase.purchaseDate,
+            type: 'Compra cancelada',
+            folio: purchase.folio,
+            charge: 0,
+            credit: 0,
+            balance: 0,
+            method: '',
+            notes:
+                'Monto original: \$${purchase.total.toStringAsFixed(2)}. '
+                'Motivo: ${cancelReason.isEmpty ? '-' : cancelReason}. '
+                'Cancelo: ${cancelledBy.isEmpty ? '-' : cancelledBy}.',
+            supplierName: purchase.supplierName,
+            purchaseId: purchase.id,
+            status: 'cancelled',
+            cancelReason: purchase.cancelReason,
+            cancelledByEmployeeName: purchase.cancelledByEmployeeName,
+            cancelledAt: purchase.cancelledAt,
+          ),
+        );
+      } else {
+        events.add(
+          SupplierStatementRow(
+            date: purchase.purchaseDate,
+            type: 'Compra',
+            folio: purchase.folio,
+            charge: purchase.total,
+            credit: 0,
+            balance: 0,
+            method: '',
+            notes: purchase.notes,
+            supplierName: purchase.supplierName,
+            purchaseId: purchase.id,
+          ),
+        );
+      }
     }
     for (final payment in payments.where(
       (payment) => payment.supplierId == supplierId,
@@ -2613,6 +2724,7 @@ class TacoPosRepository {
                     'Motivo: ${payment.cancelReason ?? ''}. '
                     'Cancelado por: ${payment.cancelledByEmployeeName ?? ''}.'
               : payment.notes,
+          supplierName: payment.supplierName,
           purchaseId: payment.purchaseId,
           paymentId: payment.id,
           fundingSourceName: payment.fundingSourceName,
@@ -2638,6 +2750,7 @@ class TacoPosRepository {
         balance: balance,
         method: event.method,
         notes: event.notes,
+        supplierName: event.supplierName,
         purchaseId: event.purchaseId,
         paymentId: event.paymentId,
         fundingSourceName: event.fundingSourceName,
@@ -7806,6 +7919,19 @@ class TacoPosRepository {
       return;
     }
     throw StateError('No tienes permiso para cancelar pagos a proveedores.');
+  }
+
+  void _requireCancelSupplierPurchaseAccess() {
+    final employee = AppSession.instance.employee;
+    if (employee?.hasAdminAccess == true ||
+        employee?.canRegisterPurchases == true ||
+        employee?.canManageSuppliers == true ||
+        employee?.canViewPurchases == true ||
+        employee?.canViewAccountsPayable == true ||
+        employee?.name.toLowerCase().trim() == 'admin') {
+      return;
+    }
+    throw StateError('No tienes permiso para cancelar compras a proveedor.');
   }
 
   void _requireOpenKitchen() {
