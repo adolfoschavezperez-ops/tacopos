@@ -84,11 +84,7 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                   List<CashWithdrawalRequest>
                                 >(
                                   stream: _repository
-                                      .watchCashWithdrawalRequests(
-                                        startBusinessDate: _startBusinessDate,
-                                        endBusinessDate: _endBusinessDate,
-                                        status: 'approved',
-                                      ),
+                                      .watchCashWithdrawalRequests(),
                                   builder: (context, withdrawalsSnapshot) {
                                     return StreamBuilder<List<Payment>>(
                                       stream: _repository
@@ -301,9 +297,12 @@ class _FinanceSummary {
       withdrawals = data.withdrawals
           .where(
             (request) =>
-                request.status == 'approved' &&
-                request.businessDate.compareTo(data.startBusinessDate) >= 0 &&
-                request.businessDate.compareTo(data.endBusinessDate) <= 0,
+                _isApprovedWithdrawal(request) &&
+                _withdrawalInBusinessDateRange(
+                  request,
+                  data.startBusinessDate,
+                  data.endBusinessDate,
+                ),
           )
           .toList(),
       pendingPurchases = data.purchases.where((purchase) {
@@ -467,6 +466,9 @@ class _FinancialStateTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final discountText = summary.cashWithdrawals > 0
+        ? 'Se descontaron gastos/retiros aprobados por ${_money(summary.cashWithdrawals)} del resultado.'
+        : null;
     final alertColor = summary.partnerSupplierPayments > 0
         ? BrandColors.info
         : summary.missingFromSales > 0
@@ -482,9 +484,27 @@ class _FinancialStateTab extends StatelessWidget {
       children: [
         GlassPanel(
           padding: const EdgeInsets.all(14),
-          child: Text(
-            alertText,
-            style: TextStyle(color: alertColor, fontWeight: FontWeight.w900),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                alertText,
+                style: TextStyle(
+                  color: alertColor,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              if (discountText != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  discountText,
+                  style: const TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
         const SizedBox(height: 14),
@@ -495,6 +515,7 @@ class _FinancialStateTab extends StatelessWidget {
             _Kpi('Pagos a proveedores', summary.supplierPaymentsTotal),
             _Kpi('Saldo a proveedores', summary.pendingPayableBalance),
             _Kpi('Aportaciones socios', summary.partnerContributions),
+            _Kpi('Gastos / retiros aprobados', summary.cashWithdrawals),
             _Kpi('Utilidad estimada', summary.estimatedResult),
           ],
         ),
@@ -523,7 +544,7 @@ class _CashFlowTab extends StatelessWidget {
             _Kpi('Consumo empleado', summary.employeeConsumption),
             _Kpi('Pagos con venta', summary.businessSupplierPayments),
             _Kpi('Pagos con socios', summary.partnerSupplierPayments),
-            _Kpi('Gastos/retiros caja', summary.cashWithdrawals),
+            _Kpi('Gastos / retiros aprobados', summary.cashWithdrawals),
             _Kpi('Flujo negocio', summary.businessCashFlow),
             _Kpi('Flujo con socios', summary.cashFlowWithPartners),
           ],
@@ -704,7 +725,7 @@ class _FinanceReportsTab extends StatelessWidget {
           rows: {
             'Venta total': summary.salesCollected,
             'Compras registradas': summary.registeredPurchases,
-            'Gastos/retiros': summary.cashWithdrawals,
+            'Gastos / retiros aprobados': summary.cashWithdrawals,
             'Utilidad estimada': summary.estimatedResult,
           },
         ),
@@ -1240,6 +1261,22 @@ Map<String, double> _groupPendingBySupplier(List<SupplierPurchase> purchases) {
     );
   }
   return result;
+}
+
+bool _isApprovedWithdrawal(CashWithdrawalRequest request) {
+  final status = request.status.trim().toLowerCase();
+  return const {'approved', 'aprobado', 'aprobada'}.contains(status);
+}
+
+bool _withdrawalInBusinessDateRange(
+  CashWithdrawalRequest request,
+  String startBusinessDate,
+  String endBusinessDate,
+) {
+  final businessDate = request.businessDate.trim();
+  if (businessDate.isEmpty) return false;
+  return businessDate.compareTo(startBusinessDate) >= 0 &&
+      businessDate.compareTo(endBusinessDate) <= 0;
 }
 
 String _dayKey(DateTime? date) {
