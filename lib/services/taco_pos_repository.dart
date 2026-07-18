@@ -4987,27 +4987,141 @@ class TacoPosRepository {
     required Branch branch,
     required String businessDate,
   }) async {
-    final snapshot = await _db
-        .collectionGroup('payments')
-        .where('businessDate', isEqualTo: businessDate)
-        .get();
+    final orderDocs = await _orderDocsForHistoricalCashCorrection(
+      branch: branch,
+      businessDate: businessDate,
+    );
+    final payments = <Payment>[];
+    for (final orderDoc in orderDocs) {
+      final order = PosOrder.fromDoc(orderDoc);
+      final snapshot = await orderDoc.reference.collection('payments').get();
+      payments.addAll(
+        snapshot.docs.map(Payment.fromDoc).where((payment) {
+          if (!_isHistoricalCorrectionPaymentActive(payment)) return false;
+          final paymentBusinessDate = payment.businessDate?.trim();
+          if (paymentBusinessDate != null &&
+              paymentBusinessDate.isNotEmpty &&
+              paymentBusinessDate != businessDate) {
+            return false;
+          }
+          final paymentBranchId = payment.branchId.trim().isEmpty
+              ? order.branchId
+              : payment.branchId;
+          return _matchesBranch(paymentBranchId, branch.id);
+        }),
+      );
+    }
+    return payments;
+  }
+
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
+  _orderDocsForHistoricalCashCorrection({
+    required Branch branch,
+    required String businessDate,
+  }) async {
+    try {
+      final snapshot = await _ordersRef
+          .where('businessDate', isEqualTo: businessDate)
+          .get();
+      final filtered = snapshot.docs
+          .where(
+            (doc) => _orderDocMatchesHistoricalCashCorrection(
+              doc,
+              branch: branch,
+              businessDate: businessDate,
+            ),
+          )
+          .toList();
+      if (filtered.isNotEmpty) return filtered;
+    } catch (error, stackTrace) {
+      developer.log(
+        'Historical cash correction orders query failed; using in-memory fallback.',
+        name: 'TacoPOS.cashCorrection',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final snapshot = await _ordersRef.get();
     return snapshot.docs
-        .map(Payment.fromDoc)
-        .where((payment) => payment.isActive)
-        .where((payment) => _matchesBranch(payment.branchId, branch.id))
+        .where(
+          (doc) => _orderDocMatchesHistoricalCashCorrection(
+            doc,
+            branch: branch,
+            businessDate: businessDate,
+          ),
+        )
         .toList();
+  }
+
+  bool _orderDocMatchesHistoricalCashCorrection(
+    QueryDocumentSnapshot<Map<String, dynamic>> doc, {
+    required Branch branch,
+    required String businessDate,
+  }) {
+    final order = PosOrder.fromDoc(doc);
+    if (!_matchesBranch(order.branchId, branch.id)) return false;
+    if (_isHistoricalCorrectionOrderCancelled(order.status)) return false;
+
+    final data = doc.data();
+    final docBusinessDate = data['businessDate']?.toString().trim();
+    if (docBusinessDate != null && docBusinessDate.isNotEmpty) {
+      return docBusinessDate == businessDate;
+    }
+    return _orderBelongsToBusinessDate(order, businessDate);
+  }
+
+  bool _isHistoricalCorrectionOrderCancelled(String status) {
+    final clean = status.trim().toLowerCase();
+    return const {
+      'cancelled',
+      'canceled',
+      'cancelado',
+      'voided',
+      'anulado',
+    }.contains(clean);
+  }
+
+  bool _isHistoricalCorrectionPaymentActive(Payment payment) {
+    final cleanStatus = payment.status.trim().toLowerCase();
+    if (cleanStatus == 'cancelled' ||
+        cleanStatus == 'canceled' ||
+        cleanStatus == 'cancelado') {
+      return false;
+    }
+    if (payment.cancelledAt != null) return false;
+    return payment.chargedAmount > 0 || payment.baseAmount > 0;
   }
 
   Future<List<CashWithdrawalRequest>> _withdrawalsForBranchAndBusinessDate({
     required Branch branch,
     required String businessDate,
   }) async {
-    final snapshot = await _cashWithdrawalRequestsRef
-        .where('businessDate', isEqualTo: businessDate)
-        .get();
+    try {
+      final snapshot = await _cashWithdrawalRequestsRef
+          .where('businessDate', isEqualTo: businessDate)
+          .get();
+      return snapshot.docs
+          .map(CashWithdrawalRequest.fromDoc)
+          .where((request) => _matchesBranch(request.branchId, branch.id))
+          .toList();
+    } catch (error, stackTrace) {
+      developer.log(
+        'Historical cash correction withdrawals query failed; using in-memory fallback.',
+        name: 'TacoPOS.cashCorrection',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    final snapshot = await _cashWithdrawalRequestsRef.get();
     return snapshot.docs
         .map(CashWithdrawalRequest.fromDoc)
-        .where((request) => _matchesBranch(request.branchId, branch.id))
+        .where(
+          (request) =>
+              request.businessDate == businessDate &&
+              _matchesBranch(request.branchId, branch.id),
+        )
         .toList();
   }
 

@@ -426,9 +426,15 @@ class _HistoricalCashCorrectionDialogState
       );
       if (!mounted) return;
       setState(() => _preview = preview);
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[TacoPOS][HistoricalCashCorrection.preview] $error\n$stackTrace',
+      );
       if (!mounted) return;
-      setState(() => _error = error.toString().replaceFirst('Bad state: ', ''));
+      setState(
+        () => _error =
+            'No se pudo recalcular el corte. Revisa conexion o intenta nuevamente.',
+      );
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -480,9 +486,15 @@ class _HistoricalCashCorrectionDialogState
       );
       if (!mounted) return;
       Navigator.pop(context, true);
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint(
+        '[TacoPOS][HistoricalCashCorrection.save] $error\n$stackTrace',
+      );
       if (!mounted) return;
-      setState(() => _error = error.toString().replaceFirst('Bad state: ', ''));
+      setState(
+        () => _error =
+            'No se pudo recalcular el corte. Revisa conexion o intenta nuevamente.',
+      );
     } finally {
       if (mounted) {
         setState(() => _saving = false);
