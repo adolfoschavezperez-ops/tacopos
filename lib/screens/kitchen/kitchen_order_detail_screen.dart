@@ -92,13 +92,18 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     }, popAfter: true);
   }
 
-  Future<void> _resolveCancellation(OrderItem item, bool accepted) async {
-    await _run(() {
-      return _repository.resolveKitchenCancellation(
-        orderId: widget.orderId,
-        itemId: item.id,
-        accepted: accepted,
-      );
+  Future<void> _resolveCancellationGroup(
+    _KitchenItemGroup group,
+    bool accepted,
+  ) async {
+    await _run(() async {
+      for (final item in group.items) {
+        await _repository.resolveKitchenCancellation(
+          orderId: widget.orderId,
+          itemId: item.id,
+          accepted: accepted,
+        );
+      }
     });
   }
 
@@ -225,6 +230,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                     personNumber,
                     personItems,
                   );
+                  final personItemGroups = _groupKitchenItems(personItems);
                   final isLastPerson = _personIndex >= people.length - 1;
                   final elapsedSince = _elapsedStart(items);
                   final plateAccent = _plateAccent(_personIndex);
@@ -288,23 +294,23 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                                     SizedBox(height: compact ? 6 : 8),
                                     Expanded(
                                       child: ListView.separated(
-                                        itemCount: personItems.length,
+                                        itemCount: personItemGroups.length,
                                         separatorBuilder: (_, _) =>
                                             Divider(height: compact ? 6 : 8),
                                         itemBuilder: (context, index) {
-                                          final item = personItems[index];
+                                          final group = personItemGroups[index];
                                           return _KitchenItemRow(
-                                            item: item,
+                                            group: group,
                                             compact: compact,
                                             busy: _busy,
                                             onAcceptCancellation: () =>
-                                                _resolveCancellation(
-                                                  item,
+                                                _resolveCancellationGroup(
+                                                  group,
                                                   true,
                                                 ),
                                             onRejectCancellation: () =>
-                                                _resolveCancellation(
-                                                  item,
+                                                _resolveCancellationGroup(
+                                                  group,
                                                   false,
                                                 ),
                                           );
@@ -549,6 +555,7 @@ class _ExpressOrderDialogState extends State<_ExpressOrderDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final itemGroups = _groupKitchenItems(widget.bundle.items);
     return Dialog.fullscreen(
       backgroundColor: Colors.transparent,
       child: PremiumBackground(
@@ -581,12 +588,12 @@ class _ExpressOrderDialogState extends State<_ExpressOrderDialog> {
                   child: GlassPanel(
                     padding: const EdgeInsets.all(12),
                     child: ListView.separated(
-                      itemCount: widget.bundle.items.length,
+                      itemCount: itemGroups.length,
                       separatorBuilder: (_, _) => const Divider(height: 12),
                       itemBuilder: (context, index) {
-                        final item = widget.bundle.items[index];
+                        final group = itemGroups[index];
                         return _KitchenItemRow(
-                          item: item,
+                          group: group,
                           compact: true,
                           busy: _busy,
                           onAcceptCancellation: () {},
@@ -707,16 +714,67 @@ Color _plateAccent(int index) {
   return colors[index % colors.length];
 }
 
+List<_KitchenItemGroup> _groupKitchenItems(List<OrderItem> items) {
+  final groupsByKey = <String, _KitchenItemGroupBuilder>{};
+  for (final item in items) {
+    final key = _kitchenItemGroupKey(item);
+    groupsByKey.putIfAbsent(key, () => _KitchenItemGroupBuilder()).add(item);
+  }
+  return groupsByKey.values.map((builder) => builder.build()).toList();
+}
+
+String _kitchenItemGroupKey(OrderItem item) {
+  return [
+    _groupPart(item.productId),
+    _groupPart(item.category),
+    _groupPart(item.productName),
+    '${item.personNumber}',
+    _groupPart(item.personName),
+    _groupPart(item.notes),
+    _groupPart(item.kitchenStatus),
+    _groupPart(item.cancelStatus),
+    _groupPart(item.kitchenBatchId ?? ''),
+    _groupPart(item.status),
+    _groupPart(item.paymentStatus),
+    item.isCancelled ? 'cancelled' : 'active',
+    item.hasCancellationRequested ? 'cancel_requested' : 'no_cancel_request',
+    _groupPart(getItemCancelReason(item)),
+  ].join('|');
+}
+
+String _groupPart(String value) => value.trim().toLowerCase();
+
+class _KitchenItemGroupBuilder {
+  final _items = <OrderItem>[];
+
+  void add(OrderItem item) {
+    _items.add(item);
+  }
+
+  _KitchenItemGroup build() {
+    return _KitchenItemGroup(List.unmodifiable(_items));
+  }
+}
+
+class _KitchenItemGroup {
+  const _KitchenItemGroup(this.items);
+
+  final List<OrderItem> items;
+
+  OrderItem get item => items.first;
+  int get qty => items.fold<int>(0, (sum, item) => sum + item.qty);
+}
+
 class _KitchenItemRow extends StatelessWidget {
   const _KitchenItemRow({
-    required this.item,
+    required this.group,
     required this.compact,
     required this.busy,
     required this.onAcceptCancellation,
     required this.onRejectCancellation,
   });
 
-  final OrderItem item;
+  final _KitchenItemGroup group;
   final bool compact;
   final bool busy;
   final VoidCallback onAcceptCancellation;
@@ -724,6 +782,7 @@ class _KitchenItemRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final item = group.item;
     final cancelled = item.isCancelled;
     final textDecoration = cancelled ? TextDecoration.lineThrough : null;
     final titleColor = cancelled
@@ -753,7 +812,7 @@ class _KitchenItemRow extends StatelessWidget {
                   borderRadius: BorderRadius.circular(9),
                 ),
                 child: Text(
-                  'x${item.qty}',
+                  'x${group.qty}',
                   style: TextStyle(
                     fontSize: compact ? 13 : 15,
                     fontWeight: FontWeight.w900,

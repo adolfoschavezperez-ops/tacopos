@@ -145,6 +145,74 @@ class BranchSummary {
   final int employeeAccessCount;
 }
 
+class HistoricalCashCorrectionPreview {
+  const HistoricalCashCorrectionPreview({
+    required this.branch,
+    required this.businessDate,
+    required this.cashSessionId,
+    required this.existingSession,
+    required this.openingCashAmount,
+    required this.cashSalesAmount,
+    required this.cardSalesAmount,
+    required this.cardBaseAmount,
+    required this.cardSurchargeAmount,
+    required this.cardCommissionAmount,
+    required this.platformAmount,
+    required this.employeeConsumptionAmount,
+    required this.approvedWithdrawalsTotal,
+    required this.pendingWithdrawalsTotal,
+    required this.withdrawalRequestCount,
+    required this.countedCashAmount,
+    required this.terminalReportedAmount,
+    required this.expectedCashAmount,
+    required this.cashUserSalesAmount,
+    required this.cashSalesExpectedAfterWithdrawals,
+    required this.cashDifference,
+    required this.cardDifference,
+    required this.netDifference,
+    required this.totalExpectedRealMoney,
+    required this.totalCountedRealMoney,
+    required this.shortageAmount,
+    required this.overAmount,
+    required this.paymentCount,
+  });
+
+  final Branch branch;
+  final String businessDate;
+  final String cashSessionId;
+  final CashSession? existingSession;
+  final double openingCashAmount;
+  final double cashSalesAmount;
+  final double cardSalesAmount;
+  final double cardBaseAmount;
+  final double cardSurchargeAmount;
+  final double cardCommissionAmount;
+  final double platformAmount;
+  final double employeeConsumptionAmount;
+  final double approvedWithdrawalsTotal;
+  final double pendingWithdrawalsTotal;
+  final int withdrawalRequestCount;
+  final double countedCashAmount;
+  final double terminalReportedAmount;
+  final double expectedCashAmount;
+  final double cashUserSalesAmount;
+  final double cashSalesExpectedAfterWithdrawals;
+  final double cashDifference;
+  final double cardDifference;
+  final double netDifference;
+  final double totalExpectedRealMoney;
+  final double totalCountedRealMoney;
+  final double shortageAmount;
+  final double overAmount;
+  final int paymentCount;
+
+  bool get hasExistingSession => existingSession != null;
+  bool get hasMovements =>
+      paymentCount > 0 ||
+      approvedWithdrawalsTotal > 0 ||
+      pendingWithdrawalsTotal > 0;
+}
+
 class CashPaymentDetails {
   const CashPaymentDetails({
     required this.receivedAmount,
@@ -4685,6 +4753,341 @@ class TacoPosRepository {
     return CashSession.fromDoc(updatedDoc);
   }
 
+  Future<HistoricalCashCorrectionPreview> previewHistoricalCashCorrection({
+    required Branch branch,
+    required String businessDate,
+    required double countedCashAmount,
+    required double terminalReportedAmount,
+    required String adminPin,
+    double? openingCashAmount,
+  }) async {
+    _requireHistoricalCashCorrectionAdmin();
+    _requireHistoricalCashCorrectionPin(adminPin);
+    _validateHistoricalCashCorrectionInput(
+      branch: branch,
+      businessDate: businessDate,
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+      openingCashAmount: openingCashAmount,
+    );
+    return _historicalCashCorrectionPreview(
+      branch: branch,
+      businessDate: businessDate.trim(),
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+      openingCashAmount: openingCashAmount,
+    );
+  }
+
+  Future<CashSession> saveHistoricalCashCorrection({
+    required Branch branch,
+    required String businessDate,
+    required double countedCashAmount,
+    required double terminalReportedAmount,
+    required String notes,
+    required String adminPin,
+    double? openingCashAmount,
+  }) async {
+    _requireHistoricalCashCorrectionAdmin();
+    _requireHistoricalCashCorrectionPin(adminPin);
+    _validateHistoricalCashCorrectionInput(
+      branch: branch,
+      businessDate: businessDate,
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+      openingCashAmount: openingCashAmount,
+    );
+
+    final preview = await _historicalCashCorrectionPreview(
+      branch: branch,
+      businessDate: businessDate.trim(),
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+      openingCashAmount: openingCashAmount,
+    );
+    final employee = AppSession.instance.employee;
+    final docRef = _cashSessionsRef.doc(preview.cashSessionId);
+    final existing = preview.existingSession;
+    final correctionNotes = notes.trim();
+    final branchFields = _branchFields(branch);
+    final now = FieldValue.serverTimestamp();
+    final historicalDate = _dateFromBusinessDate(preview.businessDate);
+
+    await docRef.set({
+      'id': docRef.id,
+      'businessDate': preview.businessDate,
+      ...branchFields,
+      'status': 'closed',
+      'openingCashAmount': preview.openingCashAmount,
+      'openedAt': existing?.openedAt != null
+          ? Timestamp.fromDate(existing!.openedAt!)
+          : (historicalDate == null
+                ? FieldValue.serverTimestamp()
+                : Timestamp.fromDate(historicalDate)),
+      'openedByEmployeeId': existing?.openedByEmployeeId ?? '',
+      'openedByEmployeeName': existing?.openedByEmployeeName.isNotEmpty == true
+          ? existing!.openedByEmployeeName
+          : 'Correccion admin',
+      'closedAt': now,
+      'closedByEmployeeId': employee?.id ?? '',
+      'closedByEmployeeName': employee?.name ?? '',
+      'countedCashAmount': preview.countedCashAmount,
+      'terminalReportedAmount': preview.terminalReportedAmount,
+      'expectedCashAmount': preview.expectedCashAmount,
+      'expectedCardChargedAmount': preview.cardSalesAmount,
+      'expectedCardBaseAmount': preview.cardBaseAmount,
+      'expectedCardSurchargeAmount': preview.cardSurchargeAmount,
+      'expectedCardFeeAbsorbedAmount': preview.cardCommissionAmount,
+      'expectedPlatformAmount': preview.platformAmount,
+      'expectedEmployeeConsumptionAmount': preview.employeeConsumptionAmount,
+      'approvedWithdrawalsTotal': preview.approvedWithdrawalsTotal,
+      'pendingWithdrawalsTotal': preview.pendingWithdrawalsTotal,
+      'withdrawalRequestCount': preview.withdrawalRequestCount,
+      'totalExpectedRealMoney': preview.totalExpectedRealMoney,
+      'totalCountedRealMoney': preview.totalCountedRealMoney,
+      'cashDifference': preview.cashDifference,
+      'cardDifference': preview.cardDifference,
+      'netDifference': preview.netDifference,
+      'shortageAmount': preview.shortageAmount,
+      'overAmount': preview.overAmount,
+      'notes': correctionNotes,
+      'correctionMode': true,
+      'correctionReason': correctionNotes,
+      'correctionNotes': correctionNotes,
+      'correctedAt': now,
+      'correctedByEmployeeId': employee?.id ?? '',
+      'correctedByEmployeeName': employee?.name ?? '',
+      'oldCashSessionId': existing?.id,
+      if (existing == null) 'createdAt': now,
+      'updatedAt': now,
+    }, SetOptions(merge: true));
+
+    await _restaurantRef.collection('activityLog').add({
+      'type': 'cash_session_historical_correction',
+      'actionType': 'cash_session_historical_correction',
+      ...branchFields,
+      'businessDate': preview.businessDate,
+      'oldCashSessionId': existing?.id ?? '',
+      'newCashSessionId': docRef.id,
+      'timestamp': FieldValue.serverTimestamp(),
+      'message':
+          'Se rehizo el corte historico de la sucursal ${branch.name} para la fecha ${preview.businessDate}',
+      'employeeId': employee?.id ?? '',
+      'employeeName': employee?.name ?? '',
+      ..._employeeAuditFields(prefix: 'createdBy'),
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+    });
+
+    final updatedDoc = await docRef.get();
+    return CashSession.fromDoc(updatedDoc);
+  }
+
+  Future<HistoricalCashCorrectionPreview> _historicalCashCorrectionPreview({
+    required Branch branch,
+    required String businessDate,
+    required double countedCashAmount,
+    required double terminalReportedAmount,
+    double? openingCashAmount,
+  }) async {
+    final existingSession = await _cashSessionForBranchAndDate(
+      branch: branch,
+      businessDate: businessDate,
+    );
+    final payments = await _paymentsForBranchAndBusinessDate(
+      branch: branch,
+      businessDate: businessDate,
+    );
+    final withdrawals = await _withdrawalsForBranchAndBusinessDate(
+      branch: branch,
+      businessDate: businessDate,
+    );
+    final resolvedOpeningCashAmount =
+        openingCashAmount ?? existingSession?.openingCashAmount ?? 0.0;
+    final totals = _totalsForPayments(
+      payments,
+      openingCashAmount: resolvedOpeningCashAmount,
+      withdrawals: withdrawals,
+    );
+    final cashSalesAmount =
+        totals.expectedCashAmount -
+        resolvedOpeningCashAmount +
+        totals.approvedWithdrawalsTotal;
+    final cashUserSalesAmount = countedCashAmount - resolvedOpeningCashAmount;
+    final cashSalesExpectedAfterWithdrawals =
+        cashSalesAmount - totals.approvedWithdrawalsTotal;
+    final cashDifference =
+        cashUserSalesAmount - cashSalesExpectedAfterWithdrawals;
+    final cardDifference =
+        terminalReportedAmount - totals.expectedCardChargedAmount;
+    final netDifference = cashDifference + cardDifference;
+    final shortageAmount = netDifference < 0 ? netDifference.abs() : 0.0;
+    final overAmount = netDifference > 0 ? netDifference : 0.0;
+    final docId =
+        existingSession?.id ??
+        await _safeHistoricalCashSessionId(
+          payments: payments,
+          branch: branch,
+          businessDate: businessDate,
+        );
+
+    return HistoricalCashCorrectionPreview(
+      branch: branch,
+      businessDate: businessDate,
+      cashSessionId: docId,
+      existingSession: existingSession,
+      openingCashAmount: resolvedOpeningCashAmount,
+      cashSalesAmount: cashSalesAmount,
+      cardSalesAmount: totals.expectedCardChargedAmount,
+      cardBaseAmount: totals.expectedCardBaseAmount,
+      cardSurchargeAmount: totals.expectedCardSurchargeAmount,
+      cardCommissionAmount: totals.expectedCardChargedAmount * 0.035 * 1.16,
+      platformAmount: totals.expectedPlatformAmount,
+      employeeConsumptionAmount: totals.expectedEmployeeConsumptionAmount,
+      approvedWithdrawalsTotal: totals.approvedWithdrawalsTotal,
+      pendingWithdrawalsTotal: totals.pendingWithdrawalsTotal,
+      withdrawalRequestCount: totals.withdrawalRequestCount,
+      countedCashAmount: countedCashAmount,
+      terminalReportedAmount: terminalReportedAmount,
+      expectedCashAmount: totals.expectedCashAmount,
+      cashUserSalesAmount: cashUserSalesAmount,
+      cashSalesExpectedAfterWithdrawals: cashSalesExpectedAfterWithdrawals,
+      cashDifference: cashDifference,
+      cardDifference: cardDifference,
+      netDifference: netDifference,
+      totalExpectedRealMoney: totals.totalExpectedRealMoney,
+      totalCountedRealMoney: countedCashAmount + terminalReportedAmount,
+      shortageAmount: shortageAmount,
+      overAmount: overAmount,
+      paymentCount: payments.length,
+    );
+  }
+
+  Future<CashSession?> _cashSessionForBranchAndDate({
+    required Branch branch,
+    required String businessDate,
+  }) async {
+    final snapshot = await _cashSessionsRef
+        .where('businessDate', isEqualTo: businessDate)
+        .get();
+    final sessions =
+        snapshot.docs
+            .map(CashSession.fromDoc)
+            .where((session) => _matchesBranch(session.branchId, branch.id))
+            .toList()
+          ..sort((a, b) {
+            final aDate = a.closedAt ?? a.openedAt ?? DateTime(1970);
+            final bDate = b.closedAt ?? b.openedAt ?? DateTime(1970);
+            return bDate.compareTo(aDate);
+          });
+    return sessions.isEmpty ? null : sessions.first;
+  }
+
+  Future<List<Payment>> _paymentsForBranchAndBusinessDate({
+    required Branch branch,
+    required String businessDate,
+  }) async {
+    final snapshot = await _db
+        .collectionGroup('payments')
+        .where('businessDate', isEqualTo: businessDate)
+        .get();
+    return snapshot.docs
+        .map(Payment.fromDoc)
+        .where((payment) => payment.isActive)
+        .where((payment) => _matchesBranch(payment.branchId, branch.id))
+        .toList();
+  }
+
+  Future<List<CashWithdrawalRequest>> _withdrawalsForBranchAndBusinessDate({
+    required Branch branch,
+    required String businessDate,
+  }) async {
+    final snapshot = await _cashWithdrawalRequestsRef
+        .where('businessDate', isEqualTo: businessDate)
+        .get();
+    return snapshot.docs
+        .map(CashWithdrawalRequest.fromDoc)
+        .where((request) => _matchesBranch(request.branchId, branch.id))
+        .toList();
+  }
+
+  String _predominantCashSessionId(List<Payment> payments) {
+    final counts = <String, int>{};
+    for (final payment in payments) {
+      final id = payment.cashSessionId?.trim();
+      if (id == null || id.isEmpty) continue;
+      counts[id] = (counts[id] ?? 0) + 1;
+    }
+    if (counts.isEmpty) return '';
+    final entries = counts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    return entries.first.key;
+  }
+
+  Future<String> _safeHistoricalCashSessionId({
+    required List<Payment> payments,
+    required Branch branch,
+    required String businessDate,
+  }) async {
+    final predominantId = _predominantCashSessionId(payments);
+    if (predominantId.isEmpty) return _cashSessionsRef.doc().id;
+    final doc = await _cashSessionsRef.doc(predominantId).get();
+    if (!doc.exists) return predominantId;
+    final session = CashSession.fromDoc(doc);
+    if (session.businessDate == businessDate &&
+        _matchesBranch(session.branchId, branch.id)) {
+      return predominantId;
+    }
+    return _cashSessionsRef.doc().id;
+  }
+
+  Map<String, Object?> _branchFields(Branch branch) {
+    return {
+      'restaurantId': branch.restaurantId,
+      'restaurantName': branch.restaurantName,
+      'branchId': branch.id,
+      'branchName': branch.name,
+    };
+  }
+
+  void _validateHistoricalCashCorrectionInput({
+    required Branch branch,
+    required String businessDate,
+    required double countedCashAmount,
+    required double terminalReportedAmount,
+    double? openingCashAmount,
+  }) {
+    if (branch.id.trim().isEmpty) {
+      throw ArgumentError('Selecciona una sucursal.');
+    }
+    final cleanDate = businessDate.trim();
+    if (cleanDate.isEmpty || _dateFromBusinessDate(cleanDate) == null) {
+      throw ArgumentError('Selecciona una fecha operativa valida.');
+    }
+    final selectedDate = _dateFromBusinessDate(cleanDate)!;
+    final today = DateTime.now();
+    final todayOnly = DateTime(today.year, today.month, today.day);
+    if (selectedDate.isAfter(todayOnly)) {
+      throw ArgumentError('No se puede rehacer un corte de fecha futura.');
+    }
+    if (countedCashAmount < 0 || terminalReportedAmount < 0) {
+      throw ArgumentError('Los montos no pueden ser negativos.');
+    }
+    if (openingCashAmount != null && openingCashAmount < 0) {
+      throw ArgumentError('El fondo inicial no puede ser negativo.');
+    }
+  }
+
+  DateTime? _dateFromBusinessDate(String businessDate) {
+    final parts = businessDate.split('-');
+    if (parts.length != 3) return null;
+    final year = int.tryParse(parts[0]);
+    final month = int.tryParse(parts[1]);
+    final day = int.tryParse(parts[2]);
+    if (year == null || month == null || day == null) return null;
+    return DateTime(year, month, day);
+  }
+
   Future<CashSessionTotals> _cashSessionTotalsOnce(String cashSessionId) async {
     final snapshot = await _db.collectionGroup('payments').get();
     final sessionDoc = await _cashSessionsRef.doc(cashSessionId).get();
@@ -7140,6 +7543,20 @@ class TacoPosRepository {
       return;
     }
     throw StateError('No tienes permiso para cerrar caja.');
+  }
+
+  void _requireHistoricalCashCorrectionAdmin() {
+    if (AppSession.instance.employee?.hasAdminAccess == true) {
+      return;
+    }
+    throw StateError('Solo un administrador puede rehacer cortes historicos.');
+  }
+
+  void _requireHistoricalCashCorrectionPin(String pin) {
+    if (pin.trim() == '072026') {
+      return;
+    }
+    throw StateError('PIN de administrador incorrecto.');
   }
 
   void _requireCashWithdrawalRequester() {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
+import '../../models/branch.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
 import '../../models/order.dart';
@@ -270,9 +271,16 @@ class _CashSessionsTab extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
           children: [
-            const SectionHeader(
+            SectionHeader(
               title: 'Cortes de caja',
               subtitle: 'Desglose completo para Admin / Socio.',
+              trailing: AppSession.instance.employee?.hasAdminAccess == true
+                  ? FilledButton.icon(
+                      onPressed: () => _openHistoricalCorrection(context),
+                      icon: const Icon(Icons.history_toggle_off_outlined),
+                      label: const Text('Rehacer corte historico'),
+                    )
+                  : null,
             ),
             const SizedBox(height: 10),
             ...sessions.map(
@@ -284,6 +292,478 @@ class _CashSessionsTab extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+
+  Future<void> _openHistoricalCorrection(BuildContext context) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      useSafeArea: true,
+      builder: (context) =>
+          _HistoricalCashCorrectionDialog(repository: TacoPosRepository()),
+    );
+    if (saved == true && context.mounted) {
+      showAppSnackBar(
+        context,
+        'Corte historico guardado.',
+        type: AppSnackBarType.success,
+      );
+    }
+  }
+}
+
+class _HistoricalCashCorrectionDialog extends StatefulWidget {
+  const _HistoricalCashCorrectionDialog({required this.repository});
+
+  final TacoPosRepository repository;
+
+  @override
+  State<_HistoricalCashCorrectionDialog> createState() =>
+      _HistoricalCashCorrectionDialogState();
+}
+
+class _HistoricalCashCorrectionDialogState
+    extends State<_HistoricalCashCorrectionDialog> {
+  final _openingCashController = TextEditingController();
+  final _cashController = TextEditingController();
+  final _terminalController = TextEditingController();
+  final _notesController = TextEditingController();
+  final _pinController = TextEditingController();
+  late final Future<List<Branch>> _branchesFuture;
+  late DateTime _businessDate;
+  String _branchId = '';
+  HistoricalCashCorrectionPreview? _preview;
+  String? _error;
+  bool _loading = false;
+  bool _saving = false;
+  bool _confirmNoMovements = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final now = DateTime.now();
+    _businessDate = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(const Duration(days: 1));
+    _branchId = AppSession.instance.currentBranchId;
+    _branchesFuture = widget.repository.getBranchesOnce();
+    _openingCashController.addListener(_clearPreview);
+    _cashController.addListener(_clearPreview);
+    _terminalController.addListener(_clearPreview);
+  }
+
+  @override
+  void dispose() {
+    _openingCashController.dispose();
+    _cashController.dispose();
+    _terminalController.dispose();
+    _notesController.dispose();
+    _pinController.dispose();
+    super.dispose();
+  }
+
+  void _clearPreview() {
+    if (_preview == null) return;
+    setState(() {
+      _preview = null;
+      _confirmNoMovements = false;
+    });
+  }
+
+  String get _businessDateText =>
+      DateFormat('yyyy-MM-dd').format(_businessDate);
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _businessDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime.now(),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _businessDate = DateTime(picked.year, picked.month, picked.day);
+      _preview = null;
+      _confirmNoMovements = false;
+    });
+  }
+
+  Future<void> _previewCorrection(Branch branch) async {
+    final cash = _amount(_cashController.text);
+    final terminal = _amount(_terminalController.text);
+    final openingCash = _optionalAmount(_openingCashController.text);
+    final pin = _pinController.text.trim();
+    final validation = _validationError(
+      branch: branch,
+      countedCash: cash,
+      terminalReported: terminal,
+      pin: pin,
+      openingCash: openingCash,
+    );
+    if (validation != null) {
+      setState(() => _error = validation);
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+      _preview = null;
+      _confirmNoMovements = false;
+    });
+    try {
+      final preview = await widget.repository.previewHistoricalCashCorrection(
+        branch: branch,
+        businessDate: _businessDateText,
+        countedCashAmount: cash!,
+        terminalReportedAmount: terminal!,
+        adminPin: pin,
+        openingCashAmount: openingCash,
+      );
+      if (!mounted) return;
+      setState(() => _preview = preview);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString().replaceFirst('Bad state: ', ''));
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  Future<void> _save(Branch branch) async {
+    final cash = _amount(_cashController.text);
+    final terminal = _amount(_terminalController.text);
+    final openingCash = _optionalAmount(_openingCashController.text);
+    final pin = _pinController.text.trim();
+    final validation = _validationError(
+      branch: branch,
+      countedCash: cash,
+      terminalReported: terminal,
+      pin: pin,
+      openingCash: openingCash,
+    );
+    if (validation != null) {
+      setState(() => _error = validation);
+      return;
+    }
+    final preview = _preview;
+    if (preview == null) {
+      setState(() => _error = 'Recalcula el corte antes de guardar.');
+      return;
+    }
+    if (!preview.hasMovements && !_confirmNoMovements) {
+      setState(
+        () => _error = 'Confirma que deseas guardar un corte sin movimientos.',
+      );
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.repository.saveHistoricalCashCorrection(
+        branch: branch,
+        businessDate: _businessDateText,
+        countedCashAmount: cash!,
+        terminalReportedAmount: terminal!,
+        notes: _notesController.text,
+        adminPin: pin,
+        openingCashAmount: openingCash,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = error.toString().replaceFirst('Bad state: ', ''));
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  String? _validationError({
+    required Branch branch,
+    required double? countedCash,
+    required double? terminalReported,
+    required String pin,
+    required double? openingCash,
+  }) {
+    if (branch.id.trim().isEmpty) return 'Selecciona una sucursal.';
+    if (_businessDate.isAfter(DateTime.now())) {
+      return 'No se puede usar una fecha futura.';
+    }
+    if (countedCash == null || countedCash < 0) {
+      return 'Captura efectivo contado valido.';
+    }
+    if (terminalReported == null || terminalReported < 0) {
+      return 'Captura terminal reportada valida.';
+    }
+    if (_openingCashController.text.trim().isNotEmpty && openingCash == null) {
+      return 'Captura fondo inicial valido.';
+    }
+    if (openingCash != null && openingCash < 0) {
+      return 'Captura fondo inicial valido.';
+    }
+    if (pin.isEmpty) return 'Captura PIN de administrador.';
+    if (pin != '072026') return 'PIN de administrador incorrecto.';
+    return null;
+  }
+
+  double? _amount(String value) {
+    final clean = value.replaceAll(RegExp(r'[\$, ]'), '').trim();
+    if (clean.isEmpty) return null;
+    return double.tryParse(clean);
+  }
+
+  double? _optionalAmount(String value) {
+    final clean = value.replaceAll(RegExp(r'[\$, ]'), '').trim();
+    if (clean.isEmpty) return null;
+    return double.tryParse(clean);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(18),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760, maxHeight: 780),
+        child: GlassPanel(
+          borderRadius: 18,
+          padding: const EdgeInsets.all(16),
+          child: FutureBuilder<List<Branch>>(
+            future: _branchesFuture,
+            builder: (context, snapshot) {
+              final branches = snapshot.data ?? const <Branch>[];
+              final effectiveBranches = branches.isEmpty
+                  ? const [Branch.defaultBranch]
+                  : branches;
+              final selectedBranch = effectiveBranches.firstWhere(
+                (branch) => branch.id == _branchId,
+                orElse: () => effectiveBranches.first,
+              );
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: SectionHeader(
+                          title: 'Rehacer corte historico',
+                          subtitle:
+                              'Recalcula una fecha pasada con ventas y pagos registrados.',
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: _saving
+                            ? null
+                            : () => Navigator.pop(context),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _CorrectionWarning(
+                            text:
+                                'Esta accion recalculara el corte con las ventas y pagos registrados para la fecha seleccionada. Usala solo para corregir cortes mal capturados.',
+                          ),
+                          const SizedBox(height: 12),
+                          Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [
+                              SizedBox(
+                                width: 230,
+                                child: DropdownButtonFormField<String>(
+                                  initialValue: selectedBranch.id,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Sucursal',
+                                  ),
+                                  items: effectiveBranches
+                                      .map(
+                                        (branch) => DropdownMenuItem(
+                                          value: branch.id,
+                                          child: Text(branch.name),
+                                        ),
+                                      )
+                                      .toList(),
+                                  onChanged: _saving
+                                      ? null
+                                      : (value) {
+                                          if (value == null) return;
+                                          setState(() {
+                                            _branchId = value;
+                                            _preview = null;
+                                            _confirmNoMovements = false;
+                                          });
+                                        },
+                                ),
+                              ),
+                              SizedBox(
+                                width: 210,
+                                child: OutlinedButton.icon(
+                                  onPressed: _saving ? null : _pickDate,
+                                  icon: const Icon(Icons.event_outlined),
+                                  label: Text(
+                                    'Fecha operativa $_businessDateText',
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 160,
+                                child: TextField(
+                                  controller: _openingCashController,
+                                  enabled: !_saving,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Fondo inicial',
+                                    prefixText: r'$',
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 160,
+                                child: TextField(
+                                  controller: _cashController,
+                                  enabled: !_saving,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Efectivo contado',
+                                    prefixText: r'$',
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 170,
+                                child: TextField(
+                                  controller: _terminalController,
+                                  enabled: !_saving,
+                                  keyboardType:
+                                      const TextInputType.numberWithOptions(
+                                        decimal: true,
+                                      ),
+                                  decoration: const InputDecoration(
+                                    labelText: 'Terminal reportada',
+                                    prefixText: r'$',
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                width: 160,
+                                child: TextField(
+                                  controller: _pinController,
+                                  enabled: !_saving,
+                                  obscureText: true,
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'PIN admin',
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _notesController,
+                            enabled: !_saving,
+                            minLines: 2,
+                            maxLines: 4,
+                            decoration: const InputDecoration(
+                              labelText: 'Notas',
+                              hintText: 'Motivo de la correccion',
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          if (_error != null) ...[
+                            _CorrectionError(text: _error!),
+                            const SizedBox(height: 12),
+                          ],
+                          FilledButton.icon(
+                            onPressed: (_loading || _saving)
+                                ? null
+                                : () => _previewCorrection(selectedBranch),
+                            icon: _loading
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.calculate_outlined),
+                            label: Text(
+                              _loading ? 'Recalculando...' : 'Recalcular corte',
+                            ),
+                          ),
+                          if (_preview != null) ...[
+                            const SizedBox(height: 12),
+                            _HistoricalCorrectionPreviewPanel(
+                              preview: _preview!,
+                              confirmNoMovements: _confirmNoMovements,
+                              onConfirmNoMovementsChanged: (value) {
+                                setState(
+                                  () => _confirmNoMovements = value ?? false,
+                                );
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: _saving
+                              ? null
+                              : () => Navigator.pop(context),
+                          child: const Text('Cancelar'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        flex: 2,
+                        child: FilledButton.icon(
+                          onPressed: (_preview == null || _saving)
+                              ? null
+                              : () => _save(selectedBranch),
+                          icon: const Icon(Icons.save_outlined),
+                          label: Text(
+                            _saving
+                                ? 'Guardando...'
+                                : 'Confirmar y guardar corte historico',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
     );
   }
 }
@@ -943,6 +1423,357 @@ class _AmountLineData {
   final double value;
   final Color color;
   final bool strong;
+}
+
+class _HistoricalCorrectionPreviewPanel extends StatelessWidget {
+  const _HistoricalCorrectionPreviewPanel({
+    required this.preview,
+    required this.confirmNoMovements,
+    required this.onConfirmNoMovementsChanged,
+  });
+
+  final HistoricalCashCorrectionPreview preview;
+  final bool confirmNoMovements;
+  final ValueChanged<bool?> onConfirmNoMovementsChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(12),
+      borderRadius: 12,
+      borderColor: BrandColors.accentYellow.withValues(alpha: 0.34),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (preview.hasExistingSession) ...[
+            const _CorrectionWarning(
+              text:
+                  'Ya existe un corte para esta fecha. Se guardara como correccion administrativa.',
+            ),
+            const SizedBox(height: 10),
+          ],
+          if (preview.openingCashAmount == 0 &&
+              !preview.hasExistingSession) ...[
+            const _CorrectionWarning(
+              text:
+                  r'No existe corte previo para tomar fondo inicial. Se usara fondo inicial $0.00.',
+            ),
+            const SizedBox(height: 10),
+          ],
+          const Text(
+            'Resumen antes de guardar',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: [
+              _CorrectionSummaryBox(
+                title: 'Venta',
+                accent: BrandColors.accentYellow,
+                lines: [
+                  _CorrectionLineData('Fecha operativa', preview.businessDate),
+                  _CorrectionLineData('Sucursal', preview.branch.name),
+                  _CorrectionLineData.money(
+                    'Venta total',
+                    preview.cashSalesAmount +
+                        preview.cardSalesAmount +
+                        preview.platformAmount +
+                        preview.employeeConsumptionAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Efectivo ventas',
+                    preview.cashSalesAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Tarjeta ventas',
+                    preview.cardSalesAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Plataforma',
+                    preview.platformAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Consumo empleado',
+                    preview.employeeConsumptionAmount,
+                  ),
+                ],
+              ),
+              _CorrectionSummaryBox(
+                title: 'Efectivo',
+                accent: BrandColors.success,
+                lines: [
+                  _CorrectionLineData.money(
+                    'Fondo inicial',
+                    preview.openingCashAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Retiros aprobados',
+                    preview.approvedWithdrawalsTotal,
+                  ),
+                  _CorrectionLineData.money(
+                    'Total efectivo esperado',
+                    preview.expectedCashAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Efectivo contado',
+                    preview.countedCashAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Efectivo usuario venta',
+                    preview.cashUserSalesAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Efectivo venta esperado',
+                    preview.cashSalesExpectedAfterWithdrawals,
+                  ),
+                  _CorrectionLineData.money(
+                    'Diferencia efectivo',
+                    preview.cashDifference,
+                    difference: true,
+                  ),
+                ],
+              ),
+              _CorrectionSummaryBox(
+                title: 'Tarjeta',
+                accent: BrandColors.info,
+                lines: [
+                  _CorrectionLineData.money(
+                    'Tarjeta ventas',
+                    preview.cardSalesAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Terminal reportada',
+                    preview.terminalReportedAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Diferencia tarjeta',
+                    preview.cardDifference,
+                    difference: true,
+                  ),
+                  _CorrectionLineData.money(
+                    'Comision tarjeta',
+                    preview.cardCommissionAmount,
+                  ),
+                  _CorrectionLineData.money(
+                    'Neto estimado tarjeta',
+                    preview.cardSalesAmount - preview.cardCommissionAmount,
+                  ),
+                ],
+              ),
+              _CorrectionSummaryBox(
+                title: 'Resultado',
+                accent: preview.netDifference < 0
+                    ? BrandColors.danger
+                    : BrandColors.success,
+                lines: [
+                  _CorrectionLineData.money(
+                    'Retiros pendientes',
+                    preview.pendingWithdrawalsTotal,
+                  ),
+                  _CorrectionLineData.money('Faltante', preview.shortageAmount),
+                  _CorrectionLineData.money('Sobrante', preview.overAmount),
+                  _CorrectionLineData.money(
+                    'Diferencia neta',
+                    preview.netDifference,
+                    difference: true,
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (!preview.hasMovements) ...[
+            const SizedBox(height: 10),
+            CheckboxListTile(
+              value: confirmNoMovements,
+              onChanged: onConfirmNoMovementsChanged,
+              contentPadding: EdgeInsets.zero,
+              controlAffinity: ListTileControlAffinity.leading,
+              title: const Text(
+                'Confirmo guardar este corte aunque no hay ventas ni movimientos.',
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CorrectionSummaryBox extends StatelessWidget {
+  const _CorrectionSummaryBox({
+    required this.title,
+    required this.accent,
+    required this.lines,
+  });
+
+  final String title;
+  final Color accent;
+  final List<_CorrectionLineData> lines;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 330,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.075),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: accent.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              color: accent,
+              fontWeight: FontWeight.w900,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...lines.map((line) => _CorrectionLine(line: line)),
+        ],
+      ),
+    );
+  }
+}
+
+class _CorrectionLine extends StatelessWidget {
+  const _CorrectionLine({required this.line});
+
+  final _CorrectionLineData line;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = line.difference
+        ? _correctionDifferenceColor(line.amount ?? 0)
+        : BrandColors.textPrimary;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              line.label,
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            line.value,
+            textAlign: TextAlign.end,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w900,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CorrectionLineData {
+  const _CorrectionLineData(this.label, this.value)
+    : amount = null,
+      difference = false;
+
+  _CorrectionLineData.money(
+    this.label,
+    double amountValue, {
+    this.difference = false,
+  }) : amount = amountValue,
+       value = _historicalMoney(amountValue);
+
+  final String label;
+  final String value;
+  final double? amount;
+  final bool difference;
+}
+
+class _CorrectionWarning extends StatelessWidget {
+  const _CorrectionWarning({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: BrandColors.accentOrange.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: BrandColors.accentOrange.withValues(alpha: 0.30),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.warning_amber_outlined,
+            color: BrandColors.accentOrange,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(
+                color: BrandColors.textSecondary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CorrectionError extends StatelessWidget {
+  const _CorrectionError({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: BrandColors.danger.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: BrandColors.danger.withValues(alpha: 0.30)),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          color: BrandColors.danger,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+}
+
+String _historicalMoney(double value) {
+  return NumberFormat.currency(
+    locale: 'es_MX',
+    symbol: r'$',
+    decimalDigits: 2,
+  ).format(value);
+}
+
+Color _correctionDifferenceColor(double value) {
+  if (value < 0) return BrandColors.danger;
+  if (value > 0) return BrandColors.success;
+  return BrandColors.textSecondary;
 }
 
 class _CashCancellationSummary extends StatelessWidget {
