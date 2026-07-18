@@ -260,14 +260,6 @@ class _CashSessionsTab extends StatelessWidget {
         }
 
         final sessions = snapshot.data ?? [];
-        if (sessions.isEmpty) {
-          return const EmptyState(
-            icon: Icons.point_of_sale_outlined,
-            title: 'Sin cortes',
-            message: 'Aun no hay cajas registradas.',
-          );
-        }
-
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
           children: [
@@ -278,17 +270,27 @@ class _CashSessionsTab extends StatelessWidget {
                   ? FilledButton.icon(
                       onPressed: () => _openHistoricalCorrection(context),
                       icon: const Icon(Icons.history_toggle_off_outlined),
-                      label: const Text('Rehacer corte historico'),
+                      label: const Text('Rehacer corte histórico'),
                     )
                   : null,
             ),
             const SizedBox(height: 10),
-            ...sessions.map(
-              (session) => Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: _CashSessionDetailCard(session: session),
+            if (sessions.isEmpty)
+              const SizedBox(
+                height: 320,
+                child: EmptyState(
+                  icon: Icons.point_of_sale_outlined,
+                  title: 'Sin cortes',
+                  message: 'Aun no hay cajas registradas.',
+                ),
+              )
+            else
+              ...sessions.map(
+                (session) => Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _CashSessionDetailCard(session: session),
+                ),
               ),
-            ),
           ],
         );
       },
@@ -305,7 +307,7 @@ class _CashSessionsTab extends StatelessWidget {
     if (saved == true && context.mounted) {
       showAppSnackBar(
         context,
-        'Corte historico guardado.',
+        'Corte histórico guardado.',
         type: AppSnackBarType.success,
       );
     }
@@ -557,7 +559,7 @@ class _HistoricalCashCorrectionDialogState
                     children: [
                       const Expanded(
                         child: SectionHeader(
-                          title: 'Rehacer corte historico',
+                          title: 'Rehacer corte histórico',
                           subtitle:
                               'Recalcula una fecha pasada con ventas y pagos registrados.',
                         ),
@@ -752,7 +754,7 @@ class _HistoricalCashCorrectionDialogState
                           label: Text(
                             _saving
                                 ? 'Guardando...'
-                                : 'Confirmar y guardar corte historico',
+                                : 'Confirmar y guardar corte histórico',
                           ),
                         ),
                       ),
