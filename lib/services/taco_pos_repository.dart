@@ -2219,6 +2219,7 @@ class TacoPosRepository {
   Future<SupplierPurchase> createSupplierPurchase({
     required Supplier supplier,
     required DateTime purchaseDate,
+    required DateTime dueDate,
     required String folio,
     required String documentType,
     required List<PurchaseLineInput> items,
@@ -2244,7 +2245,6 @@ class TacoPosRepository {
     );
     final purchaseRef = _supplierPurchasesRef.doc();
     final batch = _db.batch();
-    final dueDate = purchaseDate.add(Duration(days: supplier.creditDays));
     final branchFields = _currentBranchFields;
     batch.set(purchaseRef, {
       'id': purchaseRef.id,
@@ -2315,6 +2315,64 @@ class TacoPosRepository {
       createdAt: DateTime.now(),
       updatedAt: DateTime.now(),
     );
+  }
+
+  Future<void> updateSupplierPurchaseDueDate({
+    required SupplierPurchase purchase,
+    required DateTime dueDate,
+    required String reason,
+  }) async {
+    _requirePurchaseAccess(manage: true);
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo del cambio.');
+    }
+    final purchaseRef = _supplierPurchasesRef.doc(purchase.id);
+    final purchaseDoc = await purchaseRef.get();
+    if (!purchaseDoc.exists) {
+      throw StateError('No se encontro la compra a proveedor.');
+    }
+    final currentPurchase = SupplierPurchase.fromDoc(purchaseDoc);
+    if (currentPurchase.isCancelled) {
+      throw StateError(
+        'No puedes cambiar vencimiento de una compra cancelada.',
+      );
+    }
+    final employee = AppSession.instance.employee;
+    final logRef = _restaurantRef.collection('activityLog').doc();
+    final batch = _db.batch();
+    batch.set(purchaseRef, {
+      'dueDate': Timestamp.fromDate(dueDate),
+      'dueDateUpdatedAt': FieldValue.serverTimestamp(),
+      'dueDateUpdatedByEmployeeId': employee?.id ?? '',
+      'dueDateUpdatedByEmployeeName': employee?.name ?? '',
+      'dueDateUpdateReason': cleanReason,
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    batch.set(logRef, {
+      'id': logRef.id,
+      ..._currentBranchFields,
+      'type': 'supplier_purchase_due_date_updated',
+      'actionType': 'supplier_purchase_due_date_updated',
+      'message':
+          'Se cambio la fecha de vencimiento de la compra ${currentPurchase.folio} '
+          'del proveedor ${currentPurchase.supplierName}',
+      'supplierId': currentPurchase.supplierId,
+      'supplierName': currentPurchase.supplierName,
+      'purchaseId': currentPurchase.id,
+      'purchaseFolio': currentPurchase.folio,
+      'previousDueDate': currentPurchase.dueDate == null
+          ? null
+          : Timestamp.fromDate(currentPurchase.dueDate!),
+      'newDueDate': Timestamp.fromDate(dueDate),
+      'reason': cleanReason,
+      'employeeId': employee?.id ?? '',
+      'employeeName': employee?.name ?? '',
+      'timestamp': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+    });
+    await batch.commit();
   }
 
   Future<void> registerSupplierPayment({
@@ -2675,6 +2733,7 @@ class TacoPosRepository {
                 'Monto original: \$${purchase.total.toStringAsFixed(2)}. '
                 'Motivo: ${cancelReason.isEmpty ? '-' : cancelReason}. '
                 'Cancelo: ${cancelledBy.isEmpty ? '-' : cancelledBy}.',
+            dueDate: purchase.dueDate,
             supplierName: purchase.supplierName,
             purchaseId: purchase.id,
             status: 'cancelled',
@@ -2694,8 +2753,10 @@ class TacoPosRepository {
             balance: 0,
             method: '',
             notes: purchase.notes,
+            dueDate: purchase.dueDate,
             supplierName: purchase.supplierName,
             purchaseId: purchase.id,
+            status: purchase.status,
           ),
         );
       }
@@ -2750,6 +2811,7 @@ class TacoPosRepository {
         balance: balance,
         method: event.method,
         notes: event.notes,
+        dueDate: event.dueDate,
         supplierName: event.supplierName,
         purchaseId: event.purchaseId,
         paymentId: event.paymentId,

@@ -431,6 +431,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
   String? _supplierId;
   String _documentType = 'note';
   DateTime _purchaseDate = DateTime.now();
+  DateTime _dueDate = DateTime.now();
   final _lines = <PurchaseLineInput>[];
   bool _saving = false;
 
@@ -472,7 +473,10 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
                         ),
                       )
                       .toList(),
-                  onChanged: (value) => setState(() => _supplierId = value),
+                  onChanged: (value) => setState(() {
+                    _supplierId = value;
+                    _suggestDueDate();
+                  }),
                 ),
               ),
               SizedBox(
@@ -503,7 +507,16 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
               OutlinedButton.icon(
                 onPressed: _pickDate,
                 icon: const Icon(Icons.event_outlined),
-                label: Text(DateFormat('dd/MM/yyyy').format(_purchaseDate)),
+                label: Text(
+                  'Compra ${DateFormat('dd/MM/yyyy').format(_purchaseDate)}',
+                ),
+              ),
+              OutlinedButton.icon(
+                onPressed: _pickDueDate,
+                icon: const Icon(Icons.event_available_outlined),
+                label: Text(
+                  'Vence ${DateFormat('dd/MM/yyyy').format(_dueDate)}',
+                ),
               ),
               SizedBox(
                 width: 320,
@@ -609,8 +622,28 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
       lastDate: DateTime(DateTime.now().year + 1),
     );
     if (picked != null && mounted) {
-      setState(() => _purchaseDate = picked);
+      setState(() {
+        _purchaseDate = picked;
+        _suggestDueDate();
+      });
     }
+  }
+
+  Future<void> _pickDueDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _dueDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked != null && mounted) {
+      setState(() => _dueDate = picked);
+    }
+  }
+
+  void _suggestDueDate() {
+    final supplier = _supplier();
+    _dueDate = _purchaseDate.add(Duration(days: supplier?.creditDays ?? 0));
   }
 
   Future<void> _addLine() async {
@@ -635,6 +668,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
       final purchase = await widget.repository.createSupplierPurchase(
         supplier: supplier,
         purchaseDate: _purchaseDate,
+        dueDate: _dueDate,
         folio: _folioController.text,
         documentType: _documentType,
         items: _lines,
@@ -690,14 +724,24 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
   @override
   Widget build(BuildContext context) {
     final canCancelPurchase = _canCancelSupplierPurchase();
-    final purchases = widget.data.purchases.where((purchase) {
-      if (_status == 'open') return purchase.hasBalance;
-      if (_status == 'paid') return purchase.status == 'paid';
-      if (_status == 'partial') return purchase.status == 'partial';
-      if (_status == 'pending') return purchase.status == 'pending';
-      if (_status == 'cancelled') return purchase.isCancelled;
-      return true;
-    }).toList();
+    final purchases =
+        widget.data.purchases.where((purchase) {
+          if (_status == 'open') return purchase.hasBalance;
+          if (_status == 'paid') return purchase.status == 'paid';
+          if (_status == 'partial') return purchase.status == 'partial';
+          if (_status == 'pending') return purchase.status == 'pending';
+          if (_status == 'cancelled') return purchase.isCancelled;
+          return true;
+        }).toList()..sort((a, b) {
+          final aDue = a.dueDate;
+          final bDue = b.dueDate;
+          if (aDue != null && bDue != null) {
+            return aDue.compareTo(bDue);
+          }
+          if (aDue != null) return -1;
+          if (bDue != null) return 1;
+          return b.purchaseDate.compareTo(a.purchaseDate);
+        });
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
@@ -730,11 +774,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
             (purchase) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: GlassCard(
-                accent: purchase.isCancelled
-                    ? BrandColors.textMuted
-                    : purchase.hasBalance
-                    ? BrandColors.accentYellow
-                    : BrandColors.success,
+                accent: _purchaseDueAccent(purchase),
                 child: ListTile(
                   title: Text(
                     purchase.supplierName,
@@ -742,8 +782,10 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
                   ),
                   subtitle: Text(
                     '${purchase.folio.isEmpty ? 'Sin folio' : purchase.folio} · '
-                    '${DateFormat('dd/MM/yyyy').format(purchase.purchaseDate)} · '
-                    'Pago: ${purchase.paymentWeekdayNameSnapshot}',
+                    'Compra ${_dateLabel(purchase.purchaseDate)} · '
+                    'Vence ${_dueDateLabel(purchase.dueDate)} · '
+                    '${_dueStatusLabel(purchase)} · '
+                    'Estado: ${_purchaseStatusLabel(purchase.status)}',
                   ),
                   trailing: Wrap(
                     spacing: 12,
@@ -754,6 +796,12 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
                       _Metric(label: 'Total', value: purchase.total),
                       _Metric(label: 'Pagado', value: purchase.paidTotal),
                       _Metric(label: 'Saldo', value: purchase.balance),
+                      TextButton(
+                        onPressed: purchase.isCancelled
+                            ? null
+                            : () => _changeDueDate(purchase),
+                        child: const Text('Cambiar vencimiento'),
+                      ),
                       OutlinedButton(
                         onPressed: () => _showPurchaseDetail(
                           context,
@@ -798,6 +846,22 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
     );
     if (!mounted || paid != true) return;
     showAppSnackBar(context, 'Pago registrado.', type: AppSnackBarType.success);
+  }
+
+  Future<void> _changeDueDate(SupplierPurchase purchase) async {
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (_) => _ChangeDueDateDialog(
+        repository: widget.repository,
+        purchase: purchase,
+      ),
+    );
+    if (!mounted || changed != true) return;
+    showAppSnackBar(
+      context,
+      'Fecha de vencimiento actualizada.',
+      type: AppSnackBarType.success,
+    );
   }
 
   Future<void> _cancelPurchase(SupplierPurchase purchase) async {
@@ -918,41 +982,63 @@ class _SupplierStatementTab extends StatefulWidget {
 }
 
 class _SupplierStatementTabState extends State<_SupplierStatementTab> {
-  String? _supplierId;
+  String _supplierId = '';
+  DateTime? _dueStart;
+  DateTime? _dueEnd;
 
   @override
   Widget build(BuildContext context) {
-    final selectedSupplierId =
-        _supplierId ?? widget.data.suppliers.firstOrNull?.id;
-    final rows = selectedSupplierId == null
-        ? const <SupplierStatementRow>[]
-        : widget.repository.buildSupplierStatement(
-            supplierId: selectedSupplierId,
-            purchases: widget.data.purchases,
-            payments: widget.data.payments,
-          );
+    final rows = _buildRows();
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        _PurchaseHeader(
+        const _PurchaseHeader(
           title: 'Estado de cuenta',
           subtitle: 'Cargos, abonos y saldo acumulado.',
-          action: SizedBox(
-            width: 260,
-            child: DropdownButtonFormField<String>(
-              initialValue: selectedSupplierId,
-              decoration: const InputDecoration(labelText: 'Proveedor'),
-              items: widget.data.suppliers
-                  .map(
+        ),
+        const SizedBox(height: 12),
+        _FiltersWrap(
+          children: [
+            SizedBox(
+              width: 260,
+              child: DropdownButtonFormField<String>(
+                initialValue: _supplierId,
+                decoration: const InputDecoration(labelText: 'Proveedor'),
+                items: [
+                  const DropdownMenuItem(value: '', child: Text('Todos')),
+                  ...widget.data.suppliers.map(
                     (supplier) => DropdownMenuItem(
                       value: supplier.id,
                       child: Text(supplier.commercialName),
                     ),
-                  )
-                  .toList(),
-              onChanged: (value) => setState(() => _supplierId = value),
+                  ),
+                ],
+                onChanged: (value) => setState(() => _supplierId = value ?? ''),
+              ),
             ),
-          ),
+            OutlinedButton.icon(
+              onPressed: () => _pickDueBoundary(start: true),
+              icon: const Icon(Icons.event_outlined),
+              label: Text('Vencimiento inicial: ${_dueDateLabel(_dueStart)}'),
+            ),
+            OutlinedButton.icon(
+              onPressed: () => _pickDueBoundary(start: false),
+              icon: const Icon(Icons.event_available_outlined),
+              label: Text('Vencimiento final: ${_dueDateLabel(_dueEnd)}'),
+            ),
+            _quickButton('Vencidas', _setOverdue),
+            _quickButton('Vencen hoy', _setToday),
+            _quickButton('Esta semana', _setWeek),
+            _quickButton('Este mes', _setMonth),
+            TextButton.icon(
+              onPressed: () => setState(() {
+                _dueStart = null;
+                _dueEnd = null;
+              }),
+              icon: const Icon(Icons.clear),
+              label: const Text('Limpiar filtro'),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         if (rows.isEmpty)
@@ -965,10 +1051,108 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
           _StatementTable(
             rows: rows,
             onViewPurchase: (purchaseId) => _openPurchaseDetail(purchaseId),
+            onChangeDueDate: (purchaseId) => _openChangeDueDate(purchaseId),
             onCancelPayment: (paymentId) => _openCancelPayment(paymentId),
           ),
       ],
     );
+  }
+
+  List<SupplierStatementRow> _buildRows() {
+    final hasDueFilter = _dueStart != null || _dueEnd != null;
+    final supplierIds = _supplierId.isEmpty
+        ? <String>{
+            ...widget.data.purchases.map((purchase) => purchase.supplierId),
+            ...widget.data.payments.map((payment) => payment.supplierId),
+          }
+        : <String>{_supplierId};
+    final rows = <SupplierStatementRow>[];
+    for (final supplierId in supplierIds) {
+      final purchases = widget.data.purchases.where((purchase) {
+        if (purchase.supplierId != supplierId) return false;
+        if (!hasDueFilter) return true;
+        return _dateInRange(purchase.dueDate, _dueStart, _dueEnd);
+      }).toList();
+      final purchaseIds = purchases.map((purchase) => purchase.id).toSet();
+      final payments = widget.data.payments.where((payment) {
+        if (payment.supplierId != supplierId) return false;
+        if (!hasDueFilter) return true;
+        return purchaseIds.contains(payment.purchaseId);
+      });
+      rows.addAll(
+        widget.repository.buildSupplierStatement(
+          supplierId: supplierId,
+          purchases: purchases,
+          payments: payments,
+        ),
+      );
+    }
+    if (hasDueFilter) {
+      rows.sort((a, b) {
+        final byDue = _compareNullableDates(a.dueDate, b.dueDate);
+        if (byDue != 0) return byDue;
+        final bySupplier = a.supplierName.compareTo(b.supplierName);
+        if (bySupplier != 0) return bySupplier;
+        return a.date.compareTo(b.date);
+      });
+    } else {
+      rows.sort((a, b) => b.date.compareTo(a.date));
+    }
+    return rows;
+  }
+
+  Widget _quickButton(String label, VoidCallback onPressed) {
+    return OutlinedButton(onPressed: onPressed, child: Text(label));
+  }
+
+  Future<void> _pickDueBoundary({required bool start}) async {
+    final initial = start ? _dueStart : _dueEnd;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial ?? DateTime.now(),
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (start) {
+        _dueStart = picked;
+      } else {
+        _dueEnd = picked;
+      }
+    });
+  }
+
+  void _setOverdue() {
+    final today = _startOfDay(DateTime.now());
+    setState(() {
+      _dueStart = DateTime(2024);
+      _dueEnd = today.subtract(const Duration(days: 1));
+    });
+  }
+
+  void _setToday() {
+    final today = _startOfDay(DateTime.now());
+    setState(() {
+      _dueStart = today;
+      _dueEnd = today;
+    });
+  }
+
+  void _setWeek() {
+    final today = _startOfDay(DateTime.now());
+    setState(() {
+      _dueStart = today;
+      _dueEnd = today.add(const Duration(days: 6));
+    });
+  }
+
+  void _setMonth() {
+    final today = _startOfDay(DateTime.now());
+    setState(() {
+      _dueStart = today;
+      _dueEnd = DateTime(today.year, today.month + 1, 0);
+    });
   }
 
   void _openPurchaseDetail(String purchaseId) {
@@ -1008,6 +1192,33 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
       context,
       repository: widget.repository,
       payment: payment,
+    );
+  }
+
+  Future<void> _openChangeDueDate(String purchaseId) async {
+    final purchase = widget.data.purchases
+        .where((purchase) => purchase.id == purchaseId)
+        .firstOrNull;
+    if (purchase == null) {
+      showAppSnackBar(
+        context,
+        'No se encontro la compra seleccionada.',
+        type: AppSnackBarType.error,
+      );
+      return;
+    }
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (_) => _ChangeDueDateDialog(
+        repository: widget.repository,
+        purchase: purchase,
+      ),
+    );
+    if (!mounted || changed != true) return;
+    showAppSnackBar(
+      context,
+      'Fecha de vencimiento actualizada.',
+      type: AppSnackBarType.success,
     );
   }
 }
@@ -2256,6 +2467,27 @@ class _PurchaseDetailDialog extends StatelessWidget {
         ),
       ),
       actions: [
+        if (!purchase.isCancelled)
+          OutlinedButton.icon(
+            onPressed: () async {
+              final changed = await showDialog<bool>(
+                context: context,
+                builder: (_) => _ChangeDueDateDialog(
+                  repository: repository,
+                  purchase: purchase,
+                ),
+              );
+              if (!context.mounted || changed != true) return;
+              Navigator.pop(context);
+              showAppSnackBar(
+                context,
+                'Fecha de vencimiento actualizada.',
+                type: AppSnackBarType.success,
+              );
+            },
+            icon: const Icon(Icons.event_available_outlined),
+            label: const Text('Cambiar vencimiento'),
+          ),
         if (purchase.hasBalance && !purchase.isCancelled)
           FilledButton.icon(
             onPressed: () async {
@@ -2287,6 +2519,151 @@ class _PurchaseDetailDialog extends StatelessWidget {
   }
 }
 
+class _ChangeDueDateDialog extends StatefulWidget {
+  const _ChangeDueDateDialog({
+    required this.repository,
+    required this.purchase,
+  });
+
+  final TacoPosRepository repository;
+  final SupplierPurchase purchase;
+
+  @override
+  State<_ChangeDueDateDialog> createState() => _ChangeDueDateDialogState();
+}
+
+class _ChangeDueDateDialogState extends State<_ChangeDueDateDialog> {
+  final _reasonController = TextEditingController();
+  late DateTime _newDueDate;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _newDueDate = widget.purchase.dueDate ?? widget.purchase.purchaseDate;
+  }
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cambiar fecha de vencimiento'),
+      content: SizedBox(
+        width: 520,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _DetailValue(
+              label: 'Proveedor',
+              value: widget.purchase.supplierName,
+            ),
+            const SizedBox(height: 10),
+            _DetailValue(
+              label: 'Folio / nota',
+              value: widget.purchase.folio.isEmpty
+                  ? 'Sin folio'
+                  : widget.purchase.folio,
+            ),
+            const SizedBox(height: 10),
+            _DetailValue(
+              label: 'Fecha compra',
+              value: _dateLabel(widget.purchase.purchaseDate),
+            ),
+            const SizedBox(height: 10),
+            _DetailValue(
+              label: 'Fecha vencimiento actual',
+              value: _dueDateLabel(widget.purchase.dueDate),
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : _pickDueDate,
+              icon: const Icon(Icons.event_available_outlined),
+              label: Text('Nueva fecha: ${_dateLabel(_newDueDate)}'),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _reasonController,
+              enabled: !_saving,
+              minLines: 2,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: 'Motivo',
+                alignLabelWithHint: true,
+              ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                _error!,
+                style: const TextStyle(
+                  color: BrandColors.danger,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving ? null : _save,
+          icon: const Icon(Icons.save_outlined),
+          label: Text(_saving ? 'Guardando...' : 'Guardar cambio'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickDueDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _newDueDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked != null && mounted) {
+      setState(() => _newDueDate = picked);
+    }
+  }
+
+  Future<void> _save() async {
+    final reason = _reasonController.text.trim();
+    if (reason.isEmpty) {
+      setState(() => _error = 'Captura el motivo del cambio.');
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.repository.updateSupplierPurchaseDueDate(
+        purchase: widget.purchase,
+        dueDate: _newDueDate,
+        reason: reason,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+}
+
 class _PurchaseDetailSummary extends StatelessWidget {
   const _PurchaseDetailSummary({
     required this.purchase,
@@ -2310,6 +2687,11 @@ class _PurchaseDetailSummary extends StatelessWidget {
             label: 'Fecha compra',
             value: DateFormat('dd/MM/yyyy').format(purchase.purchaseDate),
           ),
+          _DetailValue(
+            label: 'Fecha vencimiento',
+            value: _dueDateLabel(purchase.dueDate),
+          ),
+          _DetailValue(label: 'Vencimiento', value: _dueStatusLabel(purchase)),
           _DetailValue(
             label: 'Folio',
             value: purchase.folio.isEmpty ? 'Sin folio' : purchase.folio,
@@ -2590,11 +2972,13 @@ class _StatementTable extends StatelessWidget {
   const _StatementTable({
     required this.rows,
     this.onViewPurchase,
+    this.onChangeDueDate,
     this.onCancelPayment,
   });
 
   final List<SupplierStatementRow> rows;
   final ValueChanged<String>? onViewPurchase;
+  final ValueChanged<String>? onChangeDueDate;
   final ValueChanged<String>? onCancelPayment;
 
   @override
@@ -2606,11 +2990,13 @@ class _StatementTable extends StatelessWidget {
           columns: const [
             DataColumn(label: Text('Fecha')),
             DataColumn(label: Text('Proveedor')),
+            DataColumn(label: Text('Vencimiento')),
             DataColumn(label: Text('Tipo')),
             DataColumn(label: Text('Folio')),
             DataColumn(label: Text('Cargo')),
             DataColumn(label: Text('Abono')),
             DataColumn(label: Text('Saldo')),
+            DataColumn(label: Text('Estado')),
             DataColumn(label: Text('Origen')),
             DataColumn(label: Text('Metodo')),
             DataColumn(label: Text('Socio')),
@@ -2624,11 +3010,13 @@ class _StatementTable extends StatelessWidget {
                   cells: [
                     DataCell(Text(DateFormat('dd/MM').format(row.date))),
                     DataCell(Text(row.supplierName)),
+                    DataCell(Text(_dueDateLabel(row.dueDate))),
                     DataCell(Text(row.type)),
                     DataCell(Text(row.folio)),
                     DataCell(Text(_money(row.charge))),
                     DataCell(Text(_money(row.credit))),
                     DataCell(Text(_money(row.balance))),
+                    DataCell(Text(_purchaseStatusLabel(row.status))),
                     DataCell(Text(row.fundingSourceName)),
                     DataCell(Text(_paymentMethodLabel(row.method))),
                     DataCell(Text(row.partnerName ?? '')),
@@ -2644,6 +3032,14 @@ class _StatementTable extends StatelessWidget {
                             TextButton(
                               onPressed: () => onViewPurchase!(row.purchaseId!),
                               child: const Text('Ver detalle'),
+                            ),
+                          if (row.type == 'Compra' &&
+                              row.purchaseId != null &&
+                              onChangeDueDate != null)
+                            TextButton(
+                              onPressed: () =>
+                                  onChangeDueDate!(row.purchaseId!),
+                              child: const Text('Cambiar vencimiento'),
                             ),
                           if (row.status == 'cancelled')
                             Chip(
@@ -2870,6 +3266,64 @@ String _dateTimeLabel(DateTime? value) {
     return 'Sin fecha';
   }
   return DateFormat('dd/MM/yyyy HH:mm').format(value);
+}
+
+String _dateLabel(DateTime value) {
+  return DateFormat('dd/MM/yyyy').format(value);
+}
+
+String _dueDateLabel(DateTime? value) {
+  if (value == null) {
+    return 'Sin vencimiento';
+  }
+  return _dateLabel(value);
+}
+
+DateTime _startOfDay(DateTime value) {
+  return DateTime(value.year, value.month, value.day);
+}
+
+bool _dateInRange(DateTime? value, DateTime? start, DateTime? end) {
+  if (value == null) return false;
+  final day = _startOfDay(value);
+  final startDay = start == null ? null : _startOfDay(start);
+  final endDay = end == null ? null : _startOfDay(end);
+  if (startDay != null && day.isBefore(startDay)) return false;
+  if (endDay != null && day.isAfter(endDay)) return false;
+  return true;
+}
+
+int _compareNullableDates(DateTime? a, DateTime? b) {
+  if (a != null && b != null) return a.compareTo(b);
+  if (a != null) return -1;
+  if (b != null) return 1;
+  return 0;
+}
+
+String _dueStatusLabel(SupplierPurchase purchase) {
+  if (purchase.isCancelled) return 'Cancelada';
+  final dueDate = purchase.dueDate;
+  if (dueDate == null) return 'Sin vencimiento';
+  if (!purchase.hasBalance) return 'Sin saldo';
+  final today = _startOfDay(DateTime.now());
+  final dueDay = _startOfDay(dueDate);
+  final diff = dueDay.difference(today).inDays;
+  if (diff < 0) return 'Vencida hace ${diff.abs()} dias';
+  if (diff == 0) return 'Vence hoy';
+  if (diff <= 7) return 'Por vencer en $diff dias';
+  return 'Por vencer';
+}
+
+Color _purchaseDueAccent(SupplierPurchase purchase) {
+  if (purchase.isCancelled) return BrandColors.textMuted;
+  if (!purchase.hasBalance) return BrandColors.success;
+  final dueDate = purchase.dueDate;
+  if (dueDate == null) return BrandColors.textMuted;
+  final today = _startOfDay(DateTime.now());
+  final dueDay = _startOfDay(dueDate);
+  if (dueDay.isBefore(today)) return BrandColors.danger;
+  if (dueDay.difference(today).inDays <= 7) return BrandColors.accentYellow;
+  return BrandColors.success;
 }
 
 String _paymentUser(SupplierPayment payment) {

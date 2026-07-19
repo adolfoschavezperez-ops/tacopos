@@ -343,7 +343,11 @@ class _FinanceSummary {
   double get pendingPayableBalance =>
       pendingPurchases.fold(0, (sum, purchase) => sum + purchase.balance);
   double get duePurchases => pendingPurchases
-      .where((purchase) => !purchase.dueDate.isAfter(DateTime.now()))
+      .where((purchase) {
+        final now = DateTime.now();
+        final today = DateTime(now.year, now.month, now.day);
+        return purchase.dueDate != null && purchase.dueDate!.isBefore(today);
+      })
       .fold(0, (sum, purchase) => sum + purchase.balance);
   double get businessSupplierPayments => supplierPayments
       .where((payment) => payment.fundingSource.startsWith('business_'))

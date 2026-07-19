@@ -118,7 +118,7 @@ class SupplierPurchase {
     required this.supplierId,
     required this.supplierName,
     required this.purchaseDate,
-    required this.dueDate,
+    this.dueDate,
     required this.folio,
     required this.documentType,
     required this.status,
@@ -151,7 +151,7 @@ class SupplierPurchase {
   final String supplierId;
   final String supplierName;
   final DateTime purchaseDate;
-  final DateTime dueDate;
+  final DateTime? dueDate;
   final String paymentWeekdaySnapshot;
   final String paymentWeekdayNameSnapshot;
   final String createdByEmployeeId;
@@ -189,7 +189,7 @@ class SupplierPurchase {
       supplierId: data['supplierId'] as String? ?? '',
       supplierName: data['supplierName'] as String? ?? 'Proveedor',
       purchaseDate: _toDate(data['purchaseDate']) ?? now,
-      dueDate: _toDate(data['dueDate']) ?? now,
+      dueDate: _toDate(data['dueDate']),
       paymentWeekdaySnapshot:
           data['paymentWeekdaySnapshot'] as String? ?? 'none',
       paymentWeekdayNameSnapshot:
@@ -385,6 +385,7 @@ class SupplierStatementRow {
     required this.balance,
     required this.method,
     required this.notes,
+    this.dueDate,
     this.supplierName = '',
     this.purchaseId,
     this.paymentId,
@@ -405,6 +406,7 @@ class SupplierStatementRow {
   final double balance;
   final String method;
   final String notes;
+  final DateTime? dueDate;
   final String supplierName;
   final String? purchaseId;
   final String? paymentId;
