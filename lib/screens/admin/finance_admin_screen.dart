@@ -384,6 +384,13 @@ class _FinanceSummary {
   double get transferSupplierPayments => supplierPayments
       .where((payment) => payment.method == 'transfer')
       .fold(0, (sum, payment) => sum + payment.amount);
+  List<SupplierPayment> get supplierPaymentsFromSalesRows => supplierPayments
+      .where((payment) => !_isPartnerSupplierPayment(payment))
+      .toList();
+  double get supplierPaymentsFromSales => supplierPaymentsFromSalesRows.fold(
+    0,
+    (sum, payment) => sum + payment.amount,
+  );
   List<SupplierPayment> get partnerSupplierPaymentRows =>
       supplierPayments.where(_isPartnerSupplierPayment).toList();
   double get partnerSupplierPayments => partnerSupplierPaymentRows.fold(
@@ -426,25 +433,34 @@ class _FinanceSummary {
       )
       .fold(0, (sum, contribution) => sum + contribution.amount);
   double get businessCashFlow =>
-      salesCollected - supplierPaymentsTotal - cashWithdrawals;
+      salesCollected - supplierPaymentsFromSales - cashWithdrawals;
   double get cashFlowWithPartners =>
       salesCollected +
       totalAportacionesSocios -
-      supplierPaymentsTotal -
+      supplierPaymentsFromSales -
+      partnerSupplierPayments -
       cashWithdrawals;
   double get estimatedResult =>
       salesCollected - registeredPurchases - cashWithdrawals;
   double get paidResult =>
-      salesCollected - supplierPaymentsTotal - cashWithdrawals;
+      salesCollected -
+      supplierPaymentsFromSales -
+      partnerSupplierPayments -
+      cashWithdrawals;
   double get missingFromSales =>
-      (supplierPaymentsTotal + cashWithdrawals - salesCollected).clamp(
+      (supplierPaymentsFromSales + cashWithdrawals - salesCollected).clamp(
         0,
         double.infinity,
       );
+  double get classifiedSupplierPaymentsTotal =>
+      supplierPaymentsFromSales + partnerSupplierPayments;
 
   void _debugPartnerContributionTotals(_FinanceData data) {
     debugPrint(
       'FINANZAS supplierPayments leidos: ${data.supplierPayments.length}; filtrados: ${supplierPayments.length}',
+    );
+    debugPrint(
+      'FINANZAS pagos proveedor clasificados: desdeVenta=$supplierPaymentsFromSales, conSocios=$partnerSupplierPayments, totalClasificado=$classifiedSupplierPaymentsTotal, totalPagos=$supplierPaymentsTotal',
     );
     final countedPaymentIds = <String>{};
     for (final payment in supplierPayments) {
@@ -460,7 +476,7 @@ class _FinanceSummary {
         );
       } else {
         debugPrint(
-          'FINANZAS supplierPayment no socio: paymentId=${payment.id}, method=$method, amount=${payment.amount}, paymentDate=${_dayKey(payment.paymentDate)}, branchId=${payment.branchId}',
+          'FINANZAS pago proveedor desde venta: paymentId=${payment.id}, method=$method, amount=${payment.amount}, paymentDate=${_dayKey(payment.paymentDate)}, branchId=${payment.branchId}',
         );
       }
     }
@@ -616,7 +632,15 @@ class _FinancialStateTab extends StatelessWidget {
           items: [
             _Kpi('Ventas cobradas', summary.salesCollected),
             _Kpi('Compras registradas', summary.registeredPurchases),
-            _Kpi('Pagos a proveedores', summary.supplierPaymentsTotal),
+            _Kpi(
+              'Pagos proveedores desde venta',
+              summary.supplierPaymentsFromSales,
+            ),
+            _Kpi(
+              'Pagos proveedores con socios',
+              summary.partnerSupplierPayments,
+            ),
+            _Kpi('Total pagos a proveedores', summary.supplierPaymentsTotal),
             _Kpi('Saldo a proveedores', summary.pendingPayableBalance),
             _Kpi('Aportaciones socios', summary.totalAportacionesSocios),
             _Kpi('Gastos / retiros aprobados', summary.cashWithdrawals),
@@ -648,7 +672,14 @@ class _CashFlowTab extends StatelessWidget {
             _Kpi('Consumo empleado', summary.employeeConsumption),
             _Kpi('Pagos en efectivo', summary.cashSupplierPayments),
             _Kpi('Pagos por transferencia', summary.transferSupplierPayments),
-            _Kpi('Pagos aportacion socios', summary.partnerSupplierPayments),
+            _Kpi(
+              'Pagos proveedores desde venta',
+              summary.supplierPaymentsFromSales,
+            ),
+            _Kpi(
+              'Pagos proveedores con socios',
+              summary.partnerSupplierPayments,
+            ),
             _Kpi('Gastos / retiros aprobados', summary.cashWithdrawals),
             _Kpi('Flujo negocio', summary.businessCashFlow),
             _Kpi('Flujo con socios', summary.cashFlowWithPartners),
@@ -827,6 +858,9 @@ class _FinanceReportsTab extends StatelessWidget {
           rows: {
             'Venta total': summary.salesCollected,
             'Aportaciones socios': summary.totalAportacionesSocios,
+            'Pagos proveedor desde venta': summary.supplierPaymentsFromSales,
+            'Pagos proveedor con socios': summary.partnerSupplierPayments,
+            'Total pagos proveedor': summary.supplierPaymentsTotal,
             'Compras registradas': summary.registeredPurchases,
             'Gastos / retiros aprobados': summary.cashWithdrawals,
             'Utilidad estimada': summary.estimatedResult,
@@ -851,11 +885,19 @@ class _ResultSplit extends StatelessWidget {
         runSpacing: 12,
         children: [
           _MiniMetric('Resultado operativo', summary.estimatedResult),
+          _MiniMetric(
+            'Pagos proveedor desde venta',
+            summary.supplierPaymentsFromSales,
+          ),
+          _MiniMetric(
+            'Pagos proveedor con socios',
+            summary.partnerSupplierPayments,
+          ),
+          _MiniMetric('Total pagos proveedor', summary.supplierPaymentsTotal),
           _MiniMetric('Flujo negocio', summary.businessCashFlow),
           _MiniMetric('Flujo con socios', summary.cashFlowWithPartners),
           _MiniMetric('Compras no pagadas', summary.pendingPayableBalance),
           _MiniMetric('Compras vencidas', summary.duePurchases),
-          _MiniMetric('Pagos transferencia', summary.transferSupplierPayments),
         ],
       ),
     );
