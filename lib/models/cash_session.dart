@@ -89,7 +89,7 @@ class CashSession {
     return CashSession(
       id: doc.id,
       businessDate: data['businessDate'] as String? ?? doc.id,
-      status: data['status'] as String? ?? 'open',
+      status: (data['status'] as String? ?? 'open').trim().toLowerCase(),
       openingCashAmount: _toDouble(data['openingCashAmount']),
       openedAt: _toDate(data['openedAt']),
       openedByEmployeeId: data['openedByEmployeeId'] as String? ?? '',
@@ -120,7 +120,7 @@ class CashSession {
       cashDifference: _toDouble(data['cashDifference']),
       cardDifference: _toDouble(data['cardDifference']),
       netDifference: _toDouble(data['netDifference']),
-      shortageAmount: _toDouble(data['shortageAmount']),
+      shortageAmount: _shortageAmountFromData(data),
       overAmount: _toDouble(data['overAmount']),
       approvedWithdrawalsTotal: _toDouble(data['approvedWithdrawalsTotal']),
       pendingWithdrawalsTotal: _toDouble(data['pendingWithdrawalsTotal']),
@@ -131,7 +131,25 @@ class CashSession {
   }
 
   static double _toDouble(Object? value) {
+    if (value is String) {
+      return double.tryParse(value.trim().replaceAll(',', '')) ?? 0;
+    }
     return value is num ? value.toDouble() : 0;
+  }
+
+  static double _shortageAmountFromData(Map<String, dynamic> data) {
+    for (final key in const [
+      'shortageAmount',
+      'shortage',
+      'netShortage',
+      'cashShortage',
+      'faltante',
+    ]) {
+      final value = _toDouble(data[key]);
+      if (value > 0) return value;
+    }
+    final netDifference = _toDouble(data['netDifference']);
+    return netDifference < 0 ? netDifference.abs() : 0;
   }
 
   static DateTime? _toDate(Object? value) {

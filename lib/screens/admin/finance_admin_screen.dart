@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
+import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
 import '../../models/employee.dart';
 import '../../models/payment.dart';
@@ -80,120 +81,143 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                             return StreamBuilder<List<Partner>>(
                               stream: _repository.watchPartners(),
                               builder: (context, partnersSnapshot) {
-                                return StreamBuilder<
-                                  List<CashWithdrawalRequest>
-                                >(
-                                  stream: _repository
-                                      .watchCashWithdrawalRequests(),
-                                  builder: (context, withdrawalsSnapshot) {
-                                    return StreamBuilder<List<Payment>>(
+                                return StreamBuilder<List<CashSession>>(
+                                  stream: _repository.watchCashSessions(
+                                    startBusinessDate: _startBusinessDate,
+                                    endBusinessDate: _endBusinessDate,
+                                  ),
+                                  builder: (context, cashSessionsSnapshot) {
+                                    return StreamBuilder<
+                                      List<CashWithdrawalRequest>
+                                    >(
                                       stream: _repository
-                                          .watchDashboardPayments(
-                                            startDate: _startDate,
-                                            endDate: _endDate,
-                                          ),
-                                      builder: (context, paymentsSnapshot) {
-                                        final nestedError =
-                                            purchasesSnapshot.error ??
-                                            supplierPaymentsSnapshot.error ??
-                                            contributionsSnapshot.error ??
-                                            partnersSnapshot.error ??
-                                            withdrawalsSnapshot.error ??
-                                            paymentsSnapshot.error;
-                                        if (nestedError != null) {
-                                          return EmptyState(
-                                            icon: Icons.error_outline,
-                                            title:
-                                                'No se pudieron cargar finanzas',
-                                            message: '$nestedError',
-                                          );
-                                        }
-                                        final isLoading =
-                                            !purchasesSnapshot.hasData ||
-                                            !supplierPaymentsSnapshot.hasData ||
-                                            !contributionsSnapshot.hasData ||
-                                            !partnersSnapshot.hasData ||
-                                            !withdrawalsSnapshot.hasData ||
-                                            !paymentsSnapshot.hasData;
-                                        if (isLoading) {
-                                          return const LoadingPanel(
-                                            message: 'Cargando finanzas...',
-                                          );
-                                        }
-                                        final data = _FinanceData(
-                                          suppliers:
-                                              suppliersSnapshot.data ??
-                                              const [],
-                                          purchases:
-                                              purchasesSnapshot.data ??
-                                              const [],
-                                          supplierPayments:
-                                              supplierPaymentsSnapshot.data ??
-                                              const [],
-                                          contributions:
-                                              contributionsSnapshot.data ??
-                                              const [],
-                                          partners:
-                                              partnersSnapshot.data ?? const [],
-                                          withdrawals:
-                                              withdrawalsSnapshot.data ??
-                                              const [],
-                                          customerPayments:
-                                              paymentsSnapshot.data ?? const [],
-                                          startDate: _startDate,
-                                          endDate: _endDate,
-                                          startBusinessDate: _startBusinessDate,
-                                          endBusinessDate: _endBusinessDate,
-                                          supplierId: _supplierId,
-                                        );
-                                        final summary = _FinanceSummary(data);
-                                        return Column(
-                                          children: [
-                                            _FinanceFilters(
+                                          .watchCashWithdrawalRequests(),
+                                      builder: (context, withdrawalsSnapshot) {
+                                        return StreamBuilder<List<Payment>>(
+                                          stream: _repository
+                                              .watchDashboardPayments(
+                                                startDate: _startDate,
+                                                endDate: _endDate,
+                                              ),
+                                          builder: (context, paymentsSnapshot) {
+                                            final nestedError =
+                                                purchasesSnapshot.error ??
+                                                supplierPaymentsSnapshot
+                                                    .error ??
+                                                contributionsSnapshot.error ??
+                                                partnersSnapshot.error ??
+                                                cashSessionsSnapshot.error ??
+                                                withdrawalsSnapshot.error ??
+                                                paymentsSnapshot.error;
+                                            if (nestedError != null) {
+                                              return EmptyState(
+                                                icon: Icons.error_outline,
+                                                title:
+                                                    'No se pudieron cargar finanzas',
+                                                message: '$nestedError',
+                                              );
+                                            }
+                                            final isLoading =
+                                                !purchasesSnapshot.hasData ||
+                                                !supplierPaymentsSnapshot
+                                                    .hasData ||
+                                                !contributionsSnapshot
+                                                    .hasData ||
+                                                !partnersSnapshot.hasData ||
+                                                !cashSessionsSnapshot.hasData ||
+                                                !withdrawalsSnapshot.hasData ||
+                                                !paymentsSnapshot.hasData;
+                                            if (isLoading) {
+                                              return const LoadingPanel(
+                                                message: 'Cargando finanzas...',
+                                              );
+                                            }
+                                            final data = _FinanceData(
                                               suppliers:
                                                   suppliersSnapshot.data ??
                                                   const [],
-                                              supplierId: _supplierId,
+                                              purchases:
+                                                  purchasesSnapshot.data ??
+                                                  const [],
+                                              supplierPayments:
+                                                  supplierPaymentsSnapshot
+                                                      .data ??
+                                                  const [],
+                                              contributions:
+                                                  contributionsSnapshot.data ??
+                                                  const [],
+                                              partners:
+                                                  partnersSnapshot.data ??
+                                                  const [],
+                                              cashSessions:
+                                                  cashSessionsSnapshot.data ??
+                                                  const [],
+                                              withdrawals:
+                                                  withdrawalsSnapshot.data ??
+                                                  const [],
+                                              customerPayments:
+                                                  paymentsSnapshot.data ??
+                                                  const [],
                                               startDate: _startDate,
                                               endDate: _endDate,
-                                              onSupplierChanged: (value) =>
-                                                  setState(
-                                                    () => _supplierId = value,
+                                              startBusinessDate:
+                                                  _startBusinessDate,
+                                              endBusinessDate: _endBusinessDate,
+                                              supplierId: _supplierId,
+                                            );
+                                            final summary = _FinanceSummary(
+                                              data,
+                                            );
+                                            return Column(
+                                              children: [
+                                                _FinanceFilters(
+                                                  suppliers:
+                                                      suppliersSnapshot.data ??
+                                                      const [],
+                                                  supplierId: _supplierId,
+                                                  startDate: _startDate,
+                                                  endDate: _endDate,
+                                                  onSupplierChanged: (value) =>
+                                                      setState(
+                                                        () =>
+                                                            _supplierId = value,
+                                                      ),
+                                                  onToday: _today,
+                                                  onWeek: _week,
+                                                  onMonth: _month,
+                                                  onPickStart: () =>
+                                                      _pickDate(isStart: true),
+                                                  onPickEnd: () =>
+                                                      _pickDate(isStart: false),
+                                                ),
+                                                Expanded(
+                                                  child: TabBarView(
+                                                    children: [
+                                                      _FinancialStateTab(
+                                                        summary: summary,
+                                                      ),
+                                                      _CashFlowTab(
+                                                        summary: summary,
+                                                      ),
+                                                      _PartnerContributionsTab(
+                                                        repository: _repository,
+                                                        partners: data.partners,
+                                                        contributions: summary
+                                                            .contributions,
+                                                      ),
+                                                      _SupplierPaymentsFinanceTab(
+                                                        payments: summary
+                                                            .supplierPayments,
+                                                      ),
+                                                      _FinanceReportsTab(
+                                                        summary: summary,
+                                                      ),
+                                                    ],
                                                   ),
-                                              onToday: _today,
-                                              onWeek: _week,
-                                              onMonth: _month,
-                                              onPickStart: () =>
-                                                  _pickDate(isStart: true),
-                                              onPickEnd: () =>
-                                                  _pickDate(isStart: false),
-                                            ),
-                                            Expanded(
-                                              child: TabBarView(
-                                                children: [
-                                                  _FinancialStateTab(
-                                                    summary: summary,
-                                                  ),
-                                                  _CashFlowTab(
-                                                    summary: summary,
-                                                  ),
-                                                  _PartnerContributionsTab(
-                                                    repository: _repository,
-                                                    partners: data.partners,
-                                                    contributions:
-                                                        summary.contributions,
-                                                  ),
-                                                  _SupplierPaymentsFinanceTab(
-                                                    payments: summary
-                                                        .supplierPayments,
-                                                  ),
-                                                  _FinanceReportsTab(
-                                                    summary: summary,
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ],
+                                                ),
+                                              ],
+                                            );
+                                          },
                                         );
                                       },
                                     );
@@ -267,6 +291,7 @@ class _FinanceData {
     required this.supplierPayments,
     required this.contributions,
     required this.partners,
+    required this.cashSessions,
     required this.withdrawals,
     required this.customerPayments,
     required this.startDate,
@@ -281,6 +306,7 @@ class _FinanceData {
   final List<SupplierPayment> supplierPayments;
   final List<PartnerContribution> contributions;
   final List<Partner> partners;
+  final List<CashSession> cashSessions;
   final List<CashWithdrawalRequest> withdrawals;
   final List<Payment> customerPayments;
   final DateTime startDate;
@@ -321,6 +347,9 @@ class _FinanceSummary {
         }
         return _dateInRange(contribution.date, data.startDate, data.endDate);
       }).toList(),
+      cashSessions = data.cashSessions
+          .where(_isClosedCashSessionForFinance)
+          .toList(),
       withdrawals = data.withdrawals
           .where(
             (request) =>
@@ -348,17 +377,25 @@ class _FinanceSummary {
   final List<SupplierPurchase> purchases;
   final List<SupplierPayment> supplierPayments;
   final List<PartnerContribution> contributions;
+  final List<CashSession> cashSessions;
   final List<CashWithdrawalRequest> withdrawals;
   final List<SupplierPurchase> pendingPurchases;
 
   double get salesCollected =>
       customerPayments.fold(0, (sum, payment) => sum + payment.chargedAmount);
+  double get ventaCobradaBruta => salesCollected;
   double get cashCollected => customerPayments
       .where((payment) => payment.method == 'cash')
       .fold(0, (sum, payment) => sum + payment.chargedAmount);
   double get cardCollected => customerPayments
       .where((payment) => payment.method == 'card')
       .fold(0, (sum, payment) => sum + payment.chargedAmount);
+  double get cardCommission => cardCollected * 0.035 * 1.16;
+  double get cardNetCollected => cardCollected - cardCommission;
+  double get cashSessionShortages =>
+      cashSessions.fold(0, (sum, session) => sum + session.shortageAmount);
+  double get ventaNetaDisponible =>
+      ventaCobradaBruta - cardCommission - cashSessionShortages;
   double get platformCollected => customerPayments
       .where((payment) => payment.method == 'platform_paid')
       .fold(0, (sum, payment) => sum + payment.chargedAmount);
@@ -433,22 +470,22 @@ class _FinanceSummary {
       )
       .fold(0, (sum, contribution) => sum + contribution.amount);
   double get businessCashFlow =>
-      salesCollected - supplierPaymentsFromSales - cashWithdrawals;
+      ventaNetaDisponible - supplierPaymentsFromSales - cashWithdrawals;
   double get cashFlowWithPartners =>
-      salesCollected +
+      ventaNetaDisponible +
       totalAportacionesSocios -
       supplierPaymentsFromSales -
       partnerSupplierPayments -
       cashWithdrawals;
   double get estimatedResult =>
-      salesCollected - registeredPurchases - cashWithdrawals;
+      ventaNetaDisponible - registeredPurchases - cashWithdrawals;
   double get paidResult =>
-      salesCollected -
+      ventaNetaDisponible -
       supplierPaymentsFromSales -
       partnerSupplierPayments -
       cashWithdrawals;
   double get missingFromSales =>
-      (supplierPaymentsFromSales + cashWithdrawals - salesCollected).clamp(
+      (supplierPaymentsFromSales + cashWithdrawals - ventaNetaDisponible).clamp(
         0,
         double.infinity,
       );
@@ -589,6 +626,12 @@ class _FinancialStateTab extends StatelessWidget {
     final discountText = summary.cashWithdrawals > 0
         ? 'Se descontaron gastos/retiros aprobados por ${_money(summary.cashWithdrawals)} del resultado.'
         : null;
+    final cardCommissionText = summary.cardCommission > 0
+        ? 'Se descontaron comisiones de tarjeta por ${_money(summary.cardCommission)} de la venta disponible.'
+        : null;
+    final shortageText = summary.cashSessionShortages > 0
+        ? 'Se descontaron faltantes de cortes por ${_money(summary.cashSessionShortages)} de la venta disponible.'
+        : null;
     final alertColor = summary.totalAportacionesSocios > 0
         ? BrandColors.info
         : summary.missingFromSales > 0
@@ -624,13 +667,36 @@ class _FinancialStateTab extends StatelessWidget {
                   ),
                 ),
               ],
+              if (cardCommissionText != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  cardCommissionText,
+                  style: const TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+              if (shortageText != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  shortageText,
+                  style: const TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 14),
         _KpiGrid(
           items: [
-            _Kpi('Ventas cobradas', summary.salesCollected),
+            _Kpi('Venta cobrada bruta', summary.ventaCobradaBruta),
+            _Kpi('Comisiones de tarjeta', summary.cardCommission),
+            _Kpi('Faltantes de cortes', summary.cashSessionShortages),
+            _Kpi('Venta neta disponible', summary.ventaNetaDisponible),
             _Kpi('Compras registradas', summary.registeredPurchases),
             _Kpi(
               'Pagos proveedores desde venta',
@@ -667,9 +733,13 @@ class _CashFlowTab extends StatelessWidget {
         _KpiGrid(
           items: [
             _Kpi('Efectivo cobrado', summary.cashCollected),
-            _Kpi('Tarjeta cobrada', summary.cardCollected),
+            _Kpi('Tarjeta cobrada bruta', summary.cardCollected),
+            _Kpi('Comisiones de tarjeta', summary.cardCommission),
+            _Kpi('Tarjeta neta', summary.cardNetCollected),
             _Kpi('Plataforma cobrada', summary.platformCollected),
             _Kpi('Consumo empleado', summary.employeeConsumption),
+            _Kpi('Faltantes de cortes', summary.cashSessionShortages),
+            _Kpi('Venta neta disponible', summary.ventaNetaDisponible),
             _Kpi('Pagos en efectivo', summary.cashSupplierPayments),
             _Kpi('Pagos por transferencia', summary.transferSupplierPayments),
             _Kpi(
@@ -856,7 +926,10 @@ class _FinanceReportsTab extends StatelessWidget {
         _ReportGroup(
           title: 'Resultado por sucursal',
           rows: {
-            'Venta total': summary.salesCollected,
+            'Venta cobrada bruta': summary.ventaCobradaBruta,
+            'Comisiones de tarjeta': summary.cardCommission,
+            'Faltantes de cortes': summary.cashSessionShortages,
+            'Venta neta disponible': summary.ventaNetaDisponible,
             'Aportaciones socios': summary.totalAportacionesSocios,
             'Pagos proveedor desde venta': summary.supplierPaymentsFromSales,
             'Pagos proveedor con socios': summary.partnerSupplierPayments,
@@ -885,6 +958,9 @@ class _ResultSplit extends StatelessWidget {
         runSpacing: 12,
         children: [
           _MiniMetric('Resultado operativo', summary.estimatedResult),
+          _MiniMetric('Venta neta disponible', summary.ventaNetaDisponible),
+          _MiniMetric('Comisiones tarjeta', summary.cardCommission),
+          _MiniMetric('Faltantes cortes', summary.cashSessionShortages),
           _MiniMetric(
             'Pagos proveedor desde venta',
             summary.supplierPaymentsFromSales,
@@ -1379,6 +1455,25 @@ Map<String, double> _groupCashFlowByDay(_FinanceSummary summary) {
       ifAbsent: () => payment.chargedAmount,
     );
   }
+  for (final payment in summary.customerPayments.where(
+    (payment) => payment.method == 'card',
+  )) {
+    final date = payment.businessDate ?? _dayKey(payment.createdAt);
+    final commission = payment.chargedAmount * 0.035 * 1.16;
+    result.update(
+      date,
+      (value) => value - commission,
+      ifAbsent: () => -commission,
+    );
+  }
+  for (final session in summary.cashSessions) {
+    final date = session.businessDate;
+    result.update(
+      date,
+      (value) => value - session.shortageAmount,
+      ifAbsent: () => -session.shortageAmount,
+    );
+  }
   for (final payment in summary.supplierPayments) {
     final date = _dayKey(payment.paymentDate);
     result.update(
@@ -1430,6 +1525,14 @@ Map<String, double> _groupPendingBySupplier(List<SupplierPurchase> purchases) {
 bool _isApprovedWithdrawal(CashWithdrawalRequest request) {
   final status = request.status.trim().toLowerCase();
   return const {'approved', 'aprobado', 'aprobada'}.contains(status);
+}
+
+bool _isClosedCashSessionForFinance(CashSession session) {
+  final status = session.status.trim().toLowerCase();
+  if (const {'cancelled', 'canceled', 'replaced', 'voided'}.contains(status)) {
+    return false;
+  }
+  return status == 'closed' || session.closedAt != null;
 }
 
 bool _isPartnerSupplierPayment(SupplierPayment payment) {
