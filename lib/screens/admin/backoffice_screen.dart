@@ -82,6 +82,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
   _BackofficeSection _section = _BackofficeSection.dashboard;
   _ReportKind _reportKind = _ReportKind.products;
   bool _navCollapsed = false;
+  bool _reportsExpanded = false;
 
   @override
   void initState() {
@@ -234,12 +235,16 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                     employee: employee,
                     reportKind: _reportKind,
                     collapsed: _navCollapsed,
+                    reportsExpanded: _reportsExpanded,
                     onSectionChanged: (value) =>
                         setState(() => _section = value),
                     onReportSelected: (value) => setState(() {
                       _section = _BackofficeSection.reports;
                       _reportKind = value;
+                      _reportsExpanded = true;
                     }),
+                    onReportsExpansionChanged: (value) =>
+                        setState(() => _reportsExpanded = value),
                     onToggleCollapsed: () =>
                         setState(() => _navCollapsed = !_navCollapsed),
                   ),
@@ -260,8 +265,10 @@ class _SideNav extends StatelessWidget {
     required this.employee,
     required this.reportKind,
     required this.collapsed,
+    required this.reportsExpanded,
     required this.onSectionChanged,
     required this.onReportSelected,
+    required this.onReportsExpansionChanged,
     required this.onToggleCollapsed,
   });
 
@@ -269,8 +276,10 @@ class _SideNav extends StatelessWidget {
   final Employee? employee;
   final _ReportKind reportKind;
   final bool collapsed;
+  final bool reportsExpanded;
   final ValueChanged<_BackofficeSection> onSectionChanged;
   final ValueChanged<_ReportKind> onReportSelected;
+  final ValueChanged<bool> onReportsExpansionChanged;
   final VoidCallback onToggleCollapsed;
 
   @override
@@ -287,70 +296,28 @@ class _SideNav extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                SizedBox(
-                  width: collapsed ? 38 : 48,
-                  height: collapsed ? 38 : 48,
-                  child: Image.asset(
-                    'assets/branding/logo_los_padrinos.png',
-                    fit: BoxFit.contain,
-                  ),
-                ),
-                if (!collapsed) ...[
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'TacoPOS\nBackoffice',
-                      style: TextStyle(fontWeight: FontWeight.w900),
-                    ),
-                  ),
-                ],
-                IconButton(
-                  tooltip: collapsed ? 'Expandir menu' : 'Minimizar menu',
-                  onPressed: onToggleCollapsed,
-                  icon: Icon(
-                    collapsed
-                        ? Icons.keyboard_double_arrow_right
-                        : Icons.keyboard_double_arrow_left,
-                  ),
-                ),
-              ],
+            _SideNavHeader(
+              collapsed: collapsed,
+              onToggleCollapsed: onToggleCollapsed,
             ),
             const SizedBox(height: 12),
             Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  for (final item in items) ...[
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 6),
-                      child: _NavButton(
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    for (final item in items)
+                      _SideNavEntry(
                         item: item,
                         collapsed: collapsed,
                         selected: item.section == section,
-                        onTap: () => onSectionChanged(item.section),
-                      ),
-                    ),
-                    if (!collapsed &&
-                        item.children.isNotEmpty &&
-                        item.section == section)
-                      ...item.children.map(
-                        (child) => Padding(
-                          padding: const EdgeInsets.only(left: 12, bottom: 5),
-                          child: _NavButton(
-                            item: child,
-                            dense: true,
-                            collapsed: false,
-                            selected:
-                                child.reportKind != null &&
-                                child.reportKind == reportKind,
-                            onTap: () => onReportSelected(child.reportKind!),
-                          ),
-                        ),
+                        selectedReport: reportKind,
+                        reportsExpanded: reportsExpanded,
+                        onSectionChanged: onSectionChanged,
+                        onReportSelected: onReportSelected,
+                        onReportsExpansionChanged: onReportsExpansionChanged,
                       ),
                   ],
-                ],
+                ),
               ),
             ),
             if (!collapsed) ...[
@@ -375,6 +342,180 @@ class _SideNav extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _SideNavHeader extends StatelessWidget {
+  const _SideNavHeader({
+    required this.collapsed,
+    required this.onToggleCollapsed,
+  });
+
+  final bool collapsed;
+  final VoidCallback onToggleCollapsed;
+
+  @override
+  Widget build(BuildContext context) {
+    final toggle = IconButton(
+      tooltip: collapsed ? 'Expandir menu' : 'Minimizar menu',
+      onPressed: onToggleCollapsed,
+      icon: Icon(
+        collapsed
+            ? Icons.keyboard_double_arrow_right
+            : Icons.keyboard_double_arrow_left,
+      ),
+    );
+    if (collapsed) {
+      return SizedBox(
+        height: 86,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            SizedBox(
+              width: 34,
+              height: 34,
+              child: Image.asset(
+                'assets/branding/logo_los_padrinos.png',
+                fit: BoxFit.contain,
+              ),
+            ),
+            toggle,
+          ],
+        ),
+      );
+    }
+    return SizedBox(
+      height: 52,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 48,
+            height: 48,
+            child: Image.asset(
+              'assets/branding/logo_los_padrinos.png',
+              fit: BoxFit.contain,
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'TacoPOS\nBackoffice',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+          ),
+          toggle,
+        ],
+      ),
+    );
+  }
+}
+
+class _SideNavEntry extends StatelessWidget {
+  const _SideNavEntry({
+    required this.item,
+    required this.collapsed,
+    required this.selected,
+    required this.selectedReport,
+    required this.reportsExpanded,
+    required this.onSectionChanged,
+    required this.onReportSelected,
+    required this.onReportsExpansionChanged,
+  });
+
+  final _NavItem item;
+  final bool collapsed;
+  final bool selected;
+  final _ReportKind selectedReport;
+  final bool reportsExpanded;
+  final ValueChanged<_BackofficeSection> onSectionChanged;
+  final ValueChanged<_ReportKind> onReportSelected;
+  final ValueChanged<bool> onReportsExpansionChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasChildren = item.children.isNotEmpty;
+    if (collapsed && hasChildren) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: PopupMenuButton<_ReportKind>(
+          tooltip: item.label,
+          position: PopupMenuPosition.over,
+          onSelected: onReportSelected,
+          itemBuilder: (context) => item.children
+              .map(
+                (child) => PopupMenuItem(
+                  value: child.reportKind!,
+                  child: Row(
+                    children: [
+                      Icon(child.icon, size: 18),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(child.label)),
+                    ],
+                  ),
+                ),
+              )
+              .toList(),
+          child: _NavButtonSurface(
+            icon: item.icon,
+            label: item.label,
+            collapsed: true,
+            selected: selected,
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        children: [
+          _NavButton(
+            item: item,
+            collapsed: collapsed,
+            selected: selected,
+            expanded: hasChildren && reportsExpanded,
+            onTap: () {
+              if (hasChildren) {
+                onSectionChanged(item.section);
+                onReportsExpansionChanged(!reportsExpanded);
+              } else {
+                onSectionChanged(item.section);
+              }
+            },
+          ),
+          if (!collapsed && hasChildren)
+            AnimatedSize(
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topCenter,
+              child: reportsExpanded
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 5, left: 10),
+                      child: Column(
+                        children: item.children
+                            .map(
+                              (child) => Padding(
+                                padding: const EdgeInsets.only(bottom: 5),
+                                child: _NavButton(
+                                  item: child,
+                                  dense: true,
+                                  collapsed: false,
+                                  selected:
+                                      child.reportKind == selectedReport &&
+                                      selected,
+                                  onTap: () =>
+                                      onReportSelected(child.reportKind!),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+        ],
       ),
     );
   }
@@ -473,12 +614,14 @@ class _NavButton extends StatelessWidget {
     required this.collapsed,
     required this.onTap,
     this.dense = false,
+    this.expanded = false,
   });
 
   final _NavItem item;
   final bool selected;
   final bool collapsed;
   final bool dense;
+  final bool expanded;
   final VoidCallback onTap;
 
   @override
@@ -486,12 +629,45 @@ class _NavButton extends StatelessWidget {
     final button = InkWell(
       borderRadius: BorderRadius.circular(8),
       onTap: onTap,
-      child: AnimatedContainer(
+      child: _NavButtonSurface(
+        icon: item.icon,
+        label: item.label,
+        collapsed: collapsed,
+        selected: selected,
+        dense: dense,
+        hasChildren: item.children.isNotEmpty,
+        expanded: expanded,
+      ),
+    );
+    return Tooltip(message: item.label, child: button);
+  }
+}
+
+class _NavButtonSurface extends StatelessWidget {
+  const _NavButtonSurface({
+    required this.icon,
+    required this.label,
+    required this.collapsed,
+    required this.selected,
+    this.dense = false,
+    this.hasChildren = false,
+    this.expanded = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool collapsed;
+  final bool selected;
+  final bool dense;
+  final bool hasChildren;
+  final bool expanded;
+
+  @override
+  Widget build(BuildContext context) {
+    if (collapsed) {
+      return AnimatedContainer(
         duration: const Duration(milliseconds: 160),
-        padding: EdgeInsets.symmetric(
-          horizontal: collapsed ? 10 : 12,
-          vertical: dense ? 8 : 10,
-        ),
+        height: dense ? 38 : 44,
         decoration: BoxDecoration(
           color: selected
               ? BrandColors.accentYellow.withValues(alpha: 0.16)
@@ -501,36 +677,69 @@ class _NavButton extends StatelessWidget {
             color: selected ? BrandColors.accentYellow : Colors.transparent,
           ),
         ),
-        child: Row(
-          mainAxisAlignment: collapsed
-              ? MainAxisAlignment.center
-              : MainAxisAlignment.start,
-          children: [
-            Icon(
-              item.icon,
-              size: dense ? 18 : 22,
-              color: selected ? BrandColors.accentYellow : null,
-            ),
-            if (!collapsed) ...[
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  item.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: dense ? 13 : null,
-                    fontWeight: FontWeight.w800,
-                    color: selected ? BrandColors.accentYellow : null,
-                  ),
-                ),
-              ),
-            ],
-          ],
+        child: Center(
+          child: Icon(
+            icon,
+            size: dense ? 18 : 22,
+            color: selected ? BrandColors.accentYellow : null,
+          ),
+        ),
+      );
+    }
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      height: dense ? 38 : 44,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
+        color: selected
+            ? BrandColors.accentYellow.withValues(alpha: 0.16)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: selected ? BrandColors.accentYellow : Colors.transparent,
         ),
       ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 30,
+            child: Center(
+              child: Icon(
+                icon,
+                size: dense ? 18 : 22,
+                color: selected ? BrandColors.accentYellow : null,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: dense ? 13 : null,
+                fontWeight: FontWeight.w800,
+                color: selected ? BrandColors.accentYellow : null,
+              ),
+            ),
+          ),
+          if (hasChildren) ...[
+            const SizedBox(width: 8),
+            AnimatedRotation(
+              turns: expanded ? 0.25 : 0,
+              duration: const Duration(milliseconds: 160),
+              child: Icon(
+                Icons.chevron_right,
+                size: 18,
+                color: selected ? BrandColors.accentYellow : null,
+              ),
+            ),
+          ],
+        ],
+      ),
     );
-    return Tooltip(message: item.label, child: button);
   }
 }
 
@@ -2615,13 +2824,13 @@ List<_NavItem> _reportNavItems(Employee? employee) {
     const _NavItem(
       _BackofficeSection.reports,
       Icons.compare_arrows_outlined,
-      'Comparativo ultimo dia',
+      'Ayer vs ultimo dia con ventas',
       reportKind: _ReportKind.hourlyYesterdayLastSales,
     ),
     const _NavItem(
       _BackofficeSection.reports,
       Icons.stacked_line_chart_outlined,
-      'Comparativo semana anterior',
+      'Comparacion contra semana anterior',
       reportKind: _ReportKind.hourlyPreviousWeek,
     ),
     const _NavItem(
@@ -2639,7 +2848,7 @@ List<_NavItem> _reportNavItems(Employee? employee) {
     const _NavItem(
       _BackofficeSection.reports,
       Icons.payments_outlined,
-      'Ventas por metodo de pago',
+      'Metodos de pago',
       reportKind: _ReportKind.paymentMethod,
     ),
     const _NavItem(
@@ -2651,7 +2860,7 @@ List<_NavItem> _reportNavItems(Employee? employee) {
     const _NavItem(
       _BackofficeSection.reports,
       Icons.point_of_sale_outlined,
-      'Corte de caja historico',
+      'Cortes de caja',
       reportKind: _ReportKind.cashHistory,
     ),
     const _NavItem(
