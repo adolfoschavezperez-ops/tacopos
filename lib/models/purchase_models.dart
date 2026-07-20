@@ -338,13 +338,11 @@ class SupplierPayment {
 
   factory SupplierPayment.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
-    final rawFundingSource =
-        data['fundingSource'] as String? ??
-        data['paymentMethod'] as String? ??
-        data['method'] as String? ??
-        'transfer';
+    final rawFundingSource = _supplierPaymentMethodFromData(data);
     final method = _normalizeSupplierPaymentMethod(rawFundingSource);
     final fundingSourceName = _supplierPaymentMethodLabel(method);
+    final paymentDate =
+        _toDate(data['paymentDate']) ?? _toDate(data['createdAt']);
     return SupplierPayment(
       id: doc.id,
       restaurantId:
@@ -364,12 +362,12 @@ class SupplierPayment {
       supplierName: data['supplierName'] as String? ?? 'Proveedor',
       purchaseId: data['purchaseId'] as String? ?? '',
       purchaseFolio: data['purchaseFolio'] as String? ?? '',
-      paymentDate: _toDate(data['paymentDate']) ?? DateTime.now(),
+      paymentDate: paymentDate ?? DateTime.now(),
       amount: _toDouble(data['amount']),
       method: method,
       reference: data['reference'] as String? ?? '',
       notes: data['notes'] as String? ?? '',
-      status: data['status'] as String? ?? 'active',
+      status: (data['status'] as String? ?? 'active').trim().toLowerCase(),
       cancelledAt: _toDate(data['cancelledAt']),
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
@@ -379,15 +377,53 @@ class SupplierPayment {
   }
 }
 
+String _supplierPaymentMethodFromData(Map<String, dynamic> data) {
+  final values = [
+    data['method'],
+    data['paymentMethod'],
+    data['fundingSource'],
+    data['methodName'],
+    data['paymentMethodName'],
+    data['fundingSourceName'],
+  ].whereType<String>().where((value) => value.trim().isNotEmpty).toList();
+  for (final value in values) {
+    if (_normalizeSupplierPaymentMethod(value) == 'partner_contribution') {
+      return value;
+    }
+  }
+  return values.isEmpty ? 'transfer' : values.first;
+}
+
 String _normalizeSupplierPaymentMethod(String value) {
-  return switch (value) {
-    'business_cash' || 'cash' => 'cash',
-    'business_transfer' || 'transfer' => 'transfer',
+  final normalized = _normalizeToken(value);
+  return switch (normalized) {
+    'business_cash' || 'business cash' || 'cash' || 'efectivo' => 'cash',
+    'business_transfer' ||
+    'business transfer' ||
+    'transfer' ||
+    'transferencia' => 'transfer',
     'partner_cash' ||
+    'partner cash' ||
     'partner_transfer' ||
-    'partner_contribution' => 'partner_contribution',
-    _ => value,
+    'partner transfer' ||
+    'partner_contribution' ||
+    'partner contribution' ||
+    'aportacion de socios' => 'partner_contribution',
+    _ => normalized,
   };
+}
+
+String _normalizeToken(String value) {
+  return value
+      .trim()
+      .toLowerCase()
+      .replaceAll('á', 'a')
+      .replaceAll('é', 'e')
+      .replaceAll('í', 'i')
+      .replaceAll('ó', 'o')
+      .replaceAll('ú', 'u')
+      .replaceAll('ü', 'u')
+      .replaceAll('ñ', 'n');
 }
 
 String _supplierPaymentMethodLabel(String method) {
@@ -655,9 +691,17 @@ class PurchaseLineInput {
 DateTime? _toDate(Object? value) {
   if (value is Timestamp) return value.toDate();
   if (value is DateTime) return value;
+  if (value is String) {
+    final clean = value.trim();
+    if (clean.isEmpty) return null;
+    return DateTime.tryParse(clean);
+  }
   return null;
 }
 
 double _toDouble(Object? value) {
+  if (value is String) {
+    return double.tryParse(value.trim().replaceAll(',', '')) ?? 0;
+  }
   return value is num ? value.toDouble() : 0;
 }

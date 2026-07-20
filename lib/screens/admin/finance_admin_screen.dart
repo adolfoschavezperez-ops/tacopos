@@ -307,14 +307,14 @@ class _FinanceSummary {
         );
       }).toList(),
       supplierPayments = data.supplierPayments.where((payment) {
-        if (payment.status != 'active') return false;
+        if (payment.isCancelled || payment.amount <= 0) return false;
         if (data.supplierId != null && payment.supplierId != data.supplierId) {
           return false;
         }
         return _dateInRange(payment.paymentDate, data.startDate, data.endDate);
       }).toList(),
       contributions = data.contributions.where((contribution) {
-        if (!contribution.isActive) return false;
+        if (!contribution.isActive || contribution.amount <= 0) return false;
         if (data.supplierId != null &&
             contribution.supplierId != data.supplierId) {
           return false;
@@ -340,7 +340,9 @@ class _FinanceSummary {
           return false;
         }
         return true;
-      }).toList();
+      }).toList() {
+    _debugPartnerContributionTotals(data);
+  }
 
   final List<Payment> customerPayments;
   final List<SupplierPurchase> purchases;
@@ -382,25 +384,44 @@ class _FinanceSummary {
   double get transferSupplierPayments => supplierPayments
       .where((payment) => payment.method == 'transfer')
       .fold(0, (sum, payment) => sum + payment.amount);
-  double get partnerSupplierPayments => supplierPayments
-      .where((payment) => payment.method == 'partner_contribution')
-      .fold(0, (sum, payment) => sum + payment.amount);
+  List<SupplierPayment> get partnerSupplierPaymentRows =>
+      supplierPayments.where(_isPartnerSupplierPayment).toList();
+  double get partnerSupplierPayments => partnerSupplierPaymentRows.fold(
+    0,
+    (sum, payment) => sum + payment.amount,
+  );
   double get cashWithdrawals =>
       withdrawals.fold(0, (sum, request) => sum + request.amount);
-  double get partnerContributions => contributions
-      .where((contribution) => contribution.linkedSupplierPaymentId == null)
-      .fold(0, (sum, contribution) => sum + contribution.amount);
+  List<PartnerContribution> get independentPartnerContributions {
+    final countedPaymentIds = partnerSupplierPaymentRows
+        .map((payment) => payment.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    return contributions.where((contribution) {
+      final linkedPaymentId = contribution.linkedSupplierPaymentId?.trim();
+      return linkedPaymentId == null ||
+          linkedPaymentId.isEmpty ||
+          !countedPaymentIds.contains(linkedPaymentId);
+    }).toList();
+  }
+
+  double get partnerContributions => independentPartnerContributions.fold(
+    0,
+    (sum, contribution) => sum + contribution.amount,
+  );
+  double get totalAportacionesSocios =>
+      partnerSupplierPayments + partnerContributions;
   double get partnerCashContributions => contributions
       .where(
         (contribution) =>
-            contribution.linkedSupplierPaymentId == null &&
+            independentPartnerContributions.contains(contribution) &&
             contribution.method == 'cash',
       )
       .fold(0, (sum, contribution) => sum + contribution.amount);
   double get partnerTransferContributions => contributions
       .where(
         (contribution) =>
-            contribution.linkedSupplierPaymentId == null &&
+            independentPartnerContributions.contains(contribution) &&
             contribution.method == 'transfer',
       )
       .fold(0, (sum, contribution) => sum + contribution.amount);
@@ -408,7 +429,7 @@ class _FinanceSummary {
       salesCollected - supplierPaymentsTotal - cashWithdrawals;
   double get cashFlowWithPartners =>
       salesCollected +
-      partnerContributions -
+      totalAportacionesSocios -
       supplierPaymentsTotal -
       cashWithdrawals;
   double get estimatedResult =>
@@ -420,6 +441,50 @@ class _FinanceSummary {
         0,
         double.infinity,
       );
+
+  void _debugPartnerContributionTotals(_FinanceData data) {
+    debugPrint(
+      'FINANZAS supplierPayments leidos: ${data.supplierPayments.length}; filtrados: ${supplierPayments.length}',
+    );
+    final countedPaymentIds = <String>{};
+    for (final payment in supplierPayments) {
+      final method = [
+        payment.method,
+        payment.fundingSource,
+        payment.fundingSourceName,
+      ].join(' | ');
+      if (_isPartnerSupplierPayment(payment)) {
+        countedPaymentIds.add(payment.id.trim());
+        debugPrint(
+          'FINANZAS aportacion detectada: paymentId=${payment.id}, method=$method, amount=${payment.amount}, paymentDate=${_dayKey(payment.paymentDate)}, branchId=${payment.branchId}',
+        );
+      } else {
+        debugPrint(
+          'FINANZAS supplierPayment no socio: paymentId=${payment.id}, method=$method, amount=${payment.amount}, paymentDate=${_dayKey(payment.paymentDate)}, branchId=${payment.branchId}',
+        );
+      }
+    }
+    var independentAdded = 0;
+    for (final contribution in contributions) {
+      final linkedId = contribution.linkedSupplierPaymentId?.trim();
+      if (linkedId != null &&
+          linkedId.isNotEmpty &&
+          countedPaymentIds.contains(linkedId)) {
+        debugPrint(
+          'FINANZAS aportacion duplicada ignorada: contributionId=${contribution.id}, linkedSupplierPaymentId=$linkedId, amount=${contribution.amount}',
+        );
+        continue;
+      }
+      independentAdded++;
+      debugPrint(
+        'FINANZAS aportacion independiente agregada: contributionId=${contribution.id}, linkedSupplierPaymentId=${linkedId ?? ''}, method=${contribution.method}, amount=${contribution.amount}, date=${_dayKey(contribution.date)}, branchId=${contribution.branchId}',
+      );
+    }
+    debugPrint(
+      'FINANZAS partnerContributions independientes agregadas: $independentAdded',
+    );
+    debugPrint('FINANZAS total aportaciones socios: $totalAportacionesSocios');
+  }
 }
 
 class _FinanceFilters extends StatelessWidget {
@@ -508,13 +573,13 @@ class _FinancialStateTab extends StatelessWidget {
     final discountText = summary.cashWithdrawals > 0
         ? 'Se descontaron gastos/retiros aprobados por ${_money(summary.cashWithdrawals)} del resultado.'
         : null;
-    final alertColor = summary.partnerSupplierPayments > 0
+    final alertColor = summary.totalAportacionesSocios > 0
         ? BrandColors.info
         : summary.missingFromSales > 0
         ? BrandColors.danger
         : BrandColors.success;
-    final alertText = summary.partnerSupplierPayments > 0
-        ? 'Se registraron pagos con aportacion de socios por ${_money(summary.partnerSupplierPayments)}.'
+    final alertText = summary.totalAportacionesSocios > 0
+        ? 'Se registraron pagos con aportacion de socios por ${_money(summary.totalAportacionesSocios)}.'
         : summary.missingFromSales > 0
         ? 'Con la venta actual no alcanza para cubrir los pagos. Faltan ${_money(summary.missingFromSales)}.'
         : 'La venta del periodo cubre los pagos registrados.';
@@ -553,7 +618,7 @@ class _FinancialStateTab extends StatelessWidget {
             _Kpi('Compras registradas', summary.registeredPurchases),
             _Kpi('Pagos a proveedores', summary.supplierPaymentsTotal),
             _Kpi('Saldo a proveedores', summary.pendingPayableBalance),
-            _Kpi('Aportaciones socios', summary.partnerContributions),
+            _Kpi('Aportaciones socios', summary.totalAportacionesSocios),
             _Kpi('Gastos / retiros aprobados', summary.cashWithdrawals),
             _Kpi('Utilidad estimada', summary.estimatedResult),
           ],
@@ -731,7 +796,8 @@ class _FinanceReportsTab extends StatelessWidget {
       summary.supplierPayments,
     );
     final contributionsByPartner = _groupContributionsByPartner(
-      summary.contributions,
+      summary.partnerSupplierPaymentRows,
+      summary.independentPartnerContributions,
     );
     final pendingBySupplier = _groupPendingBySupplier(summary.pendingPurchases);
     final cashFlowByDay = _groupCashFlowByDay(summary);
@@ -760,6 +826,7 @@ class _FinanceReportsTab extends StatelessWidget {
           title: 'Resultado por sucursal',
           rows: {
             'Venta total': summary.salesCollected,
+            'Aportaciones socios': summary.totalAportacionesSocios,
             'Compras registradas': summary.registeredPurchases,
             'Gastos / retiros aprobados': summary.cashWithdrawals,
             'Utilidad estimada': summary.estimatedResult,
@@ -1236,12 +1303,21 @@ Map<String, double> _groupPaymentsBySupplier(List<SupplierPayment> payments) {
 }
 
 Map<String, double> _groupContributionsByPartner(
+  List<SupplierPayment> partnerSupplierPayments,
   List<PartnerContribution> contributions,
 ) {
   final result = <String, double>{};
-  for (final contribution in contributions.where(
-    (contribution) => contribution.linkedSupplierPaymentId == null,
-  )) {
+  for (final payment in partnerSupplierPayments) {
+    final partnerName = payment.partnerName?.trim();
+    result.update(
+      partnerName == null || partnerName.isEmpty
+          ? 'Aportacion de socios'
+          : partnerName,
+      (value) => value + payment.amount,
+      ifAbsent: () => payment.amount,
+    );
+  }
+  for (final contribution in contributions) {
     result.update(
       contribution.partnerName,
       (value) => value + contribution.amount,
@@ -1269,6 +1345,14 @@ Map<String, double> _groupCashFlowByDay(_FinanceSummary summary) {
       ifAbsent: () => -payment.amount,
     );
   }
+  for (final payment in summary.partnerSupplierPaymentRows) {
+    final date = _dayKey(payment.paymentDate);
+    result.update(
+      date,
+      (value) => value + payment.amount,
+      ifAbsent: () => payment.amount,
+    );
+  }
   for (final request in summary.withdrawals) {
     result.update(
       request.businessDate,
@@ -1276,7 +1360,7 @@ Map<String, double> _groupCashFlowByDay(_FinanceSummary summary) {
       ifAbsent: () => -request.amount,
     );
   }
-  for (final contribution in summary.contributions) {
+  for (final contribution in summary.independentPartnerContributions) {
     final date = _dayKey(contribution.date);
     result.update(
       date,
@@ -1304,6 +1388,38 @@ Map<String, double> _groupPendingBySupplier(List<SupplierPurchase> purchases) {
 bool _isApprovedWithdrawal(CashWithdrawalRequest request) {
   final status = request.status.trim().toLowerCase();
   return const {'approved', 'aprobado', 'aprobada'}.contains(status);
+}
+
+bool _isPartnerSupplierPayment(SupplierPayment payment) {
+  final values = [
+    payment.method,
+    payment.fundingSource,
+    payment.fundingSourceName,
+  ].map(_normalizeFinanceToken);
+  return values.any(
+    (value) => const {
+      'partner_contribution',
+      'partner contribution',
+      'partner_cash',
+      'partner cash',
+      'partner_transfer',
+      'partner transfer',
+      'aportacion de socios',
+    }.contains(value),
+  );
+}
+
+String _normalizeFinanceToken(String value) {
+  return value
+      .trim()
+      .toLowerCase()
+      .replaceAll('á', 'a')
+      .replaceAll('é', 'e')
+      .replaceAll('í', 'i')
+      .replaceAll('ó', 'o')
+      .replaceAll('ú', 'u')
+      .replaceAll('ü', 'u')
+      .replaceAll('ñ', 'n');
 }
 
 bool _withdrawalInBusinessDateRange(
