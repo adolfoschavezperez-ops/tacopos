@@ -9,6 +9,7 @@ import '../../models/payment.dart';
 import '../../models/product.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
+import '../../utils/csv_exporter.dart';
 import '../../utils/formatters.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
@@ -34,6 +35,8 @@ class AdminDashboardScreen extends StatefulWidget {
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   late DateTime _startDate;
   late DateTime _endDate;
+  late DateTime _hourlyBaseDate;
+  _HourlyReportMode _hourlyReportMode = _HourlyReportMode.yesterdayVsLastSales;
 
   @override
   void initState() {
@@ -41,6 +44,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final now = DateTime.now();
     _startDate = DateTime(now.year, now.month, now.day);
     _endDate = _startDate;
+    _hourlyBaseDate = _startDate.subtract(const Duration(days: 1));
   }
 
   String get _startBusinessDate => DateFormat('yyyy-MM-dd').format(_startDate);
@@ -324,6 +328,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       const SizedBox(height: 14),
                       _CashStatusPanel(repository: repository),
                       const SizedBox(height: 14),
+                      _HourlySalesComparisonPanel(
+                        repository: repository,
+                        orders: orders,
+                        mode: _hourlyReportMode,
+                        baseDate: _hourlyBaseDate,
+                        onModeChanged: (mode) =>
+                            setState(() => _hourlyReportMode = mode),
+                        onBaseDateChanged: (date) =>
+                            setState(() => _hourlyBaseDate = date),
+                        onRefresh: () => setState(() {}),
+                      ),
+                      const SizedBox(height: 20),
                       LayoutBuilder(
                         builder: (context, constraints) {
                           final columns = constraints.maxWidth >= 900
@@ -1103,6 +1119,691 @@ class _AdminLinkPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+enum _HourlyReportMode { yesterdayVsLastSales, selectedVsPreviousWeek }
+
+class _HourlySalesComparisonPanel extends StatelessWidget {
+  const _HourlySalesComparisonPanel({
+    required this.repository,
+    required this.orders,
+    required this.mode,
+    required this.baseDate,
+    required this.onModeChanged,
+    required this.onBaseDateChanged,
+    required this.onRefresh,
+  });
+
+  final TacoPosRepository repository;
+  final List<PosOrder> orders;
+  final _HourlyReportMode mode;
+  final DateTime baseDate;
+  final ValueChanged<_HourlyReportMode> onModeChanged;
+  final ValueChanged<DateTime> onBaseDateChanged;
+  final VoidCallback onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final range = _queryRange();
+    return StreamBuilder<List<Payment>>(
+      stream: repository.watchDashboardPayments(
+        startDate: range.start,
+        endDate: range.end,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          debugPrint('Hourly sales report failed: ${snapshot.error}');
+          return GlassPanel(
+            borderColor: BrandColors.danger,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _toolbar(context),
+                const SizedBox(height: 12),
+                const Text('No se pudo cargar el reporte. Intenta nuevamente.'),
+              ],
+            ),
+          );
+        }
+        if (!snapshot.hasData) {
+          return const LoadingPanel(message: 'Cargando ventas por hora...');
+        }
+
+        final payments = snapshot.data ?? const <Payment>[];
+        final orderById = {for (final order in orders) order.id: order};
+        final report = _buildReport(payments, orderById);
+        return GlassPanel(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _toolbar(context),
+              const SizedBox(height: 14),
+              if (report == null)
+                const Text(
+                  'No se encontro un dia anterior con ventas para comparar.',
+                  style: TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w800,
+                  ),
+                )
+              else ...[
+                _HourlySummary(report: report),
+                const SizedBox(height: 14),
+                _HourlyBars(report: report),
+                const SizedBox(height: 14),
+                _HourlyTable(report: report),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _toolbar(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        const SizedBox(
+          width: 260,
+          child: SectionHeader(
+            title: 'Ventas por hora',
+            subtitle: 'Comparativos de venta cobrada.',
+          ),
+        ),
+        SizedBox(
+          width: 340,
+          child: DropdownButtonFormField<_HourlyReportMode>(
+            initialValue: mode,
+            decoration: const InputDecoration(labelText: 'Reporte'),
+            items: const [
+              DropdownMenuItem(
+                value: _HourlyReportMode.yesterdayVsLastSales,
+                child: Text('Ventas por hora: ayer vs ultimo dia con ventas'),
+              ),
+              DropdownMenuItem(
+                value: _HourlyReportMode.selectedVsPreviousWeek,
+                child: Text('Ventas por hora: semana anterior'),
+              ),
+            ],
+            onChanged: (value) {
+              if (value != null) onModeChanged(value);
+            },
+          ),
+        ),
+        if (mode == _HourlyReportMode.selectedVsPreviousWeek)
+          OutlinedButton.icon(
+            onPressed: () async {
+              final picked = await showDatePicker(
+                context: context,
+                initialDate: baseDate,
+                firstDate: DateTime(2024),
+                lastDate: DateTime(DateTime.now().year + 2),
+              );
+              if (picked != null) onBaseDateChanged(_startOfDay(picked));
+            },
+            icon: const Icon(Icons.event_outlined),
+            label: Text('Base: ${_dateLabel(baseDate)}'),
+          ),
+        FilledButton.icon(
+          onPressed: onRefresh,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Actualizar'),
+        ),
+      ],
+    );
+  }
+
+  _DateRange _queryRange() {
+    final yesterday = _startOfDay(
+      DateTime.now(),
+    ).subtract(const Duration(days: 1));
+    if (mode == _HourlyReportMode.yesterdayVsLastSales) {
+      return _DateRange(
+        start: yesterday.subtract(const Duration(days: 30)),
+        end: yesterday,
+      );
+    }
+    final cleanBase = _startOfDay(baseDate);
+    final compare = cleanBase.subtract(const Duration(days: 7));
+    return _DateRange(
+      start: compare.isBefore(cleanBase) ? compare : cleanBase,
+      end: compare.isAfter(cleanBase) ? compare : cleanBase,
+    );
+  }
+
+  _HourlyComparisonReport? _buildReport(
+    List<Payment> payments,
+    Map<String, PosOrder> orderById,
+  ) {
+    final activePayments = payments.where((payment) {
+      if (!payment.isActive) return false;
+      final order = orderById[payment.orderId];
+      if (order == null) return true;
+      return !_isOrderCancelled(order);
+    }).toList();
+
+    final aDate = mode == _HourlyReportMode.yesterdayVsLastSales
+        ? _startOfDay(DateTime.now()).subtract(const Duration(days: 1))
+        : _startOfDay(baseDate);
+    final DateTime? bDate = mode == _HourlyReportMode.yesterdayVsLastSales
+        ? _lastSalesDateBefore(activePayments, aDate)
+        : aDate.subtract(const Duration(days: 7));
+    if (bDate == null) return null;
+
+    final a = _hourlySalesForDate(activePayments, orderById, aDate);
+    final b = _hourlySalesForDate(activePayments, orderById, bDate);
+    final rows = List.generate(24, (hour) {
+      final aHour = a.hours[hour] ?? const _HourlyBucket();
+      final bHour = b.hours[hour] ?? const _HourlyBucket();
+      return _HourlyComparisonRow(hour: hour, a: aHour, b: bHour);
+    });
+    return _HourlyComparisonReport(
+      mode: mode,
+      aDate: aDate,
+      bDate: bDate,
+      aLabel: mode == _HourlyReportMode.yesterdayVsLastSales
+          ? 'Ayer'
+          : 'Dia seleccionado',
+      bLabel: mode == _HourlyReportMode.yesterdayVsLastSales
+          ? 'Ultimo dia con ventas'
+          : 'Semana anterior',
+      rows: rows,
+    );
+  }
+
+  DateTime? _lastSalesDateBefore(List<Payment> payments, DateTime aDate) {
+    for (var offset = 1; offset <= 30; offset++) {
+      final candidate = aDate.subtract(Duration(days: offset));
+      final total = payments
+          .where(
+            (payment) => _paymentBusinessDate(payment) == _dateKey(candidate),
+          )
+          .fold<double>(0, (sum, payment) => sum + payment.chargedAmount);
+      if (total > 0.01) return candidate;
+    }
+    return null;
+  }
+
+  _DailyHourlySales _hourlySalesForDate(
+    List<Payment> payments,
+    Map<String, PosOrder> orderById,
+    DateTime date,
+  ) {
+    final businessDate = _dateKey(date);
+    final buckets = <int, _MutableHourlyBucket>{};
+    for (final payment in payments.where(
+      (payment) => _paymentBusinessDate(payment) == businessDate,
+    )) {
+      final order = orderById[payment.orderId];
+      final saleTime = payment.createdAt ?? order?.paidAt ?? order?.createdAt;
+      final hour = (saleTime ?? date).hour;
+      final bucket = buckets.putIfAbsent(hour, _MutableHourlyBucket.new);
+      bucket.sales += payment.chargedAmount;
+      if (payment.orderId.trim().isNotEmpty) {
+        bucket.orderIds.add(payment.orderId);
+      }
+    }
+    return _DailyHourlySales(
+      date: date,
+      hours: {
+        for (final entry in buckets.entries)
+          entry.key: _HourlyBucket(
+            sales: entry.value.sales,
+            orderCount: entry.value.orderIds.length,
+          ),
+      },
+    );
+  }
+}
+
+class _HourlySummary extends StatelessWidget {
+  const _HourlySummary({required this.report});
+
+  final _HourlyComparisonReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final diff = report.totalA - report.totalB;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth >= 900
+            ? 3
+            : constraints.maxWidth >= 560
+            ? 2
+            : 1;
+        return GridView.count(
+          crossAxisCount: columns,
+          crossAxisSpacing: 10,
+          mainAxisSpacing: 10,
+          childAspectRatio: constraints.maxWidth >= 900 ? 2.2 : 1.7,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          children: [
+            _SmallReportCard(
+              label: '${report.aLabel} ${_dateLabel(report.aDate)}',
+              value: _money(report.totalA),
+              color: BrandColors.accentYellow,
+            ),
+            _SmallReportCard(
+              label: '${report.bLabel} ${_dateLabel(report.bDate)}',
+              value: _money(report.totalB),
+              color: BrandColors.info,
+            ),
+            _SmallReportCard(
+              label: 'Diferencia total',
+              value:
+                  '${_money(diff)} (${_percentLabel(report.totalA, report.totalB)})',
+              color: diff >= 0 ? BrandColors.success : BrandColors.danger,
+            ),
+            _SmallReportCard(
+              label: 'Mejor hora ${report.aLabel.toLowerCase()}',
+              value: report.bestA == null
+                  ? 'Sin ventas'
+                  : '${_hourRange(report.bestA!.hour)} ${_money(report.bestA!.a.sales)}',
+              color: BrandColors.accentYellow,
+            ),
+            _SmallReportCard(
+              label: report.mode == _HourlyReportMode.yesterdayVsLastSales
+                  ? 'Hora mas baja de ayer'
+                  : 'Mejor hora semana anterior',
+              value: report.mode == _HourlyReportMode.yesterdayVsLastSales
+                  ? report.lowestA == null
+                        ? 'Sin ventas'
+                        : '${_hourRange(report.lowestA!.hour)} ${_money(report.lowestA!.a.sales)}'
+                  : report.bestB == null
+                  ? 'Sin ventas'
+                  : '${_hourRange(report.bestB!.hour)} ${_money(report.bestB!.b.sales)}',
+              color: BrandColors.textMuted,
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _SmallReportCard extends StatelessWidget {
+  const _SmallReportCard({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      accent: color,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            label,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: BrandColors.textMuted, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.w900,
+              fontSize: 18,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HourlyBars extends StatelessWidget {
+  const _HourlyBars({required this.report});
+
+  final _HourlyComparisonReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxSales = report.rows.fold<double>(
+      0,
+      (max, row) => [
+        max,
+        row.a.sales,
+        row.b.sales,
+      ].reduce((value, element) => value > element ? value : element),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 12,
+          children: const [
+            _Legend(color: BrandColors.accentYellow, label: 'Dia A'),
+            _Legend(color: BrandColors.info, label: 'Dia B'),
+          ],
+        ),
+        const SizedBox(height: 10),
+        ...report.rows
+            .where((row) => row.a.sales > 0 || row.b.sales > 0)
+            .map((row) => _HourlyBarRow(row: row, maxSales: maxSales)),
+      ],
+    );
+  }
+}
+
+class _Legend extends StatelessWidget {
+  const _Legend({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(width: 12, height: 12, color: color),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(color: BrandColors.textMuted)),
+      ],
+    );
+  }
+}
+
+class _HourlyBarRow extends StatelessWidget {
+  const _HourlyBarRow({required this.row, required this.maxSales});
+
+  final _HourlyComparisonRow row;
+  final double maxSales;
+
+  @override
+  Widget build(BuildContext context) {
+    final aFactor = maxSales <= 0 ? 0.0 : row.a.sales / maxSales;
+    final bFactor = maxSales <= 0 ? 0.0 : row.b.sales / maxSales;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 96,
+            child: Text(
+              _hourRange(row.hour),
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              children: [
+                _Bar(value: aFactor, color: BrandColors.accentYellow),
+                const SizedBox(height: 3),
+                _Bar(value: bFactor, color: BrandColors.info),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 92,
+            child: Text(
+              _money(row.a.sales),
+              textAlign: TextAlign.right,
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Bar extends StatelessWidget {
+  const _Bar({required this.value, required this.color});
+
+  final double value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            width: (constraints.maxWidth * value).clamp(
+              2,
+              constraints.maxWidth,
+            ),
+            height: 8,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _HourlyTable extends StatelessWidget {
+  const _HourlyTable({required this.report});
+
+  final _HourlyComparisonReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: OutlinedButton.icon(
+            onPressed: () => _export(context),
+            icon: const Icon(Icons.download_outlined),
+            label: const Text('CSV'),
+          ),
+        ),
+        const SizedBox(height: 8),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            columns: [
+              const DataColumn(label: Text('Hora')),
+              DataColumn(label: Text('${report.aLabel} venta')),
+              DataColumn(label: Text('${report.bLabel} venta')),
+              const DataColumn(label: Text('Dif \$')),
+              const DataColumn(label: Text('Dif %')),
+              DataColumn(label: Text('Ordenes ${report.aLabel}')),
+              DataColumn(label: Text('Ordenes ${report.bLabel}')),
+            ],
+            rows: report.rows
+                .map(
+                  (row) => DataRow(
+                    cells: [
+                      DataCell(Text(_hourRange(row.hour))),
+                      DataCell(Text(_money(row.a.sales))),
+                      DataCell(Text(_money(row.b.sales))),
+                      DataCell(
+                        Text(
+                          _money(row.diff),
+                          style: TextStyle(color: _diffColor(row.diff)),
+                        ),
+                      ),
+                      DataCell(
+                        Text(
+                          _percentLabel(row.a.sales, row.b.sales),
+                          style: TextStyle(color: _diffColor(row.diff)),
+                        ),
+                      ),
+                      DataCell(Text('${row.a.orderCount}')),
+                      DataCell(Text('${row.b.orderCount}')),
+                    ],
+                  ),
+                )
+                .toList(),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _export(BuildContext context) async {
+    final csv = [
+      'Reporte,Fecha A,Fecha B,Hora,Venta A,Venta B,Diferencia,Diferencia %,Ordenes A,Ordenes B',
+      ...report.rows.map(
+        (row) =>
+            '"${report.title}","${_dateKey(report.aDate)}","${_dateKey(report.bDate)}","${_hourRange(row.hour)}",${row.a.sales},${row.b.sales},${row.diff},"${_percentLabel(row.a.sales, row.b.sales)}",${row.a.orderCount},${row.b.orderCount}',
+      ),
+    ].join('\n');
+    final message = await exportCsvFile(
+      fileName: 'ventas-por-hora-comparativo.csv',
+      content: csv,
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+}
+
+class _DateRange {
+  const _DateRange({required this.start, required this.end});
+
+  final DateTime start;
+  final DateTime end;
+}
+
+class _DailyHourlySales {
+  const _DailyHourlySales({required this.date, required this.hours});
+
+  final DateTime date;
+  final Map<int, _HourlyBucket> hours;
+}
+
+class _MutableHourlyBucket {
+  double sales = 0;
+  final Set<String> orderIds = {};
+}
+
+class _HourlyBucket {
+  const _HourlyBucket({this.sales = 0, this.orderCount = 0});
+
+  final double sales;
+  final int orderCount;
+}
+
+class _HourlyComparisonRow {
+  const _HourlyComparisonRow({
+    required this.hour,
+    required this.a,
+    required this.b,
+  });
+
+  final int hour;
+  final _HourlyBucket a;
+  final _HourlyBucket b;
+
+  double get diff => a.sales - b.sales;
+}
+
+class _HourlyComparisonReport {
+  const _HourlyComparisonReport({
+    required this.mode,
+    required this.aDate,
+    required this.bDate,
+    required this.aLabel,
+    required this.bLabel,
+    required this.rows,
+  });
+
+  final _HourlyReportMode mode;
+  final DateTime aDate;
+  final DateTime bDate;
+  final String aLabel;
+  final String bLabel;
+  final List<_HourlyComparisonRow> rows;
+
+  String get title => mode == _HourlyReportMode.yesterdayVsLastSales
+      ? 'Ventas por hora: ayer vs ultimo dia con ventas'
+      : 'Ventas por hora: semana anterior';
+  double get totalA => rows.fold(0, (sum, row) => sum + row.a.sales);
+  double get totalB => rows.fold(0, (sum, row) => sum + row.b.sales);
+  _HourlyComparisonRow? get bestA => _best(rows, (row) => row.a.sales);
+  _HourlyComparisonRow? get bestB => _best(rows, (row) => row.b.sales);
+  _HourlyComparisonRow? get lowestA {
+    final nonZero = rows.where((row) => row.a.sales > 0).toList();
+    if (nonZero.isEmpty) return null;
+    nonZero.sort((a, b) => a.a.sales.compareTo(b.a.sales));
+    return nonZero.first;
+  }
+
+  static _HourlyComparisonRow? _best(
+    List<_HourlyComparisonRow> rows,
+    double Function(_HourlyComparisonRow row) selector,
+  ) {
+    final nonZero = rows.where((row) => selector(row) > 0).toList();
+    if (nonZero.isEmpty) return null;
+    nonZero.sort((a, b) => selector(b).compareTo(selector(a)));
+    return nonZero.first;
+  }
+}
+
+bool _isOrderCancelled(PosOrder order) {
+  final status = order.status.toLowerCase().trim();
+  return status == 'cancelled' ||
+      status == 'canceled' ||
+      status == 'voided' ||
+      order.cancelledAt != null ||
+      order.canceledAt != null;
+}
+
+String _paymentBusinessDate(Payment payment) {
+  final businessDate = payment.businessDate?.trim();
+  if (businessDate != null && businessDate.isNotEmpty) return businessDate;
+  return _dateKey(payment.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+}
+
+DateTime _startOfDay(DateTime date) =>
+    DateTime(date.year, date.month, date.day);
+
+String _dateKey(DateTime date) => DateFormat('yyyy-MM-dd').format(date);
+
+String _dateLabel(DateTime date) => DateFormat('dd/MM/yyyy').format(date);
+
+String _hourRange(int hour) {
+  final start = hour.toString().padLeft(2, '0');
+  return '$start:00 - $start:59';
+}
+
+String _money(double value) {
+  final sign = value < 0 ? '-' : '';
+  return '$sign\$${value.abs().toStringAsFixed(2)}';
+}
+
+String _percentLabel(double a, double b) {
+  if (b.abs() <= 0.01) {
+    if (a.abs() <= 0.01) return '0.0%';
+    return '+100.0%';
+  }
+  final value = ((a - b) / b) * 100;
+  final sign = value > 0 ? '+' : '';
+  return '$sign${value.toStringAsFixed(1)}%';
+}
+
+Color _diffColor(double diff) {
+  if (diff > 0.01) return BrandColors.success;
+  if (diff < -0.01) return BrandColors.danger;
+  return BrandColors.textMuted;
 }
 
 class _MetricCard extends StatelessWidget {
