@@ -773,65 +773,50 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
           ...purchases.map(
             (purchase) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
-              child: GlassCard(
-                accent: _purchaseDueAccent(purchase),
-                child: ListTile(
-                  title: Text(
-                    purchase.supplierName,
-                    style: const TextStyle(fontWeight: FontWeight.w900),
-                  ),
-                  subtitle: Text(
-                    '${purchase.folio.isEmpty ? 'Sin folio' : purchase.folio} · '
-                    'Compra ${_dateLabel(purchase.purchaseDate)} · '
-                    'Vence ${_dueDateLabel(purchase.dueDate)} · '
-                    '${_dueStatusLabel(purchase)} · '
-                    'Estado: ${_purchaseStatusLabel(purchase.status)}',
-                  ),
-                  trailing: Wrap(
-                    spacing: 12,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      if (purchase.isCancelled)
-                        const Chip(label: Text('Cancelada')),
-                      _Metric(label: 'Total', value: purchase.total),
-                      _Metric(label: 'Pagado', value: purchase.paidTotal),
-                      _Metric(label: 'Saldo', value: purchase.balance),
-                      TextButton(
-                        onPressed: purchase.isCancelled
-                            ? null
-                            : () => _changeDueDate(purchase),
-                        child: const Text('Cambiar vencimiento'),
-                      ),
-                      TextButton(
-                        onPressed: purchase.isCancelled
-                            ? null
-                            : () => _editPurchase(purchase),
-                        child: const Text('Editar compra'),
-                      ),
-                      OutlinedButton(
-                        onPressed: () => _showPurchaseDetail(
-                          context,
-                          repository: widget.repository,
+              child: GestureDetector(
+                onDoubleTap: () => _editPurchaseFromRow(purchase),
+                child: GlassCard(
+                  accent: _purchaseDueAccent(purchase),
+                  child: ListTile(
+                    title: Text(
+                      purchase.supplierName,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    subtitle: Text(
+                      '${purchase.folio.isEmpty ? 'Sin folio' : purchase.folio} · '
+                      'Compra ${_dateLabel(purchase.purchaseDate)} · '
+                      'Vence ${_dueDateLabel(purchase.dueDate)} · '
+                      '${_dueStatusLabel(purchase)} · '
+                      'Estado: ${_purchaseStatusLabel(purchase.status)}',
+                    ),
+                    trailing: Wrap(
+                      spacing: 12,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        if (purchase.isCancelled)
+                          const Chip(label: Text('Cancelada')),
+                        _Metric(label: 'Total', value: purchase.total),
+                        _Metric(label: 'Pagado', value: purchase.paidTotal),
+                        _Metric(label: 'Saldo', value: purchase.balance),
+                        _AccountsPayableActionsMenu(
                           purchase: purchase,
-                          payments: widget.data.payments,
-                          data: widget.data,
-                        ),
-                        child: const Text('Ver detalle'),
-                      ),
-                      if (!purchase.isCancelled) ...[
-                        if (canCancelPurchase)
-                          TextButton(
-                            onPressed: () => _cancelPurchase(purchase),
-                            child: const Text('Cancelar compra'),
+                          canCancelPurchase: canCancelPurchase,
+                          onEdit: () => _editPurchaseFromRow(purchase),
+                          onChangeDueDate: () => _changeDueDate(purchase),
+                          onCancel: () => _cancelPurchase(purchase),
+                          onViewDetail: () => _showPurchaseDetail(
+                            context,
+                            repository: widget.repository,
+                            purchase: purchase,
+                            payments: widget.data.payments,
+                            data: widget.data,
                           ),
-                        FilledButton(
-                          onPressed: purchase.hasBalance
+                          onPay: purchase.hasBalance
                               ? () => _payPurchase(purchase)
                               : null,
-                          child: const Text('Pagar'),
                         ),
                       ],
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -851,6 +836,18 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
     );
     if (!mounted || paid != true) return;
     showAppSnackBar(context, 'Pago registrado.', type: AppSnackBarType.success);
+  }
+
+  void _editPurchaseFromRow(SupplierPurchase purchase) {
+    if (purchase.isCancelled) {
+      showAppSnackBar(
+        context,
+        'No se puede editar una compra cancelada.',
+        type: AppSnackBarType.warning,
+      );
+      return;
+    }
+    _editPurchase(purchase);
   }
 
   Future<void> _changeDueDate(SupplierPurchase purchase) async {
@@ -925,6 +922,90 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
         type: AppSnackBarType.error,
       );
     }
+  }
+}
+
+enum _AccountsPayableAction { edit, changeDueDate, cancel, viewDetail, pay }
+
+class _AccountsPayableActionsMenu extends StatelessWidget {
+  const _AccountsPayableActionsMenu({
+    required this.purchase,
+    required this.canCancelPurchase,
+    required this.onEdit,
+    required this.onChangeDueDate,
+    required this.onCancel,
+    required this.onViewDetail,
+    required this.onPay,
+  });
+
+  final SupplierPurchase purchase;
+  final bool canCancelPurchase;
+  final VoidCallback onEdit;
+  final VoidCallback onChangeDueDate;
+  final VoidCallback onCancel;
+  final VoidCallback onViewDetail;
+  final VoidCallback? onPay;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 72,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Acciones',
+            style: TextStyle(color: BrandColors.textMuted, fontSize: 11),
+          ),
+          PopupMenuButton<_AccountsPayableAction>(
+            tooltip: 'Acciones',
+            icon: const Icon(Icons.more_vert),
+            onSelected: (action) {
+              switch (action) {
+                case _AccountsPayableAction.edit:
+                  onEdit();
+                case _AccountsPayableAction.changeDueDate:
+                  onChangeDueDate();
+                case _AccountsPayableAction.cancel:
+                  onCancel();
+                case _AccountsPayableAction.viewDetail:
+                  onViewDetail();
+                case _AccountsPayableAction.pay:
+                  onPay?.call();
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                value: _AccountsPayableAction.edit,
+                enabled: !purchase.isCancelled,
+                child: const Text('Editar compra'),
+              ),
+              PopupMenuItem(
+                value: _AccountsPayableAction.changeDueDate,
+                enabled: !purchase.isCancelled,
+                child: const Text('Cambiar fecha de vencimiento'),
+              ),
+              PopupMenuItem(
+                value: _AccountsPayableAction.cancel,
+                enabled: !purchase.isCancelled && canCancelPurchase,
+                child: const Text('Cancelar compra'),
+              ),
+              const PopupMenuItem(
+                value: _AccountsPayableAction.viewDetail,
+                child: Text('Ver detalle'),
+              ),
+              if (onPay != null) ...[
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: _AccountsPayableAction.pay,
+                  child: Text('Registrar pago'),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
   }
 }
 
