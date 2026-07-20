@@ -35,7 +35,7 @@ class DashboardSectionPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _ExecutiveSurface(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -49,7 +49,7 @@ class DashboardSectionPanel extends StatelessWidget {
                     Text(
                       title,
                       style: const TextStyle(
-                        fontSize: 18,
+                        fontSize: 16,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -67,7 +67,7 @@ class DashboardSectionPanel extends StatelessWidget {
               if (trailing != null) ...[const SizedBox(width: 12), trailing!],
             ],
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 12),
           child,
         ],
       ),
@@ -100,7 +100,7 @@ class ExecutiveDashboardHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _ExecutiveSurface(
-      padding: const EdgeInsets.all(22),
+      padding: const EdgeInsets.all(16),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 760;
@@ -115,16 +115,16 @@ class ExecutiveDashboardHeader extends StatelessWidget {
                   letterSpacing: 0,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 5),
               Text(
                 title,
                 style: TextStyle(
-                  fontSize: compact ? 28 : 36,
+                  fontSize: compact ? 24 : 30,
                   fontWeight: FontWeight.w900,
                   height: 1.05,
                 ),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 6),
               Text(
                 subtitle,
                 style: const TextStyle(
@@ -150,7 +150,7 @@ class ExecutiveDashboardHeader extends StatelessWidget {
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [copy, const SizedBox(height: 18), filters],
+              children: [copy, const SizedBox(height: 12), filters],
             );
           }
           return Row(
@@ -186,7 +186,7 @@ class ExecutiveKpiCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _ExecutiveSurface(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -214,14 +214,14 @@ class ExecutiveKpiCard extends StatelessWidget {
               fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 5),
           Text(
             value,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 27, fontWeight: FontWeight.w900),
+            style: const TextStyle(fontSize: 23, fontWeight: FontWeight.w900),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 5),
           Text(
             detail,
             maxLines: 2,
@@ -727,7 +727,7 @@ class _DatePill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.06),
         borderRadius: BorderRadius.circular(8),

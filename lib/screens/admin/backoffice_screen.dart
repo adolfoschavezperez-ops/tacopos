@@ -81,6 +81,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
   late DateTime _endDate;
   _BackofficeSection _section = _BackofficeSection.dashboard;
   _ReportKind _reportKind = _ReportKind.products;
+  bool _navCollapsed = false;
 
   @override
   void initState() {
@@ -200,7 +201,6 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                 endDate: _endDate,
                 startBusinessDate: _startBusinessDate,
                 endBusinessDate: _endBusinessDate,
-                onReportChanged: (value) => setState(() => _reportKind = value),
                 onPickStart: _pickStartDate,
                 onPickEnd: _pickEndDate,
                 onToday: _today,
@@ -214,8 +214,13 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                     _MobileTopBar(
                       section: effectiveSection,
                       employee: employee,
+                      reportKind: _reportKind,
                       onSectionChanged: (value) =>
                           setState(() => _section = value),
+                      onReportSelected: (value) => setState(() {
+                        _section = _BackofficeSection.reports;
+                        _reportKind = value;
+                      }),
                     ),
                     Expanded(child: body),
                   ],
@@ -227,8 +232,16 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                   _SideNav(
                     section: effectiveSection,
                     employee: employee,
+                    reportKind: _reportKind,
+                    collapsed: _navCollapsed,
                     onSectionChanged: (value) =>
                         setState(() => _section = value),
+                    onReportSelected: (value) => setState(() {
+                      _section = _BackofficeSection.reports;
+                      _reportKind = value;
+                    }),
+                    onToggleCollapsed: () =>
+                        setState(() => _navCollapsed = !_navCollapsed),
                   ),
                   Expanded(child: body),
                 ],
@@ -245,66 +258,121 @@ class _SideNav extends StatelessWidget {
   const _SideNav({
     required this.section,
     required this.employee,
+    required this.reportKind,
+    required this.collapsed,
     required this.onSectionChanged,
+    required this.onReportSelected,
+    required this.onToggleCollapsed,
   });
 
   final _BackofficeSection section;
   final Employee? employee;
+  final _ReportKind reportKind;
+  final bool collapsed;
   final ValueChanged<_BackofficeSection> onSectionChanged;
+  final ValueChanged<_ReportKind> onReportSelected;
+  final VoidCallback onToggleCollapsed;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 268,
-      padding: const EdgeInsets.all(18),
+    final items = _navItems(employee);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+      width: collapsed ? 72 : 268,
+      padding: EdgeInsets.all(collapsed ? 10 : 18),
       child: GlassPanel(
-        borderRadius: 26,
+        padding: EdgeInsets.all(collapsed ? 8 : 14),
+        borderRadius: collapsed ? 18 : 26,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
                 SizedBox(
-                  width: 48,
-                  height: 48,
+                  width: collapsed ? 38 : 48,
+                  height: collapsed ? 38 : 48,
                   child: Image.asset(
                     'assets/branding/logo_los_padrinos.png',
                     fit: BoxFit.contain,
                   ),
                 ),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: Text(
-                    'TacoPOS\nBackoffice',
-                    style: TextStyle(fontWeight: FontWeight.w900),
+                if (!collapsed) ...[
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'TacoPOS\nBackoffice',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ],
+                IconButton(
+                  tooltip: collapsed ? 'Expandir menu' : 'Minimizar menu',
+                  onPressed: onToggleCollapsed,
+                  icon: Icon(
+                    collapsed
+                        ? Icons.keyboard_double_arrow_right
+                        : Icons.keyboard_double_arrow_left,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
-            ..._navItems(employee).map(
-              (item) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: _NavButton(
-                  item: item,
-                  selected: item.section == section,
-                  onTap: () => onSectionChanged(item.section),
-                ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final item in items) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _NavButton(
+                        item: item,
+                        collapsed: collapsed,
+                        selected: item.section == section,
+                        onTap: () => onSectionChanged(item.section),
+                      ),
+                    ),
+                    if (!collapsed &&
+                        item.children.isNotEmpty &&
+                        item.section == section)
+                      ...item.children.map(
+                        (child) => Padding(
+                          padding: const EdgeInsets.only(left: 12, bottom: 5),
+                          child: _NavButton(
+                            item: child,
+                            dense: true,
+                            collapsed: false,
+                            selected:
+                                child.reportKind != null &&
+                                child.reportKind == reportKind,
+                            onTap: () => onReportSelected(child.reportKind!),
+                          ),
+                        ),
+                      ),
+                  ],
+                ],
               ),
             ),
-            const Spacer(),
-            Text(
-              employee?.name ?? 'Socio',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: AppSession.instance.signOut,
-              icon: const Icon(Icons.logout),
-              label: const Text('Salir'),
-            ),
+            if (!collapsed) ...[
+              const SizedBox(height: 10),
+              Text(
+                employee?.name ?? 'Socio',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: AppSession.instance.signOut,
+                icon: const Icon(Icons.logout),
+                label: const Text('Salir'),
+              ),
+            ] else
+              IconButton(
+                tooltip: 'Salir',
+                onPressed: AppSession.instance.signOut,
+                icon: const Icon(Icons.logout),
+              ),
           ],
         ),
       ),
@@ -316,12 +384,16 @@ class _MobileTopBar extends StatelessWidget {
   const _MobileTopBar({
     required this.section,
     required this.employee,
+    required this.reportKind,
     required this.onSectionChanged,
+    required this.onReportSelected,
   });
 
   final _BackofficeSection section;
   final Employee? employee;
+  final _ReportKind reportKind;
   final ValueChanged<_BackofficeSection> onSectionChanged;
+  final ValueChanged<_ReportKind> onReportSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -354,12 +426,35 @@ class _MobileTopBar extends StatelessWidget {
                 children: _navItems(employee).map((item) {
                   return Padding(
                     padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      selected: item.section == section,
-                      avatar: Icon(item.icon, size: 18),
-                      label: Text(item.label),
-                      onSelected: (_) => onSectionChanged(item.section),
-                    ),
+                    child: item.children.isEmpty
+                        ? ChoiceChip(
+                            selected: item.section == section,
+                            avatar: Icon(item.icon, size: 18),
+                            label: Text(item.label),
+                            onSelected: (_) => onSectionChanged(item.section),
+                          )
+                        : PopupMenuButton<_ReportKind>(
+                            tooltip: 'Reportes',
+                            onSelected: onReportSelected,
+                            itemBuilder: (context) => item.children
+                                .map(
+                                  (child) => PopupMenuItem(
+                                    value: child.reportKind!,
+                                    child: Text(child.label),
+                                  ),
+                                )
+                                .toList(),
+                            child: ChoiceChip(
+                              selected: item.section == section,
+                              avatar: Icon(item.icon, size: 18),
+                              label: Text(
+                                section == item.section
+                                    ? _reportTitle(reportKind)
+                                    : item.label,
+                              ),
+                              onSelected: (_) => onSectionChanged(item.section),
+                            ),
+                          ),
                   );
                 }).toList(),
               ),
@@ -375,46 +470,67 @@ class _NavButton extends StatelessWidget {
   const _NavButton({
     required this.item,
     required this.selected,
+    required this.collapsed,
     required this.onTap,
+    this.dense = false,
   });
 
   final _NavItem item;
   final bool selected;
+  final bool collapsed;
+  final bool dense;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(16),
+    final button = InkWell(
+      borderRadius: BorderRadius.circular(8),
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: EdgeInsets.symmetric(
+          horizontal: collapsed ? 10 : 12,
+          vertical: dense ? 8 : 10,
+        ),
         decoration: BoxDecoration(
           color: selected
               ? BrandColors.accentYellow.withValues(alpha: 0.16)
               : Colors.transparent,
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(8),
           border: Border.all(
             color: selected ? BrandColors.accentYellow : Colors.transparent,
           ),
         ),
         child: Row(
+          mainAxisAlignment: collapsed
+              ? MainAxisAlignment.center
+              : MainAxisAlignment.start,
           children: [
-            Icon(item.icon, color: selected ? BrandColors.accentYellow : null),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                item.label,
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: selected ? BrandColors.accentYellow : null,
+            Icon(
+              item.icon,
+              size: dense ? 18 : 22,
+              color: selected ? BrandColors.accentYellow : null,
+            ),
+            if (!collapsed) ...[
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  item.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: dense ? 13 : null,
+                    fontWeight: FontWeight.w800,
+                    color: selected ? BrandColors.accentYellow : null,
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
     );
+    return Tooltip(message: item.label, child: button);
   }
 }
 
@@ -427,7 +543,6 @@ class _BackofficeBody extends StatelessWidget {
     required this.endDate,
     required this.startBusinessDate,
     required this.endBusinessDate,
-    required this.onReportChanged,
     required this.onPickStart,
     required this.onPickEnd,
     required this.onToday,
@@ -442,7 +557,6 @@ class _BackofficeBody extends StatelessWidget {
   final DateTime endDate;
   final String startBusinessDate;
   final String endBusinessDate;
-  final ValueChanged<_ReportKind> onReportChanged;
   final VoidCallback onPickStart;
   final VoidCallback onPickEnd;
   final VoidCallback onToday;
@@ -550,47 +664,56 @@ class _BackofficeBody extends StatelessWidget {
                   ),
                   const SizedBox(height: 18),
                 ],
-                switch (section) {
-                  _BackofficeSection.dashboard => _DashboardSection(
-                    repository: repository,
-                    orders: orders,
-                    payments: activePayments,
-                    startBusinessDate: startBusinessDate,
-                    endBusinessDate: endBusinessDate,
-                    onPickStart: onPickStart,
-                    onPickEnd: onPickEnd,
-                    onToday: onToday,
-                    onWeek: onWeek,
-                    onMonth: onMonth,
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  child: KeyedSubtree(
+                    key: ValueKey('${section.name}-${reportKind.name}'),
+                    child: switch (section) {
+                      _BackofficeSection.dashboard => _DashboardSection(
+                        repository: repository,
+                        orders: orders,
+                        payments: activePayments,
+                        startBusinessDate: startBusinessDate,
+                        endBusinessDate: endBusinessDate,
+                        onPickStart: onPickStart,
+                        onPickEnd: onPickEnd,
+                        onToday: onToday,
+                        onWeek: onWeek,
+                        onMonth: onMonth,
+                      ),
+                      _BackofficeSection.sales => _SalesSection(
+                        repository: repository,
+                        orders: orders,
+                        payments: activePayments,
+                      ),
+                      _BackofficeSection.reports => _ReportsSection(
+                        repository: repository,
+                        orders:
+                            reportKind ==
+                                    _ReportKind.hourlyYesterdayLastSales ||
+                                reportKind == _ReportKind.hourlyPreviousWeek
+                            ? allOrders
+                            : orders,
+                        payments: reportKind == _ReportKind.cancelledPayments
+                            ? payments
+                            : activePayments,
+                        reportKind: reportKind,
+                        startBusinessDate: startBusinessDate,
+                        endBusinessDate: endBusinessDate,
+                      ),
+                      _BackofficeSection.authorizations =>
+                        const SizedBox.shrink(),
+                      _BackofficeSection.live => const SizedBox.shrink(),
+                      _BackofficeSection.cash => const SizedBox.shrink(),
+                      _BackofficeSection.kitchen => const SizedBox.shrink(),
+                      _BackofficeSection.purchases => const SizedBox.shrink(),
+                      _BackofficeSection.finance => const SizedBox.shrink(),
+                      _BackofficeSection.settings => const SizedBox.shrink(),
+                    },
                   ),
-                  _BackofficeSection.sales => _SalesSection(
-                    repository: repository,
-                    orders: orders,
-                    payments: activePayments,
-                  ),
-                  _BackofficeSection.reports => _ReportsSection(
-                    repository: repository,
-                    orders:
-                        reportKind == _ReportKind.hourlyYesterdayLastSales ||
-                            reportKind == _ReportKind.hourlyPreviousWeek
-                        ? allOrders
-                        : orders,
-                    payments: reportKind == _ReportKind.cancelledPayments
-                        ? payments
-                        : activePayments,
-                    reportKind: reportKind,
-                    startBusinessDate: startBusinessDate,
-                    endBusinessDate: endBusinessDate,
-                    onReportChanged: onReportChanged,
-                  ),
-                  _BackofficeSection.authorizations => const SizedBox.shrink(),
-                  _BackofficeSection.live => const SizedBox.shrink(),
-                  _BackofficeSection.cash => const SizedBox.shrink(),
-                  _BackofficeSection.kitchen => const SizedBox.shrink(),
-                  _BackofficeSection.purchases => const SizedBox.shrink(),
-                  _BackofficeSection.finance => const SizedBox.shrink(),
-                  _BackofficeSection.settings => const SizedBox.shrink(),
-                },
+                ),
               ],
             );
           },
@@ -1209,7 +1332,6 @@ class _ReportsSection extends StatefulWidget {
     required this.reportKind,
     required this.startBusinessDate,
     required this.endBusinessDate,
-    required this.onReportChanged,
   });
 
   final TacoPosRepository repository;
@@ -1218,7 +1340,6 @@ class _ReportsSection extends StatefulWidget {
   final _ReportKind reportKind;
   final String startBusinessDate;
   final String endBusinessDate;
-  final ValueChanged<_ReportKind> onReportChanged;
 
   @override
   State<_ReportsSection> createState() => _ReportsSectionState();
@@ -1263,7 +1384,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _reportSelector(
+              _reportToolbar(
                 rows: const [],
                 headers: _reportHeaders(widget.reportKind),
               ),
@@ -1277,7 +1398,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _reportSelector(rows: rows, headers: headers),
+            _reportToolbar(rows: rows, headers: headers),
             const SizedBox(height: 14),
             _ReportTable(headers: headers, rows: rows),
           ],
@@ -1286,39 +1407,41 @@ class _ReportsSectionState extends State<_ReportsSection> {
     );
   }
 
-  Widget _reportSelector({
+  Widget _reportToolbar({
     required List<List<String>> rows,
     required List<String> headers,
     List<Widget> extraChildren = const [],
   }) {
     return GlassPanel(
-      padding: const EdgeInsets.all(14),
-      child: Wrap(
-        spacing: 10,
-        runSpacing: 10,
-        crossAxisAlignment: WrapCrossAlignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
         children: [
-          DropdownButton<_ReportKind>(
-            value: widget.reportKind,
-            items: _ReportKind.values
-                .map(
-                  (kind) => DropdownMenuItem(
-                    value: kind,
-                    child: Text(_reportTitle(kind)),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) {
-              if (value != null) widget.onReportChanged(value);
-            },
+          Expanded(
+            child: Text(
+              _reportTitle(widget.reportKind),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+            ),
           ),
-          ...extraChildren,
+          if (extraChildren.isNotEmpty)
+            Flexible(
+              flex: 2,
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: extraChildren,
+              ),
+            ),
+          const SizedBox(width: 10),
           FilledButton.icon(
             onPressed: rows.isEmpty
                 ? null
                 : () => _copyCsv(context, headers, rows),
             icon: const Icon(Icons.download_outlined),
-            label: const Text('Exportar CSV'),
+            label: const Text('CSV'),
           ),
         ],
       ),
@@ -1341,7 +1464,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _reportSelector(rows: const [], headers: _hourlyCsvHeaders),
+              _reportToolbar(rows: const [], headers: _hourlyCsvHeaders),
               const SizedBox(height: 14),
               const LoadingPanel(message: 'Cargando ventas por hora...'),
             ],
@@ -1352,7 +1475,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _reportSelector(rows: const [], headers: _hourlyCsvHeaders),
+              _reportToolbar(rows: const [], headers: _hourlyCsvHeaders),
               const SizedBox(height: 14),
               const _FriendlyError(
                 message: 'No se pudo cargar el reporte. Intenta nuevamente.',
@@ -1364,7 +1487,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _reportSelector(rows: const [], headers: _hourlyCsvHeaders),
+              _reportToolbar(rows: const [], headers: _hourlyCsvHeaders),
               const SizedBox(height: 14),
               const LoadingPanel(message: 'Cargando ventas por hora...'),
             ],
@@ -1380,7 +1503,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _reportSelector(
+            _reportToolbar(
               rows: rows,
               headers: _hourlyCsvHeaders,
               extraChildren: [
@@ -1440,7 +1563,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              _reportSelector(rows: const [], headers: _stockOutCsvHeaders),
+              _reportToolbar(rows: const [], headers: _stockOutCsvHeaders),
               const SizedBox(height: 14),
               const LoadingPanel(message: 'Cargando productos agotados...'),
             ],
@@ -1481,7 +1604,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _reportSelector(
+            _reportToolbar(
               rows: rows.map(_stockOutCsvRow).toList(),
               headers: _stockOutCsvHeaders,
               extraChildren: [
@@ -1889,35 +2012,74 @@ class _BackofficeBranchSelector extends StatelessWidget {
   }
 }
 
-class _ReportTable extends StatelessWidget {
+class _ReportTable extends StatefulWidget {
   const _ReportTable({required this.headers, required this.rows});
 
   final List<String> headers;
   final List<List<String>> rows;
 
   @override
+  State<_ReportTable> createState() => _ReportTableState();
+}
+
+class _ReportTableState extends State<_ReportTable> {
+  int? _sortColumnIndex;
+  bool _sortAscending = true;
+
+  @override
   Widget build(BuildContext context) {
-    if (rows.isEmpty) {
+    if (widget.rows.isEmpty) {
       return const EmptyState(
         icon: Icons.analytics_outlined,
         title: 'Sin datos',
         message: 'No hay informacion para el reporte seleccionado.',
       );
     }
+    final sortedRows = [...widget.rows];
+    final sortColumnIndex = _sortColumnIndex;
+    if (sortColumnIndex != null) {
+      sortedRows.sort((a, b) {
+        final result = _compareReportCells(
+          sortColumnIndex < a.length ? a[sortColumnIndex] : '',
+          sortColumnIndex < b.length ? b[sortColumnIndex] : '',
+        );
+        return _sortAscending ? result : -result;
+      });
+    }
     return GlassPanel(
+      padding: const EdgeInsets.all(10),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 620),
+        constraints: const BoxConstraints(maxHeight: 640),
         child: SingleChildScrollView(
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              columns: headers
-                  .map((header) => DataColumn(label: Text(header)))
+              sortColumnIndex: _sortColumnIndex,
+              sortAscending: _sortAscending,
+              headingRowHeight: 42,
+              dataRowMinHeight: 38,
+              dataRowMaxHeight: 46,
+              horizontalMargin: 14,
+              columnSpacing: 22,
+              columns: widget.headers
+                  .asMap()
+                  .entries
+                  .map(
+                    (entry) => DataColumn(
+                      label: Text(entry.value),
+                      onSort: (columnIndex, ascending) {
+                        setState(() {
+                          _sortColumnIndex = columnIndex;
+                          _sortAscending = ascending;
+                        });
+                      },
+                    ),
+                  )
                   .toList(),
-              rows: rows
+              rows: sortedRows
                   .map(
                     (row) => DataRow(
-                      cells: headers
+                      cells: widget.headers
                           .asMap()
                           .keys
                           .map(
@@ -1935,6 +2097,52 @@ class _ReportTable extends StatelessWidget {
       ),
     );
   }
+}
+
+int _compareReportCells(String a, String b) {
+  final aDate = _tryParseReportDate(a);
+  final bDate = _tryParseReportDate(b);
+  if (aDate != null && bDate != null) return aDate.compareTo(bDate);
+
+  final aNumber = _tryParseReportNumber(a);
+  final bNumber = _tryParseReportNumber(b);
+  if (aNumber != null && bNumber != null) return aNumber.compareTo(bNumber);
+
+  return a.toLowerCase().trim().compareTo(b.toLowerCase().trim());
+}
+
+DateTime? _tryParseReportDate(String value) {
+  final clean = value.trim();
+  if (clean.isEmpty || clean == '-') return null;
+  final formats = [
+    'yyyy-MM-dd HH:mm',
+    'yyyy-MM-dd',
+    'dd/MM/yyyy HH:mm',
+    'dd/MM/yyyy',
+    'dd/MM',
+  ];
+  for (final pattern in formats) {
+    try {
+      final parsed = DateFormat(pattern).parseStrict(clean);
+      if (pattern == 'dd/MM') {
+        final now = DateTime.now();
+        return DateTime(now.year, parsed.month, parsed.day);
+      }
+      return parsed;
+    } on FormatException {
+      continue;
+    }
+  }
+  return null;
+}
+
+double? _tryParseReportNumber(String value) {
+  final clean = value
+      .replaceAll(RegExp(r'[\$,%%]'), '')
+      .replaceAll(',', '')
+      .trim();
+  if (clean.isEmpty || clean == '-') return null;
+  return double.tryParse(clean);
 }
 
 class _ResponsiveGrid extends StatelessWidget {
@@ -2214,11 +2422,19 @@ class _SettingsLink {
 }
 
 class _NavItem {
-  const _NavItem(this.section, this.icon, this.label);
+  const _NavItem(
+    this.section,
+    this.icon,
+    this.label, {
+    this.reportKind,
+    this.children = const [],
+  });
 
   final _BackofficeSection section;
   final IconData icon;
   final String label;
+  final _ReportKind? reportKind;
+  final List<_NavItem> children;
 }
 
 class _BarRow {
@@ -2315,10 +2531,11 @@ List<_NavItem> _navItems(Employee? employee) {
       const _NavItem(_BackofficeSection.sales, Icons.receipt_long, 'Ventas'),
     if (employee?.hasAdminAccess == true ||
         employee?.canViewKitchenReports == true)
-      const _NavItem(
+      _NavItem(
         _BackofficeSection.reports,
         Icons.analytics_outlined,
         'Reportes',
+        children: _reportNavItems(employee),
       ),
     if (_canUseBackoffice(employee))
       const _NavItem(
@@ -2375,6 +2592,112 @@ List<_NavItem> _navItems(Employee? employee) {
         Icons.settings_outlined,
         'Configuracion',
       ),
+  ];
+}
+
+List<_NavItem> _reportNavItems(Employee? employee) {
+  final canKitchen =
+      employee?.hasAdminAccess == true ||
+      employee?.canViewKitchenReports == true;
+  return [
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.inventory_2_outlined,
+      'Ventas por articulo',
+      reportKind: _ReportKind.products,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.schedule_outlined,
+      'Ventas por hora',
+      reportKind: _ReportKind.hourly,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.compare_arrows_outlined,
+      'Comparativo ultimo dia',
+      reportKind: _ReportKind.hourlyYesterdayLastSales,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.stacked_line_chart_outlined,
+      'Comparativo semana anterior',
+      reportKind: _ReportKind.hourlyPreviousWeek,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.calendar_month_outlined,
+      'Ventas por fecha',
+      reportKind: _ReportKind.dates,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.storefront_outlined,
+      'Ventas por plataforma',
+      reportKind: _ReportKind.platform,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.payments_outlined,
+      'Ventas por metodo de pago',
+      reportKind: _ReportKind.paymentMethod,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.badge_outlined,
+      'Ventas por empleado',
+      reportKind: _ReportKind.employee,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.point_of_sale_outlined,
+      'Corte de caja historico',
+      reportKind: _ReportKind.cashHistory,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.request_quote_outlined,
+      'Gastos / retiros',
+      reportKind: _ReportKind.withdrawals,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.cancel_outlined,
+      'Cancelaciones',
+      reportKind: _ReportKind.cancellations,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.money_off_csred_outlined,
+      'Pagos cancelados',
+      reportKind: _ReportKind.cancelledPayments,
+    ),
+    if (canKitchen) ...const [
+      _NavItem(
+        _BackofficeSection.reports,
+        Icons.warning_amber_outlined,
+        'Mermas por insumo',
+        reportKind: _ReportKind.kitchenWaste,
+      ),
+      _NavItem(
+        _BackofficeSection.reports,
+        Icons.sync_alt_outlined,
+        'Entradas y salidas de insumos',
+        reportKind: _ReportKind.kitchenInventory,
+      ),
+      _NavItem(
+        _BackofficeSection.reports,
+        Icons.soup_kitchen_outlined,
+        'Rendimiento de cocina',
+        reportKind: _ReportKind.kitchenYield,
+      ),
+      _NavItem(
+        _BackofficeSection.reports,
+        Icons.production_quantity_limits_outlined,
+        'Productos agotados',
+        reportKind: _ReportKind.productStockOuts,
+      ),
+    ],
   ];
 }
 

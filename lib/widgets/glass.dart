@@ -218,7 +218,7 @@ class SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final compact = size.width < 650 || size.height < 750;
+    final compact = size.width < 900 || size.height < 820;
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
@@ -233,8 +233,9 @@ class SectionHeader extends StatelessWidget {
                 style: compact
                     ? Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w800,
+                        fontSize: 20,
                       )
-                    : Theme.of(context).textTheme.headlineMedium,
+                    : Theme.of(context).textTheme.headlineSmall,
               ),
               if (subtitle != null) ...[
                 SizedBox(height: compact ? 2 : 4),
