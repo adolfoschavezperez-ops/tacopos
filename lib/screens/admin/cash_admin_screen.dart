@@ -1800,6 +1800,10 @@ class _CashCancellationSummary extends StatelessWidget {
     return StreamBuilder<List<PosOrder>>(
       stream: repository.watchAllOrders(),
       builder: (context, orderSnapshot) {
+        if (orderSnapshot.connectionState == ConnectionState.waiting &&
+            !orderSnapshot.hasData) {
+          return const LoadingPanel(message: 'Cargando cancelaciones...');
+        }
         final orders = (orderSnapshot.data ?? const <PosOrder>[])
             .where(
               (order) =>
@@ -1823,6 +1827,10 @@ class _CashCancellationSummary extends StatelessWidget {
             activeOnly: false,
           ),
           builder: (context, paymentSnapshot) {
+            if (paymentSnapshot.connectionState == ConnectionState.waiting &&
+                !paymentSnapshot.hasData) {
+              return const LoadingPanel(message: 'Cargando cancelaciones...');
+            }
             final payments = (paymentSnapshot.data ?? const <Payment>[])
                 .where((payment) => payment.isCancelled)
                 .toList();
@@ -1838,6 +1846,12 @@ class _CashCancellationSummary extends StatelessWidget {
             return FutureBuilder<List<_CancelledItemLine>>(
               future: _cancelledItemLines(repository, orderSnapshot.data ?? []),
               builder: (context, itemSnapshot) {
+                if (itemSnapshot.connectionState == ConnectionState.waiting &&
+                    !itemSnapshot.hasData) {
+                  return const LoadingPanel(
+                    message: 'Cargando cancelaciones...',
+                  );
+                }
                 final itemLines = itemSnapshot.data ?? const [];
                 final itemTotal = itemLines.fold<double>(
                   0,

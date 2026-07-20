@@ -135,6 +135,28 @@ class _PurchaseDataScope extends StatelessWidget {
                         return StreamBuilder<List<PartnerContribution>>(
                           stream: repository.watchPartnerContributions(),
                           builder: (context, contributionsSnapshot) {
+                            final nestedError =
+                                partnersSnapshot.error ??
+                                purchasesSnapshot.error ??
+                                paymentsSnapshot.error ??
+                                contributionsSnapshot.error;
+                            if (nestedError != null) {
+                              return EmptyState(
+                                icon: Icons.error_outline,
+                                title: 'No se pudieron cargar compras',
+                                message: '$nestedError',
+                              );
+                            }
+                            final isLoading =
+                                !partnersSnapshot.hasData ||
+                                !purchasesSnapshot.hasData ||
+                                !paymentsSnapshot.hasData ||
+                                !contributionsSnapshot.hasData;
+                            if (isLoading) {
+                              return const LoadingPanel(
+                                message: 'Cargando compras...',
+                              );
+                            }
                             final data = _PurchaseData(
                               suppliers: suppliersSnapshot.data ?? const [],
                               partners: partnersSnapshot.data ?? const [],

@@ -519,6 +519,10 @@ class _BackofficeBody extends StatelessWidget {
             if (paymentsSnapshot.hasError) {
               return _FriendlyError(message: 'No se pudieron cargar pagos.');
             }
+            if (paymentsSnapshot.connectionState == ConnectionState.waiting &&
+                !paymentsSnapshot.hasData) {
+              return const LoadingPanel(message: 'Cargando reportes...');
+            }
             final payments = _paymentsInRange(paymentsSnapshot.data ?? []);
             final activePayments = payments
                 .where(_isDashboardActivePayment)
@@ -838,6 +842,10 @@ class _DashboardSection extends StatelessWidget {
         FutureBuilder<_ItemsSummary>(
           future: _itemsSummary(repository, orders),
           builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting &&
+                !snapshot.hasData) {
+              return const LoadingPanel(message: 'Cargando dashboard...');
+            }
             final summary = snapshot.data ?? const _ItemsSummary.empty();
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1250,6 +1258,20 @@ class _ReportsSectionState extends State<_ReportsSection> {
         widget.endBusinessDate,
       ),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _reportSelector(
+                rows: const [],
+                headers: _reportHeaders(widget.reportKind),
+              ),
+              const SizedBox(height: 14),
+              const LoadingPanel(message: 'Cargando reporte...'),
+            ],
+          );
+        }
         final rows = snapshot.data ?? const <List<String>>[];
         final headers = _reportHeaders(widget.reportKind);
         return Column(
@@ -1314,6 +1336,17 @@ class _ReportsSectionState extends State<_ReportsSection> {
         endDate: range.end,
       ),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _reportSelector(rows: const [], headers: _hourlyCsvHeaders),
+              const SizedBox(height: 14),
+              const LoadingPanel(message: 'Cargando ventas por hora...'),
+            ],
+          );
+        }
         if (snapshot.hasError) {
           debugPrint('Hourly comparison report failed: ${snapshot.error}');
           return Column(
@@ -1402,6 +1435,17 @@ class _ReportsSectionState extends State<_ReportsSection> {
         endBusinessDate: widget.endBusinessDate,
       ),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _reportSelector(rows: const [], headers: _stockOutCsvHeaders),
+              const SizedBox(height: 14),
+              const LoadingPanel(message: 'Cargando productos agotados...'),
+            ],
+          );
+        }
         final allRows = snapshot.data ?? const <ProductStockOutRow>[];
         final branches = _stockOutOptions(
           allRows.map((row) => MapEntry(row.branchId, row.branchName)),

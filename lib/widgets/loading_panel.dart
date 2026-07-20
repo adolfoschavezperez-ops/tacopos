@@ -10,6 +10,37 @@ class LoadingPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ReportLoadingWidget(message: message);
+  }
+}
+
+class ReportLoadingWidget extends StatefulWidget {
+  const ReportLoadingWidget({super.key, this.message = 'Cargando...'});
+
+  final String message;
+
+  @override
+  State<ReportLoadingWidget> createState() => _ReportLoadingWidgetState();
+}
+
+class _ReportLoadingWidgetState extends State<ReportLoadingWidget> {
+  var _visible = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future<void>.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        setState(() => _visible = true);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_visible) {
+      return const SizedBox.shrink();
+    }
     return Center(
       child: GlassPanel(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
@@ -18,7 +49,10 @@ class LoadingPanel extends StatelessWidget {
           children: [
             const CircularProgressIndicator(color: BrandColors.accentYellow),
             const SizedBox(height: 14),
-            Text(message, style: const TextStyle(color: BrandColors.textMuted)),
+            Text(
+              widget.message,
+              style: const TextStyle(color: BrandColors.textMuted),
+            ),
           ],
         ),
       ),

@@ -242,6 +242,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   message: '${paymentsSnapshot.error}',
                 );
               }
+              if (paymentsSnapshot.connectionState == ConnectionState.waiting &&
+                  !paymentsSnapshot.hasData) {
+                return const LoadingPanel(message: 'Cargando dashboard...');
+              }
 
               final payments = _paymentsInRange(paymentsSnapshot.data ?? []);
               final baseSales = payments.fold<double>(
@@ -302,6 +306,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       title: 'No se pudieron cargar productos',
                       message: '${productsSnapshot.error}',
                     );
+                  }
+                  if (productsSnapshot.connectionState ==
+                          ConnectionState.waiting &&
+                      !productsSnapshot.hasData) {
+                    return const LoadingPanel(message: 'Cargando dashboard...');
                   }
 
                   final products = productsSnapshot.data ?? [];

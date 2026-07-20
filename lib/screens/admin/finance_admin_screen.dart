@@ -93,6 +93,33 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                             endDate: _endDate,
                                           ),
                                       builder: (context, paymentsSnapshot) {
+                                        final nestedError =
+                                            purchasesSnapshot.error ??
+                                            supplierPaymentsSnapshot.error ??
+                                            contributionsSnapshot.error ??
+                                            partnersSnapshot.error ??
+                                            withdrawalsSnapshot.error ??
+                                            paymentsSnapshot.error;
+                                        if (nestedError != null) {
+                                          return EmptyState(
+                                            icon: Icons.error_outline,
+                                            title:
+                                                'No se pudieron cargar finanzas',
+                                            message: '$nestedError',
+                                          );
+                                        }
+                                        final isLoading =
+                                            !purchasesSnapshot.hasData ||
+                                            !supplierPaymentsSnapshot.hasData ||
+                                            !contributionsSnapshot.hasData ||
+                                            !partnersSnapshot.hasData ||
+                                            !withdrawalsSnapshot.hasData ||
+                                            !paymentsSnapshot.hasData;
+                                        if (isLoading) {
+                                          return const LoadingPanel(
+                                            message: 'Cargando finanzas...',
+                                          );
+                                        }
                                         final data = _FinanceData(
                                           suppliers:
                                               suppliersSnapshot.data ??
