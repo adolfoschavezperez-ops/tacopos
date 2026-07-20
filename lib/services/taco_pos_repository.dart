@@ -2336,10 +2336,13 @@ class TacoPosRepository {
   }) async {
     _requirePurchaseAccess(manage: true);
     if (items.isEmpty) {
-      throw ArgumentError('Agrega al menos un renglon de compra.');
+      throw ArgumentError('La compra debe tener al menos un articulo.');
     }
     final invalidItem = items.any(
       (item) =>
+          (item.kitchenStockItemId ?? item.purchaseItemId ?? '')
+              .trim()
+              .isEmpty ||
           item.purchaseItemName.trim().isEmpty ||
           item.quantity <= 0 ||
           item.unitCost < 0,
@@ -2376,7 +2379,11 @@ class TacoPosRepository {
         : 'partial';
     final employee = AppSession.instance.employee;
     final existingItemsSnapshot = await purchaseRef.collection('items').get();
-    final existingDocs = existingItemsSnapshot.docs;
+    final existingActiveDocs = {
+      for (final doc in existingItemsSnapshot.docs)
+        if (SupplierPurchaseItem.fromDoc(doc).isActive) doc.id: doc.reference,
+    };
+    final previousItemsCount = existingActiveDocs.length;
     final paymentsSnapshot = await _supplierPaymentsRef
         .where('purchaseId', isEqualTo: currentPurchase.id)
         .get();
@@ -2399,11 +2406,17 @@ class TacoPosRepository {
       'updatedByEmployeeId': employee?.id ?? '',
       'updatedByEmployeeName': employee?.name ?? '',
     }, SetOptions(merge: true));
+    final keptItemIds = <String>{};
     for (var index = 0; index < items.length; index++) {
       final item = items[index];
-      final itemRef = index < existingDocs.length
-          ? existingDocs[index].reference
+      final existingItemId = item.supplierPurchaseItemId?.trim();
+      final itemRef =
+          existingItemId != null &&
+              existingItemId.isNotEmpty &&
+              existingActiveDocs.containsKey(existingItemId)
+          ? existingActiveDocs[existingItemId]!
           : purchaseRef.collection('items').doc();
+      keptItemIds.add(itemRef.id);
       final itemId = item.kitchenStockItemId ?? item.purchaseItemId;
       final itemName = item.kitchenStockItemName ?? item.purchaseItemName;
       batch.set(itemRef, {
@@ -2424,8 +2437,11 @@ class TacoPosRepository {
         'notes': item.notes.trim(),
       }, SetOptions(merge: true));
     }
-    for (var index = items.length; index < existingDocs.length; index++) {
-      batch.set(existingDocs[index].reference, {
+    for (final entry in existingActiveDocs.entries) {
+      if (keptItemIds.contains(entry.key)) {
+        continue;
+      }
+      batch.set(entry.value, {
         'status': 'removed',
         'quantity': 0,
         'unitCost': 0,
@@ -2455,6 +2471,8 @@ class TacoPosRepository {
       'purchaseFolio': folio.trim(),
       'previousTotal': currentPurchase.total,
       'newTotal': total,
+      'previousItemsCount': previousItemsCount,
+      'newItemsCount': items.length,
       'employeeId': employee?.id ?? '',
       'employeeName': employee?.name ?? '',
       'timestamp': FieldValue.serverTimestamp(),

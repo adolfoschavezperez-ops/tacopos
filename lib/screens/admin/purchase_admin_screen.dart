@@ -1987,6 +1987,12 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
     final initial = widget.initial;
     if (initial == null) return;
     _itemId = initial.kitchenStockItemId ?? initial.purchaseItemId;
+    if (_itemId != null &&
+        !widget.items
+            .where((item) => item.active)
+            .any((item) => item.id == _itemId)) {
+      _itemId = null;
+    }
     _nameController.text =
         initial.kitchenStockItemName ?? initial.purchaseItemName;
     _qtyController.text = _formatQty(initial.quantity);
@@ -2097,6 +2103,7 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
     Navigator.pop(
       context,
       PurchaseLineInput(
+        supplierPurchaseItemId: widget.initial?.supplierPurchaseItemId,
         purchaseItemId: null,
         purchaseItemName: name,
         kitchenStockItemId: item.isEmpty ? null : item.first.id,
@@ -2296,7 +2303,7 @@ class _EditSupplierPurchaseDialogState
                       OutlinedButton.icon(
                         onPressed: _saving ? null : _addLine,
                         icon: const Icon(Icons.add),
-                        label: const Text('Agregar renglon'),
+                        label: const Text('Agregar articulo'),
                       ),
                     ],
                   ),
@@ -2441,14 +2448,14 @@ class _EditSupplierPurchaseDialogState
       return;
     }
     if (_lines.isEmpty) {
-      showAppSnackBar(context, 'Agrega al menos un renglon.');
+      showAppSnackBar(context, 'La compra debe tener al menos un articulo.');
       return;
     }
     final total = _lines.fold<double>(0, (sum, line) => sum + line.total);
     if (total + 0.01 < paidTotal) {
       showAppSnackBar(
         context,
-        'No puedes dejar el total por debajo de lo ya pagado.',
+        'No puedes dejar el total menor a lo ya pagado. Esta compra tiene pagos aplicados por ${_money(paidTotal)}.',
         type: AppSnackBarType.warning,
       );
       return;
@@ -3830,6 +3837,7 @@ String _purchaseItemName(SupplierPurchaseItem item) {
 
 PurchaseLineInput _lineFromPurchaseItem(SupplierPurchaseItem item) {
   return PurchaseLineInput(
+    supplierPurchaseItemId: item.id,
     purchaseItemId: item.purchaseItemId,
     purchaseItemName: item.purchaseItemName,
     kitchenStockItemId: item.kitchenStockItemId,

@@ -630,6 +630,7 @@ class PurchaseLineInput {
     required this.quantity,
     required this.unit,
     required this.unitCost,
+    this.supplierPurchaseItemId,
     this.purchaseItemId,
     this.kitchenStockItemId,
     this.kitchenStockItemName,
@@ -637,6 +638,7 @@ class PurchaseLineInput {
     this.notes = '',
   });
 
+  final String? supplierPurchaseItemId;
   final String? purchaseItemId;
   final String purchaseItemName;
   final String? kitchenStockItemId;
