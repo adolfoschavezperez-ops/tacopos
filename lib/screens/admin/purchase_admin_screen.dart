@@ -691,7 +691,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
             repository: widget.repository,
             purchase: purchase,
             payments: widget.data.payments,
-            partners: widget.data.partners,
+            data: widget.data,
           ),
         ),
       );
@@ -802,13 +802,19 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
                             : () => _changeDueDate(purchase),
                         child: const Text('Cambiar vencimiento'),
                       ),
+                      TextButton(
+                        onPressed: purchase.isCancelled
+                            ? null
+                            : () => _editPurchase(purchase),
+                        child: const Text('Editar compra'),
+                      ),
                       OutlinedButton(
                         onPressed: () => _showPurchaseDetail(
                           context,
                           repository: widget.repository,
                           purchase: purchase,
                           payments: widget.data.payments,
-                          partners: widget.data.partners,
+                          data: widget.data,
                         ),
                         child: const Text('Ver detalle'),
                       ),
@@ -841,7 +847,6 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       builder: (_) => _SupplierPaymentDialog(
         repository: widget.repository,
         purchase: purchase,
-        partners: widget.data.partners,
       ),
     );
     if (!mounted || paid != true) return;
@@ -860,6 +865,23 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
     showAppSnackBar(
       context,
       'Fecha de vencimiento actualizada.',
+      type: AppSnackBarType.success,
+    );
+  }
+
+  Future<void> _editPurchase(SupplierPurchase purchase) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _EditSupplierPurchaseDialog(
+        repository: widget.repository,
+        data: widget.data,
+        purchase: purchase,
+      ),
+    );
+    if (!mounted || saved != true) return;
+    showAppSnackBar(
+      context,
+      'Compra actualizada.',
       type: AppSnackBarType.success,
     );
   }
@@ -906,30 +928,52 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
   }
 }
 
-class _SupplierPaymentsTab extends StatelessWidget {
+class _SupplierPaymentsTab extends StatefulWidget {
   const _SupplierPaymentsTab({required this.repository, required this.data});
 
   final TacoPosRepository repository;
   final _PurchaseData data;
 
   @override
+  State<_SupplierPaymentsTab> createState() => _SupplierPaymentsTabState();
+}
+
+class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
+  String _method = 'all';
+
+  @override
   Widget build(BuildContext context) {
+    final payments = widget.data.payments.where((payment) {
+      if (_method == 'all') return true;
+      return payment.method == _method;
+    }).toList();
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
-        const _PurchaseHeader(
+        _PurchaseHeader(
           title: 'Pagos a proveedores',
           subtitle: 'Historial de pagos aplicados.',
+          action: _Dropdown(
+            label: 'Forma',
+            value: _method,
+            values: const {
+              'all': 'Todos',
+              'cash': 'Efectivo',
+              'transfer': 'Transferencia',
+              'partner_contribution': 'Aportacion de socios',
+            },
+            onChanged: (value) => setState(() => _method = value),
+          ),
         ),
         const SizedBox(height: 12),
-        if (data.payments.isEmpty)
+        if (payments.isEmpty)
           const EmptyState(
             icon: Icons.payments_outlined,
             title: 'Sin pagos',
             message: 'Los abonos apareceran aqui.',
           )
         else
-          ...data.payments.map(
+          ...payments.map(
             (payment) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: GlassCard(
@@ -940,8 +984,7 @@ class _SupplierPaymentsTab extends StatelessWidget {
                   title: Text(payment.supplierName),
                   subtitle: Text(
                     '${DateFormat('dd/MM/yyyy').format(payment.paymentDate)} · '
-                    '${payment.fundingSourceName} · ${_paymentMethodLabel(payment.method)} · ${payment.purchaseFolio}'
-                    '${payment.partnerName == null ? '' : ' · ${payment.partnerName}'}'
+                    '${_supplierPaymentMethodLabel(payment)} · ${payment.purchaseFolio}'
                     '${payment.reference.isEmpty ? '' : ' · Ref: ${payment.reference}'}',
                   ),
                   trailing: Wrap(
@@ -954,7 +997,7 @@ class _SupplierPaymentsTab extends StatelessWidget {
                         TextButton(
                           onPressed: () => _cancelSupplierPayment(
                             context,
-                            repository: repository,
+                            repository: widget.repository,
                             payment: payment,
                           ),
                           child: const Text('Cancelar pago'),
@@ -1052,6 +1095,7 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
             rows: rows,
             onViewPurchase: (purchaseId) => _openPurchaseDetail(purchaseId),
             onChangeDueDate: (purchaseId) => _openChangeDueDate(purchaseId),
+            onEditPurchase: (purchaseId) => _openEditPurchase(purchaseId),
             onCancelPayment: (paymentId) => _openCancelPayment(paymentId),
           ),
       ],
@@ -1172,7 +1216,7 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
       repository: widget.repository,
       purchase: purchase,
       payments: widget.data.payments,
-      partners: widget.data.partners,
+      data: widget.data,
     );
   }
 
@@ -1218,6 +1262,34 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
     showAppSnackBar(
       context,
       'Fecha de vencimiento actualizada.',
+      type: AppSnackBarType.success,
+    );
+  }
+
+  Future<void> _openEditPurchase(String purchaseId) async {
+    final purchase = widget.data.purchases
+        .where((purchase) => purchase.id == purchaseId)
+        .firstOrNull;
+    if (purchase == null) {
+      showAppSnackBar(
+        context,
+        'No se encontro la compra seleccionada.',
+        type: AppSnackBarType.error,
+      );
+      return;
+    }
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _EditSupplierPurchaseDialog(
+        repository: widget.repository,
+        data: widget.data,
+        purchase: purchase,
+      ),
+    );
+    if (!mounted || saved != true) return;
+    showAppSnackBar(
+      context,
+      'Compra actualizada.',
       type: AppSnackBarType.success,
     );
   }
@@ -1317,7 +1389,7 @@ class _PurchaseKardexTab extends StatelessWidget {
                 repository: repository,
                 purchase: purchase,
                 payments: data.payments,
-                partners: data.partners,
+                data: data,
               );
             },
           ),
@@ -1892,9 +1964,10 @@ class _PurchaseKitchenStockItemDialogState
 }
 
 class _PurchaseLineDialog extends StatefulWidget {
-  const _PurchaseLineDialog({required this.items});
+  const _PurchaseLineDialog({required this.items, this.initial});
 
   final List<KitchenStockItem> items;
+  final PurchaseLineInput? initial;
 
   @override
   State<_PurchaseLineDialog> createState() => _PurchaseLineDialogState();
@@ -1905,7 +1978,22 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
   final _qtyController = TextEditingController(text: '1');
   final _unitController = TextEditingController(text: 'kg');
   final _costController = TextEditingController();
+  final _notesController = TextEditingController();
   String? _itemId;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initial;
+    if (initial == null) return;
+    _itemId = initial.kitchenStockItemId ?? initial.purchaseItemId;
+    _nameController.text =
+        initial.kitchenStockItemName ?? initial.purchaseItemName;
+    _qtyController.text = _formatQty(initial.quantity);
+    _unitController.text = initial.unit;
+    _costController.text = initial.unitCost.toStringAsFixed(2);
+    _notesController.text = initial.notes;
+  }
 
   @override
   void dispose() {
@@ -1913,13 +2001,16 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
     _qtyController.dispose();
     _unitController.dispose();
     _costController.dispose();
+    _notesController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Agregar renglon'),
+      title: Text(
+        widget.initial == null ? 'Agregar renglon' : 'Editar renglon',
+      ),
       content: SizedBox(
         width: 520,
         child: Wrap(
@@ -1949,6 +2040,7 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
             _field(_qtyController, 'Cantidad', 110),
             _field(_unitController, 'Unidad', 100),
             _field(_costController, 'Costo unitario', 140),
+            _field(_notesController, 'Notas', 480),
           ],
         ),
       ),
@@ -1957,7 +2049,10 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancelar'),
         ),
-        FilledButton(onPressed: _submit, child: const Text('Agregar')),
+        FilledButton(
+          onPressed: _submit,
+          child: Text(widget.initial == null ? 'Agregar' : 'Guardar'),
+        ),
       ],
     );
   }
@@ -2011,8 +2106,375 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
         quantity: quantity,
         unit: _unitController.text.trim(),
         unitCost: unitCost,
+        notes: _notesController.text,
       ),
     );
+  }
+}
+
+class _EditSupplierPurchaseDialog extends StatefulWidget {
+  const _EditSupplierPurchaseDialog({
+    required this.repository,
+    required this.data,
+    required this.purchase,
+  });
+
+  final TacoPosRepository repository;
+  final _PurchaseData data;
+  final SupplierPurchase purchase;
+
+  @override
+  State<_EditSupplierPurchaseDialog> createState() =>
+      _EditSupplierPurchaseDialogState();
+}
+
+class _EditSupplierPurchaseDialogState
+    extends State<_EditSupplierPurchaseDialog> {
+  late final TextEditingController _folioController;
+  late final TextEditingController _notesController;
+  late Future<List<SupplierPurchaseItem>> _itemsFuture;
+  late String _supplierId;
+  late String _documentType;
+  late DateTime _purchaseDate;
+  late DateTime _dueDate;
+  final _lines = <PurchaseLineInput>[];
+  bool _loaded = false;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _supplierId = widget.purchase.supplierId;
+    _documentType = widget.purchase.documentType;
+    _purchaseDate = widget.purchase.purchaseDate;
+    _dueDate = widget.purchase.dueDate ?? widget.purchase.purchaseDate;
+    _folioController = TextEditingController(text: widget.purchase.folio);
+    _notesController = TextEditingController(text: widget.purchase.notes);
+    _itemsFuture = widget.repository.getSupplierPurchaseItemsForPurchases([
+      widget.purchase,
+    ]);
+  }
+
+  @override
+  void dispose() {
+    _folioController.dispose();
+    _notesController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activePayments = widget.data.payments
+        .where(
+          (payment) =>
+              payment.purchaseId == widget.purchase.id && payment.isActive,
+        )
+        .toList();
+    final paidTotal = activePayments.fold<double>(
+      0,
+      (sum, payment) => sum + payment.amount,
+    );
+    final total = _lines.fold<double>(0, (sum, line) => sum + line.total);
+    return AlertDialog(
+      title: const Text('Editar compra a proveedor'),
+      content: SizedBox(
+        width: MediaQuery.sizeOf(context).width.clamp(340, 980).toDouble(),
+        child: FutureBuilder<List<SupplierPurchaseItem>>(
+          future: _itemsFuture,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return EmptyState(
+                icon: Icons.error_outline,
+                title: 'No se pudo cargar la compra',
+                message: '${snapshot.error}',
+              );
+            }
+            if (!snapshot.hasData) {
+              return const LoadingPanel(message: 'Cargando compra...');
+            }
+            if (!_loaded) {
+              _lines.addAll(snapshot.data!.map(_lineFromPurchaseItem));
+              _loaded = true;
+            }
+            return SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (activePayments.isNotEmpty)
+                    const GlassPanel(
+                      padding: EdgeInsets.all(12),
+                      child: Text(
+                        'Esta compra ya tiene pagos aplicados. No puedes reducir el total por debajo de lo pagado.',
+                        style: TextStyle(
+                          color: BrandColors.accentYellow,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: [
+                      SizedBox(
+                        width: 280,
+                        child: DropdownButtonFormField<String>(
+                          initialValue: _supplierId,
+                          decoration: const InputDecoration(
+                            labelText: 'Proveedor',
+                          ),
+                          items: widget.data.suppliers
+                              .map(
+                                (supplier) => DropdownMenuItem(
+                                  value: supplier.id,
+                                  child: Text(supplier.commercialName),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: _saving
+                              ? null
+                              : (value) =>
+                                    setState(() => _supplierId = value ?? ''),
+                        ),
+                      ),
+                      _editField(_folioController, 'Folio / nota', 180),
+                      SizedBox(
+                        width: 190,
+                        child: DropdownButtonFormField<String>(
+                          initialValue: _documentType,
+                          decoration: const InputDecoration(
+                            labelText: 'Documento',
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'note',
+                              child: Text('Nota'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'invoice',
+                              child: Text('Factura'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'ticket',
+                              child: Text('Ticket'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'remision',
+                              child: Text('Remision'),
+                            ),
+                          ],
+                          onChanged: _saving
+                              ? null
+                              : (value) => setState(
+                                  () => _documentType = value ?? 'note',
+                                ),
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : () => _pickDate(true),
+                        icon: const Icon(Icons.event_outlined),
+                        label: Text('Compra ${_dateLabel(_purchaseDate)}'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : () => _pickDate(false),
+                        icon: const Icon(Icons.event_available_outlined),
+                        label: Text('Vence ${_dateLabel(_dueDate)}'),
+                      ),
+                      _editField(_notesController, 'Observaciones', 360),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          'Renglones',
+                          style: TextStyle(fontWeight: FontWeight.w900),
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _saving ? null : _addLine,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Agregar renglon'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  if (_lines.isEmpty)
+                    const Text(
+                      'Sin renglones.',
+                      style: TextStyle(color: BrandColors.textMuted),
+                    )
+                  else
+                    ..._lines.asMap().entries.map((entry) {
+                      final line = entry.value;
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(line.purchaseItemName),
+                        subtitle: Text(
+                          '${_formatQty(line.quantity)} ${line.unit} x ${_money(line.unitCost)}'
+                          '${line.notes.trim().isEmpty ? '' : ' · ${line.notes}'}',
+                        ),
+                        trailing: Wrap(
+                          spacing: 8,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            MoneyText(value: line.total),
+                            IconButton(
+                              tooltip: 'Editar renglon',
+                              onPressed: _saving
+                                  ? null
+                                  : () => _editLine(entry.key),
+                              icon: const Icon(Icons.edit_outlined),
+                            ),
+                            IconButton(
+                              tooltip: 'Quitar renglon',
+                              onPressed: _saving
+                                  ? null
+                                  : () => setState(
+                                      () => _lines.removeAt(entry.key),
+                                    ),
+                              icon: const Icon(Icons.delete_outline),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  const Divider(),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Wrap(
+                      spacing: 14,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _Metric(label: 'Pagado', value: paidTotal),
+                        _Metric(label: 'Nuevo total', value: total),
+                        _Metric(
+                          label: 'Nuevo saldo',
+                          value: (total - paidTotal).clamp(0, double.infinity),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving ? null : () => _save(paidTotal),
+          icon: const Icon(Icons.save_outlined),
+          label: Text(_saving ? 'Guardando...' : 'Guardar cambios'),
+        ),
+      ],
+    );
+  }
+
+  Widget _editField(
+    TextEditingController controller,
+    String label,
+    double width,
+  ) {
+    return SizedBox(
+      width: width,
+      child: TextField(
+        controller: controller,
+        enabled: !_saving,
+        decoration: InputDecoration(labelText: label),
+      ),
+    );
+  }
+
+  Future<void> _pickDate(bool purchaseDate) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: purchaseDate ? _purchaseDate : _dueDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (purchaseDate) {
+        _purchaseDate = picked;
+      } else {
+        _dueDate = picked;
+      }
+    });
+  }
+
+  Future<void> _addLine() async {
+    final line = await showDialog<PurchaseLineInput>(
+      context: context,
+      builder: (_) => _PurchaseLineDialog(items: widget.data.kitchenStockItems),
+    );
+    if (line != null && mounted) {
+      setState(() => _lines.add(line));
+    }
+  }
+
+  Future<void> _editLine(int index) async {
+    final line = await showDialog<PurchaseLineInput>(
+      context: context,
+      builder: (_) => _PurchaseLineDialog(
+        items: widget.data.kitchenStockItems,
+        initial: _lines[index],
+      ),
+    );
+    if (line != null && mounted) {
+      setState(() => _lines[index] = line);
+    }
+  }
+
+  Future<void> _save(double paidTotal) async {
+    final supplier = widget.data.suppliers
+        .where((supplier) => supplier.id == _supplierId)
+        .firstOrNull;
+    if (supplier == null) {
+      showAppSnackBar(context, 'Selecciona proveedor.');
+      return;
+    }
+    if (_lines.isEmpty) {
+      showAppSnackBar(context, 'Agrega al menos un renglon.');
+      return;
+    }
+    final total = _lines.fold<double>(0, (sum, line) => sum + line.total);
+    if (total + 0.01 < paidTotal) {
+      showAppSnackBar(
+        context,
+        'No puedes dejar el total por debajo de lo ya pagado.',
+        type: AppSnackBarType.warning,
+      );
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      await widget.repository.updateSupplierPurchase(
+        purchase: widget.purchase,
+        supplier: supplier,
+        purchaseDate: _purchaseDate,
+        dueDate: _dueDate,
+        folio: _folioController.text,
+        documentType: _documentType,
+        items: _lines,
+        notes: _notesController.text,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      showAppSnackBar(
+        context,
+        error.toString().replaceFirst('Bad state: ', ''),
+        type: AppSnackBarType.error,
+      );
+    }
   }
 }
 
@@ -2020,12 +2482,10 @@ class _SupplierPaymentDialog extends StatefulWidget {
   const _SupplierPaymentDialog({
     required this.repository,
     required this.purchase,
-    required this.partners,
   });
 
   final TacoPosRepository repository;
   final SupplierPurchase purchase;
-  final List<Partner> partners;
 
   @override
   State<_SupplierPaymentDialog> createState() => _SupplierPaymentDialogState();
@@ -2035,8 +2495,8 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
   late final TextEditingController _amountController;
   final _referenceController = TextEditingController();
   final _notesController = TextEditingController();
-  String _fundingSource = 'business_cash';
-  String? _partnerId;
+  DateTime _paymentDate = DateTime.now();
+  String _method = 'cash';
   bool _saving = false;
 
   @override
@@ -2058,7 +2518,7 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Pago a proveedor'),
+      title: const Text('Registrar pago a proveedor'),
       content: SizedBox(
         width: 420,
         child: Wrap(
@@ -2077,66 +2537,32 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
               ),
             ),
             SizedBox(
-              width: 390,
-              child: DropdownButtonFormField<String>(
-                initialValue: _fundingSource,
-                decoration: const InputDecoration(
-                  labelText: 'Origen del dinero',
-                ),
-                items: const [
-                  DropdownMenuItem(
-                    value: 'business_cash',
-                    child: Text('Venta del negocio - efectivo'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'business_transfer',
-                    child: Text('Venta del negocio - transferencia'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'partner_cash',
-                    child: Text('Inversion de socio - efectivo'),
-                  ),
-                  DropdownMenuItem(
-                    value: 'partner_transfer',
-                    child: Text('Inversion de socio - transferencia'),
-                  ),
-                ],
-                onChanged: (value) => setState(() {
-                  _fundingSource = value ?? 'business_cash';
-                  if (!_fundingSource.startsWith('partner_')) {
-                    _partnerId = null;
-                  }
-                }),
+              width: 180,
+              child: OutlinedButton.icon(
+                onPressed: _saving ? null : _pickPaymentDate,
+                icon: const Icon(Icons.event_outlined),
+                label: Text(_dateLabel(_paymentDate)),
               ),
             ),
             SizedBox(
               width: 390,
-              child: Text(
-                'Metodo real: ${_fundingSourceMethodLabel(_fundingSource)}',
-                style: const TextStyle(
-                  color: BrandColors.textMuted,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: DropdownButtonFormField<String>(
+                initialValue: _method,
+                decoration: const InputDecoration(labelText: 'Forma de pago'),
+                items: const [
+                  DropdownMenuItem(value: 'cash', child: Text('Efectivo')),
+                  DropdownMenuItem(
+                    value: 'transfer',
+                    child: Text('Transferencia'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'partner_contribution',
+                    child: Text('Aportacion de socios'),
+                  ),
+                ],
+                onChanged: (value) => setState(() => _method = value ?? 'cash'),
               ),
             ),
-            if (_fundingSource.startsWith('partner_'))
-              SizedBox(
-                width: 390,
-                child: DropdownButtonFormField<String>(
-                  initialValue: _partnerId,
-                  decoration: const InputDecoration(labelText: 'Socio'),
-                  items: widget.partners
-                      .where((partner) => partner.active)
-                      .map(
-                        (partner) => DropdownMenuItem(
-                          value: partner.id,
-                          child: Text(partner.name),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => setState(() => _partnerId = value),
-                ),
-              ),
             _dialogText(_referenceController, 'Referencia', 390),
             _dialogText(_notesController, 'Notas', 390),
           ],
@@ -2149,10 +2575,22 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
         ),
         FilledButton(
           onPressed: _saving ? null : _save,
-          child: Text(_saving ? 'Guardando...' : 'Pagar'),
+          child: Text(_saving ? 'Guardando...' : 'Registrar pago'),
         ),
       ],
     );
+  }
+
+  Future<void> _pickPaymentDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _paymentDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 1),
+    );
+    if (picked != null && mounted) {
+      setState(() => _paymentDate = picked);
+    }
   }
 
   Widget _dialogText(
@@ -2170,17 +2608,13 @@ class _SupplierPaymentDialogState extends State<_SupplierPaymentDialog> {
   }
 
   Future<void> _save() async {
-    final partner = widget.partners
-        .where((partner) => partner.id == _partnerId)
-        .firstOrNull;
     setState(() => _saving = true);
     try {
       await widget.repository.registerSupplierPayment(
         purchase: widget.purchase,
         amount: _parse(_amountController.text),
-        fundingSource: _fundingSource,
-        partnerId: partner?.id,
-        partnerName: partner?.name,
+        fundingSource: _method,
+        paymentDate: _paymentDate,
         reference: _referenceController.text,
         notes: _notesController.text,
       );
@@ -2204,7 +2638,7 @@ void _showPurchaseDetail(
   required TacoPosRepository repository,
   required SupplierPurchase purchase,
   required List<SupplierPayment> payments,
-  required List<Partner> partners,
+  required _PurchaseData data,
 }) {
   showDialog<void>(
     context: context,
@@ -2212,7 +2646,7 @@ void _showPurchaseDetail(
       repository: repository,
       purchase: purchase,
       payments: payments,
-      partners: partners,
+      data: data,
     ),
   );
 }
@@ -2389,13 +2823,13 @@ class _PurchaseDetailDialog extends StatelessWidget {
     required this.repository,
     required this.purchase,
     required this.payments,
-    required this.partners,
+    required this.data,
   });
 
   final TacoPosRepository repository;
   final SupplierPurchase purchase;
   final List<SupplierPayment> payments;
-  final List<Partner> partners;
+  final _PurchaseData data;
 
   @override
   Widget build(BuildContext context) {
@@ -2470,6 +2904,28 @@ class _PurchaseDetailDialog extends StatelessWidget {
         if (!purchase.isCancelled)
           OutlinedButton.icon(
             onPressed: () async {
+              final saved = await showDialog<bool>(
+                context: context,
+                builder: (_) => _EditSupplierPurchaseDialog(
+                  repository: repository,
+                  data: data,
+                  purchase: purchase,
+                ),
+              );
+              if (!context.mounted || saved != true) return;
+              Navigator.pop(context);
+              showAppSnackBar(
+                context,
+                'Compra actualizada.',
+                type: AppSnackBarType.success,
+              );
+            },
+            icon: const Icon(Icons.edit_outlined),
+            label: const Text('Editar compra'),
+          ),
+        if (!purchase.isCancelled)
+          OutlinedButton.icon(
+            onPressed: () async {
               final changed = await showDialog<bool>(
                 context: context,
                 builder: (_) => _ChangeDueDateDialog(
@@ -2496,7 +2952,6 @@ class _PurchaseDetailDialog extends StatelessWidget {
                 builder: (_) => _SupplierPaymentDialog(
                   repository: repository,
                   purchase: purchase,
-                  partners: partners,
                 ),
               );
               if (!context.mounted || paid != true) return;
@@ -2883,8 +3338,7 @@ class _PurchasePaymentsDetail extends StatelessWidget {
               child: DataTable(
                 columns: const [
                   DataColumn(label: Text('Fecha')),
-                  DataColumn(label: Text('Origen')),
-                  DataColumn(label: Text('Metodo')),
+                  DataColumn(label: Text('Forma de pago')),
                   DataColumn(label: Text('Monto')),
                   DataColumn(label: Text('Referencia')),
                   DataColumn(label: Text('Socio')),
@@ -2897,8 +3351,7 @@ class _PurchasePaymentsDetail extends StatelessWidget {
                       (payment) => DataRow(
                         cells: [
                           DataCell(Text(_dateTimeLabel(payment.paymentDate))),
-                          DataCell(Text(payment.fundingSourceName)),
-                          DataCell(Text(_paymentMethodLabel(payment.method))),
+                          DataCell(Text(_supplierPaymentMethodLabel(payment))),
                           DataCell(Text(_money(payment.amount))),
                           DataCell(Text(payment.reference)),
                           DataCell(Text(payment.partnerName ?? '')),
@@ -2938,12 +3391,12 @@ class _PurchasePaymentsDetail extends StatelessWidget {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       title: Text(
-        '${_paymentMethodLabel(payment.method)} · ${_money(payment.amount)}',
+        '${_supplierPaymentMethodLabel(payment)} · ${_money(payment.amount)}',
         style: const TextStyle(fontWeight: FontWeight.w900),
       ),
       subtitle: Text(
         '${_dateTimeLabel(payment.paymentDate)} · ${_paymentUser(payment)}'
-        '\nOrigen: ${payment.fundingSourceName}'
+        '\nForma: ${_supplierPaymentMethodLabel(payment)}'
         '${payment.partnerName == null ? '' : '\nSocio: ${payment.partnerName}'}'
         '${payment.reference.trim().isEmpty ? '' : '\nRef: ${payment.reference}'}'
         '${payment.isCancelled
@@ -2973,12 +3426,14 @@ class _StatementTable extends StatelessWidget {
     required this.rows,
     this.onViewPurchase,
     this.onChangeDueDate,
+    this.onEditPurchase,
     this.onCancelPayment,
   });
 
   final List<SupplierStatementRow> rows;
   final ValueChanged<String>? onViewPurchase;
   final ValueChanged<String>? onChangeDueDate;
+  final ValueChanged<String>? onEditPurchase;
   final ValueChanged<String>? onCancelPayment;
 
   @override
@@ -2997,8 +3452,7 @@ class _StatementTable extends StatelessWidget {
             DataColumn(label: Text('Abono')),
             DataColumn(label: Text('Saldo')),
             DataColumn(label: Text('Estado')),
-            DataColumn(label: Text('Origen')),
-            DataColumn(label: Text('Metodo')),
+            DataColumn(label: Text('Forma de pago')),
             DataColumn(label: Text('Socio')),
             DataColumn(label: Text('Referencia')),
             DataColumn(label: Text('Notas')),
@@ -3017,8 +3471,7 @@ class _StatementTable extends StatelessWidget {
                     DataCell(Text(_money(row.credit))),
                     DataCell(Text(_money(row.balance))),
                     DataCell(Text(_purchaseStatusLabel(row.status))),
-                    DataCell(Text(row.fundingSourceName)),
-                    DataCell(Text(_paymentMethodLabel(row.method))),
+                    DataCell(Text(_statementPaymentMethodLabel(row))),
                     DataCell(Text(row.partnerName ?? '')),
                     DataCell(Text(row.reference)),
                     DataCell(Text(row.notes)),
@@ -3040,6 +3493,13 @@ class _StatementTable extends StatelessWidget {
                               onPressed: () =>
                                   onChangeDueDate!(row.purchaseId!),
                               child: const Text('Cambiar vencimiento'),
+                            ),
+                          if (row.type == 'Compra' &&
+                              row.purchaseId != null &&
+                              onEditPurchase != null)
+                            TextButton(
+                              onPressed: () => onEditPurchase!(row.purchaseId!),
+                              child: const Text('Editar compra'),
                             ),
                           if (row.status == 'cancelled')
                             Chip(
@@ -3231,14 +3691,32 @@ String _paymentMethodLabel(String method) {
   return switch (method) {
     'cash' => 'Efectivo',
     'transfer' => 'Transferencia',
+    'partner_contribution' => 'Aportacion de socios',
     'both' => 'Ambas',
     '' => '',
     _ => method,
   };
 }
 
-String _fundingSourceMethodLabel(String fundingSource) {
-  return fundingSource.endsWith('cash') ? 'Efectivo' : 'Transferencia';
+String _supplierPaymentMethodLabel(SupplierPayment payment) {
+  return _paymentMethodLabel(_normalizeSupplierPaymentMethod(payment.method));
+}
+
+String _statementPaymentMethodLabel(SupplierStatementRow row) {
+  final method = _normalizeSupplierPaymentMethod(row.method);
+  if (method.isEmpty) return row.fundingSourceName;
+  return _paymentMethodLabel(method);
+}
+
+String _normalizeSupplierPaymentMethod(String value) {
+  return switch (value) {
+    'business_cash' || 'cash' => 'cash',
+    'business_transfer' || 'transfer' => 'transfer',
+    'partner_cash' ||
+    'partner_transfer' ||
+    'partner_contribution' => 'partner_contribution',
+    _ => value,
+  };
 }
 
 String _purchaseStatusLabel(String status) {
@@ -3348,6 +3826,20 @@ String _purchaseItemName(SupplierPurchaseItem item) {
     return kitchenName;
   }
   return item.purchaseItemName;
+}
+
+PurchaseLineInput _lineFromPurchaseItem(SupplierPurchaseItem item) {
+  return PurchaseLineInput(
+    purchaseItemId: item.purchaseItemId,
+    purchaseItemName: item.purchaseItemName,
+    kitchenStockItemId: item.kitchenStockItemId,
+    kitchenStockItemName: item.kitchenStockItemName,
+    affectsKitchenStock: item.affectsKitchenStock,
+    quantity: item.quantity,
+    unit: item.unit,
+    unitCost: item.unitCost,
+    notes: item.notes,
+  );
 }
 
 double _parse(String value) {

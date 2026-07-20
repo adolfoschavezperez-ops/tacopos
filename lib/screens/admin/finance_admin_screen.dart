@@ -349,39 +349,47 @@ class _FinanceSummary {
         return purchase.dueDate != null && purchase.dueDate!.isBefore(today);
       })
       .fold(0, (sum, purchase) => sum + purchase.balance);
-  double get businessSupplierPayments => supplierPayments
-      .where((payment) => payment.fundingSource.startsWith('business_'))
+  double get cashSupplierPayments => supplierPayments
+      .where((payment) => payment.method == 'cash')
+      .fold(0, (sum, payment) => sum + payment.amount);
+  double get transferSupplierPayments => supplierPayments
+      .where((payment) => payment.method == 'transfer')
       .fold(0, (sum, payment) => sum + payment.amount);
   double get partnerSupplierPayments => supplierPayments
-      .where((payment) => payment.fundingSource.startsWith('partner_'))
-      .fold(0, (sum, payment) => sum + payment.amount);
-  double get businessTransfers => supplierPayments
-      .where((payment) => payment.fundingSource == 'business_transfer')
+      .where((payment) => payment.method == 'partner_contribution')
       .fold(0, (sum, payment) => sum + payment.amount);
   double get cashWithdrawals =>
       withdrawals.fold(0, (sum, request) => sum + request.amount);
-  double get partnerContributions =>
-      contributions.fold(0, (sum, contribution) => sum + contribution.amount);
+  double get partnerContributions => contributions
+      .where((contribution) => contribution.linkedSupplierPaymentId == null)
+      .fold(0, (sum, contribution) => sum + contribution.amount);
   double get partnerCashContributions => contributions
-      .where((contribution) => contribution.method == 'cash')
+      .where(
+        (contribution) =>
+            contribution.linkedSupplierPaymentId == null &&
+            contribution.method == 'cash',
+      )
       .fold(0, (sum, contribution) => sum + contribution.amount);
   double get partnerTransferContributions => contributions
-      .where((contribution) => contribution.method == 'transfer')
+      .where(
+        (contribution) =>
+            contribution.linkedSupplierPaymentId == null &&
+            contribution.method == 'transfer',
+      )
       .fold(0, (sum, contribution) => sum + contribution.amount);
   double get businessCashFlow =>
-      salesCollected - businessSupplierPayments - cashWithdrawals;
+      salesCollected - supplierPaymentsTotal - cashWithdrawals;
   double get cashFlowWithPartners =>
       salesCollected +
       partnerContributions -
-      businessSupplierPayments -
-      partnerSupplierPayments -
+      supplierPaymentsTotal -
       cashWithdrawals;
   double get estimatedResult =>
       salesCollected - registeredPurchases - cashWithdrawals;
   double get paidResult =>
-      salesCollected - businessSupplierPayments - cashWithdrawals;
+      salesCollected - supplierPaymentsTotal - cashWithdrawals;
   double get missingFromSales =>
-      (businessSupplierPayments + cashWithdrawals - salesCollected).clamp(
+      (supplierPaymentsTotal + cashWithdrawals - salesCollected).clamp(
         0,
         double.infinity,
       );
@@ -479,7 +487,7 @@ class _FinancialStateTab extends StatelessWidget {
         ? BrandColors.danger
         : BrandColors.success;
     final alertText = summary.partnerSupplierPayments > 0
-        ? 'Se cubrieron pagos con inversion de socios por ${_money(summary.partnerSupplierPayments)}.'
+        ? 'Se registraron pagos con aportacion de socios por ${_money(summary.partnerSupplierPayments)}.'
         : summary.missingFromSales > 0
         ? 'Con la venta actual no alcanza para cubrir los pagos. Faltan ${_money(summary.missingFromSales)}.'
         : 'La venta del periodo cubre los pagos registrados.';
@@ -546,8 +554,9 @@ class _CashFlowTab extends StatelessWidget {
             _Kpi('Tarjeta cobrada', summary.cardCollected),
             _Kpi('Plataforma cobrada', summary.platformCollected),
             _Kpi('Consumo empleado', summary.employeeConsumption),
-            _Kpi('Pagos con venta', summary.businessSupplierPayments),
-            _Kpi('Pagos con socios', summary.partnerSupplierPayments),
+            _Kpi('Pagos en efectivo', summary.cashSupplierPayments),
+            _Kpi('Pagos por transferencia', summary.transferSupplierPayments),
+            _Kpi('Pagos aportacion socios', summary.partnerSupplierPayments),
             _Kpi('Gastos / retiros aprobados', summary.cashWithdrawals),
             _Kpi('Flujo negocio', summary.businessCashFlow),
             _Kpi('Flujo con socios', summary.cashFlowWithPartners),
@@ -672,8 +681,7 @@ class _SupplierPaymentsFinanceTab extends StatelessWidget {
             (payment) => _FinanceTile(
               title: payment.supplierName,
               subtitle:
-                  '${payment.fundingSourceName} · ${_methodLabel(payment.method)}'
-                  '${payment.partnerName == null ? '' : ' · ${payment.partnerName}'}'
+                  '${_methodLabel(payment.method)}'
                   '${payment.reference.isEmpty ? '' : ' · ${payment.reference}'}',
               amount: payment.amount,
             ),
@@ -690,7 +698,7 @@ class _FinanceReportsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final paymentsByOrigin = _groupPaymentsByOrigin(summary.supplierPayments);
+    final paymentsByOrigin = _groupPaymentsByMethod(summary.supplierPayments);
     final purchasesBySupplier = _groupPurchasesBySupplier(summary.purchases);
     final paymentsBySupplier = _groupPaymentsBySupplier(
       summary.supplierPayments,
@@ -707,10 +715,7 @@ class _FinanceReportsTab extends StatelessWidget {
         const SizedBox(height: 16),
         _ReportGroup(title: 'Pagos por proveedor', rows: paymentsBySupplier),
         const SizedBox(height: 16),
-        _ReportGroup(
-          title: 'Pagos por origen del dinero',
-          rows: paymentsByOrigin,
-        ),
+        _ReportGroup(title: 'Pagos por forma de pago', rows: paymentsByOrigin),
         const SizedBox(height: 16),
         _ReportGroup(
           title: 'Aportaciones por socio',
@@ -756,7 +761,7 @@ class _ResultSplit extends StatelessWidget {
           _MiniMetric('Flujo con socios', summary.cashFlowWithPartners),
           _MiniMetric('Compras no pagadas', summary.pendingPayableBalance),
           _MiniMetric('Compras vencidas', summary.duePurchases),
-          _MiniMetric('Transferencias negocio', summary.businessTransfers),
+          _MiniMetric('Pagos transferencia', summary.transferSupplierPayments),
         ],
       ),
     );
@@ -1165,11 +1170,11 @@ class _PartnerDialogState extends State<_PartnerDialog> {
   }
 }
 
-Map<String, double> _groupPaymentsByOrigin(List<SupplierPayment> payments) {
+Map<String, double> _groupPaymentsByMethod(List<SupplierPayment> payments) {
   final result = <String, double>{};
   for (final payment in payments) {
     result.update(
-      payment.fundingSourceName,
+      _methodLabel(payment.method),
       (value) => value + payment.amount,
       ifAbsent: () => payment.amount,
     );
@@ -1207,7 +1212,9 @@ Map<String, double> _groupContributionsByPartner(
   List<PartnerContribution> contributions,
 ) {
   final result = <String, double>{};
-  for (final contribution in contributions) {
+  for (final contribution in contributions.where(
+    (contribution) => contribution.linkedSupplierPaymentId == null,
+  )) {
     result.update(
       contribution.partnerName,
       (value) => value + contribution.amount,
@@ -1299,6 +1306,7 @@ String _methodLabel(String method) {
   return switch (method) {
     'cash' => 'Efectivo',
     'transfer' => 'Transferencia',
+    'partner_contribution' => 'Aportacion de socios',
     'card' => 'Tarjeta',
     'platform_paid' => 'Pagado en plataforma',
     'employee_consumption' => 'Consumo empleado',

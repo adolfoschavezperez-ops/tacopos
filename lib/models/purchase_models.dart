@@ -222,6 +222,7 @@ class SupplierPurchaseItem {
     required this.unit,
     required this.unitCost,
     required this.total,
+    this.status = 'active',
     this.purchaseItemId,
     this.kitchenStockItemId,
     this.kitchenStockItemName,
@@ -239,7 +240,10 @@ class SupplierPurchaseItem {
   final String unit;
   final double unitCost;
   final double total;
+  final String status;
   final String notes;
+
+  bool get isActive => status != 'removed' && status != 'cancelled';
 
   factory SupplierPurchaseItem.fromDoc(
     DocumentSnapshot<Map<String, dynamic>> doc,
@@ -266,6 +270,7 @@ class SupplierPurchaseItem {
       unit: data['unit'] as String? ?? '',
       unitCost: _toDouble(data['unitCost']),
       total: _toDouble(data['total']),
+      status: data['status'] as String? ?? 'active',
       notes: data['notes'] as String? ?? '',
     );
   }
@@ -290,8 +295,8 @@ class SupplierPayment {
     this.branchName = AppConstants.defaultBranchName,
     this.createdByEmployeeId = '',
     this.createdByEmployeeName = '',
-    this.fundingSource = 'business_cash',
-    this.fundingSourceName = 'Venta del negocio - efectivo',
+    this.fundingSource = 'cash',
+    this.fundingSourceName = 'Efectivo',
     this.partnerId,
     this.partnerName,
     this.cancelledAt,
@@ -333,13 +338,13 @@ class SupplierPayment {
 
   factory SupplierPayment.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
-    final method = data['method'] as String? ?? 'transfer';
-    final fallbackFundingSource = method == 'cash'
-        ? 'business_cash'
-        : 'business_transfer';
-    final fallbackFundingSourceName = method == 'cash'
-        ? 'Venta del negocio - efectivo'
-        : 'Venta del negocio - transferencia';
+    final rawFundingSource =
+        data['fundingSource'] as String? ??
+        data['paymentMethod'] as String? ??
+        data['method'] as String? ??
+        'transfer';
+    final method = _normalizeSupplierPaymentMethod(rawFundingSource);
+    final fundingSourceName = _supplierPaymentMethodLabel(method);
     return SupplierPayment(
       id: doc.id,
       restaurantId:
@@ -351,9 +356,8 @@ class SupplierPayment {
           data['branchName'] as String? ?? AppConstants.defaultBranchName,
       createdByEmployeeId: data['createdByEmployeeId'] as String? ?? '',
       createdByEmployeeName: data['createdByEmployeeName'] as String? ?? '',
-      fundingSource: data['fundingSource'] as String? ?? fallbackFundingSource,
-      fundingSourceName:
-          data['fundingSourceName'] as String? ?? fallbackFundingSourceName,
+      fundingSource: method,
+      fundingSourceName: fundingSourceName,
       partnerId: data['partnerId'] as String?,
       partnerName: data['partnerName'] as String?,
       supplierId: data['supplierId'] as String? ?? '',
@@ -373,6 +377,26 @@ class SupplierPayment {
       createdAt: _toDate(data['createdAt']),
     );
   }
+}
+
+String _normalizeSupplierPaymentMethod(String value) {
+  return switch (value) {
+    'business_cash' || 'cash' => 'cash',
+    'business_transfer' || 'transfer' => 'transfer',
+    'partner_cash' ||
+    'partner_transfer' ||
+    'partner_contribution' => 'partner_contribution',
+    _ => value,
+  };
+}
+
+String _supplierPaymentMethodLabel(String method) {
+  return switch (_normalizeSupplierPaymentMethod(method)) {
+    'cash' => 'Efectivo',
+    'transfer' => 'Transferencia',
+    'partner_contribution' => 'Aportacion de socios',
+    _ => method,
+  };
 }
 
 class SupplierStatementRow {
