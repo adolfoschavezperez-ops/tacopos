@@ -66,6 +66,7 @@ enum _ReportKind {
   cancellations,
   cancelledPayments,
   productStockOuts,
+  salesDiscrepancyAudit,
 }
 
 class BackofficeScreen extends StatefulWidget {
@@ -1586,6 +1587,9 @@ class _ReportsSectionState extends State<_ReportsSection> {
     if (widget.reportKind == _ReportKind.productStockOuts) {
       return _buildProductStockOutReport(context);
     }
+    if (widget.reportKind == _ReportKind.salesDiscrepancyAudit) {
+      return _buildSalesDiscrepancyAuditReport(context);
+    }
     if (widget.reportKind == _ReportKind.hourlyYesterdayLastSales ||
         widget.reportKind == _ReportKind.hourlyPreviousWeek) {
       return _buildHourlyComparisonReport(context);
@@ -1894,6 +1898,15 @@ class _ReportsSectionState extends State<_ReportsSection> {
       },
     );
   }
+
+  Widget _buildSalesDiscrepancyAuditReport(BuildContext context) {
+    return _SalesDiscrepancyAuditReport(
+      repository: widget.repository,
+      orders: widget.orders,
+      startBusinessDate: widget.startBusinessDate,
+      endBusinessDate: widget.endBusinessDate,
+    );
+  }
 }
 
 class _SettingsSection extends StatelessWidget {
@@ -2085,6 +2098,790 @@ class _SmallMetric extends StatelessWidget {
       ),
     );
   }
+}
+
+const _salesAuditHeaders = [
+  'Fecha',
+  'Folio',
+  'Mesa / Para llevar',
+  'Cliente',
+  'Estado orden',
+  'Total items',
+  'Descuento explicito',
+  'Total esperado',
+  'Total orden',
+  'Total pagos',
+  'Recibido',
+  'Cambio',
+  'paidTotal',
+  'pendingTotal',
+  'Diferencia',
+  'Tipo discrepancia',
+  'Accion',
+];
+
+const _salesAuditDiscrepancyTypes = {
+  'all': 'Todos',
+  'items_order': 'Items vs total orden',
+  'payments_order': 'Pagos vs total orden',
+  'cash_net': 'Recibido menos cambio vs pago aplicado',
+  'paid_total': 'paidTotal vs suma de pagos',
+  'pending_total': 'Orden pagada con saldo pendiente',
+  'unpaid_complete': 'Orden no pagada con pagos completos',
+  'implicit_discount': 'Descuento implicito sin campo de descuento',
+  'invalid_total': 'Total negativo o cero inesperado',
+  'other': 'Otros',
+};
+
+const _salesAuditOrderStatuses = {
+  'all': 'Todos',
+  'paid': 'Pagadas',
+  'open': 'Abiertas',
+  'cancelled': 'Canceladas',
+  'partial': 'Parciales',
+};
+
+class _SalesDiscrepancyAuditReport extends StatefulWidget {
+  const _SalesDiscrepancyAuditReport({
+    required this.repository,
+    required this.orders,
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+  });
+
+  final TacoPosRepository repository;
+  final List<PosOrder> orders;
+  final String startBusinessDate;
+  final String endBusinessDate;
+
+  @override
+  State<_SalesDiscrepancyAuditReport> createState() =>
+      _SalesDiscrepancyAuditReportState();
+}
+
+class _SalesDiscrepancyAuditReportState
+    extends State<_SalesDiscrepancyAuditReport> {
+  final _queryController = TextEditingController();
+  bool _onlyDiscrepancies = true;
+  String _discrepancyType = 'all';
+  String _orderStatus = 'all';
+  late Future<List<_SalesAuditRow>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _loadRows();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SalesDiscrepancyAuditReport oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.orders != widget.orders ||
+        oldWidget.startBusinessDate != widget.startBusinessDate ||
+        oldWidget.endBusinessDate != widget.endBusinessDate) {
+      _future = _loadRows();
+    }
+  }
+
+  @override
+  void dispose() {
+    _queryController.dispose();
+    super.dispose();
+  }
+
+  Future<List<_SalesAuditRow>> _loadRows() async {
+    final rows = <_SalesAuditRow>[];
+    for (final order in widget.orders) {
+      try {
+        final items = await widget.repository.getOrderItemsOnce(order.id);
+        final payments = await widget.repository.getOrderPaymentsOnce(order.id);
+        rows.add(_buildSalesAuditRow(order, items, payments));
+      } catch (error) {
+        debugPrint('Sales discrepancy audit failed for ${order.id}: $error');
+      }
+    }
+    return rows;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<_SalesAuditRow>>(
+      future: _future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _auditToolbar(const []),
+              const SizedBox(height: 14),
+              const LoadingPanel(message: 'Auditando ventas...'),
+            ],
+          );
+        }
+        if (snapshot.hasError) {
+          debugPrint('Sales discrepancy audit failed: ${snapshot.error}');
+          return const _FriendlyError(
+            message: 'No se pudo cargar la auditoria de ventas.',
+          );
+        }
+        final allRows = snapshot.data ?? const <_SalesAuditRow>[];
+        final rows = _filteredRows(allRows);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _auditToolbar(rows),
+            const SizedBox(height: 14),
+            _SalesAuditSummary(rows: rows, reviewedCount: allRows.length),
+            const SizedBox(height: 14),
+            if (rows.isEmpty)
+              EmptyState(
+                icon: Icons.rule_folder_outlined,
+                title: _onlyDiscrepancies
+                    ? 'Sin discrepancias'
+                    : 'Sin ventas para mostrar',
+                message:
+                    'Ajusta los filtros o amplia el rango para revisar mas ordenes.',
+              )
+            else
+              _SalesAuditTable(
+                rows: rows,
+                onOpen: (row) => _openAuditDetail(row),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _auditToolbar(List<_SalesAuditRow> rows) {
+    return GlassPanel(
+      padding: const EdgeInsets.all(12),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          SizedBox(
+            width: 220,
+            child: TextField(
+              controller: _queryController,
+              decoration: const InputDecoration(
+                labelText: 'Folio / cliente / mesa',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          _StockOutDropdown(
+            label: 'Sucursal',
+            value: AppSession.instance.currentBranchId,
+            options: {
+              AppSession.instance.currentBranchId:
+                  AppSession.instance.currentBranchName,
+            },
+            onChanged: (_) {},
+          ),
+          _StockOutDropdown(
+            label: 'Tipo',
+            value: _discrepancyType,
+            options: _salesAuditDiscrepancyTypes,
+            onChanged: (value) =>
+                setState(() => _discrepancyType = value ?? 'all'),
+          ),
+          _StockOutDropdown(
+            label: 'Estado orden',
+            value: _orderStatus,
+            options: _salesAuditOrderStatuses,
+            onChanged: (value) => setState(() => _orderStatus = value ?? 'all'),
+          ),
+          FilterChip(
+            selected: _onlyDiscrepancies,
+            label: const Text('Solo con discrepancias'),
+            onSelected: (value) => setState(() => _onlyDiscrepancies = value),
+          ),
+          FilledButton.icon(
+            onPressed: () => setState(() => _future = _loadRows()),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Actualizar'),
+          ),
+          FilledButton.icon(
+            onPressed: rows.isEmpty
+                ? null
+                : () => _copyCsv(context, _salesAuditCsvHeaders, [
+                    for (final row in rows) row.csvRow,
+                  ]),
+            icon: const Icon(Icons.download_outlined),
+            label: const Text('CSV'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<_SalesAuditRow> _filteredRows(List<_SalesAuditRow> rows) {
+    final query = _queryController.text.trim().toLowerCase();
+    return rows.where((row) {
+      if (_onlyDiscrepancies && !row.hasDiscrepancy) return false;
+      if (_discrepancyType != 'all' &&
+          !row.discrepancyCodes.contains(_discrepancyType)) {
+        return false;
+      }
+      if (_orderStatus != 'all' &&
+          row.order.status.trim().toLowerCase() != _orderStatus &&
+          row.order.paymentStatus.trim().toLowerCase() != _orderStatus) {
+        return false;
+      }
+      if (query.isEmpty) return true;
+      return [
+        _shortId(row.order.id),
+        row.order.id,
+        row.order.displayName,
+        row.order.customerName ?? '',
+      ].any((value) => value.toLowerCase().contains(query));
+    }).toList();
+  }
+
+  void _openAuditDetail(_SalesAuditRow row) {
+    showDialog<void>(
+      context: context,
+      builder: (_) => _SalesAuditDetailDialog(
+        row: row,
+        onOpenSale: () {
+          Navigator.pop(context);
+          _openSaleDetail(context, widget.repository, row.order);
+        },
+      ),
+    );
+  }
+}
+
+class _SalesAuditSummary extends StatelessWidget {
+  const _SalesAuditSummary({required this.rows, required this.reviewedCount});
+
+  final List<_SalesAuditRow> rows;
+  final int reviewedCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final discrepant = rows.where((row) => row.hasDiscrepancy).toList();
+    final percent = reviewedCount == 0
+        ? '0.0%'
+        : '${((discrepant.length / reviewedCount) * 100).toStringAsFixed(1)}%';
+    final dates =
+        discrepant
+            .map((row) => _businessDateFor(row.order.createdAt))
+            .whereType<String>()
+            .toList()
+          ..sort();
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        _SmallMetric('Ordenes revisadas', '$reviewedCount'),
+        _SmallMetric('Ordenes con discrepancia', '${discrepant.length}'),
+        _SmallMetric('Porcentaje', percent),
+        _SmallMetric(
+          'Dif. items vs orden',
+          _money(rows.fold(0, (sum, row) => sum + row.diffItemsOrder)),
+        ),
+        _SmallMetric(
+          'Dif. pagos vs orden',
+          _money(rows.fold(0, (sum, row) => sum + row.diffPaymentsOrder)),
+        ),
+        _SmallMetric(
+          'Efectivo inconsistente',
+          '${rows.where((row) => row.cashPaymentMismatchCount > 0).length}',
+        ),
+        _SmallMetric('Primera fecha', dates.isEmpty ? '-' : dates.first),
+        _SmallMetric('Ultima fecha', dates.isEmpty ? '-' : dates.last),
+      ],
+    );
+  }
+}
+
+class _SalesAuditTable extends StatefulWidget {
+  const _SalesAuditTable({required this.rows, required this.onOpen});
+
+  final List<_SalesAuditRow> rows;
+  final ValueChanged<_SalesAuditRow> onOpen;
+
+  @override
+  State<_SalesAuditTable> createState() => _SalesAuditTableState();
+}
+
+class _SalesAuditTableState extends State<_SalesAuditTable> {
+  int? _sortColumnIndex;
+  bool _sortAscending = true;
+
+  @override
+  Widget build(BuildContext context) {
+    final sortedRows = [...widget.rows];
+    final sortColumnIndex = _sortColumnIndex;
+    if (sortColumnIndex != null) {
+      sortedRows.sort((a, b) {
+        final result = _compareReportCells(
+          a.tableCells[sortColumnIndex],
+          b.tableCells[sortColumnIndex],
+        );
+        return _sortAscending ? result : -result;
+      });
+    }
+    return GlassPanel(
+      padding: const EdgeInsets.all(10),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 640),
+        child: SingleChildScrollView(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              sortColumnIndex: _sortColumnIndex,
+              sortAscending: _sortAscending,
+              headingRowHeight: 42,
+              dataRowMinHeight: 38,
+              dataRowMaxHeight: 50,
+              horizontalMargin: 14,
+              columnSpacing: 22,
+              columns: _salesAuditHeaders.asMap().entries.map((entry) {
+                return DataColumn(
+                  label: Text(entry.value),
+                  onSort: entry.key == _salesAuditHeaders.length - 1
+                      ? null
+                      : (columnIndex, ascending) {
+                          setState(() {
+                            _sortColumnIndex = columnIndex;
+                            _sortAscending = ascending;
+                          });
+                        },
+                );
+              }).toList(),
+              rows: sortedRows.map((row) {
+                return DataRow(
+                  cells: [
+                    for (final cell in row.tableCells) DataCell(Text(cell)),
+                    DataCell(
+                      TextButton.icon(
+                        onPressed: () => widget.onOpen(row),
+                        icon: const Icon(Icons.visibility_outlined),
+                        label: const Text('Detalle'),
+                      ),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SalesAuditDetailDialog extends StatelessWidget {
+  const _SalesAuditDetailDialog({required this.row, required this.onOpenSale});
+
+  final _SalesAuditRow row;
+  final VoidCallback onOpenSale;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.all(18),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 980, maxHeight: 760),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: SectionHeader(
+                      title: 'Auditoria ${_shortId(row.order.id)}',
+                      subtitle:
+                          '${_dateTimeText(row.order.createdAt)} | ${row.order.branchName}',
+                    ),
+                  ),
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              GlassPanel(
+                child: Wrap(
+                  spacing: 14,
+                  runSpacing: 10,
+                  children: [
+                    _InfoText('OrderId', row.order.id),
+                    _InfoText('Folio', _shortId(row.order.id)),
+                    _InfoText('Sucursal', row.order.branchName),
+                    _InfoText('Mesa / pedido', row.order.displayName),
+                    _InfoText('Cliente', row.order.customerName ?? '-'),
+                    _InfoText('Estado', row.order.status),
+                    _InfoText('Pago', row.order.paymentStatus),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              GlassPanel(
+                child: Wrap(
+                  spacing: 14,
+                  runSpacing: 10,
+                  children: [
+                    _InfoText('Items activos', '${row.activeItemCount}'),
+                    _InfoText('Items cancelados', '${row.cancelledItemCount}'),
+                    _InfoText('Subtotal items', _money(row.itemsSubtotal)),
+                    _InfoText(
+                      'Descuento explicito',
+                      _money(row.explicitDiscount),
+                    ),
+                    _InfoText('Total esperado', _money(row.expectedOrderTotal)),
+                    _InfoText('Total orden', _money(row.order.total)),
+                    _InfoText('paidTotal', _money(row.order.paidTotal)),
+                    _InfoText('pendingTotal', _money(row.order.pendingTotal)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _DetailTable(
+                title: 'Pagos',
+                headers: const [
+                  'Metodo',
+                  'Status',
+                  'Amount',
+                  'Base',
+                  'Cobrado',
+                  'Recibido',
+                  'Cambio',
+                  'Recargo',
+                  'Comision',
+                  'Hora',
+                  'Usuario',
+                ],
+                rows: row.payments.map((payment) {
+                  return [
+                    _paymentMethodLabel(payment.method),
+                    payment.status,
+                    _money(payment.amount),
+                    _money(payment.baseAmount),
+                    _money(payment.chargedAmount),
+                    payment.cashReceivedAmount == null
+                        ? '-'
+                        : _money(payment.cashReceivedAmount!),
+                    payment.cashChangeAmount == null
+                        ? '-'
+                        : _money(payment.cashChangeAmount!),
+                    _money(payment.surchargeAmount),
+                    _money(payment.cardFeeAbsorbedAmount),
+                    _dateTimeText(payment.createdAt),
+                    payment.employeeName ?? payment.createdBy ?? '-',
+                  ];
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+              GlassPanel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Diagnostico',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 10),
+                    ...row.diagnostics.map((text) => Text('- $text')),
+                    const SizedBox(height: 10),
+                    Text('Formula items: ${row.itemsFormula}'),
+                    Text('Formula pagos: ${row.paymentsFormula}'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.icon(
+                  onPressed: onOpenSale,
+                  icon: const Icon(Icons.receipt_long),
+                  label: const Text('Ver venta'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SalesAuditRow {
+  const _SalesAuditRow({
+    required this.order,
+    required this.items,
+    required this.payments,
+    required this.activeItemCount,
+    required this.cancelledItemCount,
+    required this.itemsSubtotal,
+    required this.explicitDiscount,
+    required this.expectedOrderTotal,
+    required this.paymentsAppliedTotal,
+    required this.receivedTotal,
+    required this.changeTotal,
+    required this.diffItemsOrder,
+    required this.diffPaymentsOrder,
+    required this.diffPaidTotal,
+    required this.diffPendingTotal,
+    required this.cashPaymentMismatchCount,
+    required this.discrepancyCodes,
+    required this.diagnostics,
+  });
+
+  final PosOrder order;
+  final List<OrderItem> items;
+  final List<Payment> payments;
+  final int activeItemCount;
+  final int cancelledItemCount;
+  final double itemsSubtotal;
+  final double explicitDiscount;
+  final double expectedOrderTotal;
+  final double paymentsAppliedTotal;
+  final double receivedTotal;
+  final double changeTotal;
+  final double diffItemsOrder;
+  final double diffPaymentsOrder;
+  final double diffPaidTotal;
+  final double diffPendingTotal;
+  final int cashPaymentMismatchCount;
+  final List<String> discrepancyCodes;
+  final List<String> diagnostics;
+
+  bool get hasDiscrepancy => discrepancyCodes.isNotEmpty;
+  double get primaryDifference {
+    if (_outsideTolerance(diffItemsOrder)) return diffItemsOrder;
+    if (_outsideTolerance(diffPaymentsOrder)) return diffPaymentsOrder;
+    if (_outsideTolerance(diffPaidTotal)) return diffPaidTotal;
+    if (_outsideTolerance(diffPendingTotal)) return diffPendingTotal;
+    return 0;
+  }
+
+  String get discrepancyLabel => hasDiscrepancy
+      ? discrepancyCodes
+            .map((code) => _salesAuditDiscrepancyTypes[code] ?? code)
+            .join(' | ')
+      : 'Sin discrepancias';
+
+  List<String> get tableCells => [
+    _businessDateFor(order.createdAt ?? order.paidAt) ?? '-',
+    _shortId(order.id),
+    order.displayName,
+    order.customerName ?? '-',
+    '${order.status} / ${order.paymentStatus}',
+    _money(itemsSubtotal),
+    _money(explicitDiscount),
+    _money(expectedOrderTotal),
+    _money(order.total),
+    _money(paymentsAppliedTotal),
+    _money(receivedTotal),
+    _money(changeTotal),
+    _money(order.paidTotal),
+    _money(order.pendingTotal),
+    _money(primaryDifference),
+    discrepancyLabel,
+  ];
+
+  List<String> get csvRow => [
+    _businessDateFor(order.createdAt ?? order.paidAt) ?? '-',
+    _shortId(order.id),
+    order.id,
+    _money(itemsSubtotal),
+    _money(explicitDiscount),
+    _money(expectedOrderTotal),
+    _money(order.total),
+    _money(paymentsAppliedTotal),
+    _money(receivedTotal),
+    _money(changeTotal),
+    _money(order.paidTotal),
+    _money(order.pendingTotal),
+    _money(primaryDifference),
+    discrepancyLabel,
+  ];
+
+  String get itemsFormula =>
+      'itemsSubtotalActivo (${_money(itemsSubtotal)}) - descuentoExplicito (${_money(explicitDiscount)}) = ${_money(expectedOrderTotal)}';
+  String get paymentsFormula =>
+      'paymentsAppliedTotal (${_money(paymentsAppliedTotal)}) vs totalOrden (${_money(order.total)})';
+}
+
+const _salesAuditCsvHeaders = [
+  'fecha',
+  'folio',
+  'orderId',
+  'total items',
+  'descuento explicito',
+  'total esperado',
+  'total orden',
+  'pagos activos',
+  'recibido',
+  'cambio',
+  'paidTotal',
+  'pendingTotal',
+  'diferencia',
+  'tipos de discrepancia',
+];
+
+_SalesAuditRow _buildSalesAuditRow(
+  PosOrder order,
+  List<OrderItem> items,
+  List<Payment> payments,
+) {
+  final activeItems = items.where((item) => !item.isCancelled).toList();
+  final cancelledItems = items.where((item) => item.isCancelled).toList();
+  final itemsSubtotal = activeItems.fold<double>(
+    0,
+    (sum, item) => sum + (item.qty * item.unitPrice),
+  );
+  final explicitDiscount = order.explicitDiscount;
+  final expectedOrderTotal = (itemsSubtotal - explicitDiscount)
+      .clamp(0, double.infinity)
+      .toDouble();
+  final activePayments = payments.where(_isAuditActivePayment).toList();
+  final paymentsAppliedTotal = activePayments.fold<double>(
+    0,
+    (sum, payment) => sum + _auditPaymentAppliedAmount(payment),
+  );
+  final receivedTotal = activePayments.fold<double>(
+    0,
+    (sum, payment) => sum + (payment.cashReceivedAmount ?? 0),
+  );
+  final changeTotal = activePayments.fold<double>(
+    0,
+    (sum, payment) => sum + (payment.cashChangeAmount ?? 0),
+  );
+  final expectedPending = (order.total - paymentsAppliedTotal)
+      .clamp(0, double.infinity)
+      .toDouble();
+  final diffItemsOrder = order.total - expectedOrderTotal;
+  final diffPaymentsOrder = paymentsAppliedTotal - order.total;
+  final diffPaidTotal = order.paidTotal - paymentsAppliedTotal;
+  final diffPendingTotal = order.pendingTotal - expectedPending;
+  final codes = <String>[];
+  final diagnostics = <String>[];
+  void add(String code, String message) {
+    if (!codes.contains(code)) codes.add(code);
+    diagnostics.add(message);
+  }
+
+  if (_outsideTolerance(diffItemsOrder)) {
+    add(
+      'items_order',
+      'Items vs total orden: diferencia ${_money(diffItemsOrder)}.',
+    );
+  }
+  if (_outsideTolerance(diffPaymentsOrder)) {
+    add(
+      'payments_order',
+      'Pagos vs total orden: diferencia ${_money(diffPaymentsOrder)}.',
+    );
+  }
+  var cashMismatchCount = 0;
+  for (final payment in activePayments.where(
+    (payment) => payment.method == 'cash',
+  )) {
+    final received = payment.cashReceivedAmount;
+    final change = payment.cashChangeAmount;
+    if (received == null || change == null) continue;
+    final cashNet = received - change;
+    final diff = cashNet - _auditPaymentAppliedAmount(payment);
+    if (_outsideTolerance(diff)) {
+      cashMismatchCount++;
+      add(
+        'cash_net',
+        'Efectivo ${payment.id}: recibido - cambio = ${_money(cashNet)}, aplicado ${_money(_auditPaymentAppliedAmount(payment))}, diferencia ${_money(diff)}.',
+      );
+    }
+    if (payment.cashReceivedAmount != null &&
+        payment.cashReceivedAmount! + _moneyTolerance <
+            _auditPaymentAppliedAmount(payment)) {
+      add('other', 'Pago efectivo mayor a recibido en ${payment.id}.');
+    }
+    if ((payment.cashChangeAmount ?? 0) < -_moneyTolerance) {
+      add('other', 'Cambio negativo en pago ${payment.id}.');
+    }
+  }
+  if (_outsideTolerance(diffPaidTotal)) {
+    add(
+      'paid_total',
+      'paidTotal vs suma de pagos: diferencia ${_money(diffPaidTotal)}.',
+    );
+  }
+  if (_outsideTolerance(diffPendingTotal)) {
+    add(
+      'pending_total',
+      'pendingTotal guardado ${_money(order.pendingTotal)} vs esperado ${_money(expectedPending)}.',
+    );
+  }
+  final orderPaid =
+      order.status.toLowerCase().trim() == 'paid' ||
+      order.paymentStatus.toLowerCase().trim() == 'paid';
+  if (orderPaid && order.pendingTotal > _moneyTolerance) {
+    add('pending_total', 'Orden pagada con saldo pendiente.');
+  }
+  final orderOpen =
+      order.status.toLowerCase().trim() == 'open' ||
+      order.paymentStatus.toLowerCase().trim() == 'pending';
+  if (orderOpen && paymentsAppliedTotal + _moneyTolerance >= order.total) {
+    add('unpaid_complete', 'Orden no pagada con pagos completos.');
+  }
+  if (itemsSubtotal > order.total + _moneyTolerance &&
+      explicitDiscount <= _moneyTolerance) {
+    add('implicit_discount', 'Posible descuento implicito o total incorrecto.');
+  }
+  if (order.total <= 0 && activeItems.isNotEmpty) {
+    add('invalid_total', 'Total de orden cero o negativo con items activos.');
+  }
+
+  return _SalesAuditRow(
+    order: order,
+    items: items,
+    payments: payments,
+    activeItemCount: activeItems.length,
+    cancelledItemCount: cancelledItems.length,
+    itemsSubtotal: itemsSubtotal,
+    explicitDiscount: explicitDiscount,
+    expectedOrderTotal: expectedOrderTotal,
+    paymentsAppliedTotal: paymentsAppliedTotal,
+    receivedTotal: receivedTotal,
+    changeTotal: changeTotal,
+    diffItemsOrder: diffItemsOrder,
+    diffPaymentsOrder: diffPaymentsOrder,
+    diffPaidTotal: diffPaidTotal,
+    diffPendingTotal: diffPendingTotal,
+    cashPaymentMismatchCount: cashMismatchCount,
+    discrepancyCodes: codes,
+    diagnostics: diagnostics.isEmpty
+        ? const ['Sin discrepancias.']
+        : diagnostics,
+  );
+}
+
+const _moneyTolerance = 0.02;
+
+bool _outsideTolerance(double value) => value.abs() > _moneyTolerance;
+
+bool _isAuditActivePayment(Payment payment) {
+  final status = payment.status.trim().toLowerCase();
+  return status != 'cancelled' &&
+      status != 'canceled' &&
+      payment.cancelledAt == null &&
+      _auditPaymentAppliedAmount(payment) > 0;
+}
+
+double _auditPaymentAppliedAmount(Payment payment) {
+  if (payment.amount > 0) return payment.amount;
+  if (payment.baseAmount > 0) return payment.baseAmount;
+  if (payment.chargedAmount > 0) return payment.chargedAmount;
+  return 0;
 }
 
 class _StockOutDropdown extends StatelessWidget {
@@ -2901,6 +3698,12 @@ List<_NavItem> _reportNavItems(Employee? employee) {
       'Pagos cancelados',
       reportKind: _ReportKind.cancelledPayments,
     ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.rule_folder_outlined,
+      'Auditoria de discrepancias de ventas',
+      reportKind: _ReportKind.salesDiscrepancyAudit,
+    ),
     if (canKitchen) ...const [
       _NavItem(
         _BackofficeSection.reports,
@@ -2979,6 +3782,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.cancellations => 'Cancelaciones de tickets',
     _ReportKind.cancelledPayments => 'Pagos cancelados',
     _ReportKind.productStockOuts => 'Productos agotados',
+    _ReportKind.salesDiscrepancyAudit => 'Auditoria de discrepancias de ventas',
   };
 }
 
@@ -3114,6 +3918,7 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Hora liberado',
       'Motivo liberacion',
     ],
+    _ReportKind.salesDiscrepancyAudit => _salesAuditHeaders,
   };
 }
 
@@ -3421,6 +4226,8 @@ Future<List<List<String>>> _reportRows(
           )
           .first;
       return rows.map(_stockOutReportRow).toList();
+    case _ReportKind.salesDiscrepancyAudit:
+      return const [];
   }
 }
 

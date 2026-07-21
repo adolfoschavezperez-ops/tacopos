@@ -29,6 +29,7 @@ class PosOrder {
     this.cancelledByEmployeeId,
     this.cancelledByEmployeeName,
     this.cancelReason,
+    this.explicitDiscount = 0,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -60,6 +61,7 @@ class PosOrder {
   final String? cancelledByEmployeeId;
   final String? cancelledByEmployeeName;
   final String? cancelReason;
+  final double explicitDiscount;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -94,6 +96,7 @@ class PosOrder {
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
       cancelReason: data['cancelReason'] as String?,
+      explicitDiscount: _readExplicitDiscount(data),
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:
@@ -146,5 +149,31 @@ class PosOrder {
     }
 
     return null;
+  }
+
+  static double _readExplicitDiscount(Map<String, dynamic> data) {
+    for (final key in const [
+      'discount',
+      'discountAmount',
+      'totalDiscount',
+      'employeeDiscount',
+      'partnerDiscount',
+      'discountTotal',
+      'netDiscount',
+      'appliedDiscount',
+      'totalDiscountAmount',
+    ]) {
+      final value = _toDouble(data[key]);
+      if (value > 0) return value;
+    }
+    return 0;
+  }
+
+  static double _toDouble(Object? value) {
+    if (value is num) return value.toDouble();
+    if (value is String) {
+      return double.tryParse(value.trim().replaceAll(',', '')) ?? 0;
+    }
+    return 0;
   }
 }
