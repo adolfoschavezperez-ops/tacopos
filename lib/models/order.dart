@@ -30,6 +30,7 @@ class PosOrder {
     this.cancelledByEmployeeName,
     this.cancelReason,
     this.explicitDiscount = 0,
+    this.explicitDiscountFields = const {},
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -62,6 +63,7 @@ class PosOrder {
   final String? cancelledByEmployeeName;
   final String? cancelReason;
   final double explicitDiscount;
+  final Map<String, double> explicitDiscountFields;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -97,6 +99,7 @@ class PosOrder {
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
       cancelReason: data['cancelReason'] as String?,
       explicitDiscount: _readExplicitDiscount(data),
+      explicitDiscountFields: _readExplicitDiscountFields(data),
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:
@@ -152,21 +155,48 @@ class PosOrder {
   }
 
   static double _readExplicitDiscount(Map<String, dynamic> data) {
+    final fields = _readExplicitDiscountFields(data);
+    for (final key in const [
+      'totalDiscount',
+      'discountTotal',
+      'discountAmount',
+      'appliedDiscount',
+      'discount',
+    ]) {
+      final value = fields[key];
+      if (value != null && value > 0) return value;
+    }
+    if (fields.isEmpty) return 0;
+    return fields.values.reduce((a, b) => a > b ? a : b);
+  }
+
+  static Map<String, double> _readExplicitDiscountFields(
+    Map<String, dynamic> data,
+  ) {
+    final fields = <String, double>{};
     for (final key in const [
       'discount',
       'discountAmount',
       'totalDiscount',
+      'discountTotal',
+      'appliedDiscount',
       'employeeDiscount',
       'partnerDiscount',
-      'discountTotal',
+      'familyDiscount',
+      'percentageDiscount',
+      'discountPercent',
+      'promotionDiscount',
+      'promoDiscount',
+      'complimentaryAmount',
+      'courtesyAmount',
+      'employeeConsumptionDiscount',
       'netDiscount',
-      'appliedDiscount',
       'totalDiscountAmount',
     ]) {
       final value = _toDouble(data[key]);
-      if (value > 0) return value;
+      if (value > 0) fields[key] = value;
     }
-    return 0;
+    return fields;
   }
 
   static double _toDouble(Object? value) {

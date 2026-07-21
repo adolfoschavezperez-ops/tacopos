@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/reports/sales_discrepancy_audit.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
@@ -2122,14 +2123,17 @@ const _salesAuditHeaders = [
 
 const _salesAuditDiscrepancyTypes = {
   'all': 'Todos',
-  'items_order': 'Items vs total orden',
+  'items_order': 'Items/descuento vs total orden',
+  'discount_inconsistent': 'Descuento inconsistente',
   'payments_order': 'Pagos vs total orden',
   'cash_net': 'Recibido menos cambio vs pago aplicado',
   'paid_total': 'paidTotal vs suma de pagos',
-  'pending_total': 'Orden pagada con saldo pendiente',
-  'unpaid_complete': 'Orden no pagada con pagos completos',
-  'implicit_discount': 'Descuento implicito sin campo de descuento',
-  'invalid_total': 'Total negativo o cero inesperado',
+  'pending_total': 'pendingTotal incorrecto',
+  'duplicate_payment': 'Pago duplicado',
+  'paid_incomplete': 'Orden pagada incompleta',
+  'cancelled_active_payments': 'Orden cancelada con pagos',
+  'state_inconsistent': 'Estado inconsistente',
+  'negative_total': 'Total negativo',
   'other': 'Otros',
 };
 
@@ -2232,7 +2236,7 @@ class _SalesDiscrepancyAuditReportState
           children: [
             _auditToolbar(rows),
             const SizedBox(height: 14),
-            _SalesAuditSummary(rows: rows, reviewedCount: allRows.length),
+            _SalesAuditSummary(rows: allRows, reviewedCount: allRows.length),
             const SizedBox(height: 14),
             if (rows.isEmpty)
               EmptyState(
@@ -2365,9 +2369,10 @@ class _SalesAuditSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final discrepant = rows.where((row) => row.hasDiscrepancy).toList();
-    final percent = reviewedCount == 0
+    final correctCount = reviewedCount - discrepant.length;
+    final integrityPercent = reviewedCount == 0
         ? '0.0%'
-        : '${((discrepant.length / reviewedCount) * 100).toStringAsFixed(1)}%';
+        : '${((correctCount / reviewedCount) * 100).toStringAsFixed(1)}%';
     final dates =
         discrepant
             .map((row) => _businessDateFor(row.order.createdAt))
@@ -2379,8 +2384,9 @@ class _SalesAuditSummary extends StatelessWidget {
       runSpacing: 10,
       children: [
         _SmallMetric('Ordenes revisadas', '$reviewedCount'),
+        _SmallMetric('Ordenes correctas', '$correctCount'),
         _SmallMetric('Ordenes con discrepancia', '${discrepant.length}'),
-        _SmallMetric('Porcentaje', percent),
+        _SmallMetric('Integridad', integrityPercent),
         _SmallMetric(
           'Dif. items vs orden',
           _money(rows.fold(0, (sum, row) => sum + row.diffItemsOrder)),
@@ -2522,6 +2528,8 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                     _InfoText('Cliente', row.order.customerName ?? '-'),
                     _InfoText('Estado', row.order.status),
                     _InfoText('Pago', row.order.paymentStatus),
+                    _InfoText('Cocina', row.order.kitchenStatus),
+                    _InfoText('Audit mode', row.auditModeLabel),
                   ],
                 ),
               ),
@@ -2547,11 +2555,51 @@ class _SalesAuditDetailDialog extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _DetailTable(
+                title: 'Descuentos encontrados',
+                headers: const ['Campo', 'Valor'],
+                rows: row.discountFields.isEmpty
+                    ? const [
+                        ['Sin campos de descuento', r'$0.00'],
+                      ]
+                    : row.discountFields.entries
+                          .map((entry) => [entry.key, _money(entry.value)])
+                          .toList(),
+              ),
+              const SizedBox(height: 12),
+              _DetailTable(
+                title: 'Items',
+                headers: const [
+                  'Producto',
+                  'Cantidad',
+                  'UnitPrice',
+                  'Total',
+                  'Status',
+                  'Kitchen',
+                  'CancelStatus',
+                  'Activo',
+                ],
+                rows: row.items.map((item) {
+                  return [
+                    item.productName,
+                    '${item.qty}',
+                    _money(item.unitPrice),
+                    _money(item.qty * item.unitPrice),
+                    item.status,
+                    item.kitchenStatus,
+                    item.cancelStatus,
+                    item.isCancelled ? 'No' : 'Si',
+                  ];
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+              _DetailTable(
                 title: 'Pagos',
                 headers: const [
+                  'PaymentId',
                   'Metodo',
                   'Status',
                   'Amount',
+                  'Aplicado',
                   'Base',
                   'Cobrado',
                   'Recibido',
@@ -2563,9 +2611,11 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                 ],
                 rows: row.payments.map((payment) {
                   return [
+                    payment.id,
                     _paymentMethodLabel(payment.method),
                     payment.status,
                     _money(payment.amount),
+                    _money(salesAuditPaymentAppliedAmount(payment)),
                     _money(payment.baseAmount),
                     _money(payment.chargedAmount),
                     payment.cashReceivedAmount == null
@@ -2578,6 +2628,18 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                     _money(payment.cardFeeAbsorbedAmount),
                     _dateTimeText(payment.createdAt),
                     payment.employeeName ?? payment.createdBy ?? '-',
+                  ];
+                }).toList(),
+              ),
+              const SizedBox(height: 12),
+              _DetailTable(
+                title: 'Validaciones',
+                headers: const ['Resultado', 'Validacion', 'Detalle'],
+                rows: row.validations.map((validation) {
+                  return [
+                    validation.passed ? 'Correcta' : 'Discrepancia',
+                    validation.label,
+                    validation.detail.isEmpty ? '-' : validation.detail,
                   ];
                 }).toList(),
               ),
@@ -2635,6 +2697,9 @@ class _SalesAuditRow {
     required this.cashPaymentMismatchCount,
     required this.discrepancyCodes,
     required this.diagnostics,
+    required this.discountFields,
+    required this.validations,
+    required this.auditMode,
   });
 
   final PosOrder order;
@@ -2655,15 +2720,29 @@ class _SalesAuditRow {
   final int cashPaymentMismatchCount;
   final List<String> discrepancyCodes;
   final List<String> diagnostics;
+  final Map<String, double> discountFields;
+  final List<SalesAuditValidation> validations;
+  final SalesAuditMode auditMode;
 
   bool get hasDiscrepancy => discrepancyCodes.isNotEmpty;
   double get primaryDifference {
-    if (_outsideTolerance(diffItemsOrder)) return diffItemsOrder;
-    if (_outsideTolerance(diffPaymentsOrder)) return diffPaymentsOrder;
-    if (_outsideTolerance(diffPaidTotal)) return diffPaidTotal;
-    if (_outsideTolerance(diffPendingTotal)) return diffPendingTotal;
+    if (diffItemsOrder.abs() > salesAuditMoneyTolerance) return diffItemsOrder;
+    if (diffPaymentsOrder.abs() > salesAuditMoneyTolerance) {
+      return diffPaymentsOrder;
+    }
+    if (diffPaidTotal.abs() > salesAuditMoneyTolerance) return diffPaidTotal;
+    if (diffPendingTotal.abs() > salesAuditMoneyTolerance) {
+      return diffPendingTotal;
+    }
     return 0;
   }
+
+  String get auditModeLabel => switch (auditMode) {
+    SalesAuditMode.paid => 'pagada',
+    SalesAuditMode.partial => 'parcial',
+    SalesAuditMode.cancelled => 'cancelada',
+    SalesAuditMode.pending => 'pendiente',
+  };
 
   String get discrepancyLabel => hasDiscrepancy
       ? discrepancyCodes
@@ -2694,7 +2773,14 @@ class _SalesAuditRow {
     _businessDateFor(order.createdAt ?? order.paidAt) ?? '-',
     _shortId(order.id),
     order.id,
+    order.status,
+    order.paymentStatus,
     _money(itemsSubtotal),
+    discountFields.isEmpty
+        ? '-'
+        : discountFields.entries
+              .map((entry) => '${entry.key}: ${_money(entry.value)}')
+              .join(' | '),
     _money(explicitDiscount),
     _money(expectedOrderTotal),
     _money(order.total),
@@ -2705,6 +2791,7 @@ class _SalesAuditRow {
     _money(order.pendingTotal),
     _money(primaryDifference),
     discrepancyLabel,
+    diagnostics.join(' | '),
   ];
 
   String get itemsFormula =>
@@ -2717,17 +2804,21 @@ const _salesAuditCsvHeaders = [
   'fecha',
   'folio',
   'orderId',
-  'total items',
-  'descuento explicito',
+  'estado orden',
+  'estado pago',
+  'subtotal items',
+  'descuentos encontrados',
+  'descuento total explicito',
   'total esperado',
   'total orden',
-  'pagos activos',
+  'total pagos activos',
   'recibido',
   'cambio',
   'paidTotal',
   'pendingTotal',
   'diferencia',
   'tipos de discrepancia',
+  'validaciones fallidas',
 ];
 
 _SalesAuditRow _buildSalesAuditRow(
@@ -2735,153 +2826,30 @@ _SalesAuditRow _buildSalesAuditRow(
   List<OrderItem> items,
   List<Payment> payments,
 ) {
-  final activeItems = items.where((item) => !item.isCancelled).toList();
-  final cancelledItems = items.where((item) => item.isCancelled).toList();
-  final itemsSubtotal = activeItems.fold<double>(
-    0,
-    (sum, item) => sum + (item.qty * item.unitPrice),
-  );
-  final explicitDiscount = order.explicitDiscount;
-  final expectedOrderTotal = (itemsSubtotal - explicitDiscount)
-      .clamp(0, double.infinity)
-      .toDouble();
-  final activePayments = payments.where(_isAuditActivePayment).toList();
-  final paymentsAppliedTotal = activePayments.fold<double>(
-    0,
-    (sum, payment) => sum + _auditPaymentAppliedAmount(payment),
-  );
-  final receivedTotal = activePayments.fold<double>(
-    0,
-    (sum, payment) => sum + (payment.cashReceivedAmount ?? 0),
-  );
-  final changeTotal = activePayments.fold<double>(
-    0,
-    (sum, payment) => sum + (payment.cashChangeAmount ?? 0),
-  );
-  final expectedPending = (order.total - paymentsAppliedTotal)
-      .clamp(0, double.infinity)
-      .toDouble();
-  final diffItemsOrder = order.total - expectedOrderTotal;
-  final diffPaymentsOrder = paymentsAppliedTotal - order.total;
-  final diffPaidTotal = order.paidTotal - paymentsAppliedTotal;
-  final diffPendingTotal = order.pendingTotal - expectedPending;
-  final codes = <String>[];
-  final diagnostics = <String>[];
-  void add(String code, String message) {
-    if (!codes.contains(code)) codes.add(code);
-    diagnostics.add(message);
-  }
-
-  if (_outsideTolerance(diffItemsOrder)) {
-    add(
-      'items_order',
-      'Items vs total orden: diferencia ${_money(diffItemsOrder)}.',
-    );
-  }
-  if (_outsideTolerance(diffPaymentsOrder)) {
-    add(
-      'payments_order',
-      'Pagos vs total orden: diferencia ${_money(diffPaymentsOrder)}.',
-    );
-  }
-  var cashMismatchCount = 0;
-  for (final payment in activePayments.where(
-    (payment) => payment.method == 'cash',
-  )) {
-    final received = payment.cashReceivedAmount;
-    final change = payment.cashChangeAmount;
-    if (received == null || change == null) continue;
-    final cashNet = received - change;
-    final diff = cashNet - _auditPaymentAppliedAmount(payment);
-    if (_outsideTolerance(diff)) {
-      cashMismatchCount++;
-      add(
-        'cash_net',
-        'Efectivo ${payment.id}: recibido - cambio = ${_money(cashNet)}, aplicado ${_money(_auditPaymentAppliedAmount(payment))}, diferencia ${_money(diff)}.',
-      );
-    }
-    if (payment.cashReceivedAmount != null &&
-        payment.cashReceivedAmount! + _moneyTolerance <
-            _auditPaymentAppliedAmount(payment)) {
-      add('other', 'Pago efectivo mayor a recibido en ${payment.id}.');
-    }
-    if ((payment.cashChangeAmount ?? 0) < -_moneyTolerance) {
-      add('other', 'Cambio negativo en pago ${payment.id}.');
-    }
-  }
-  if (_outsideTolerance(diffPaidTotal)) {
-    add(
-      'paid_total',
-      'paidTotal vs suma de pagos: diferencia ${_money(diffPaidTotal)}.',
-    );
-  }
-  if (_outsideTolerance(diffPendingTotal)) {
-    add(
-      'pending_total',
-      'pendingTotal guardado ${_money(order.pendingTotal)} vs esperado ${_money(expectedPending)}.',
-    );
-  }
-  final orderPaid =
-      order.status.toLowerCase().trim() == 'paid' ||
-      order.paymentStatus.toLowerCase().trim() == 'paid';
-  if (orderPaid && order.pendingTotal > _moneyTolerance) {
-    add('pending_total', 'Orden pagada con saldo pendiente.');
-  }
-  final orderOpen =
-      order.status.toLowerCase().trim() == 'open' ||
-      order.paymentStatus.toLowerCase().trim() == 'pending';
-  if (orderOpen && paymentsAppliedTotal + _moneyTolerance >= order.total) {
-    add('unpaid_complete', 'Orden no pagada con pagos completos.');
-  }
-  if (itemsSubtotal > order.total + _moneyTolerance &&
-      explicitDiscount <= _moneyTolerance) {
-    add('implicit_discount', 'Posible descuento implicito o total incorrecto.');
-  }
-  if (order.total <= 0 && activeItems.isNotEmpty) {
-    add('invalid_total', 'Total de orden cero o negativo con items activos.');
-  }
-
+  final audit = auditSalesIntegrity(order, items, payments);
   return _SalesAuditRow(
     order: order,
     items: items,
     payments: payments,
-    activeItemCount: activeItems.length,
-    cancelledItemCount: cancelledItems.length,
-    itemsSubtotal: itemsSubtotal,
-    explicitDiscount: explicitDiscount,
-    expectedOrderTotal: expectedOrderTotal,
-    paymentsAppliedTotal: paymentsAppliedTotal,
-    receivedTotal: receivedTotal,
-    changeTotal: changeTotal,
-    diffItemsOrder: diffItemsOrder,
-    diffPaymentsOrder: diffPaymentsOrder,
-    diffPaidTotal: diffPaidTotal,
-    diffPendingTotal: diffPendingTotal,
-    cashPaymentMismatchCount: cashMismatchCount,
-    discrepancyCodes: codes,
-    diagnostics: diagnostics.isEmpty
-        ? const ['Sin discrepancias.']
-        : diagnostics,
+    activeItemCount: audit.activeItems.length,
+    cancelledItemCount: audit.cancelledItems.length,
+    itemsSubtotal: audit.itemsSubtotal,
+    explicitDiscount: audit.explicitDiscountTotal,
+    expectedOrderTotal: audit.expectedOrderTotal,
+    paymentsAppliedTotal: audit.paymentsAppliedTotal,
+    receivedTotal: audit.receivedTotal,
+    changeTotal: audit.changeTotal,
+    diffItemsOrder: audit.diffItemsOrder,
+    diffPaymentsOrder: audit.diffPaymentsOrder,
+    diffPaidTotal: audit.diffPaidTotal,
+    diffPendingTotal: audit.diffPendingTotal,
+    cashPaymentMismatchCount: audit.cashPaymentMismatchCount,
+    discrepancyCodes: audit.failedCodes,
+    diagnostics: audit.diagnostics,
+    discountFields: audit.discountFields,
+    validations: audit.validations,
+    auditMode: audit.auditMode,
   );
-}
-
-const _moneyTolerance = 0.02;
-
-bool _outsideTolerance(double value) => value.abs() > _moneyTolerance;
-
-bool _isAuditActivePayment(Payment payment) {
-  final status = payment.status.trim().toLowerCase();
-  return status != 'cancelled' &&
-      status != 'canceled' &&
-      payment.cancelledAt == null &&
-      _auditPaymentAppliedAmount(payment) > 0;
-}
-
-double _auditPaymentAppliedAmount(Payment payment) {
-  if (payment.amount > 0) return payment.amount;
-  if (payment.baseAmount > 0) return payment.baseAmount;
-  if (payment.chargedAmount > 0) return payment.chargedAmount;
-  return 0;
 }
 
 class _StockOutDropdown extends StatelessWidget {
