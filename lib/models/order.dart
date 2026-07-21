@@ -31,6 +31,14 @@ class PosOrder {
     this.cancelReason,
     this.explicitDiscount = 0,
     this.explicitDiscountFields = const {},
+    this.discountType,
+    this.discountName,
+    this.discountReason,
+    this.discountBeneficiaryEmployeeId,
+    this.discountBeneficiaryEmployeeName,
+    this.discountAuthorizedByEmployeeId,
+    this.discountAuthorizedByEmployeeName,
+    this.discountAppliedAt,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -64,6 +72,14 @@ class PosOrder {
   final String? cancelReason;
   final double explicitDiscount;
   final Map<String, double> explicitDiscountFields;
+  final String? discountType;
+  final String? discountName;
+  final String? discountReason;
+  final String? discountBeneficiaryEmployeeId;
+  final String? discountBeneficiaryEmployeeName;
+  final String? discountAuthorizedByEmployeeId;
+  final String? discountAuthorizedByEmployeeName;
+  final DateTime? discountAppliedAt;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -100,6 +116,28 @@ class PosOrder {
       cancelReason: data['cancelReason'] as String?,
       explicitDiscount: _readExplicitDiscount(data),
       explicitDiscountFields: _readExplicitDiscountFields(data),
+      discountType:
+          _readOptionalString(data['discountType']) ??
+          _readOptionalString(data['lastAppliedDiscountType']),
+      discountName:
+          _readOptionalString(data['discountName']) ??
+          _readOptionalString(data['lastAppliedDiscountName']),
+      discountReason:
+          _readOptionalString(data['discountReason']) ??
+          _readOptionalString(data['lastDiscountReason']),
+      discountBeneficiaryEmployeeId: _readOptionalString(
+        data['discountBeneficiaryEmployeeId'],
+      ),
+      discountBeneficiaryEmployeeName: _readOptionalString(
+        data['discountBeneficiaryEmployeeName'],
+      ),
+      discountAuthorizedByEmployeeId: _readOptionalString(
+        data['discountAuthorizedByEmployeeId'],
+      ),
+      discountAuthorizedByEmployeeName: _readOptionalString(
+        data['discountAuthorizedByEmployeeName'],
+      ),
+      discountAppliedAt: _toDate(data['discountAppliedAt']),
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:
@@ -195,6 +233,7 @@ class PosOrder {
       'percentageDiscount',
       'discountPercent',
       'discountPercentage',
+      'appliedDiscountPercent',
       'promotionDiscount',
       'promoDiscount',
       'complimentaryAmount',
@@ -203,8 +242,6 @@ class PosOrder {
       'netDiscount',
       'totalDiscountAmount',
       'benefitAmount',
-      'settledAmount',
-      'paymentAmount',
     ]) {
       final value = _toDouble(data[key]);
       if (value > 0) fields[key] = value;
@@ -218,5 +255,10 @@ class PosOrder {
       return double.tryParse(value.trim().replaceAll(',', '')) ?? 0;
     }
     return 0;
+  }
+
+  static String? _readOptionalString(Object? value) {
+    final clean = value?.toString().trim();
+    return clean == null || clean.isEmpty ? null : clean;
   }
 }

@@ -141,6 +141,59 @@ void main() {
       expect(result.hasDiscrepancy, isFalse);
     });
 
+    test('does not flag a correct 100 percent discount settlement', () {
+      final result = auditSalesIntegrity(
+        _order(total: 80, paidTotal: 80),
+        [_item(total: 80)],
+        [
+          _payment(
+            baseAmount: 80,
+            chargedAmount: 0,
+            received: 0,
+            change: 0,
+            discountAmount: 80,
+            totalAfterDiscount: 0,
+            appliedDiscountPercent: 100,
+            appliedDiscountType: 'courtesy',
+            appliedDiscountName: 'Cortesia gerencia',
+          ),
+        ],
+      );
+
+      expect(result.monetaryDiscountApplied, 80);
+      expect(result.moneyPaymentsApplied, 0);
+      expect(result.settledTotal, 80);
+      expect(result.discountPercentNormalized, 1);
+      expect(result.discountTypeLabel, 'Cortesia');
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('maps discount type labels from payment metadata', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            baseAmount: 100,
+            chargedAmount: 50,
+            received: 50,
+            change: 0,
+            discountAmount: 50,
+            totalAfterDiscount: 50,
+            appliedDiscountPercent: 50,
+            appliedDiscountType: 'friends_family',
+            appliedDiscountName: 'Familia',
+            discountReason: 'Autorizado',
+          ),
+        ],
+      );
+
+      expect(result.discountTypeLabel, 'Amigos/Familia');
+      expect(result.discountName, 'Familia');
+      expect(result.discountReason, 'Autorizado');
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
     test('calculates a monetary discount from percent only when needed', () {
       final result = auditSalesIntegrity(
         _order(total: 200, paidTotal: 200),
@@ -259,12 +312,15 @@ Payment _payment({
   String id = 'payment',
   String method = 'cash',
   double baseAmount = 0,
-  double chargedAmount = 0,
+  double? chargedAmount,
   double? received,
   double? change,
   double discountAmount = 0,
   double totalAfterDiscount = 0,
   double appliedDiscountPercent = 0,
+  String? appliedDiscountType,
+  String? appliedDiscountName,
+  String? discountReason,
   DateTime? createdAt,
 }) {
   return Payment(
@@ -277,12 +333,15 @@ Payment _payment({
     baseAmount: baseAmount,
     surchargeRate: 0,
     surchargeAmount: 0,
-    chargedAmount: chargedAmount == 0 ? baseAmount : chargedAmount,
+    chargedAmount: chargedAmount ?? baseAmount,
     cashReceivedAmount: received,
     cashChangeAmount: change,
     discountAmount: discountAmount,
     totalAfterDiscount: totalAfterDiscount,
     appliedDiscountPercent: appliedDiscountPercent,
+    appliedDiscountType: appliedDiscountType,
+    appliedDiscountName: appliedDiscountName,
+    discountReason: discountReason,
     createdAt: createdAt,
   );
 }

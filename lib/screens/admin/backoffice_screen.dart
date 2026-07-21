@@ -2108,13 +2108,16 @@ const _salesAuditHeaders = [
   'Cliente',
   'Estado orden',
   'Total articulos bruto',
-  'Descuento monetario',
+  'Descuento %',
+  r'Descuento $',
+  'Tipo descuento',
   'Pago monetario',
   'Total liquidado',
   'Total orden',
-  'Total neto calculado',
   'paidTotal',
   'pendingTotal',
+  'Recibido',
+  'Cambio',
   'Diferencia real',
   'Tipo discrepancia',
   'Accion',
@@ -2548,6 +2551,12 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                       'Descuento monetario',
                       _money(row.explicitDiscount),
                     ),
+                    _InfoText('Descuento %', row.discountPercentText),
+                    _InfoText('Tipo descuento', row.discountTypeLabel),
+                    _InfoText('Nombre descuento', row.discountName),
+                    _InfoText('Motivo descuento', row.discountReason),
+                    _InfoText('Beneficiario', row.discountBeneficiary),
+                    _InfoText('Autorizo', row.discountAuthorizedBy),
                     _InfoText(
                       'Pago monetario',
                       _money(row.paymentsAppliedTotal),
@@ -2572,6 +2581,12 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                   'Tipo',
                   'Porcentaje',
                   'Importe',
+                  'Tipo desc.',
+                  'Nombre',
+                  'Motivo',
+                  'Beneficiario',
+                  'Autorizo',
+                  'Fecha',
                   'Usado',
                   'Detalle',
                 ],
@@ -2583,6 +2598,12 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                           '-',
                           '-',
                           r'$0.00',
+                          'Sin descuento',
+                          '-',
+                          '-',
+                          '-',
+                          '-',
+                          '-',
                           'No',
                           '-',
                         ],
@@ -2597,6 +2618,22 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                                   ? '-'
                                   : '${(source.normalizedPercent! * 100).toStringAsFixed(2)}%',
                               _money(source.monetaryAmount),
+                              source.discountTypeLabel,
+                              source.discountName.isEmpty
+                                  ? '-'
+                                  : source.discountName,
+                              source.discountReason.isEmpty
+                                  ? '-'
+                                  : source.discountReason,
+                              source.discountBeneficiary.isEmpty
+                                  ? '-'
+                                  : source.discountBeneficiary,
+                              source.discountAuthorizedBy.isEmpty
+                                  ? '-'
+                                  : source.discountAuthorizedBy,
+                              source.appliedAt == null
+                                  ? '-'
+                                  : _dateTimeText(source.appliedAt),
                               source.used ? 'Si' : 'No',
                               [source.interpretation, source.metadata]
                                   .where((text) => text.trim().isNotEmpty)
@@ -2644,6 +2681,9 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                   'Cobrado',
                   'Recibido',
                   'Cambio',
+                  'Discount',
+                  'Discount %',
+                  'Discount type',
                   'Recargo',
                   'Comision',
                   'Hora',
@@ -2664,6 +2704,13 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                     payment.cashChangeAmount == null
                         ? '-'
                         : _money(payment.cashChangeAmount!),
+                    _money(payment.discountAmount),
+                    payment.appliedDiscountPercent <= 0
+                        ? '-'
+                        : '${(payment.appliedDiscountPercent > 1 ? payment.appliedDiscountPercent : payment.appliedDiscountPercent * 100).toStringAsFixed(2)}%',
+                    payment.appliedDiscountType ??
+                        payment.appliedDiscountName ??
+                        '-',
                     _money(payment.surchargeAmount),
                     _money(payment.cardFeeAbsorbedAmount),
                     _dateTimeText(payment.createdAt),
@@ -2740,6 +2787,13 @@ class _SalesAuditRow {
     required this.diagnostics,
     required this.discountFields,
     required this.discountSources,
+    required this.discountPercentNormalized,
+    required this.discountTypeLabel,
+    required this.discountName,
+    required this.discountReason,
+    required this.discountBeneficiary,
+    required this.discountAuthorizedBy,
+    required this.discountSourceFields,
     required this.validations,
     required this.auditMode,
   });
@@ -2765,6 +2819,13 @@ class _SalesAuditRow {
   final List<String> diagnostics;
   final Map<String, double> discountFields;
   final List<SalesAuditDiscountSource> discountSources;
+  final double? discountPercentNormalized;
+  final String discountTypeLabel;
+  final String discountName;
+  final String discountReason;
+  final String discountBeneficiary;
+  final String discountAuthorizedBy;
+  final String discountSourceFields;
   final List<SalesAuditValidation> validations;
   final SalesAuditMode auditMode;
 
@@ -2794,6 +2855,10 @@ class _SalesAuditRow {
             .join(' | ')
       : 'Sin discrepancias';
 
+  String get discountPercentText => discountPercentNormalized == null
+      ? '-'
+      : '${(discountPercentNormalized! * 100).toStringAsFixed(2)}%';
+
   List<String> get tableCells => [
     _businessDateFor(order.createdAt ?? order.paidAt) ?? '-',
     _shortId(order.id),
@@ -2801,13 +2866,16 @@ class _SalesAuditRow {
     order.customerName ?? '-',
     '${order.status} / ${order.paymentStatus}',
     _money(itemsSubtotal),
+    discountPercentText,
     _money(explicitDiscount),
+    discountTypeLabel,
     _money(paymentsAppliedTotal),
     _money(settledTotal),
     _money(order.total),
-    _money(expectedOrderTotal),
     _money(order.paidTotal),
     _money(order.pendingTotal),
+    _money(receivedTotal),
+    _money(changeTotal),
     _money(primaryDifference),
     discrepancyLabel,
   ];
@@ -2819,25 +2887,31 @@ class _SalesAuditRow {
     order.status,
     order.paymentStatus,
     _money(itemsSubtotal),
+    discountPercentText,
+    _money(explicitDiscount),
+    discountTypeLabel,
+    discountName.isEmpty ? '-' : discountName,
+    discountReason.isEmpty ? '-' : discountReason,
+    discountBeneficiary.isEmpty ? '-' : discountBeneficiary,
+    discountAuthorizedBy.isEmpty ? '-' : discountAuthorizedBy,
+    _money(paymentsAppliedTotal),
+    _money(settledTotal),
+    _money(order.total),
+    _money(order.paidTotal),
+    _money(order.pendingTotal),
+    _money(receivedTotal),
+    _money(changeTotal),
+    _money(primaryDifference),
+    discrepancyLabel,
+    discountSourceFields.isEmpty ? '-' : discountSourceFields,
     discountSources.isEmpty
         ? '-'
         : discountSources
               .map(
                 (source) =>
-                    '${source.used ? '*' : ''}${source.field}: ${_money(source.monetaryAmount)} (${source.kind})',
+                    '${source.used ? '*' : ''}${source.field}: raw=${source.originalValue.toStringAsFixed(2)} amount=${_money(source.monetaryAmount)} type=${source.discountTypeLabel}',
               )
               .join(' | '),
-    _money(explicitDiscount),
-    _money(paymentsAppliedTotal),
-    _money(settledTotal),
-    _money(expectedOrderTotal),
-    _money(order.total),
-    _money(receivedTotal),
-    _money(changeTotal),
-    _money(order.paidTotal),
-    _money(order.pendingTotal),
-    _money(primaryDifference),
-    discrepancyLabel,
     diagnostics.join(' | '),
   ];
 
@@ -2854,18 +2928,24 @@ const _salesAuditCsvHeaders = [
   'estado orden',
   'estado pago',
   'total articulos bruto',
-  'origen descuentos',
+  'discountPercent',
   'descuento monetario valido',
+  'discountType',
+  'discountName',
+  'discountReason',
+  'discountBeneficiary',
+  'discountAuthorizedBy',
   'pago monetario',
   'total liquidado',
-  'total neto calculado',
   'total orden',
-  'recibido',
-  'cambio',
   'paidTotal',
   'pendingTotal',
+  'recibido',
+  'cambio',
   'diferencia',
   'tipos de discrepancia',
+  'campos fuente usados',
+  'interpretacion descuentos',
   'validaciones fallidas',
 ];
 
@@ -2897,6 +2977,13 @@ _SalesAuditRow _buildSalesAuditRow(
     diagnostics: audit.diagnostics,
     discountFields: audit.discountFields,
     discountSources: audit.discountSources,
+    discountPercentNormalized: audit.discountPercentNormalized,
+    discountTypeLabel: audit.discountTypeLabel,
+    discountName: audit.discountName,
+    discountReason: audit.discountReason,
+    discountBeneficiary: audit.discountBeneficiary,
+    discountAuthorizedBy: audit.discountAuthorizedBy,
+    discountSourceFields: audit.discountSourceFields,
     validations: audit.validations,
     auditMode: audit.auditMode,
   );

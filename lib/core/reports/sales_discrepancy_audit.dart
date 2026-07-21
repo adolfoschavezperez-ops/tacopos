@@ -22,6 +22,13 @@ class SalesAuditResult {
     required this.diffPendingTotal,
     required this.discountFields,
     required this.discountSources,
+    required this.discountPercentNormalized,
+    required this.discountTypeLabel,
+    required this.discountName,
+    required this.discountReason,
+    required this.discountBeneficiary,
+    required this.discountAuthorizedBy,
+    required this.discountSourceFields,
     required this.failedCodes,
     required this.diagnostics,
     required this.validations,
@@ -46,6 +53,13 @@ class SalesAuditResult {
   final double diffPendingTotal;
   final Map<String, double> discountFields;
   final List<SalesAuditDiscountSource> discountSources;
+  final double? discountPercentNormalized;
+  final String discountTypeLabel;
+  final String discountName;
+  final String discountReason;
+  final String discountBeneficiary;
+  final String discountAuthorizedBy;
+  final String discountSourceFields;
   final List<String> failedCodes;
   final List<String> diagnostics;
   final List<SalesAuditValidation> validations;
@@ -75,6 +89,12 @@ class SalesAuditDiscountSource {
     required this.kind,
     required this.monetaryAmount,
     required this.used,
+    this.discountTypeLabel = 'Sin descuento',
+    this.discountName = '',
+    this.discountReason = '',
+    this.discountBeneficiary = '',
+    this.discountAuthorizedBy = '',
+    this.appliedAt,
     this.normalizedPercent,
     this.interpretation = '',
     this.metadata = '',
@@ -85,6 +105,12 @@ class SalesAuditDiscountSource {
   final String kind;
   final double monetaryAmount;
   final bool used;
+  final String discountTypeLabel;
+  final String discountName;
+  final String discountReason;
+  final String discountBeneficiary;
+  final String discountAuthorizedBy;
+  final DateTime? appliedAt;
   final double? normalizedPercent;
   final String interpretation;
   final String metadata;
@@ -187,6 +213,13 @@ SalesAuditResult auditSalesIntegrity(
       diffPendingTotal: diffPendingTotal,
       discountFields: discountResolution.fields,
       discountSources: discountResolution.sources,
+      discountPercentNormalized: discountResolution.percentNormalized,
+      discountTypeLabel: discountResolution.typeLabel,
+      discountName: discountResolution.name,
+      discountReason: discountResolution.reason,
+      discountBeneficiary: discountResolution.beneficiary,
+      discountAuthorizedBy: discountResolution.authorizedBy,
+      discountSourceFields: discountResolution.sourceFields,
       failedCodes: codes,
       diagnostics: diagnostics,
       validations: validations,
@@ -232,6 +265,13 @@ SalesAuditResult auditSalesIntegrity(
       diffPendingTotal: diffPendingTotal,
       discountFields: discountResolution.fields,
       discountSources: discountResolution.sources,
+      discountPercentNormalized: discountResolution.percentNormalized,
+      discountTypeLabel: discountResolution.typeLabel,
+      discountName: discountResolution.name,
+      discountReason: discountResolution.reason,
+      discountBeneficiary: discountResolution.beneficiary,
+      discountAuthorizedBy: discountResolution.authorizedBy,
+      discountSourceFields: discountResolution.sourceFields,
       failedCodes: codes,
       diagnostics: diagnostics,
       validations: validations,
@@ -280,6 +320,13 @@ SalesAuditResult auditSalesIntegrity(
       diffPendingTotal: diffPendingTotal,
       discountFields: discountResolution.fields,
       discountSources: discountResolution.sources,
+      discountPercentNormalized: discountResolution.percentNormalized,
+      discountTypeLabel: discountResolution.typeLabel,
+      discountName: discountResolution.name,
+      discountReason: discountResolution.reason,
+      discountBeneficiary: discountResolution.beneficiary,
+      discountAuthorizedBy: discountResolution.authorizedBy,
+      discountSourceFields: discountResolution.sourceFields,
       failedCodes: codes,
       diagnostics: diagnostics,
       validations: validations,
@@ -358,6 +405,13 @@ SalesAuditResult auditSalesIntegrity(
     diffPendingTotal: diffPendingTotal,
     discountFields: discountResolution.fields,
     discountSources: discountResolution.sources,
+    discountPercentNormalized: discountResolution.percentNormalized,
+    discountTypeLabel: discountResolution.typeLabel,
+    discountName: discountResolution.name,
+    discountReason: discountResolution.reason,
+    discountBeneficiary: discountResolution.beneficiary,
+    discountAuthorizedBy: discountResolution.authorizedBy,
+    discountSourceFields: discountResolution.sourceFields,
     failedCodes: codes,
     diagnostics: diagnostics,
     validations: validations,
@@ -454,6 +508,17 @@ _DiscountResolution _resolveDiscount(
           normalizedPercent: normalized,
           monetaryAmount: grossItemsTotal * normalized,
           used: false,
+          discountTypeLabel: _discountTypeLabel(
+            rawType: order.discountType,
+            rawName: order.discountName,
+            sourceField: entry.key,
+            hasDiscount: true,
+          ),
+          discountName: order.discountName ?? '',
+          discountReason: order.discountReason ?? '',
+          discountBeneficiary: order.discountBeneficiaryEmployeeName ?? '',
+          discountAuthorizedBy: order.discountAuthorizedByEmployeeName ?? '',
+          appliedAt: order.discountAppliedAt,
           interpretation: 'Porcentaje aplicado al total bruto de items.',
         ),
       );
@@ -465,6 +530,17 @@ _DiscountResolution _resolveDiscount(
           kind: 'importe',
           monetaryAmount: value,
           used: false,
+          discountTypeLabel: _discountTypeLabel(
+            rawType: order.discountType,
+            rawName: order.discountName,
+            sourceField: entry.key,
+            hasDiscount: true,
+          ),
+          discountName: order.discountName ?? '',
+          discountReason: order.discountReason ?? '',
+          discountBeneficiary: order.discountBeneficiaryEmployeeName ?? '',
+          discountAuthorizedBy: order.discountAuthorizedByEmployeeName ?? '',
+          appliedAt: order.discountAppliedAt,
           interpretation: 'Importe monetario guardado en la orden.',
         ),
       );
@@ -482,6 +558,19 @@ _DiscountResolution _resolveDiscount(
           kind: 'importe',
           monetaryAmount: payment.discountAmount,
           used: false,
+          discountTypeLabel: _discountTypeLabel(
+            rawType: payment.appliedDiscountType,
+            rawName: payment.appliedDiscountName,
+            sourceField: 'discountAmount',
+            hasDiscount: true,
+          ),
+          discountName: payment.appliedDiscountName ?? '',
+          discountReason: payment.discountReason ?? '',
+          discountBeneficiary: payment.discountEmployeeBeneficiaryName ?? '',
+          discountAuthorizedBy:
+              payment.discountAuthorizedByPartnerName ??
+              payment.discountAuthorizedByPartnerLinkedEmployeeName ??
+              '',
           interpretation: 'Importe monetario de descuento del pago.',
           metadata: _paymentDiscountMetadata(payment),
         ),
@@ -502,6 +591,19 @@ _DiscountResolution _resolveDiscount(
           normalizedPercent: normalized,
           monetaryAmount: base * normalized,
           used: false,
+          discountTypeLabel: _discountTypeLabel(
+            rawType: payment.appliedDiscountType,
+            rawName: payment.appliedDiscountName,
+            sourceField: 'appliedDiscountPercent',
+            hasDiscount: true,
+          ),
+          discountName: payment.appliedDiscountName ?? '',
+          discountReason: payment.discountReason ?? '',
+          discountBeneficiary: payment.discountEmployeeBeneficiaryName ?? '',
+          discountAuthorizedBy:
+              payment.discountAuthorizedByPartnerName ??
+              payment.discountAuthorizedByPartnerLinkedEmployeeName ??
+              '',
           interpretation: 'Porcentaje aplicado al subtotal del pago.',
           metadata: _paymentDiscountMetadata(payment),
         ),
@@ -519,6 +621,31 @@ _DiscountResolution _resolveDiscount(
     0,
     (sum, source) => sum + source.monetaryAmount,
   );
+  final normalizedPercent = _selectedDiscountPercent(
+    selected,
+    amount,
+    grossItemsTotal,
+  );
+  final selectedType = _selectedText(
+    selected,
+    (source) => source.discountTypeLabel,
+    fallback: amount > salesAuditMoneyTolerance
+        ? 'Tipo no identificado'
+        : 'Sin descuento',
+  );
+  final selectedName = _selectedText(selected, (source) => source.discountName);
+  final selectedReason = _selectedText(
+    selected,
+    (source) => source.discountReason,
+  );
+  final selectedBeneficiary = _selectedText(
+    selected,
+    (source) => source.discountBeneficiary,
+  );
+  final selectedAuthorizedBy = _selectedText(
+    selected,
+    (source) => source.discountAuthorizedBy,
+  );
   final selectedKeys = selected.map((source) => source.field).toSet();
   sources.addAll(
     [...orderMoney, ...paymentMoney, ...orderPercent, ...paymentPercent].map((
@@ -530,6 +657,12 @@ _DiscountResolution _resolveDiscount(
         kind: source.kind,
         monetaryAmount: source.monetaryAmount,
         used: selectedKeys.contains(source.field),
+        discountTypeLabel: source.discountTypeLabel,
+        discountName: source.discountName,
+        discountReason: source.discountReason,
+        discountBeneficiary: source.discountBeneficiary,
+        discountAuthorizedBy: source.discountAuthorizedBy,
+        appliedAt: source.appliedAt,
         normalizedPercent: source.normalizedPercent,
         interpretation: source.interpretation,
         metadata: source.metadata,
@@ -541,6 +674,13 @@ _DiscountResolution _resolveDiscount(
     amount: amount.clamp(0, double.infinity).toDouble(),
     fields: fields,
     sources: sources,
+    percentNormalized: normalizedPercent,
+    typeLabel: selectedType,
+    name: selectedName,
+    reason: selectedReason,
+    beneficiary: selectedBeneficiary,
+    authorizedBy: selectedAuthorizedBy,
+    sourceFields: selected.map((source) => source.field).join(' | '),
   );
 }
 
@@ -584,6 +724,72 @@ bool _isPercentField(String field) {
 double _normalizePercent(double value) {
   if (value > 1) return value / 100;
   return value;
+}
+
+double? _selectedDiscountPercent(
+  List<SalesAuditDiscountSource> selected,
+  double amount,
+  double grossItemsTotal,
+) {
+  for (final source in selected) {
+    final percent = source.normalizedPercent;
+    if (percent != null && percent > 0) return percent;
+  }
+  if (amount > salesAuditMoneyTolerance &&
+      grossItemsTotal > salesAuditMoneyTolerance) {
+    return amount / grossItemsTotal;
+  }
+  return null;
+}
+
+String _selectedText(
+  List<SalesAuditDiscountSource> selected,
+  String Function(SalesAuditDiscountSource source) read, {
+  String fallback = '',
+}) {
+  for (final source in selected) {
+    final value = read(source).trim();
+    if (value.isNotEmpty &&
+        value != 'Sin descuento' &&
+        value != 'Tipo no identificado') {
+      return value;
+    }
+  }
+  return fallback;
+}
+
+String _discountTypeLabel({
+  required String? rawType,
+  required String? rawName,
+  required String sourceField,
+  required bool hasDiscount,
+}) {
+  if (!hasDiscount) return 'Sin descuento';
+  final clean = [
+    rawType,
+    rawName,
+    sourceField,
+  ].whereType<String>().join(' ').toLowerCase();
+  if (clean.contains('employee')) return 'Empleado';
+  if (clean.contains('partner') || clean.contains('socio')) return 'Socio';
+  if (clean.contains('family') ||
+      clean.contains('familia') ||
+      clean.contains('friends')) {
+    return 'Amigos/Familia';
+  }
+  if (clean.contains('courtesy') ||
+      clean.contains('cortesia') ||
+      clean.contains('complimentary')) {
+    return 'Cortesia';
+  }
+  if (clean.contains('promotion') || clean.contains('promo')) {
+    return 'Promocion';
+  }
+  if (clean.contains('manual')) return 'Manual';
+  if ((rawType ?? '').trim().isEmpty && (rawName ?? '').trim().isEmpty) {
+    return 'Tipo no identificado';
+  }
+  return (rawName ?? rawType ?? '').trim();
 }
 
 String _paymentDiscountMetadata(Payment payment) {
@@ -704,6 +910,13 @@ SalesAuditResult _result({
   required double diffPendingTotal,
   required Map<String, double> discountFields,
   required List<SalesAuditDiscountSource> discountSources,
+  required double? discountPercentNormalized,
+  required String discountTypeLabel,
+  required String discountName,
+  required String discountReason,
+  required String discountBeneficiary,
+  required String discountAuthorizedBy,
+  required String discountSourceFields,
   required List<String> failedCodes,
   required List<String> diagnostics,
   required List<SalesAuditValidation> validations,
@@ -728,6 +941,13 @@ SalesAuditResult _result({
     diffPendingTotal: diffPendingTotal,
     discountFields: discountFields,
     discountSources: discountSources,
+    discountPercentNormalized: discountPercentNormalized,
+    discountTypeLabel: discountTypeLabel,
+    discountName: discountName,
+    discountReason: discountReason,
+    discountBeneficiary: discountBeneficiary,
+    discountAuthorizedBy: discountAuthorizedBy,
+    discountSourceFields: discountSourceFields,
     failedCodes: failedCodes,
     diagnostics: diagnostics.isEmpty
         ? const ['Sin discrepancias.']
@@ -744,11 +964,25 @@ class _DiscountResolution {
     required this.amount,
     required this.fields,
     required this.sources,
+    required this.percentNormalized,
+    required this.typeLabel,
+    required this.name,
+    required this.reason,
+    required this.beneficiary,
+    required this.authorizedBy,
+    required this.sourceFields,
   });
 
   final double amount;
   final Map<String, double> fields;
   final List<SalesAuditDiscountSource> sources;
+  final double? percentNormalized;
+  final String typeLabel;
+  final String name;
+  final String reason;
+  final String beneficiary;
+  final String authorizedBy;
+  final String sourceFields;
 }
 
 bool _outsideTolerance(double value) => value.abs() > salesAuditMoneyTolerance;
