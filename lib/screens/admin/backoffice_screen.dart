@@ -2201,7 +2201,20 @@ class _SalesDiscrepancyAuditReportState
       try {
         final items = await widget.repository.getOrderItemsOnce(order.id);
         final payments = await widget.repository.getOrderPaymentsOnce(order.id);
-        rows.add(_buildSalesAuditRow(order, items, payments));
+        final correctionPreview = await widget.repository
+            .previewSafeOrderTotalsCorrection(
+              order: order,
+              items: items,
+              payments: payments,
+            );
+        rows.add(
+          _buildSalesAuditRow(
+            order,
+            items,
+            payments,
+            correctionPreview: correctionPreview,
+          ),
+        );
       } catch (error) {
         debugPrint('Sales discrepancy audit failed for ${order.id}: $error');
       }
@@ -2264,6 +2277,7 @@ class _SalesDiscrepancyAuditReportState
               _SalesAuditTable(
                 rows: rows,
                 onOpen: (row) => _openAuditDetail(row),
+                onCorrect: (row) => _openTotalsCorrection(row),
               ),
           ],
         );
@@ -2371,6 +2385,38 @@ class _SalesDiscrepancyAuditReportState
       ),
     );
   }
+
+  Future<void> _openTotalsCorrection(_SalesAuditRow row) async {
+    final preview = row.correctionPreview;
+    if (preview == null || !preview.safe) {
+      _showAuditMessage(
+        'Esta discrepancia requiere revision manual y no puede corregirse automaticamente.',
+      );
+      return;
+    }
+    final confirmed = await showDialog<_TotalsCorrectionInput>(
+      context: context,
+      builder: (_) => _TotalsCorrectionDialog(row: row, preview: preview),
+    );
+    if (!mounted || confirmed == null) return;
+    try {
+      await widget.repository.correctOrderTotalsFromAudit(
+        orderId: row.order.id,
+        reason: confirmed.reason,
+        adminPin: confirmed.pin,
+      );
+      if (!mounted) return;
+      setState(() => _future = _loadRows());
+      _showAuditMessage('Totales corregidos correctamente.');
+    } catch (error) {
+      if (!mounted) return;
+      _showAuditMessage(error.toString().replaceFirst('Bad state: ', ''));
+    }
+  }
+
+  void _showAuditMessage(String message) {
+    showAppSnackBar(context, message);
+  }
 }
 
 class _SalesAuditSummary extends StatelessWidget {
@@ -2468,10 +2514,15 @@ class _SalesAuditFilterNote extends StatelessWidget {
 }
 
 class _SalesAuditTable extends StatefulWidget {
-  const _SalesAuditTable({required this.rows, required this.onOpen});
+  const _SalesAuditTable({
+    required this.rows,
+    required this.onOpen,
+    required this.onCorrect,
+  });
 
   final List<_SalesAuditRow> rows;
   final ValueChanged<_SalesAuditRow> onOpen;
+  final ValueChanged<_SalesAuditRow> onCorrect;
 
   @override
   State<_SalesAuditTable> createState() => _SalesAuditTableState();
@@ -2527,10 +2578,22 @@ class _SalesAuditTableState extends State<_SalesAuditTable> {
                   cells: [
                     for (final cell in row.tableCells) DataCell(Text(cell)),
                     DataCell(
-                      TextButton.icon(
-                        onPressed: () => widget.onOpen(row),
-                        icon: const Icon(Icons.visibility_outlined),
-                        label: const Text('Detalle'),
+                      Wrap(
+                        spacing: 6,
+                        children: [
+                          TextButton.icon(
+                            onPressed: () => widget.onOpen(row),
+                            icon: const Icon(Icons.visibility_outlined),
+                            label: const Text('Detalle'),
+                          ),
+                          TextButton.icon(
+                            onPressed: row.canCorrectTotals
+                                ? () => widget.onCorrect(row)
+                                : null,
+                            icon: const Icon(Icons.build_circle_outlined),
+                            label: const Text('Corregir totales'),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -2823,6 +2886,151 @@ class _SalesAuditDetailDialog extends StatelessWidget {
   }
 }
 
+class _TotalsCorrectionInput {
+  const _TotalsCorrectionInput({required this.reason, required this.pin});
+
+  final String reason;
+  final String pin;
+}
+
+class _TotalsCorrectionDialog extends StatefulWidget {
+  const _TotalsCorrectionDialog({required this.row, required this.preview});
+
+  final _SalesAuditRow row;
+  final OrderTotalsCorrectionPreview preview;
+
+  @override
+  State<_TotalsCorrectionDialog> createState() =>
+      _TotalsCorrectionDialogState();
+}
+
+class _TotalsCorrectionDialogState extends State<_TotalsCorrectionDialog> {
+  final _reasonController = TextEditingController();
+  final _pinController = TextEditingController();
+  String _error = '';
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    _pinController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final row = widget.row;
+    final preview = widget.preview;
+    return AlertDialog(
+      title: Text('Corregir totales ${_shortId(row.order.id)}'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _DetailTable(
+                title: 'Vista previa',
+                headers: const ['Campo', 'Actual', 'Nuevo'],
+                rows: [
+                  ['Folio', _shortId(row.order.id), _shortId(row.order.id)],
+                  [
+                    'Total articulos',
+                    _money(preview.grossSubtotal),
+                    _money(preview.grossSubtotal),
+                  ],
+                  [
+                    'Descuento',
+                    _money(preview.discountAmount),
+                    _money(preview.discountAmount),
+                  ],
+                  [
+                    'Total neto',
+                    _money(preview.netTotal),
+                    _money(preview.netTotal),
+                  ],
+                  [
+                    'Pagos activos',
+                    _money(preview.paymentTotal),
+                    _money(preview.paymentTotal),
+                  ],
+                  [
+                    'Total orden',
+                    _money(preview.previousTotal),
+                    _money(preview.newTotal),
+                  ],
+                  [
+                    'paidTotal',
+                    _money(preview.previousPaidTotal),
+                    _money(preview.newPaidTotal),
+                  ],
+                  [
+                    'pendingTotal',
+                    _money(preview.previousPendingTotal),
+                    _money(preview.newPendingTotal),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _reasonController,
+                minLines: 2,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Motivo obligatorio',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _pinController,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'PIN administrador',
+                ),
+              ),
+              if (_error.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error,
+                  style: const TextStyle(
+                    color: BrandColors.danger,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final reason = _reasonController.text.trim();
+            final pin = _pinController.text.trim();
+            if (reason.isEmpty) {
+              setState(() => _error = 'Captura el motivo.');
+              return;
+            }
+            if (pin != '072026') {
+              setState(() => _error = 'PIN administrador incorrecto.');
+              return;
+            }
+            Navigator.pop(
+              context,
+              _TotalsCorrectionInput(reason: reason, pin: pin),
+            );
+          },
+          child: const Text('Confirmar correccion'),
+        ),
+      ],
+    );
+  }
+}
+
 class _SalesAuditRow {
   const _SalesAuditRow({
     required this.order,
@@ -2855,6 +3063,7 @@ class _SalesAuditRow {
     required this.discountSourceFields,
     required this.validations,
     required this.auditMode,
+    this.correctionPreview,
   });
 
   final PosOrder order;
@@ -2887,8 +3096,10 @@ class _SalesAuditRow {
   final String discountSourceFields;
   final List<SalesAuditValidation> validations;
   final SalesAuditMode auditMode;
+  final OrderTotalsCorrectionPreview? correctionPreview;
 
   bool get hasDiscrepancy => discrepancyCodes.isNotEmpty;
+  bool get canCorrectTotals => correctionPreview?.safe == true;
   double get primaryDifference {
     if (diffItemsOrder.abs() > salesAuditMoneyTolerance) return diffItemsOrder;
     if (diffPaymentsOrder.abs() > salesAuditMoneyTolerance) {
@@ -3011,8 +3222,9 @@ const _salesAuditCsvHeaders = [
 _SalesAuditRow _buildSalesAuditRow(
   PosOrder order,
   List<OrderItem> items,
-  List<Payment> payments,
-) {
+  List<Payment> payments, {
+  OrderTotalsCorrectionPreview? correctionPreview,
+}) {
   final audit = auditSalesIntegrity(order, items, payments);
   return _SalesAuditRow(
     order: order,
@@ -3045,6 +3257,7 @@ _SalesAuditRow _buildSalesAuditRow(
     discountSourceFields: audit.discountSourceFields,
     validations: audit.validations,
     auditMode: audit.auditMode,
+    correctionPreview: correctionPreview,
   );
 }
 
@@ -5124,6 +5337,51 @@ class _SaleDetailDialog extends StatelessWidget {
                       _InfoText('Cliente', order.customerName ?? '-'),
                       _InfoText('Total', _money(order.total)),
                       _InfoText(
+                        'Descuento aplicado',
+                        order.explicitDiscount > 0.01 ? 'Si' : 'No',
+                      ),
+                      _InfoText(
+                        'Descuento',
+                        order.explicitDiscount > 0.01
+                            ? (order.discountName ??
+                                  order.discountType ??
+                                  'Descuento historico no identificado')
+                            : 'Sin descuento',
+                      ),
+                      _InfoText(
+                        'Porcentaje',
+                        order.discountType == 'none' ||
+                                order.explicitDiscount <= 0.01
+                            ? '-'
+                            : _orderDiscountPercentText(order),
+                      ),
+                      _InfoText('Importe', _money(order.explicitDiscount)),
+                      _InfoText(
+                        'Subtotal bruto',
+                        _money(_saleDetailGrossSubtotal(order, items)),
+                      ),
+                      _InfoText(
+                        'Total neto',
+                        _money(
+                          (_saleDetailGrossSubtotal(order, items) -
+                                  order.explicitDiscount)
+                              .clamp(0, double.infinity)
+                              .toDouble(),
+                        ),
+                      ),
+                      _InfoText(
+                        'Aplico',
+                        order.discountAppliedByEmployeeName ?? '-',
+                      ),
+                      _InfoText(
+                        'Autorizo',
+                        order.discountAuthorizedByEmployeeName ?? '-',
+                      ),
+                      _InfoText(
+                        'Fecha descuento',
+                        _dateTimeText(order.discountAppliedAt),
+                      ),
+                      _InfoText(
                         'A cocina',
                         _durationText(
                           _durationBetween(
@@ -5406,6 +5664,29 @@ String _displayBusinessDate(String businessDate) {
 
 String _orderCountLabel(int count) {
   return count == 1 ? '1 orden' : '$count ordenes';
+}
+
+double _saleDetailGrossSubtotal(PosOrder order, List<OrderItem> items) {
+  final active = items.where((item) => !item.isCancelled);
+  final subtotal = active.fold<double>(
+    0,
+    (sum, item) => sum + (item.qty * item.unitPrice),
+  );
+  return subtotal > 0 ? subtotal : order.total;
+}
+
+String _orderDiscountPercentText(PosOrder order) {
+  for (final entry in order.explicitDiscountFields.entries) {
+    final key = entry.key.toLowerCase();
+    if (key.contains('percent') || key.contains('percentage')) {
+      final value = entry.value > 1 ? entry.value : entry.value * 100;
+      return '${value.toStringAsFixed(2)}%';
+    }
+  }
+  if (order.explicitDiscount > 0.01 && order.total > 0.01) {
+    return '${((order.explicitDiscount / order.total) * 100).toStringAsFixed(2)}%';
+  }
+  return '-';
 }
 
 String _money(double value) => '\$${value.toStringAsFixed(2)}';

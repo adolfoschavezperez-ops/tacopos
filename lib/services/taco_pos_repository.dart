@@ -132,6 +132,54 @@ class PaymentResult {
   final bool allPaid;
 }
 
+class OrderTotalsRecalculation {
+  const OrderTotalsRecalculation({
+    required this.orderId,
+    required this.grossSubtotal,
+    required this.discountAmount,
+    required this.netTotal,
+    required this.changed,
+  });
+
+  final String orderId;
+  final double grossSubtotal;
+  final double discountAmount;
+  final double netTotal;
+  final bool changed;
+}
+
+class OrderTotalsCorrectionPreview {
+  const OrderTotalsCorrectionPreview({
+    required this.safe,
+    required this.message,
+    required this.grossSubtotal,
+    required this.discountAmount,
+    required this.netTotal,
+    required this.paymentTotal,
+    required this.previousTotal,
+    required this.newTotal,
+    required this.previousPaidTotal,
+    required this.newPaidTotal,
+    required this.previousPendingTotal,
+    required this.newPendingTotal,
+    required this.hasDiscount,
+  });
+
+  final bool safe;
+  final String message;
+  final double grossSubtotal;
+  final double discountAmount;
+  final double netTotal;
+  final double paymentTotal;
+  final double previousTotal;
+  final double newTotal;
+  final double previousPaidTotal;
+  final double newPaidTotal;
+  final double previousPendingTotal;
+  final double newPendingTotal;
+  final bool hasDiscount;
+}
+
 class BranchSummary {
   const BranchSummary({
     required this.tableCount,
@@ -7480,6 +7528,298 @@ class TacoPosRepository {
     return const PaymentResult(allPaid: true);
   }
 
+  Future<OrderTotalsRecalculation> recalculateOrderBeforeCheckout(
+    String orderId,
+  ) async {
+    _requireCharge();
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) {
+      throw StateError('No se encontro la orden.');
+    }
+    final order = PosOrder.fromDoc(orderDoc);
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final activeItems = itemsSnapshot.docs
+        .map(OrderItem.fromDoc)
+        .where(isActiveOrderItem)
+        .toList();
+    final grossSubtotal = _activeItemsGrossSubtotal(activeItems);
+    final currentData = orderDoc.data() ?? {};
+    final discountAmount = _explicitOrderDiscountAmount(
+      currentData,
+    ).clamp(0, grossSubtotal).toDouble();
+    final netTotal = (grossSubtotal - discountAmount)
+        .clamp(0, double.infinity)
+        .toDouble();
+    final paidTotal = order.paidTotal.clamp(0, grossSubtotal).toDouble();
+    final pendingTotal = (grossSubtotal - paidTotal)
+        .clamp(0, double.infinity)
+        .toDouble();
+    final discountApplied = discountAmount > 0.01;
+    final updates = <String, Object?>{
+      'grossSubtotal': grossSubtotal,
+      'total': grossSubtotal,
+      'discountApplied': discountApplied,
+      'discountAmount': discountAmount,
+      'totalDiscountAmount': discountAmount,
+      'netTotal': netTotal,
+      'pendingTotal': pendingTotal,
+      if (!discountApplied) ...{
+        'discountCatalogId': null,
+        'discountType': 'none',
+        'discountName': null,
+        'discountPercent': 0.0,
+        'discountRate': 0.0,
+        'discountReason': null,
+      },
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+    final changed =
+        (_numberToDouble(currentData['grossSubtotal']) - grossSubtotal).abs() >
+            0.02 ||
+        (order.total - grossSubtotal).abs() > 0.02 ||
+        (_numberToDouble(currentData['netTotal']) - netTotal).abs() > 0.02 ||
+        (order.pendingTotal - pendingTotal).abs() > 0.02 ||
+        _numberToDouble(currentData['discountAmount']) != discountAmount;
+    final missingFields =
+        !currentData.containsKey('grossSubtotal') ||
+        !currentData.containsKey('netTotal') ||
+        !currentData.containsKey('discountApplied');
+    if (changed || missingFields) {
+      await orderRef.update(updates);
+    }
+    return OrderTotalsRecalculation(
+      orderId: orderId,
+      grossSubtotal: grossSubtotal,
+      discountAmount: discountAmount,
+      netTotal: netTotal,
+      changed: changed || missingFields,
+    );
+  }
+
+  Future<OrderTotalsCorrectionPreview> previewSafeOrderTotalsCorrection({
+    required PosOrder order,
+    required List<OrderItem> items,
+    required List<Payment> payments,
+  }) async {
+    return _safeOrderTotalsCorrectionPreview(order, items, payments);
+  }
+
+  Future<void> correctOrderTotalsFromAudit({
+    required String orderId,
+    required String reason,
+    required String adminPin,
+  }) async {
+    if (adminPin.trim() != '072026') {
+      throw StateError('PIN administrador incorrecto.');
+    }
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw StateError('Captura el motivo de la correccion.');
+    }
+    final employee = AppSession.instance.employee;
+    if (employee?.canViewAdmin != true && employee?.hasAdminAccess != true) {
+      throw StateError('No tienes permiso para corregir auditoria.');
+    }
+
+    await _db.runTransaction((transaction) async {
+      final orderRef = _ordersRef.doc(orderId);
+      final orderDoc = await transaction.get(orderRef);
+      if (!orderDoc.exists) {
+        throw StateError('No se encontro la orden.');
+      }
+      final order = PosOrder.fromDoc(orderDoc);
+      final itemsSnapshot = await orderRef.collection('items').get();
+      final paymentsSnapshot = await orderRef.collection('payments').get();
+      final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+      final payments = paymentsSnapshot.docs.map(Payment.fromDoc).toList();
+      final preview = _safeOrderTotalsCorrectionPreview(order, items, payments);
+      if (!preview.safe) {
+        throw StateError(preview.message);
+      }
+
+      transaction.update(orderRef, {
+        'previousTotal': preview.previousTotal,
+        'previousPaidTotal': preview.previousPaidTotal,
+        'previousPendingTotal': preview.previousPendingTotal,
+        'total': preview.newTotal,
+        'grossSubtotal': preview.grossSubtotal,
+        'discountApplied': preview.discountAmount > 0.01,
+        'discountAmount': preview.discountAmount,
+        'totalDiscountAmount': preview.discountAmount,
+        'netTotal': preview.netTotal,
+        'paidTotal': preview.newPaidTotal,
+        'pendingTotal': preview.newPendingTotal,
+        'paymentStatus': 'paid',
+        if (order.status.trim().toLowerCase() != 'paid') 'status': order.status,
+        'totalsCorrectedAt': FieldValue.serverTimestamp(),
+        'totalsCorrectedByEmployeeId': employee?.id ?? '',
+        'totalsCorrectedByEmployeeName': employee?.name ?? '',
+        'totalsCorrectionReason': cleanReason,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      transaction.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': 'order_totals_corrected',
+        'actionType': 'order_totals_corrected',
+        'message':
+            'Se corrigieron los totales de la venta ${_shortLogFolio(order.id)}',
+        'orderId': orderId,
+        'folio': _shortLogFolio(order.id),
+        'previousTotal': preview.previousTotal,
+        'newTotal': preview.newTotal,
+        'previousPaidTotal': preview.previousPaidTotal,
+        'newPaidTotal': preview.newPaidTotal,
+        'itemSubtotal': preview.grossSubtotal,
+        'discountAmount': preview.discountAmount,
+        'netTotal': preview.netTotal,
+        'paymentTotal': preview.paymentTotal,
+        'reason': cleanReason,
+        'employeeId': employee?.id ?? '',
+        'employeeName': employee?.name ?? '',
+        ..._currentBranchFields,
+        'createdAt': FieldValue.serverTimestamp(),
+        'timestamp': FieldValue.serverTimestamp(),
+        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      });
+    });
+  }
+
+  OrderTotalsCorrectionPreview _safeOrderTotalsCorrectionPreview(
+    PosOrder order,
+    List<OrderItem> items,
+    List<Payment> payments,
+  ) {
+    final paid =
+        normalizeStatus(order.status) == 'paid' ||
+        normalizeStatus(order.paymentStatus) == 'paid';
+    if (!paid) {
+      return _unsafeTotalsPreview(order, 'La orden no esta pagada.');
+    }
+    if (order.pendingTotal.abs() > 0.02) {
+      return _unsafeTotalsPreview(order, 'La orden tiene saldo pendiente.');
+    }
+    final activeItems = items.where(isActiveOrderItem).toList();
+    final grossSubtotal = _activeItemsGrossSubtotal(activeItems);
+    if (grossSubtotal <= 0.02) {
+      return _unsafeTotalsPreview(order, 'La orden no tiene items activos.');
+    }
+    final activePayments = payments.where(isActivePayment).toList();
+    final cancelledPayments = payments.where(
+      (payment) => !isActivePayment(payment),
+    );
+    if (cancelledPayments.isNotEmpty) {
+      return _unsafeTotalsPreview(
+        order,
+        'Existen pagos cancelados; requiere revision manual.',
+      );
+    }
+    final discountAmount = order.explicitDiscount
+        .clamp(0, grossSubtotal)
+        .toDouble();
+    final netTotal = (grossSubtotal - discountAmount)
+        .clamp(0, double.infinity)
+        .toDouble();
+    final paymentTotal = activePayments.fold<double>(
+      0,
+      (runningTotal, payment) =>
+          runningTotal + _paymentNetAppliedAmount(payment),
+    );
+    final expectedPayment = discountAmount > 0.02 ? netTotal : grossSubtotal;
+    if ((paymentTotal - expectedPayment).abs() > 0.02) {
+      return _unsafeTotalsPreview(
+        order,
+        'Items y pagos no coinciden para una correccion automatica.',
+      );
+    }
+    if (activePayments.length !=
+        activePayments.map((p) => p.id).toSet().length) {
+      return _unsafeTotalsPreview(order, 'Hay pagos duplicados.');
+    }
+    final newPaidTotal = grossSubtotal;
+    final newPendingTotal = 0.0;
+    final hasOnlyTotalsIssue =
+        (order.total - grossSubtotal).abs() > 0.02 ||
+        (order.paidTotal - newPaidTotal).abs() > 0.02 ||
+        (order.pendingTotal - newPendingTotal).abs() > 0.02;
+    if (!hasOnlyTotalsIssue) {
+      return _unsafeTotalsPreview(
+        order,
+        'No hay una discrepancia de totales corregible automaticamente.',
+      );
+    }
+    return OrderTotalsCorrectionPreview(
+      safe: true,
+      message: 'Correccion segura disponible.',
+      grossSubtotal: grossSubtotal,
+      discountAmount: discountAmount.toDouble(),
+      netTotal: netTotal,
+      paymentTotal: paymentTotal,
+      previousTotal: order.total,
+      newTotal: grossSubtotal,
+      previousPaidTotal: order.paidTotal,
+      newPaidTotal: newPaidTotal,
+      previousPendingTotal: order.pendingTotal,
+      newPendingTotal: newPendingTotal,
+      hasDiscount: discountAmount > 0.02,
+    );
+  }
+
+  OrderTotalsCorrectionPreview _unsafeTotalsPreview(
+    PosOrder order,
+    String message,
+  ) {
+    return OrderTotalsCorrectionPreview(
+      safe: false,
+      message: message,
+      grossSubtotal: 0,
+      discountAmount: 0,
+      netTotal: 0,
+      paymentTotal: 0,
+      previousTotal: order.total,
+      newTotal: order.total,
+      previousPaidTotal: order.paidTotal,
+      newPaidTotal: order.paidTotal,
+      previousPendingTotal: order.pendingTotal,
+      newPendingTotal: order.pendingTotal,
+      hasDiscount: false,
+    );
+  }
+
+  double _activeItemsGrossSubtotal(List<OrderItem> activeItems) {
+    return activeItems.fold<double>(
+      0,
+      (runningTotal, item) => runningTotal + (item.qty * item.unitPrice),
+    );
+  }
+
+  double _paymentNetAppliedAmount(Payment payment) {
+    if ((payment.appliedAmount ?? 0) > 0) return payment.appliedAmount!;
+    if (payment.totalAfterDiscount > 0) return payment.totalAfterDiscount;
+    if (payment.chargedAmount > 0) return payment.chargedAmount;
+    if (payment.discountAmount > 0 && payment.baseAmount > 0) {
+      return (payment.baseAmount - payment.discountAmount)
+          .clamp(0, double.infinity)
+          .toDouble();
+    }
+    return payment.baseAmount;
+  }
+
+  double _explicitOrderDiscountAmount(Map<String, dynamic> data) {
+    for (final key in const [
+      'totalDiscountAmount',
+      'discountAmount',
+      'discountTotal',
+      'totalDiscount',
+      'appliedDiscount',
+    ]) {
+      final value = _numberToDouble(data[key]);
+      if (value > 0.02) return value;
+    }
+    return 0;
+  }
+
+  String _shortLogFolio(String id) => id.length <= 6 ? id : id.substring(0, 6);
+
   bool _updateOrderPaymentTotalsInBatch(
     WriteBatch batch,
     PosOrder order, {
@@ -7511,14 +7851,7 @@ class TacoPosRepository {
         'paymentStatus': 'partial',
         'paidTotal': paidTotal,
         'pendingTotal': pendingTotal,
-        if (discount != null) ...{
-          'totalDiscountAmount': FieldValue.increment(discount.discountAmount),
-          'lastAppliedDiscountType': discount.type,
-          'lastAppliedDiscountName': discount.name,
-          'lastDiscountReason': discount.reason,
-          'lastDiscountAuthorizationMode': discount.authorizationMode,
-          'lastDiscountAuthorizationStatus': discount.authorizationStatus,
-        },
+        ..._orderDiscountSnapshot(discount, baseAmount),
         'updatedAt': FieldValue.serverTimestamp(),
       });
       if (!markItemsOnlyIfClosed) {
@@ -7540,14 +7873,7 @@ class TacoPosRepository {
       'paymentStatus': 'paid',
       'paidTotal': paidTotal,
       'pendingTotal': 0.0,
-      if (discount != null) ...{
-        'totalDiscountAmount': FieldValue.increment(discount.discountAmount),
-        'lastAppliedDiscountType': discount.type,
-        'lastAppliedDiscountName': discount.name,
-        'lastDiscountReason': discount.reason,
-        'lastDiscountAuthorizationMode': discount.authorizationMode,
-        'lastDiscountAuthorizationStatus': discount.authorizationStatus,
-      },
+      ..._orderDiscountSnapshot(discount, order.total),
       'paidAt': FieldValue.serverTimestamp(),
       ..._currentBranchFields,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -7616,6 +7942,7 @@ class TacoPosRepository {
       'subtotalBeforeDiscount': baseAmount,
       'discountAmount': discountAmount,
       'totalAfterDiscount': chargedAmount,
+      'appliedAmount': chargedAmount,
       'appliedDiscountType': discount?.type,
       'appliedDiscountName': discount?.name,
       'appliedDiscountPercent': discount?.percent ?? 0.0,
@@ -7657,6 +7984,60 @@ class TacoPosRepository {
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
     });
+  }
+
+  Map<String, Object?> _orderDiscountSnapshot(
+    AppliedDiscountDetails? discount,
+    double grossSubtotal,
+  ) {
+    final netTotal = discount?.totalAfterDiscount ?? grossSubtotal;
+    if (discount == null || discount.discountAmount <= 0.01) {
+      return {
+        'discountApplied': false,
+        'discountCatalogId': null,
+        'discountType': 'none',
+        'discountName': null,
+        'discountPercent': 0.0,
+        'discountRate': 0.0,
+        'discountAmount': 0.0,
+        'totalDiscountAmount': 0.0,
+        'grossSubtotal': grossSubtotal,
+        'netTotal': grossSubtotal,
+      };
+    }
+    final employee = AppSession.instance.employee;
+    return {
+      'discountApplied': true,
+      'discountCatalogId':
+          discount.discountAuthorizationRequestId?.trim().isNotEmpty == true
+          ? discount.discountAuthorizationRequestId
+          : discount.type,
+      'discountType': discount.type,
+      'discountName': discount.name,
+      'discountPercent': discount.percent,
+      'discountRate': discount.percent / 100,
+      'discountAmount': discount.discountAmount,
+      'totalDiscountAmount': discount.discountAmount,
+      'grossSubtotal': discount.amountBeforeDiscount,
+      'netTotal': netTotal,
+      'discountReason': discount.reason,
+      'discountAppliedAt': FieldValue.serverTimestamp(),
+      'discountAppliedByEmployeeId': employee?.id ?? '',
+      'discountAppliedByEmployeeName': employee?.name ?? '',
+      'discountAuthorizedByEmployeeId':
+          discount.authorizedByPartnerLinkedEmployeeId ??
+          discount.authorizedByPartnerId ??
+          '',
+      'discountAuthorizedByEmployeeName':
+          discount.authorizedByPartnerLinkedEmployeeName ??
+          discount.authorizedByPartnerName ??
+          '',
+      'lastAppliedDiscountType': discount.type,
+      'lastAppliedDiscountName': discount.name,
+      'lastDiscountReason': discount.reason,
+      'lastDiscountAuthorizationMode': discount.authorizationMode,
+      'lastDiscountAuthorizationStatus': discount.authorizationStatus,
+    };
   }
 
   void _recordDiscountUsageInBatch(

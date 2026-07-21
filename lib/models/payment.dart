@@ -14,6 +14,7 @@ class Payment {
     required this.surchargeRate,
     required this.surchargeAmount,
     required this.chargedAmount,
+    this.appliedAmount,
     this.cardFeeRate = 0,
     this.cardFeeAbsorbedAmount = 0,
     this.personNumber,
@@ -65,6 +66,7 @@ class Payment {
   final double surchargeRate;
   final double surchargeAmount;
   final double chargedAmount;
+  final double? appliedAmount;
   final double cardFeeRate;
   final double cardFeeAbsorbedAmount;
   final int? personNumber;
@@ -134,6 +136,7 @@ class Payment {
           (data['chargedAmount'] as num?)?.toDouble() ??
           legacyAmount ??
           baseAmount + surchargeAmount,
+      appliedAmount: (data['appliedAmount'] as num?)?.toDouble(),
       cardFeeRate:
           (data['cardFeeRate'] as num?)?.toDouble() ??
           (cardFeeAbsorbedAmount > 0 && baseAmount > 0

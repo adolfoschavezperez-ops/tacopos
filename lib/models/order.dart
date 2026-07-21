@@ -38,6 +38,8 @@ class PosOrder {
     this.discountBeneficiaryEmployeeName,
     this.discountAuthorizedByEmployeeId,
     this.discountAuthorizedByEmployeeName,
+    this.discountAppliedByEmployeeId,
+    this.discountAppliedByEmployeeName,
     this.discountAppliedAt,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
@@ -79,6 +81,8 @@ class PosOrder {
   final String? discountBeneficiaryEmployeeName;
   final String? discountAuthorizedByEmployeeId;
   final String? discountAuthorizedByEmployeeName;
+  final String? discountAppliedByEmployeeId;
+  final String? discountAppliedByEmployeeName;
   final DateTime? discountAppliedAt;
   final String restaurantId;
   final String restaurantName;
@@ -136,6 +140,12 @@ class PosOrder {
       ),
       discountAuthorizedByEmployeeName: _readOptionalString(
         data['discountAuthorizedByEmployeeName'],
+      ),
+      discountAppliedByEmployeeId: _readOptionalString(
+        data['discountAppliedByEmployeeId'],
+      ),
+      discountAppliedByEmployeeName: _readOptionalString(
+        data['discountAppliedByEmployeeName'],
       ),
       discountAppliedAt: _toDate(data['discountAppliedAt']),
       restaurantId:

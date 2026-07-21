@@ -247,6 +247,17 @@ class _OrderScreenState extends State<OrderScreen> {
       _showMessage('No tienes permiso para cobrar');
       return;
     }
+    setState(() => _busy = true);
+    try {
+      await _repository.recalculateOrderBeforeCheckout(_boundOrderId);
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage('No se pudo validar el total: $error');
+      setState(() => _busy = false);
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _busy = false);
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => PaymentScreen(orderId: _boundOrderId)),

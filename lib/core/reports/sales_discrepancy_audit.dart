@@ -433,6 +433,9 @@ bool isSalesAuditActivePayment(Payment payment) {
 }
 
 double salesAuditMoneyPaymentAmount(Payment payment) {
+  if ((payment.appliedAmount ?? 0) > salesAuditMoneyTolerance) {
+    return payment.appliedAmount!;
+  }
   if (payment.totalAfterDiscount > salesAuditMoneyTolerance) {
     return payment.totalAfterDiscount;
   }

@@ -175,6 +175,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   Future<void> _payPlatformOrder(PosOrder order) async {
+    if (await _recalculateBeforeOpeningSheet()) {
+      return;
+    }
     final confirmed = await _confirm(
       title: 'Registrar pagado en plataforma',
       message: 'Se cerrara ${order.displayName} como pagado en plataforma.',
@@ -338,6 +341,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _showMessage('No hay saldo pendiente por cobrar.');
       return;
     }
+    if (await _recalculateBeforeOpeningSheet()) {
+      return;
+    }
+    if (!mounted) return;
 
     final initialDiscount = await _autoGeneralDiscount(
       order,
@@ -381,6 +388,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _showMessage('Esta cuenta ya tiene pagos parciales.');
       return;
     }
+    if (await _recalculateBeforeOpeningSheet()) {
+      return;
+    }
+    if (!mounted) return;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -423,6 +434,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _showMessage('No hay saldo pendiente por cobrar.');
       return;
     }
+    if (await _recalculateBeforeOpeningSheet()) {
+      return;
+    }
+    if (!mounted) return;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -443,6 +458,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
         },
       ),
     );
+  }
+
+  Future<bool> _recalculateBeforeOpeningSheet() async {
+    try {
+      final result = await _repository.recalculateOrderBeforeCheckout(
+        widget.orderId,
+      );
+      if (result.changed) {
+        _showMessage('Total actualizado. Vuelve a tocar Cobrar.');
+        return true;
+      }
+    } catch (error) {
+      _showMessage('No se pudo validar el total: $error');
+      return true;
+    }
+    return false;
   }
 
   Future<AppliedDiscountDetails?> _openDiscountDialog(
