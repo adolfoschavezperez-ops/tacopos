@@ -2107,16 +2107,15 @@ const _salesAuditHeaders = [
   'Mesa / Para llevar',
   'Cliente',
   'Estado orden',
-  'Total items',
-  'Descuento explicito',
-  'Total esperado',
+  'Total articulos bruto',
+  'Descuento monetario',
+  'Pago monetario',
+  'Total liquidado',
   'Total orden',
-  'Total pagos',
-  'Recibido',
-  'Cambio',
+  'Total neto calculado',
   'paidTotal',
   'pendingTotal',
-  'Diferencia',
+  'Diferencia real',
   'Tipo discrepancia',
   'Accion',
 ];
@@ -2125,9 +2124,9 @@ const _salesAuditDiscrepancyTypes = {
   'all': 'Todos',
   'items_order': 'Items/descuento vs total orden',
   'discount_inconsistent': 'Descuento inconsistente',
-  'payments_order': 'Pagos vs total orden',
-  'cash_net': 'Recibido menos cambio vs pago aplicado',
-  'paid_total': 'paidTotal vs suma de pagos',
+  'payments_order': 'Liquidacion vs total bruto',
+  'cash_net': 'Recibido menos cambio vs pago monetario',
+  'paid_total': 'paidTotal vs total liquidado',
   'pending_total': 'pendingTotal incorrecto',
   'duplicate_payment': 'Pago duplicado',
   'paid_incomplete': 'Orden pagada incompleta',
@@ -2392,7 +2391,7 @@ class _SalesAuditSummary extends StatelessWidget {
           _money(rows.fold(0, (sum, row) => sum + row.diffItemsOrder)),
         ),
         _SmallMetric(
-          'Dif. pagos vs orden',
+          'Dif. liquidacion',
           _money(rows.fold(0, (sum, row) => sum + row.diffPaymentsOrder)),
         ),
         _SmallMetric(
@@ -2541,12 +2540,23 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                   children: [
                     _InfoText('Items activos', '${row.activeItemCount}'),
                     _InfoText('Items cancelados', '${row.cancelledItemCount}'),
-                    _InfoText('Subtotal items', _money(row.itemsSubtotal)),
                     _InfoText(
-                      'Descuento explicito',
+                      'Total articulos bruto',
+                      _money(row.itemsSubtotal),
+                    ),
+                    _InfoText(
+                      'Descuento monetario',
                       _money(row.explicitDiscount),
                     ),
-                    _InfoText('Total esperado', _money(row.expectedOrderTotal)),
+                    _InfoText(
+                      'Pago monetario',
+                      _money(row.paymentsAppliedTotal),
+                    ),
+                    _InfoText('Total liquidado', _money(row.settledTotal)),
+                    _InfoText(
+                      'Total neto calculado',
+                      _money(row.expectedOrderTotal),
+                    ),
                     _InfoText('Total orden', _money(row.order.total)),
                     _InfoText('paidTotal', _money(row.order.paidTotal)),
                     _InfoText('pendingTotal', _money(row.order.pendingTotal)),
@@ -2555,14 +2565,44 @@ class _SalesAuditDetailDialog extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               _DetailTable(
-                title: 'Descuentos encontrados',
-                headers: const ['Campo', 'Valor'],
-                rows: row.discountFields.isEmpty
+                title: 'Origen del descuento',
+                headers: const [
+                  'Campo Firestore',
+                  'Valor crudo',
+                  'Tipo',
+                  'Porcentaje',
+                  'Importe',
+                  'Usado',
+                  'Detalle',
+                ],
+                rows: row.discountSources.isEmpty
                     ? const [
-                        ['Sin campos de descuento', r'$0.00'],
+                        [
+                          'Sin campos de descuento',
+                          r'$0.00',
+                          '-',
+                          '-',
+                          r'$0.00',
+                          'No',
+                          '-',
+                        ],
                       ]
-                    : row.discountFields.entries
-                          .map((entry) => [entry.key, _money(entry.value)])
+                    : row.discountSources
+                          .map(
+                            (source) => [
+                              source.field,
+                              source.originalValue.toStringAsFixed(2),
+                              source.kind,
+                              source.normalizedPercent == null
+                                  ? '-'
+                                  : '${(source.normalizedPercent! * 100).toStringAsFixed(2)}%',
+                              _money(source.monetaryAmount),
+                              source.used ? 'Si' : 'No',
+                              [source.interpretation, source.metadata]
+                                  .where((text) => text.trim().isNotEmpty)
+                                  .join(' | '),
+                            ],
+                          )
                           .toList(),
               ),
               const SizedBox(height: 12),
@@ -2599,7 +2639,7 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                   'Metodo',
                   'Status',
                   'Amount',
-                  'Aplicado',
+                  'Pago monetario',
                   'Base',
                   'Cobrado',
                   'Recibido',
@@ -2615,7 +2655,7 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                     _paymentMethodLabel(payment.method),
                     payment.status,
                     _money(payment.amount),
-                    _money(salesAuditPaymentAppliedAmount(payment)),
+                    _money(salesAuditMoneyPaymentAmount(payment)),
                     _money(payment.baseAmount),
                     _money(payment.chargedAmount),
                     payment.cashReceivedAmount == null
@@ -2688,6 +2728,7 @@ class _SalesAuditRow {
     required this.explicitDiscount,
     required this.expectedOrderTotal,
     required this.paymentsAppliedTotal,
+    required this.settledTotal,
     required this.receivedTotal,
     required this.changeTotal,
     required this.diffItemsOrder,
@@ -2698,6 +2739,7 @@ class _SalesAuditRow {
     required this.discrepancyCodes,
     required this.diagnostics,
     required this.discountFields,
+    required this.discountSources,
     required this.validations,
     required this.auditMode,
   });
@@ -2711,6 +2753,7 @@ class _SalesAuditRow {
   final double explicitDiscount;
   final double expectedOrderTotal;
   final double paymentsAppliedTotal;
+  final double settledTotal;
   final double receivedTotal;
   final double changeTotal;
   final double diffItemsOrder;
@@ -2721,6 +2764,7 @@ class _SalesAuditRow {
   final List<String> discrepancyCodes;
   final List<String> diagnostics;
   final Map<String, double> discountFields;
+  final List<SalesAuditDiscountSource> discountSources;
   final List<SalesAuditValidation> validations;
   final SalesAuditMode auditMode;
 
@@ -2758,11 +2802,10 @@ class _SalesAuditRow {
     '${order.status} / ${order.paymentStatus}',
     _money(itemsSubtotal),
     _money(explicitDiscount),
-    _money(expectedOrderTotal),
-    _money(order.total),
     _money(paymentsAppliedTotal),
-    _money(receivedTotal),
-    _money(changeTotal),
+    _money(settledTotal),
+    _money(order.total),
+    _money(expectedOrderTotal),
     _money(order.paidTotal),
     _money(order.pendingTotal),
     _money(primaryDifference),
@@ -2776,15 +2819,19 @@ class _SalesAuditRow {
     order.status,
     order.paymentStatus,
     _money(itemsSubtotal),
-    discountFields.isEmpty
+    discountSources.isEmpty
         ? '-'
-        : discountFields.entries
-              .map((entry) => '${entry.key}: ${_money(entry.value)}')
+        : discountSources
+              .map(
+                (source) =>
+                    '${source.used ? '*' : ''}${source.field}: ${_money(source.monetaryAmount)} (${source.kind})',
+              )
               .join(' | '),
     _money(explicitDiscount),
+    _money(paymentsAppliedTotal),
+    _money(settledTotal),
     _money(expectedOrderTotal),
     _money(order.total),
-    _money(paymentsAppliedTotal),
     _money(receivedTotal),
     _money(changeTotal),
     _money(order.paidTotal),
@@ -2795,9 +2842,9 @@ class _SalesAuditRow {
   ];
 
   String get itemsFormula =>
-      'itemsSubtotalActivo (${_money(itemsSubtotal)}) - descuentoExplicito (${_money(explicitDiscount)}) = ${_money(expectedOrderTotal)}';
+      'totalArticulosBruto (${_money(itemsSubtotal)}) - descuentoMonetario (${_money(explicitDiscount)}) = totalNetoCalculado (${_money(expectedOrderTotal)})';
   String get paymentsFormula =>
-      'paymentsAppliedTotal (${_money(paymentsAppliedTotal)}) vs totalOrden (${_money(order.total)})';
+      'pagoMonetario (${_money(paymentsAppliedTotal)}) + descuentoMonetario (${_money(explicitDiscount)}) = totalLiquidado (${_money(settledTotal)})';
 }
 
 const _salesAuditCsvHeaders = [
@@ -2806,12 +2853,13 @@ const _salesAuditCsvHeaders = [
   'orderId',
   'estado orden',
   'estado pago',
-  'subtotal items',
-  'descuentos encontrados',
-  'descuento total explicito',
-  'total esperado',
+  'total articulos bruto',
+  'origen descuentos',
+  'descuento monetario valido',
+  'pago monetario',
+  'total liquidado',
+  'total neto calculado',
   'total orden',
-  'total pagos activos',
   'recibido',
   'cambio',
   'paidTotal',
@@ -2833,20 +2881,22 @@ _SalesAuditRow _buildSalesAuditRow(
     payments: payments,
     activeItemCount: audit.activeItems.length,
     cancelledItemCount: audit.cancelledItems.length,
-    itemsSubtotal: audit.itemsSubtotal,
-    explicitDiscount: audit.explicitDiscountTotal,
-    expectedOrderTotal: audit.expectedOrderTotal,
-    paymentsAppliedTotal: audit.paymentsAppliedTotal,
+    itemsSubtotal: audit.grossItemsTotal,
+    explicitDiscount: audit.monetaryDiscountApplied,
+    expectedOrderTotal: audit.netCustomerDue,
+    paymentsAppliedTotal: audit.moneyPaymentsApplied,
+    settledTotal: audit.settledTotal,
     receivedTotal: audit.receivedTotal,
     changeTotal: audit.changeTotal,
     diffItemsOrder: audit.diffItemsOrder,
-    diffPaymentsOrder: audit.diffPaymentsOrder,
+    diffPaymentsOrder: audit.diffSettlement,
     diffPaidTotal: audit.diffPaidTotal,
     diffPendingTotal: audit.diffPendingTotal,
     cashPaymentMismatchCount: audit.cashPaymentMismatchCount,
     discrepancyCodes: audit.failedCodes,
     diagnostics: audit.diagnostics,
     discountFields: audit.discountFields,
+    discountSources: audit.discountSources,
     validations: audit.validations,
     auditMode: audit.auditMode,
   );

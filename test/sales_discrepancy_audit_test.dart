@@ -41,19 +41,20 @@ void main() {
 
     test('does not flag a paid order with a real discount', () {
       final result = auditSalesIntegrity(
-        _order(total: 88, paidTotal: 88, explicitDiscount: 22),
+        _order(total: 110, paidTotal: 110, explicitDiscount: 22),
         [_item(total: 110)],
         [_payment(baseAmount: 88, received: 110, change: 22)],
       );
 
-      expect(result.explicitDiscountTotal, 22);
-      expect(result.expectedOrderTotal, 88);
+      expect(result.monetaryDiscountApplied, 22);
+      expect(result.netCustomerDue, 88);
+      expect(result.settledTotal, 110);
       expect(result.hasDiscrepancy, isFalse);
     });
 
     test('uses payment discount fields as the applied amount source', () {
       final result = auditSalesIntegrity(
-        _order(total: 88, paidTotal: 88),
+        _order(total: 110, paidTotal: 110),
         [_item(total: 110)],
         [
           _payment(
@@ -67,8 +68,97 @@ void main() {
         ],
       );
 
-      expect(result.explicitDiscountTotal, 22);
-      expect(result.paymentsAppliedTotal, 88);
+      expect(result.monetaryDiscountApplied, 22);
+      expect(result.moneyPaymentsApplied, 88);
+      expect(result.settledTotal, 110);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('does not flag a correct 20 percent discount settlement', () {
+      final result = auditSalesIntegrity(
+        _order(total: 309, paidTotal: 309),
+        [_item(total: 309)],
+        [
+          _payment(
+            baseAmount: 309,
+            chargedAmount: 247.20,
+            received: 247.20,
+            change: 0,
+            discountAmount: 61.80,
+            totalAfterDiscount: 247.20,
+            appliedDiscountPercent: 20,
+          ),
+        ],
+      );
+
+      expect(result.monetaryDiscountApplied, 61.80);
+      expect(result.moneyPaymentsApplied, 247.20);
+      expect(result.settledTotal, 309);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('does not flag a correct 50 percent discount settlement', () {
+      final result = auditSalesIntegrity(
+        _order(total: 148, paidTotal: 148),
+        [_item(total: 148)],
+        [
+          _payment(
+            baseAmount: 148,
+            chargedAmount: 74,
+            received: 74,
+            change: 0,
+            discountAmount: 74,
+            totalAfterDiscount: 74,
+            appliedDiscountPercent: 50,
+          ),
+        ],
+      );
+
+      expect(result.monetaryDiscountApplied, 74);
+      expect(result.moneyPaymentsApplied, 74);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('does not flag a correct 30 percent discount settlement', () {
+      final result = auditSalesIntegrity(
+        _order(total: 113, paidTotal: 113),
+        [_item(total: 113)],
+        [
+          _payment(
+            baseAmount: 113,
+            chargedAmount: 79.10,
+            received: 79.10,
+            change: 0,
+            discountAmount: 33.90,
+            totalAfterDiscount: 79.10,
+            appliedDiscountPercent: 30,
+          ),
+        ],
+      );
+
+      expect(result.monetaryDiscountApplied, 33.90);
+      expect(result.moneyPaymentsApplied, 79.10);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('calculates a monetary discount from percent only when needed', () {
+      final result = auditSalesIntegrity(
+        _order(total: 200, paidTotal: 200),
+        [_item(total: 200)],
+        [
+          _payment(
+            baseAmount: 200,
+            chargedAmount: 160,
+            received: 160,
+            change: 0,
+            totalAfterDiscount: 160,
+            appliedDiscountPercent: 0.20,
+          ),
+        ],
+      );
+
+      expect(result.monetaryDiscountApplied, 40);
+      expect(result.settledTotal, 200);
       expect(result.hasDiscrepancy, isFalse);
     });
 
@@ -76,7 +166,7 @@ void main() {
       final result = auditSalesIntegrity(
         _order(id: 'Z7nGWf', total: 88, paidTotal: 88),
         [_item(total: 110)],
-        [_payment(baseAmount: 88, received: 110, change: 22)],
+        [_payment(baseAmount: 110, received: 110, change: 22)],
       );
 
       expect(result.hasDiscrepancy, isTrue);
@@ -174,6 +264,7 @@ Payment _payment({
   double? change,
   double discountAmount = 0,
   double totalAfterDiscount = 0,
+  double appliedDiscountPercent = 0,
   DateTime? createdAt,
 }) {
   return Payment(
@@ -191,6 +282,7 @@ Payment _payment({
     cashChangeAmount: change,
     discountAmount: discountAmount,
     totalAfterDiscount: totalAfterDiscount,
+    appliedDiscountPercent: appliedDiscountPercent,
     createdAt: createdAt,
   );
 }

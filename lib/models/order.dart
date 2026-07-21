@@ -157,17 +157,26 @@ class PosOrder {
   static double _readExplicitDiscount(Map<String, dynamic> data) {
     final fields = _readExplicitDiscountFields(data);
     for (final key in const [
+      'totalDiscountAmount',
       'totalDiscount',
       'discountTotal',
       'discountAmount',
       'appliedDiscount',
       'discount',
+      'employeeDiscount',
+      'partnerDiscount',
+      'familyDiscount',
+      'courtesyAmount',
+      'complimentaryAmount',
+      'promotionDiscount',
+      'promoDiscount',
+      'employeeConsumptionDiscount',
+      'benefitAmount',
     ]) {
       final value = fields[key];
       if (value != null && value > 0) return value;
     }
-    if (fields.isEmpty) return 0;
-    return fields.values.reduce((a, b) => a > b ? a : b);
+    return 0;
   }
 
   static Map<String, double> _readExplicitDiscountFields(
@@ -185,6 +194,7 @@ class PosOrder {
       'familyDiscount',
       'percentageDiscount',
       'discountPercent',
+      'discountPercentage',
       'promotionDiscount',
       'promoDiscount',
       'complimentaryAmount',
@@ -192,6 +202,9 @@ class PosOrder {
       'employeeConsumptionDiscount',
       'netDiscount',
       'totalDiscountAmount',
+      'benefitAmount',
+      'settledAmount',
+      'paymentAmount',
     ]) {
       final value = _toDouble(data[key]);
       if (value > 0) fields[key] = value;

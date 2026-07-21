@@ -9,18 +9,19 @@ class SalesAuditResult {
     required this.activeItems,
     required this.cancelledItems,
     required this.activePayments,
-    required this.itemsSubtotal,
-    required this.explicitDiscountTotal,
-    required this.expectedOrderTotal,
-    required this.paymentsAppliedTotal,
+    required this.grossItemsTotal,
+    required this.monetaryDiscountApplied,
+    required this.netCustomerDue,
+    required this.moneyPaymentsApplied,
+    required this.settledTotal,
     required this.receivedTotal,
     required this.changeTotal,
     required this.diffItemsOrder,
-    required this.diffPaymentsOrder,
+    required this.diffSettlement,
     required this.diffPaidTotal,
     required this.diffPendingTotal,
     required this.discountFields,
-    required this.paymentDiscountTotal,
+    required this.discountSources,
     required this.failedCodes,
     required this.diagnostics,
     required this.validations,
@@ -32,18 +33,19 @@ class SalesAuditResult {
   final List<OrderItem> activeItems;
   final List<OrderItem> cancelledItems;
   final List<Payment> activePayments;
-  final double itemsSubtotal;
-  final double explicitDiscountTotal;
-  final double expectedOrderTotal;
-  final double paymentsAppliedTotal;
+  final double grossItemsTotal;
+  final double monetaryDiscountApplied;
+  final double netCustomerDue;
+  final double moneyPaymentsApplied;
+  final double settledTotal;
   final double receivedTotal;
   final double changeTotal;
   final double diffItemsOrder;
-  final double diffPaymentsOrder;
+  final double diffSettlement;
   final double diffPaidTotal;
   final double diffPendingTotal;
   final Map<String, double> discountFields;
-  final double paymentDiscountTotal;
+  final List<SalesAuditDiscountSource> discountSources;
   final List<String> failedCodes;
   final List<String> diagnostics;
   final List<SalesAuditValidation> validations;
@@ -66,6 +68,28 @@ class SalesAuditValidation {
   final String detail;
 }
 
+class SalesAuditDiscountSource {
+  const SalesAuditDiscountSource({
+    required this.field,
+    required this.originalValue,
+    required this.kind,
+    required this.monetaryAmount,
+    required this.used,
+    this.normalizedPercent,
+    this.interpretation = '',
+    this.metadata = '',
+  });
+
+  final String field;
+  final double originalValue;
+  final String kind;
+  final double monetaryAmount;
+  final bool used;
+  final double? normalizedPercent;
+  final String interpretation;
+  final String metadata;
+}
+
 enum SalesAuditMode { paid, partial, cancelled, pending }
 
 SalesAuditResult auditSalesIntegrity(
@@ -77,23 +101,24 @@ SalesAuditResult auditSalesIntegrity(
   final cancelledItems = items.where((item) => item.isCancelled).toList();
   final activePayments = payments.where(isSalesAuditActivePayment).toList();
   final mode = _auditModeFor(order);
-  final itemsSubtotal = activeItems.fold<double>(
+  final grossItemsTotal = activeItems.fold<double>(
     0,
     (sum, item) => sum + (item.qty * item.unitPrice),
   );
-  final paymentDiscountTotal = _paymentDiscountTotal(activePayments);
-  final discountFields = _discountFieldsFor(order, activePayments);
-  final explicitDiscountTotal = _explicitDiscountTotal(
-    orderDiscount: order.explicitDiscount,
-    paymentDiscountTotal: paymentDiscountTotal,
+  final discountResolution = _resolveDiscount(
+    order,
+    activePayments,
+    grossItemsTotal,
   );
-  final expectedOrderTotal = (itemsSubtotal - explicitDiscountTotal)
+  final monetaryDiscountApplied = discountResolution.amount;
+  final netCustomerDue = (grossItemsTotal - monetaryDiscountApplied)
       .clamp(0, double.infinity)
       .toDouble();
-  final paymentsAppliedTotal = activePayments.fold<double>(
+  final moneyPaymentsApplied = activePayments.fold<double>(
     0,
-    (sum, payment) => sum + salesAuditPaymentAppliedAmount(payment),
+    (sum, payment) => sum + salesAuditMoneyPaymentAmount(payment),
   );
+  final settledTotal = moneyPaymentsApplied + monetaryDiscountApplied;
   final receivedTotal = activePayments.fold<double>(
     0,
     (sum, payment) => sum + (payment.cashReceivedAmount ?? 0),
@@ -102,12 +127,12 @@ SalesAuditResult auditSalesIntegrity(
     0,
     (sum, payment) => sum + (payment.cashChangeAmount ?? 0),
   );
-  final expectedPending = (order.total - paymentsAppliedTotal)
+  final expectedPending = (grossItemsTotal - settledTotal)
       .clamp(0, double.infinity)
       .toDouble();
-  final diffItemsOrder = order.total - expectedOrderTotal;
-  final diffPaymentsOrder = paymentsAppliedTotal - order.total;
-  final diffPaidTotal = order.paidTotal - paymentsAppliedTotal;
+  final diffItemsOrder = order.total - grossItemsTotal;
+  final diffSettlement = settledTotal - grossItemsTotal;
+  final diffPaidTotal = order.paidTotal - settledTotal;
   final diffPendingTotal = order.pendingTotal - expectedPending;
   final codes = <String>[];
   final diagnostics = <String>[];
@@ -134,7 +159,7 @@ SalesAuditResult auditSalesIntegrity(
   if (mode == SalesAuditMode.pending) {
     validation(
       'Orden pendiente sin cobro completo',
-      _pendingOrderLooksConsistent(order, activeItems, paymentsAppliedTotal),
+      _pendingOrderLooksConsistent(order, activeItems, moneyPaymentsApplied),
       code: 'state_inconsistent',
       failMessage: 'Estado pendiente con totales inconsistentes.',
       detail: 'Las ordenes abiertas correctas no se tratan como error.',
@@ -146,22 +171,22 @@ SalesAuditResult auditSalesIntegrity(
       failMessage: 'Total de orden negativo.',
     );
     return _result(
-      order: order,
       activeItems: activeItems,
       cancelledItems: cancelledItems,
       activePayments: activePayments,
-      itemsSubtotal: itemsSubtotal,
-      explicitDiscountTotal: explicitDiscountTotal,
-      expectedOrderTotal: expectedOrderTotal,
-      paymentsAppliedTotal: paymentsAppliedTotal,
+      grossItemsTotal: grossItemsTotal,
+      monetaryDiscountApplied: monetaryDiscountApplied,
+      netCustomerDue: netCustomerDue,
+      moneyPaymentsApplied: moneyPaymentsApplied,
+      settledTotal: settledTotal,
       receivedTotal: receivedTotal,
       changeTotal: changeTotal,
       diffItemsOrder: diffItemsOrder,
-      diffPaymentsOrder: diffPaymentsOrder,
+      diffSettlement: diffSettlement,
       diffPaidTotal: diffPaidTotal,
       diffPendingTotal: diffPendingTotal,
-      discountFields: discountFields,
-      paymentDiscountTotal: paymentDiscountTotal,
+      discountFields: discountResolution.fields,
+      discountSources: discountResolution.sources,
       failedCodes: codes,
       diagnostics: diagnostics,
       validations: validations,
@@ -191,22 +216,22 @@ SalesAuditResult auditSalesIntegrity(
       failMessage: 'Orden cancelada con pendingTotal negativo.',
     );
     return _result(
-      order: order,
       activeItems: activeItems,
       cancelledItems: cancelledItems,
       activePayments: activePayments,
-      itemsSubtotal: itemsSubtotal,
-      explicitDiscountTotal: explicitDiscountTotal,
-      expectedOrderTotal: expectedOrderTotal,
-      paymentsAppliedTotal: paymentsAppliedTotal,
+      grossItemsTotal: grossItemsTotal,
+      monetaryDiscountApplied: monetaryDiscountApplied,
+      netCustomerDue: netCustomerDue,
+      moneyPaymentsApplied: moneyPaymentsApplied,
+      settledTotal: settledTotal,
       receivedTotal: receivedTotal,
       changeTotal: changeTotal,
       diffItemsOrder: diffItemsOrder,
-      diffPaymentsOrder: diffPaymentsOrder,
+      diffSettlement: diffSettlement,
       diffPaidTotal: diffPaidTotal,
       diffPendingTotal: diffPendingTotal,
-      discountFields: discountFields,
-      paymentDiscountTotal: paymentDiscountTotal,
+      discountFields: discountResolution.fields,
+      discountSources: discountResolution.sources,
       failedCodes: codes,
       diagnostics: diagnostics,
       validations: validations,
@@ -218,15 +243,15 @@ SalesAuditResult auditSalesIntegrity(
 
   if (mode == SalesAuditMode.partial) {
     validation(
-      'paidTotal = pagos activos',
+      'paidTotal = total liquidado',
       !_outsideTolerance(diffPaidTotal),
       code: 'paid_total',
       failMessage:
-          'paidTotal vs suma de pagos activos: diferencia ${diffPaidTotal.toStringAsFixed(2)}.',
+          'paidTotal vs total liquidado: diferencia ${diffPaidTotal.toStringAsFixed(2)}.',
     );
     validation(
-      'pendingTotal = total - paidTotal',
-      !_outsideTolerance(order.pendingTotal - (order.total - order.paidTotal)),
+      'pendingTotal = total bruto - liquidado',
+      !_outsideTolerance(diffPendingTotal),
       code: 'pending_total',
       failMessage: 'pendingTotal incorrecto para orden parcial.',
     );
@@ -239,22 +264,22 @@ SalesAuditResult auditSalesIntegrity(
     final cashIssues = _validateCashPayments(activePayments, fail, validations);
     final duplicateCount = _detectDuplicatePayments(activePayments, fail);
     return _result(
-      order: order,
       activeItems: activeItems,
       cancelledItems: cancelledItems,
       activePayments: activePayments,
-      itemsSubtotal: itemsSubtotal,
-      explicitDiscountTotal: explicitDiscountTotal,
-      expectedOrderTotal: expectedOrderTotal,
-      paymentsAppliedTotal: paymentsAppliedTotal,
+      grossItemsTotal: grossItemsTotal,
+      monetaryDiscountApplied: monetaryDiscountApplied,
+      netCustomerDue: netCustomerDue,
+      moneyPaymentsApplied: moneyPaymentsApplied,
+      settledTotal: settledTotal,
       receivedTotal: receivedTotal,
       changeTotal: changeTotal,
       diffItemsOrder: diffItemsOrder,
-      diffPaymentsOrder: diffPaymentsOrder,
+      diffSettlement: diffSettlement,
       diffPaidTotal: diffPaidTotal,
       diffPendingTotal: diffPendingTotal,
-      discountFields: discountFields,
-      paymentDiscountTotal: paymentDiscountTotal,
+      discountFields: discountResolution.fields,
+      discountSources: discountResolution.sources,
       failedCodes: codes,
       diagnostics: diagnostics,
       validations: validations,
@@ -264,38 +289,35 @@ SalesAuditResult auditSalesIntegrity(
     );
   }
 
-  final itemsTotalMatches = !_outsideTolerance(
-    expectedOrderTotal - order.total,
-  );
-  final missingDiscountLike =
-      explicitDiscountTotal <= salesAuditMoneyTolerance &&
-      itemsSubtotal > order.total + salesAuditMoneyTolerance;
+  final orderTotalMatchesGross = !_outsideTolerance(diffItemsOrder);
   validation(
-    'Subtotal - descuento = total orden',
-    itemsTotalMatches,
+    'Items activos = total bruto orden',
+    orderTotalMatchesGross,
     code: 'items_order',
     failMessage:
-        'Items/descuento vs total orden: diferencia ${(order.total - expectedOrderTotal).toStringAsFixed(2)}.',
+        'Items vs total orden: diferencia ${diffItemsOrder.toStringAsFixed(2)}.',
   );
-  if (!itemsTotalMatches && missingDiscountLike) {
+  if (!orderTotalMatchesGross &&
+      monetaryDiscountApplied <= salesAuditMoneyTolerance &&
+      grossItemsTotal > order.total + salesAuditMoneyTolerance) {
     fail(
       'discount_inconsistent',
-      'Posible descuento no registrado o total incorrecto.',
+      'Posible total incorrecto o beneficio no registrado.',
     );
   }
   validation(
-    'Total pagos activos = total orden',
-    !_outsideTolerance(diffPaymentsOrder),
+    'Pago monetario + descuento = total bruto',
+    !_outsideTolerance(diffSettlement),
     code: 'payments_order',
     failMessage:
-        'Pagos vs total orden: diferencia ${diffPaymentsOrder.toStringAsFixed(2)}.',
+        'Liquidacion vs total bruto: diferencia ${diffSettlement.toStringAsFixed(2)}.',
   );
   validation(
-    'paidTotal = pagos activos',
+    'paidTotal = total liquidado',
     !_outsideTolerance(diffPaidTotal),
     code: 'paid_total',
     failMessage:
-        'paidTotal vs suma de pagos activos: diferencia ${diffPaidTotal.toStringAsFixed(2)}.',
+        'paidTotal vs total liquidado: diferencia ${diffPaidTotal.toStringAsFixed(2)}.',
   );
   validation(
     'pendingTotal pagado = 0',
@@ -305,10 +327,10 @@ SalesAuditResult auditSalesIntegrity(
   );
   validation(
     'Orden pagada completa',
-    paymentsAppliedTotal + salesAuditMoneyTolerance >= order.total &&
-        order.paidTotal + salesAuditMoneyTolerance >= order.total,
+    settledTotal + salesAuditMoneyTolerance >= grossItemsTotal &&
+        order.paidTotal + salesAuditMoneyTolerance >= grossItemsTotal,
     code: 'paid_incomplete',
-    failMessage: 'Orden marcada pagada sin importe completo.',
+    failMessage: 'Orden marcada pagada sin importe liquidado completo.',
   );
   validation(
     'Total no negativo',
@@ -320,22 +342,22 @@ SalesAuditResult auditSalesIntegrity(
   final duplicateCount = _detectDuplicatePayments(activePayments, fail);
 
   return _result(
-    order: order,
     activeItems: activeItems,
     cancelledItems: cancelledItems,
     activePayments: activePayments,
-    itemsSubtotal: itemsSubtotal,
-    explicitDiscountTotal: explicitDiscountTotal,
-    expectedOrderTotal: expectedOrderTotal,
-    paymentsAppliedTotal: paymentsAppliedTotal,
+    grossItemsTotal: grossItemsTotal,
+    monetaryDiscountApplied: monetaryDiscountApplied,
+    netCustomerDue: netCustomerDue,
+    moneyPaymentsApplied: moneyPaymentsApplied,
+    settledTotal: settledTotal,
     receivedTotal: receivedTotal,
     changeTotal: changeTotal,
     diffItemsOrder: diffItemsOrder,
-    diffPaymentsOrder: diffPaymentsOrder,
+    diffSettlement: diffSettlement,
     diffPaidTotal: diffPaidTotal,
     diffPendingTotal: diffPendingTotal,
-    discountFields: discountFields,
-    paymentDiscountTotal: paymentDiscountTotal,
+    discountFields: discountResolution.fields,
+    discountSources: discountResolution.sources,
     failedCodes: codes,
     diagnostics: diagnostics,
     validations: validations,
@@ -350,18 +372,26 @@ bool isSalesAuditActivePayment(Payment payment) {
   return status != 'cancelled' &&
       status != 'canceled' &&
       payment.cancelledAt == null &&
-      salesAuditPaymentAppliedAmount(payment) > 0;
+      (payment.baseAmount > salesAuditMoneyTolerance ||
+          payment.chargedAmount > salesAuditMoneyTolerance ||
+          payment.totalAfterDiscount > salesAuditMoneyTolerance ||
+          payment.discountAmount > salesAuditMoneyTolerance);
 }
 
-double salesAuditPaymentAppliedAmount(Payment payment) {
-  if (payment.discountAmount > salesAuditMoneyTolerance &&
-      payment.totalAfterDiscount > 0) {
+double salesAuditMoneyPaymentAmount(Payment payment) {
+  if (payment.totalAfterDiscount > salesAuditMoneyTolerance) {
     return payment.totalAfterDiscount;
   }
-  if (payment.baseAmount > 0) return payment.baseAmount;
-  if (payment.amount > 0) return payment.amount;
-  if (payment.totalAfterDiscount > 0) return payment.totalAfterDiscount;
-  if (payment.chargedAmount > 0) return payment.chargedAmount;
+  if (payment.chargedAmount > salesAuditMoneyTolerance) {
+    return payment.chargedAmount;
+  }
+  if (payment.discountAmount > salesAuditMoneyTolerance &&
+      payment.baseAmount > salesAuditMoneyTolerance) {
+    return (payment.baseAmount - payment.discountAmount)
+        .clamp(0, double.infinity)
+        .toDouble();
+  }
+  if (payment.baseAmount > salesAuditMoneyTolerance) return payment.baseAmount;
   return 0;
 }
 
@@ -387,9 +417,9 @@ SalesAuditMode _auditModeFor(PosOrder order) {
 bool _pendingOrderLooksConsistent(
   PosOrder order,
   List<OrderItem> activeItems,
-  double paymentsAppliedTotal,
+  double moneyPaymentsApplied,
 ) {
-  if (paymentsAppliedTotal > salesAuditMoneyTolerance) return false;
+  if (moneyPaymentsApplied > salesAuditMoneyTolerance) return false;
   if (activeItems.isEmpty && order.total.abs() <= salesAuditMoneyTolerance) {
     return true;
   }
@@ -397,46 +427,178 @@ bool _pendingOrderLooksConsistent(
       order.paidTotal.abs() <= salesAuditMoneyTolerance;
 }
 
-Map<String, double> _discountFieldsFor(
+_DiscountResolution _resolveDiscount(
   PosOrder order,
   List<Payment> activePayments,
+  double grossItemsTotal,
 ) {
   final fields = <String, double>{};
+  final sources = <SalesAuditDiscountSource>[];
+  final orderMoney = <SalesAuditDiscountSource>[];
+  final orderPercent = <SalesAuditDiscountSource>[];
+  final paymentMoney = <SalesAuditDiscountSource>[];
+  final paymentPercent = <SalesAuditDiscountSource>[];
+
   for (final entry in order.explicitDiscountFields.entries) {
-    if (entry.value > salesAuditMoneyTolerance) {
-      fields['order.${entry.key}'] = entry.value;
+    final field = 'order.${entry.key}';
+    final value = entry.value;
+    if (value <= salesAuditMoneyTolerance) continue;
+    fields[field] = value;
+    if (_isPercentField(entry.key)) {
+      final normalized = _normalizePercent(value);
+      orderPercent.add(
+        SalesAuditDiscountSource(
+          field: field,
+          originalValue: value,
+          kind: 'porcentaje',
+          normalizedPercent: normalized,
+          monetaryAmount: grossItemsTotal * normalized,
+          used: false,
+          interpretation: 'Porcentaje aplicado al total bruto de items.',
+        ),
+      );
+    } else {
+      orderMoney.add(
+        SalesAuditDiscountSource(
+          field: field,
+          originalValue: value,
+          kind: 'importe',
+          monetaryAmount: value,
+          used: false,
+          interpretation: 'Importe monetario guardado en la orden.',
+        ),
+      );
     }
   }
+
   for (final payment in activePayments) {
     if (payment.discountAmount > salesAuditMoneyTolerance) {
-      fields['payment.${payment.id}.discountAmount'] = payment.discountAmount;
+      final field = 'payment.${payment.id}.discountAmount';
+      fields[field] = payment.discountAmount;
+      paymentMoney.add(
+        SalesAuditDiscountSource(
+          field: field,
+          originalValue: payment.discountAmount,
+          kind: 'importe',
+          monetaryAmount: payment.discountAmount,
+          used: false,
+          interpretation: 'Importe monetario de descuento del pago.',
+          metadata: _paymentDiscountMetadata(payment),
+        ),
+      );
     }
     if (payment.appliedDiscountPercent > salesAuditMoneyTolerance) {
-      fields['payment.${payment.id}.appliedDiscountPercent'] =
-          payment.appliedDiscountPercent;
+      final normalized = _normalizePercent(payment.appliedDiscountPercent);
+      final base = payment.subtotalBeforeDiscount > salesAuditMoneyTolerance
+          ? payment.subtotalBeforeDiscount
+          : payment.baseAmount;
+      final field = 'payment.${payment.id}.appliedDiscountPercent';
+      fields[field] = payment.appliedDiscountPercent;
+      paymentPercent.add(
+        SalesAuditDiscountSource(
+          field: field,
+          originalValue: payment.appliedDiscountPercent,
+          kind: 'porcentaje',
+          normalizedPercent: normalized,
+          monetaryAmount: base * normalized,
+          used: false,
+          interpretation: 'Porcentaje aplicado al subtotal del pago.',
+          metadata: _paymentDiscountMetadata(payment),
+        ),
+      );
     }
   }
-  return fields;
+
+  final selected = _selectDiscountSource(
+    orderMoney: orderMoney,
+    paymentMoney: paymentMoney,
+    orderPercent: orderPercent,
+    paymentPercent: paymentPercent,
+  );
+  final amount = selected.fold<double>(
+    0,
+    (sum, source) => sum + source.monetaryAmount,
+  );
+  final selectedKeys = selected.map((source) => source.field).toSet();
+  sources.addAll(
+    [...orderMoney, ...paymentMoney, ...orderPercent, ...paymentPercent].map((
+      source,
+    ) {
+      return SalesAuditDiscountSource(
+        field: source.field,
+        originalValue: source.originalValue,
+        kind: source.kind,
+        monetaryAmount: source.monetaryAmount,
+        used: selectedKeys.contains(source.field),
+        normalizedPercent: source.normalizedPercent,
+        interpretation: source.interpretation,
+        metadata: source.metadata,
+      );
+    }),
+  );
+
+  return _DiscountResolution(
+    amount: amount.clamp(0, double.infinity).toDouble(),
+    fields: fields,
+    sources: sources,
+  );
 }
 
-double _explicitDiscountTotal({
-  required double orderDiscount,
-  required double paymentDiscountTotal,
+List<SalesAuditDiscountSource> _selectDiscountSource({
+  required List<SalesAuditDiscountSource> orderMoney,
+  required List<SalesAuditDiscountSource> paymentMoney,
+  required List<SalesAuditDiscountSource> orderPercent,
+  required List<SalesAuditDiscountSource> paymentPercent,
 }) {
-  if (orderDiscount > salesAuditMoneyTolerance) return orderDiscount;
-  if (paymentDiscountTotal > salesAuditMoneyTolerance) {
-    return paymentDiscountTotal;
+  const orderPriority = [
+    'order.totalDiscountAmount',
+    'order.totalDiscount',
+    'order.discountTotal',
+    'order.discountAmount',
+    'order.appliedDiscount',
+    'order.employeeDiscount',
+    'order.partnerDiscount',
+    'order.familyDiscount',
+    'order.courtesyAmount',
+    'order.complimentaryAmount',
+    'order.promotionDiscount',
+    'order.promoDiscount',
+    'order.employeeConsumptionDiscount',
+    'order.benefitAmount',
+  ];
+  for (final key in orderPriority) {
+    final match = orderMoney.where((source) => source.field == key).toList();
+    if (match.isNotEmpty) return match;
   }
-  return 0;
+  if (paymentMoney.isNotEmpty) return paymentMoney;
+  if (orderPercent.isNotEmpty) return [orderPercent.first];
+  if (paymentPercent.isNotEmpty) return paymentPercent;
+  return const [];
 }
 
-double _paymentDiscountTotal(List<Payment> activePayments) {
-  final discounts = activePayments
-      .where((payment) => payment.discountAmount > salesAuditMoneyTolerance)
-      .map((payment) => payment.discountAmount)
-      .toList();
-  if (discounts.isEmpty) return 0;
-  return discounts.fold<double>(0, (sum, value) => sum + value);
+bool _isPercentField(String field) {
+  final clean = field.toLowerCase();
+  return clean.contains('percent') || clean.contains('percentage');
+}
+
+double _normalizePercent(double value) {
+  if (value > 1) return value / 100;
+  return value;
+}
+
+String _paymentDiscountMetadata(Payment payment) {
+  return [
+    if ((payment.appliedDiscountType ?? '').trim().isNotEmpty)
+      'tipo=${payment.appliedDiscountType}',
+    if ((payment.appliedDiscountName ?? '').trim().isNotEmpty)
+      'nombre=${payment.appliedDiscountName}',
+    if ((payment.discountReason ?? '').trim().isNotEmpty)
+      'motivo=${payment.discountReason}',
+    if ((payment.discountAuthorizationStatus ?? '').trim().isNotEmpty)
+      'autorizacion=${payment.discountAuthorizationStatus}',
+    if ((payment.employeeName ?? '').trim().isNotEmpty)
+      'empleado=${payment.employeeName}',
+  ].join(' | ');
 }
 
 int _validateCashPayments(
@@ -448,15 +610,15 @@ int _validateCashPayments(
   for (final payment in activePayments.where(
     (payment) => _normalize(payment.method) == 'cash',
   )) {
-    final applied = salesAuditPaymentAppliedAmount(payment);
+    final moneyApplied = salesAuditMoneyPaymentAmount(payment);
     final received = payment.cashReceivedAmount;
     final change = payment.cashChangeAmount;
     if (received != null && change != null) {
       final net = received - change;
-      final passed = !_outsideTolerance(net - applied);
+      final passed = !_outsideTolerance(net - moneyApplied);
       validations.add(
         SalesAuditValidation(
-          label: 'Recibido - cambio = pago aplicado',
+          label: 'Recibido - cambio = pago monetario',
           passed: passed,
           detail: payment.id,
         ),
@@ -465,7 +627,7 @@ int _validateCashPayments(
         issues++;
         fail(
           'cash_net',
-          'Efectivo ${payment.id}: recibido - cambio no coincide con pago aplicado.',
+          'Efectivo ${payment.id}: recibido - cambio no coincide con pago monetario.',
         );
       }
     }
@@ -480,7 +642,8 @@ int _validateCashPayments(
       );
       fail('cash_net', 'Cambio negativo en pago ${payment.id}.');
     }
-    if (received != null && received + salesAuditMoneyTolerance < applied) {
+    if (received != null &&
+        received + salesAuditMoneyTolerance < moneyApplied) {
       issues++;
       validations.add(
         SalesAuditValidation(
@@ -507,7 +670,7 @@ int _detectDuplicatePayments(
       if (a.id == b.id) continue;
       final sameMethod = _normalize(a.method) == _normalize(b.method);
       final sameAmount = !_outsideTolerance(
-        salesAuditPaymentAppliedAmount(a) - salesAuditPaymentAppliedAmount(b),
+        salesAuditMoneyPaymentAmount(a) - salesAuditMoneyPaymentAmount(b),
       );
       final nearTime = _nearCreatedAt(a.createdAt, b.createdAt);
       if (sameMethod && sameAmount && nearTime) {
@@ -525,22 +688,22 @@ bool _nearCreatedAt(DateTime? a, DateTime? b) {
 }
 
 SalesAuditResult _result({
-  required PosOrder order,
   required List<OrderItem> activeItems,
   required List<OrderItem> cancelledItems,
   required List<Payment> activePayments,
-  required double itemsSubtotal,
-  required double explicitDiscountTotal,
-  required double expectedOrderTotal,
-  required double paymentsAppliedTotal,
+  required double grossItemsTotal,
+  required double monetaryDiscountApplied,
+  required double netCustomerDue,
+  required double moneyPaymentsApplied,
+  required double settledTotal,
   required double receivedTotal,
   required double changeTotal,
   required double diffItemsOrder,
-  required double diffPaymentsOrder,
+  required double diffSettlement,
   required double diffPaidTotal,
   required double diffPendingTotal,
   required Map<String, double> discountFields,
-  required double paymentDiscountTotal,
+  required List<SalesAuditDiscountSource> discountSources,
   required List<String> failedCodes,
   required List<String> diagnostics,
   required List<SalesAuditValidation> validations,
@@ -552,18 +715,19 @@ SalesAuditResult _result({
     activeItems: activeItems,
     cancelledItems: cancelledItems,
     activePayments: activePayments,
-    itemsSubtotal: itemsSubtotal,
-    explicitDiscountTotal: explicitDiscountTotal,
-    expectedOrderTotal: expectedOrderTotal,
-    paymentsAppliedTotal: paymentsAppliedTotal,
+    grossItemsTotal: grossItemsTotal,
+    monetaryDiscountApplied: monetaryDiscountApplied,
+    netCustomerDue: netCustomerDue,
+    moneyPaymentsApplied: moneyPaymentsApplied,
+    settledTotal: settledTotal,
     receivedTotal: receivedTotal,
     changeTotal: changeTotal,
     diffItemsOrder: diffItemsOrder,
-    diffPaymentsOrder: diffPaymentsOrder,
+    diffSettlement: diffSettlement,
     diffPaidTotal: diffPaidTotal,
     diffPendingTotal: diffPendingTotal,
     discountFields: discountFields,
-    paymentDiscountTotal: paymentDiscountTotal,
+    discountSources: discountSources,
     failedCodes: failedCodes,
     diagnostics: diagnostics.isEmpty
         ? const ['Sin discrepancias.']
@@ -573,6 +737,18 @@ SalesAuditResult _result({
     duplicatePaymentCount: duplicatePaymentCount,
     auditMode: auditMode,
   );
+}
+
+class _DiscountResolution {
+  const _DiscountResolution({
+    required this.amount,
+    required this.fields,
+    required this.sources,
+  });
+
+  final double amount;
+  final Map<String, double> fields;
+  final List<SalesAuditDiscountSource> sources;
 }
 
 bool _outsideTolerance(double value) => value.abs() > salesAuditMoneyTolerance;
