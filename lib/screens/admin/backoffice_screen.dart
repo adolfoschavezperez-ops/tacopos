@@ -1560,13 +1560,25 @@ class _ReportsSectionState extends State<_ReportsSection> {
   String _stockOutProduct = '';
   String _stockOutStatus = 'all';
   late DateTime _hourlyBaseDate;
+  late String _hourlySyncedBusinessDate;
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    _hourlyBaseDate = today.subtract(const Duration(days: 1));
+    _hourlySyncedBusinessDate = widget.endBusinessDate;
+    _hourlyBaseDate =
+        _parseBusinessDate(_hourlySyncedBusinessDate) ??
+        _startOfDay(DateTime.now());
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReportsSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.endBusinessDate != widget.endBusinessDate) {
+      _hourlySyncedBusinessDate = widget.endBusinessDate;
+      _hourlyBaseDate =
+          _parseBusinessDate(_hourlySyncedBusinessDate) ?? _hourlyBaseDate;
+    }
   }
 
   @override
@@ -1716,22 +1728,30 @@ class _ReportsSectionState extends State<_ReportsSection> {
               rows: rows,
               headers: _hourlyCsvHeaders,
               extraChildren: [
-                if (mode == _HourlyComparisonMode.previousWeek)
-                  OutlinedButton.icon(
-                    onPressed: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: _hourlyBaseDate,
-                        firstDate: DateTime(2024),
-                        lastDate: DateTime(DateTime.now().year + 2),
-                      );
-                      if (picked != null && mounted) {
-                        setState(() => _hourlyBaseDate = _startOfDay(picked));
-                      }
-                    },
-                    icon: const Icon(Icons.event_outlined),
-                    label: Text('Fecha base: ${_dateText(_hourlyBaseDate)}'),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _hourlyBaseDate,
+                      firstDate: DateTime(2024),
+                      lastDate: DateTime(DateTime.now().year + 2),
+                    );
+                    if (picked != null && mounted) {
+                      setState(() {
+                        _hourlyBaseDate = _startOfDay(picked);
+                        _hourlySyncedBusinessDate =
+                            _businessDateFor(_hourlyBaseDate) ??
+                            _hourlySyncedBusinessDate;
+                      });
+                    }
+                  },
+                  icon: const Icon(Icons.event_outlined),
+                  label: Text(
+                    mode == _HourlyComparisonMode.yesterdayVsLastSales
+                        ? 'Fecha seleccionada: ${_dateText(_hourlyBaseDate)}'
+                        : 'Fecha base: ${_dateText(_hourlyBaseDate)}',
                   ),
+                ),
                 FilledButton.icon(
                   onPressed: () => setState(() {}),
                   icon: const Icon(Icons.refresh),
@@ -2824,7 +2844,7 @@ List<_NavItem> _reportNavItems(Employee? employee) {
     const _NavItem(
       _BackofficeSection.reports,
       Icons.compare_arrows_outlined,
-      'Ayer vs ultimo dia con ventas',
+      'Dia seleccionado vs ultimo dia con ventas',
       reportKind: _ReportKind.hourlyYesterdayLastSales,
     ),
     const _NavItem(
@@ -2945,7 +2965,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.products => 'Ventas por articulo',
     _ReportKind.hourly => 'Ventas por hora',
     _ReportKind.hourlyYesterdayLastSales =>
-      'Ventas por hora: ayer vs último día con ventas',
+      'Ventas por hora: dia seleccionado vs ultimo dia con ventas',
     _ReportKind.hourlyPreviousWeek => 'Ventas por hora: semana anterior',
     _ReportKind.dates => 'Ventas por fecha',
     _ReportKind.kitchenWaste => 'Mermas por insumo',
@@ -3551,15 +3571,15 @@ List<_BarRow> _salesByHour(List<Payment> payments) {
 
 const _hourlyCsvHeaders = [
   'Reporte',
-  'Fecha A',
-  'Fecha B',
+  'Fecha seleccionada',
+  'Ultimo dia con ventas',
   'Hora',
-  'Venta A',
-  'Venta B',
+  'Venta fecha seleccionada',
+  'Venta ultimo dia con ventas',
   'Diferencia \$',
   'Diferencia %',
-  'Ordenes A',
-  'Ordenes B',
+  'Ordenes fecha seleccionada',
+  'Ordenes ultimo dia con ventas',
 ];
 
 enum _HourlyComparisonMode { yesterdayVsLastSales, previousWeek }
@@ -3615,7 +3635,7 @@ class _HourlyComparisonReport {
   final List<_HourlyComparisonRow> rows;
 
   String get title => mode == _HourlyComparisonMode.yesterdayVsLastSales
-      ? 'Ventas por hora: ayer vs ultimo dia con ventas'
+      ? 'Ventas por hora: dia seleccionado vs ultimo dia con ventas'
       : 'Ventas por hora: semana anterior';
   double get totalA => rows.fold(0, (sum, row) => sum + row.a.sales);
   double get totalB => rows.fold(0, (sum, row) => sum + row.b.sales);
@@ -3690,7 +3710,7 @@ class _HourlyComparisonSummary extends StatelessWidget {
         ),
         _SmallMetric(
           report.mode == _HourlyComparisonMode.yesterdayVsLastSales
-              ? 'Hora mas baja de ayer'
+              ? 'Hora mas baja del dia seleccionado'
               : 'Mejor hora semana anterior',
           report.mode == _HourlyComparisonMode.yesterdayVsLastSales
               ? report.lowestA == null
@@ -3887,16 +3907,13 @@ class _HourlyComparisonTable extends StatelessWidget {
 }
 
 _DateRange _hourlyQueryRange(_HourlyComparisonMode mode, DateTime baseDate) {
-  final yesterday = _startOfDay(
-    DateTime.now(),
-  ).subtract(const Duration(days: 1));
+  final cleanBase = _startOfDay(baseDate);
   if (mode == _HourlyComparisonMode.yesterdayVsLastSales) {
     return _DateRange(
-      start: yesterday.subtract(const Duration(days: 30)),
-      end: yesterday,
+      start: cleanBase.subtract(const Duration(days: 30)),
+      end: cleanBase,
     );
   }
-  final cleanBase = _startOfDay(baseDate);
   final compare = cleanBase.subtract(const Duration(days: 7));
   return _DateRange(
     start: compare.isBefore(cleanBase) ? compare : cleanBase,
@@ -3917,9 +3934,7 @@ _HourlyComparisonReport? _buildHourlyComparison({
     if (order == null) return true;
     return !_isCancelledOrder(order);
   }).toList();
-  final aDate = mode == _HourlyComparisonMode.yesterdayVsLastSales
-      ? _startOfDay(DateTime.now()).subtract(const Duration(days: 1))
-      : _startOfDay(baseDate);
+  final aDate = _startOfDay(baseDate);
   final bDate = mode == _HourlyComparisonMode.yesterdayVsLastSales
       ? _lastSalesDateBefore(activePayments, aDate)
       : aDate.subtract(const Duration(days: 7));
@@ -3930,9 +3945,7 @@ _HourlyComparisonReport? _buildHourlyComparison({
     mode: mode,
     aDate: aDate,
     bDate: bDate,
-    aLabel: mode == _HourlyComparisonMode.yesterdayVsLastSales
-        ? 'Ayer'
-        : 'Dia seleccionado',
+    aLabel: 'Dia seleccionado',
     bLabel: mode == _HourlyComparisonMode.yesterdayVsLastSales
         ? 'Ultimo dia con ventas'
         : 'Semana anterior',
@@ -4011,6 +4024,14 @@ DateTime _startOfDay(DateTime value) {
 
 String _dateText(DateTime date) {
   return DateFormat('dd/MM/yyyy').format(date);
+}
+
+DateTime? _parseBusinessDate(String value) {
+  try {
+    return _startOfDay(DateFormat('yyyy-MM-dd').parseStrict(value));
+  } on FormatException {
+    return null;
+  }
 }
 
 String _hourRange(int hour) {
