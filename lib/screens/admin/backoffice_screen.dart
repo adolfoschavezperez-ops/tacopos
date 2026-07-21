@@ -2238,7 +2238,18 @@ class _SalesDiscrepancyAuditReportState
           children: [
             _auditToolbar(rows),
             const SizedBox(height: 14),
-            _SalesAuditSummary(rows: allRows, reviewedCount: allRows.length),
+            _SalesAuditSummary(
+              rows: allRows,
+              reviewedCount: allRows.length,
+              startBusinessDate: widget.startBusinessDate,
+              endBusinessDate: widget.endBusinessDate,
+            ),
+            const SizedBox(height: 8),
+            _SalesAuditFilterNote(
+              onlyDiscrepancies: _onlyDiscrepancies,
+              reviewedCount: allRows.length,
+              visibleCount: rows.length,
+            ),
             const SizedBox(height: 14),
             if (rows.isEmpty)
               EmptyState(
@@ -2363,10 +2374,17 @@ class _SalesDiscrepancyAuditReportState
 }
 
 class _SalesAuditSummary extends StatelessWidget {
-  const _SalesAuditSummary({required this.rows, required this.reviewedCount});
+  const _SalesAuditSummary({
+    required this.rows,
+    required this.reviewedCount,
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+  });
 
   final List<_SalesAuditRow> rows;
   final int reviewedCount;
+  final String startBusinessDate;
+  final String endBusinessDate;
 
   @override
   Widget build(BuildContext context) {
@@ -2385,6 +2403,10 @@ class _SalesAuditSummary extends StatelessWidget {
       spacing: 10,
       runSpacing: 10,
       children: [
+        _SmallMetric(
+          'Periodo auditado',
+          '${_displayBusinessDate(startBusinessDate)} al ${_displayBusinessDate(endBusinessDate)}',
+        ),
         _SmallMetric('Ordenes revisadas', '$reviewedCount'),
         _SmallMetric('Ordenes correctas', '$correctCount'),
         _SmallMetric('Ordenes con discrepancia', '${discrepant.length}'),
@@ -2401,9 +2423,46 @@ class _SalesAuditSummary extends StatelessWidget {
           'Efectivo inconsistente',
           '${rows.where((row) => row.cashPaymentMismatchCount > 0).length}',
         ),
-        _SmallMetric('Primera fecha', dates.isEmpty ? '-' : dates.first),
-        _SmallMetric('Ultima fecha', dates.isEmpty ? '-' : dates.last),
+        _SmallMetric(
+          'Primera discrepancia',
+          dates.isEmpty ? '-' : _displayBusinessDate(dates.first),
+        ),
+        _SmallMetric(
+          'Ultima discrepancia',
+          dates.isEmpty ? '-' : _displayBusinessDate(dates.last),
+        ),
       ],
+    );
+  }
+}
+
+class _SalesAuditFilterNote extends StatelessWidget {
+  const _SalesAuditFilterNote({
+    required this.onlyDiscrepancies,
+    required this.reviewedCount,
+    required this.visibleCount,
+  });
+
+  final bool onlyDiscrepancies;
+  final int reviewedCount;
+  final int visibleCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = onlyDiscrepancies
+        ? 'Se revisaron ${_orderCountLabel(reviewedCount)}. La tabla muestra unicamente ${_orderCountLabel(visibleCount)} con discrepancias.'
+        : reviewedCount == 1
+        ? 'Se muestra la 1 orden auditada.'
+        : 'Se muestran todas las ${_orderCountLabel(reviewedCount)} auditadas.';
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: BrandColors.textMuted,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 }
@@ -5337,6 +5396,16 @@ String _dateTimeText(DateTime? date) {
 String? _businessDateFor(DateTime? date) {
   if (date == null) return null;
   return DateFormat('yyyy-MM-dd').format(date);
+}
+
+String _displayBusinessDate(String businessDate) {
+  final parsed = DateTime.tryParse(businessDate);
+  if (parsed == null) return businessDate;
+  return DateFormat('dd/MM/yyyy').format(parsed);
+}
+
+String _orderCountLabel(int count) {
+  return count == 1 ? '1 orden' : '$count ordenes';
 }
 
 String _money(double value) => '\$${value.toStringAsFixed(2)}';
