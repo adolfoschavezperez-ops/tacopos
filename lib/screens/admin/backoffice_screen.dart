@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/reports/hourly_sales_comparison.dart' as hourly;
 import '../../core/reports/sales_discrepancy_audit.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
@@ -4782,11 +4783,6 @@ class _HourlyBucket {
   final int orderCount;
 }
 
-class _MutableHourlyBucket {
-  double sales = 0;
-  final Set<String> orderIds = {};
-}
-
 class _HourlyComparisonRow {
   const _HourlyComparisonRow({
     required this.hour,
@@ -5111,95 +5107,33 @@ _HourlyComparisonReport? _buildHourlyComparison({
   required List<PosOrder> orders,
   required DateTime baseDate,
 }) {
-  final orderById = {for (final order in orders) order.id: order};
-  final activePayments = payments.where((payment) {
-    if (!_isDashboardActivePayment(payment)) return false;
-    final order = orderById[payment.orderId];
-    if (order == null) return true;
-    return !_isCancelledOrder(order);
-  }).toList();
-  final aDate = _startOfDay(baseDate);
-  final bDate = mode == _HourlyComparisonMode.yesterdayVsLastSales
-      ? _lastSalesDateBefore(activePayments, aDate)
-      : aDate.subtract(const Duration(days: 7));
-  if (bDate == null) return null;
-  final aBuckets = _hourlyBucketsForDate(activePayments, orderById, aDate);
-  final bBuckets = _hourlyBucketsForDate(activePayments, orderById, bDate);
+  final shared = hourly.buildHourlySalesComparison(
+    mode: mode == _HourlyComparisonMode.yesterdayVsLastSales
+        ? hourly.HourlyComparisonMode.yesterdayVsLastSales
+        : hourly.HourlyComparisonMode.previousWeek,
+    payments: payments,
+    orders: orders,
+    baseDate: baseDate,
+  );
+  if (shared == null) return null;
   return _HourlyComparisonReport(
     mode: mode,
-    aDate: aDate,
-    bDate: bDate,
+    aDate: shared.aDate,
+    bDate: shared.bDate,
     aLabel: 'Dia seleccionado',
     bLabel: mode == _HourlyComparisonMode.yesterdayVsLastSales
         ? 'Ultimo dia con ventas'
         : 'Semana anterior',
-    rows: List.generate(
-      24,
-      (hour) => _HourlyComparisonRow(
-        hour: hour,
-        a: aBuckets[hour] ?? const _HourlyBucket(),
-        b: bBuckets[hour] ?? const _HourlyBucket(),
-      ),
-    ),
+    rows: shared.rows
+        .map(
+          (row) => _HourlyComparisonRow(
+            hour: row.hour,
+            a: _HourlyBucket(sales: row.a.sales, orderCount: row.a.orderCount),
+            b: _HourlyBucket(sales: row.b.sales, orderCount: row.b.orderCount),
+          ),
+        )
+        .toList(),
   );
-}
-
-DateTime? _lastSalesDateBefore(List<Payment> payments, DateTime date) {
-  for (var offset = 1; offset <= 30; offset++) {
-    final candidate = date.subtract(Duration(days: offset));
-    final key = _businessDateFor(candidate);
-    final total = payments
-        .where((payment) => _paymentBusinessDate(payment) == key)
-        .fold<double>(
-          0,
-          (sum, payment) => sum + _dashboardCollectedAmount(payment),
-        );
-    if (total > 0.01) return candidate;
-  }
-  return null;
-}
-
-Map<int, _HourlyBucket> _hourlyBucketsForDate(
-  List<Payment> payments,
-  Map<String, PosOrder> orderById,
-  DateTime date,
-) {
-  final key = _businessDateFor(date);
-  final buckets = <int, _MutableHourlyBucket>{};
-  for (final payment in payments.where(
-    (payment) => _paymentBusinessDate(payment) == key,
-  )) {
-    final order = orderById[payment.orderId];
-    final saleDate = payment.createdAt ?? order?.paidAt ?? order?.createdAt;
-    final hour = (saleDate ?? date).hour;
-    final bucket = buckets.putIfAbsent(hour, _MutableHourlyBucket.new);
-    bucket.sales += _dashboardCollectedAmount(payment);
-    if (payment.orderId.trim().isNotEmpty) {
-      bucket.orderIds.add(payment.orderId);
-    }
-  }
-  return {
-    for (final entry in buckets.entries)
-      entry.key: _HourlyBucket(
-        sales: entry.value.sales,
-        orderCount: entry.value.orderIds.length,
-      ),
-  };
-}
-
-bool _isCancelledOrder(PosOrder order) {
-  final status = order.status.toLowerCase().trim();
-  return status == 'cancelled' ||
-      status == 'canceled' ||
-      status == 'voided' ||
-      order.cancelledAt != null ||
-      order.canceledAt != null;
-}
-
-String _paymentBusinessDate(Payment payment) {
-  final businessDate = payment.businessDate?.trim();
-  if (businessDate != null && businessDate.isNotEmpty) return businessDate;
-  return _businessDateFor(payment.createdAt) ?? '';
 }
 
 DateTime _startOfDay(DateTime value) {

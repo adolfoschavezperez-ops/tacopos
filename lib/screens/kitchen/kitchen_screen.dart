@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/reports/hourly_sales_comparison.dart';
 import '../../core/sound/kitchen_sound_service.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
@@ -31,6 +32,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
   late final Future<bool> _kitchenIsOpenFuture;
   final Set<String> _knownKitchenOrderIds = <String>{};
   bool _hasInitializedKitchenOrders = false;
+  bool _openingHourlySales = false;
 
   @override
   void initState() {
@@ -109,6 +111,11 @@ class _KitchenScreenState extends State<KitchenScreen> {
                         onTestBeep: () => _testKitchenBeep(context),
                         onTestExpressBeep: () =>
                             _testKitchenExpressBeep(context),
+                        canViewHourlySales:
+                            _canViewKitchenHourlySalesComparison,
+                        openingHourlySales: _openingHourlySales,
+                        onOpenHourlySales: () =>
+                            _openHourlySalesComparison(context),
                       ),
                       const SizedBox(height: 18),
                       const Expanded(
@@ -145,6 +152,11 @@ class _KitchenScreenState extends State<KitchenScreen> {
                           onTestBeep: () => _testKitchenBeep(context),
                           onTestExpressBeep: () =>
                               _testKitchenExpressBeep(context),
+                          canViewHourlySales:
+                              _canViewKitchenHourlySalesComparison,
+                          openingHourlySales: _openingHourlySales,
+                          onOpenHourlySales: () =>
+                              _openHourlySalesComparison(context),
                         ),
                         SizedBox(height: compact ? 10 : 18),
                         Expanded(
@@ -186,6 +198,35 @@ class _KitchenScreenState extends State<KitchenScreen> {
         },
       ),
     );
+  }
+
+  bool get _canViewKitchenHourlySalesComparison =>
+      AppSession.instance.employee?.canViewKitchenHourlySalesComparison == true;
+
+  Future<void> _openHourlySalesComparison(BuildContext context) async {
+    if (!_canViewKitchenHourlySalesComparison) {
+      showAppSnackBar(
+        context,
+        'No tienes permiso para consultar este reporte.',
+        type: AppSnackBarType.error,
+        position: AppSnackBarPosition.top,
+      );
+      return;
+    }
+    if (_openingHourlySales) return;
+    setState(() => _openingHourlySales = true);
+    try {
+      await showDialog<void>(
+        context: context,
+        useSafeArea: true,
+        barrierDismissible: true,
+        builder: (_) => _KitchenHourlySalesDialog(repository: _repository),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _openingHourlySales = false);
+      }
+    }
   }
 
   void _handleNewKitchenBundles(List<KitchenOrderBundle> bundles) {
@@ -255,11 +296,17 @@ class _KitchenListHeader extends StatelessWidget {
     required this.activeCount,
     required this.onTestBeep,
     required this.onTestExpressBeep,
+    required this.canViewHourlySales,
+    required this.openingHourlySales,
+    required this.onOpenHourlySales,
   });
 
   final int activeCount;
   final VoidCallback onTestBeep;
   final VoidCallback onTestExpressBeep;
+  final bool canViewHourlySales;
+  final bool openingHourlySales;
+  final VoidCallback onOpenHourlySales;
 
   @override
   Widget build(BuildContext context) {
@@ -277,6 +324,14 @@ class _KitchenListHeader extends StatelessWidget {
           runSpacing: 8,
           alignment: WrapAlignment.end,
           children: [
+            if (canViewHourlySales)
+              OutlinedButton.icon(
+                onPressed: openingHourlySales ? null : onOpenHourlySales,
+                icon: const Icon(Icons.query_stats, size: 18),
+                label: Text(
+                  openingHourlySales ? 'Abriendo...' : 'Ventas por hora',
+                ),
+              ),
             OutlinedButton.icon(
               onPressed: onTestBeep,
               icon: const Icon(Icons.notifications_active_outlined, size: 18),
@@ -290,6 +345,369 @@ class _KitchenListHeader extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+class _KitchenHourlySalesDialog extends StatefulWidget {
+  const _KitchenHourlySalesDialog({required this.repository});
+
+  final TacoPosRepository repository;
+
+  @override
+  State<_KitchenHourlySalesDialog> createState() =>
+      _KitchenHourlySalesDialogState();
+}
+
+class _KitchenHourlySalesDialogState extends State<_KitchenHourlySalesDialog> {
+  late final Future<HourlyComparisonReport> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = widget.repository.getKitchenHourlySalesComparison();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(18),
+      child: FractionallySizedBox(
+        widthFactor: 0.92,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1120, maxHeight: 760),
+          child: GlassPanel(
+            borderRadius: 18,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: SectionHeader(
+                        title: 'Ventas por hora',
+                        subtitle: 'Hoy vs mismo dia de la semana anterior',
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Cerrar',
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Flexible(
+                  child: FutureBuilder<HourlyComparisonReport>(
+                    future: _future,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState != ConnectionState.done) {
+                        return const SizedBox(
+                          height: 320,
+                          child: LoadingPanel(
+                            message: 'Cargando ventas por hora...',
+                          ),
+                        );
+                      }
+                      if (snapshot.hasError || !snapshot.hasData) {
+                        debugPrint(
+                          'Kitchen hourly sales report failed: ${snapshot.error}',
+                        );
+                        return const SizedBox(
+                          height: 260,
+                          child: EmptyState(
+                            icon: Icons.error_outline,
+                            title: 'No se pudo cargar',
+                            message:
+                                'No se pudo cargar el comparativo de ventas.',
+                          ),
+                        );
+                      }
+                      return _KitchenHourlySalesContent(report: snapshot.data!);
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _KitchenHourlySalesContent extends StatelessWidget {
+  const _KitchenHourlySalesContent({required this.report});
+
+  final HourlyComparisonReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final diff = report.totalA - report.totalB;
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _KitchenHourlyMetric(
+                label: 'Dia seleccionado ${_dateText(report.aDate)}',
+                value: _money(report.totalA),
+                accent: BrandColors.accentYellow,
+              ),
+              _KitchenHourlyMetric(
+                label: 'Semana anterior ${_dateText(report.bDate)}',
+                value: _money(report.totalB),
+                accent: BrandColors.info,
+              ),
+              _KitchenHourlyMetric(
+                label: 'Diferencia total',
+                value:
+                    '${_money(diff)} ${hourlyPercentLabel(report.totalA, report.totalB)}',
+                accent: _diffColor(diff),
+              ),
+              _KitchenHourlyMetric(
+                label: 'Mejor hora dia seleccionado',
+                value: report.bestA == null
+                    ? 'Sin ventas'
+                    : '${hourRange(report.bestA!.hour)} ${_money(report.bestA!.a.sales)}',
+                accent: BrandColors.accentYellow,
+              ),
+              _KitchenHourlyMetric(
+                label: 'Mejor hora semana anterior',
+                value: report.bestB == null
+                    ? 'Sin ventas'
+                    : '${hourRange(report.bestB!.hour)} ${_money(report.bestB!.b.sales)}',
+                accent: BrandColors.info,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          _KitchenHourlyChart(report: report),
+        ],
+      ),
+    );
+  }
+}
+
+class _KitchenHourlyMetric extends StatelessWidget {
+  const _KitchenHourlyMetric({
+    required this.label,
+    required this.value,
+    required this.accent,
+  });
+
+  final String label;
+  final String value;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 200,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: accent.withValues(alpha: 0.09),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: accent.withValues(alpha: 0.24)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              value,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: accent,
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _KitchenHourlyChart extends StatelessWidget {
+  const _KitchenHourlyChart({required this.report});
+
+  final HourlyComparisonReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleRows = report.rows
+        .where((row) => row.a.sales > 0 || row.b.sales > 0)
+        .toList();
+    final maxSales = visibleRows.fold<double>(
+      0,
+      (max, row) => [
+        max,
+        row.a.sales,
+        row.b.sales,
+      ].reduce((value, element) => value > element ? value : element),
+    );
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      borderRadius: 12,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            spacing: 14,
+            runSpacing: 8,
+            children: const [
+              _KitchenHourlyLegend(
+                color: BrandColors.accentYellow,
+                label: 'Dia A',
+              ),
+              _KitchenHourlyLegend(color: BrandColors.info, label: 'Dia B'),
+            ],
+          ),
+          const SizedBox(height: 14),
+          if (visibleRows.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 18),
+              child: Text(
+                'Sin ventas por hora para graficar.',
+                style: TextStyle(
+                  color: BrandColors.textMuted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            )
+          else
+            ...visibleRows.map(
+              (row) => _KitchenHourlyBarRow(row: row, maxSales: maxSales),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _KitchenHourlyLegend extends StatelessWidget {
+  const _KitchenHourlyLegend({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(color: BrandColors.textMuted)),
+      ],
+    );
+  }
+}
+
+class _KitchenHourlyBarRow extends StatelessWidget {
+  const _KitchenHourlyBarRow({required this.row, required this.maxSales});
+
+  final HourlyComparisonRow row;
+  final double maxSales;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 112,
+            child: Text(
+              hourRange(row.hour),
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              children: [
+                _KitchenHourlyBar(
+                  value: maxSales <= 0 ? 0 : row.a.sales / maxSales,
+                  color: BrandColors.accentYellow,
+                ),
+                const SizedBox(height: 4),
+                _KitchenHourlyBar(
+                  value: maxSales <= 0 ? 0 : row.b.sales / maxSales,
+                  color: BrandColors.info,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 10),
+          SizedBox(
+            width: 92,
+            child: Text(
+              _money(row.diff),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                color: _diffColor(row.diff),
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _KitchenHourlyBar extends StatelessWidget {
+  const _KitchenHourlyBar({required this.value, required this.color});
+
+  final double value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            width: (constraints.maxWidth * value).clamp(
+              2,
+              constraints.maxWidth,
+            ),
+            height: 10,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(5),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -639,6 +1057,20 @@ class _KitchenElapsedBadgeState extends State<KitchenElapsedBadge> {
       ),
     );
   }
+}
+
+String _money(double value) {
+  return NumberFormat.currency(symbol: r'$', decimalDigits: 2).format(value);
+}
+
+String _dateText(DateTime date) {
+  return DateFormat('dd/MM/yyyy').format(date);
+}
+
+Color _diffColor(double value) {
+  if (value > 0.01) return BrandColors.success;
+  if (value < -0.01) return BrandColors.danger;
+  return BrandColors.textMuted;
 }
 
 Color _elapsedColorForStart(DateTime? startTime) {

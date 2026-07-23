@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/reports/hourly_sales_comparison.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../models/active_session.dart';
@@ -3759,6 +3760,53 @@ class TacoPosRepository {
       businessDate: businessDate,
       activeOnly: activeOnly,
     );
+  }
+
+  Future<HourlyComparisonReport> getKitchenHourlySalesComparison() async {
+    final openCash = await getOpenCashSession();
+    final businessDate = openCash?.businessDate ?? _currentBusinessDate();
+    final baseDate = _dateFromBusinessDate(businessDate);
+    if (baseDate == null) {
+      throw StateError('No se pudo determinar la fecha operativa.');
+    }
+    final branch = AppSession.instance.selectedBranch;
+    final previousBusinessDate = _businessDateFor(
+      baseDate.subtract(const Duration(days: 7)),
+    );
+
+    final orderDocs = [
+      ...await _orderDocsForHistoricalCashCorrection(
+        branch: branch,
+        businessDate: businessDate,
+      ),
+      ...await _orderDocsForHistoricalCashCorrection(
+        branch: branch,
+        businessDate: previousBusinessDate,
+      ),
+    ];
+    final ordersById = <String, PosOrder>{};
+    for (final doc in orderDocs) {
+      final order = PosOrder.fromDoc(doc);
+      ordersById[order.id] = order;
+    }
+
+    final payments = [
+      ...await _paymentsForBranchAndBusinessDate(
+        branch: branch,
+        businessDate: businessDate,
+      ),
+      ...await _paymentsForBranchAndBusinessDate(
+        branch: branch,
+        businessDate: previousBusinessDate,
+      ),
+    ];
+
+    return buildHourlySalesComparison(
+      mode: HourlyComparisonMode.previousWeek,
+      payments: payments,
+      orders: ordersById.values.toList(),
+      baseDate: baseDate,
+    )!;
   }
 
   Stream<List<CashSession>> watchCashSessions({
@@ -8999,6 +9047,7 @@ class TacoPosRepository {
     required bool canOpenKitchen,
     required bool canCloseKitchen,
     required bool canViewKitchenReports,
+    required bool canViewKitchenHourlySalesComparison,
     required bool canManageKitchenStock,
     required bool canCancelOrders,
     required bool canCancelPayments,
@@ -9032,6 +9081,8 @@ class TacoPosRepository {
       'canOpenKitchen': canOpenKitchen,
       'canCloseKitchen': canCloseKitchen,
       'canViewKitchenReports': canViewKitchenReports,
+      'canViewKitchenHourlySalesComparison':
+          canViewKitchenHourlySalesComparison,
       'canManageKitchenStock': canManageKitchenStock,
       'canCancelOrders': canCancelOrders,
       'canCancelPayments': canCancelPayments,
@@ -9072,6 +9123,8 @@ class TacoPosRepository {
       'canOpenKitchen': canOpenKitchen,
       'canCloseKitchen': canCloseKitchen,
       'canViewKitchenReports': canViewKitchenReports,
+      'canViewKitchenHourlySalesComparison':
+          canViewKitchenHourlySalesComparison,
       'canManageKitchenStock': canManageKitchenStock,
       'canCancelOrders': canCancelOrders,
       'canCancelPayments': canCancelPayments,

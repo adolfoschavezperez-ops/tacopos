@@ -155,6 +155,7 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
   late bool _canOpenKitchen;
   late bool _canCloseKitchen;
   late bool _canViewKitchenReports;
+  late bool _canViewKitchenHourlySalesComparison;
   late bool _canManageKitchenStock;
   late bool _canCancelOrders;
   late bool _canCancelPayments;
@@ -189,6 +190,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
     _canOpenKitchen = widget.employee?.canOpenKitchen ?? false;
     _canCloseKitchen = widget.employee?.canCloseKitchen ?? false;
     _canViewKitchenReports = widget.employee?.canViewKitchenReports ?? false;
+    _canViewKitchenHourlySalesComparison =
+        widget.employee?.canViewKitchenHourlySalesComparison ?? false;
     _canManageKitchenStock = widget.employee?.canManageKitchenStock ?? false;
     _canCancelOrders = widget.employee?.canCancelOrders ?? false;
     _canCancelPayments = widget.employee?.canCancelPayments ?? false;
@@ -269,6 +272,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
             'canOpenKitchen': _canOpenKitchen,
             'canCloseKitchen': _canCloseKitchen,
             'canViewKitchenReports': _canViewKitchenReports,
+            'canViewKitchenHourlySalesComparison':
+                _canViewKitchenHourlySalesComparison,
             'canManageKitchenStock': _canManageKitchenStock,
             'canCancelOrders': _canCancelOrders,
             'canCancelPayments': _canCancelPayments,
@@ -297,6 +302,8 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
         canOpenKitchen: _canOpenKitchen,
         canCloseKitchen: _canCloseKitchen,
         canViewKitchenReports: _canViewKitchenReports,
+        canViewKitchenHourlySalesComparison:
+            _canViewKitchenHourlySalesComparison,
         canManageKitchenStock: _canManageKitchenStock,
         canCancelOrders: _canCancelOrders,
         canCancelPayments: _canCancelPayments,
@@ -579,6 +586,16 @@ class _EmployeeDialogState extends State<_EmployeeDialog> {
                     setState(() => _canViewKitchenReports = value),
               ),
               _PermissionSwitch(
+                title: 'Ver comparativo de ventas por hora en Cocina',
+                subtitle:
+                    'Permite consultar desde Cocina las ventas de hoy contra el mismo dia de la semana anterior.',
+                value: _canViewKitchenHourlySalesComparison,
+                enabled: !_saving,
+                onChanged: (value) => setState(
+                  () => _canViewKitchenHourlySalesComparison = value,
+                ),
+              ),
+              _PermissionSwitch(
                 title: 'Administrar insumos de cocina',
                 value: _canManageKitchenStock,
                 enabled: !_saving,
@@ -633,9 +650,11 @@ class _PermissionSwitch extends StatelessWidget {
     required this.value,
     required this.enabled,
     required this.onChanged,
+    this.subtitle,
   });
 
   final String title;
+  final String? subtitle;
   final bool value;
   final bool enabled;
   final ValueChanged<bool> onChanged;
@@ -646,6 +665,7 @@ class _PermissionSwitch extends StatelessWidget {
       dense: true,
       contentPadding: EdgeInsets.zero,
       title: Text(title),
+      subtitle: subtitle == null ? null : Text(subtitle!),
       value: value,
       onChanged: enabled ? onChanged : null,
     );
@@ -737,6 +757,7 @@ class _EmployeeAdminTile extends StatelessWidget {
       if (employee.canManageCash) 'Caja',
       if (employee.canAuthorizeCashWithdrawals) 'Retiros',
       if (employee.canViewKitchen) 'Cocina',
+      if (employee.canViewKitchenHourlySalesComparison) 'Ventas hora cocina',
       if (employee.canOpenKitchen) 'Abrir cocina',
       if (employee.canCloseKitchen) 'Cerrar cocina',
       if (employee.canViewKitchenReports) 'Reporte cocina',

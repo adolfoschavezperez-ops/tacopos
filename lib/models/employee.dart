@@ -21,6 +21,7 @@ class Employee {
     required this.canOpenKitchen,
     required this.canCloseKitchen,
     required this.canViewKitchenReports,
+    required this.canViewKitchenHourlySalesComparison,
     required this.canManageKitchenStock,
     required this.canCancelOrders,
     required this.canCancelPayments,
@@ -59,6 +60,7 @@ class Employee {
   final bool canOpenKitchen;
   final bool canCloseKitchen;
   final bool canViewKitchenReports;
+  final bool canViewKitchenHourlySalesComparison;
   final bool canManageKitchenStock;
   final bool canCancelOrders;
   final bool canCancelPayments;
@@ -114,6 +116,7 @@ class Employee {
     'canOpenKitchen': canOpenKitchen,
     'canCloseKitchen': canCloseKitchen,
     'canViewKitchenReports': canViewKitchenReports,
+    'canViewKitchenHourlySalesComparison': canViewKitchenHourlySalesComparison,
     'canManageKitchenStock': canManageKitchenStock,
     'canCancelOrders': canCancelOrders,
     'canCancelPayments': canCancelPayments,
@@ -162,6 +165,10 @@ class Employee {
       canViewKitchenReports: read(
         'canViewKitchenReports',
         canViewKitchenReports,
+      ),
+      canViewKitchenHourlySalesComparison: read(
+        'canViewKitchenHourlySalesComparison',
+        canViewKitchenHourlySalesComparison,
       ),
       canManageKitchenStock: read(
         'canManageKitchenStock',
@@ -228,6 +235,8 @@ class Employee {
       canOpenKitchen: data['canOpenKitchen'] as bool? ?? false,
       canCloseKitchen: data['canCloseKitchen'] as bool? ?? false,
       canViewKitchenReports: data['canViewKitchenReports'] as bool? ?? false,
+      canViewKitchenHourlySalesComparison:
+          data['canViewKitchenHourlySalesComparison'] as bool? ?? false,
       canManageKitchenStock: data['canManageKitchenStock'] as bool? ?? false,
       canCancelOrders:
           data['canCancelOrders'] as bool? ??
