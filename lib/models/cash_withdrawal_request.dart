@@ -28,6 +28,9 @@ class CashWithdrawalRequest {
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
     this.branchName = AppConstants.defaultBranchName,
+    this.source = '',
+    this.sourceName = '',
+    this.isHistorical = false,
   });
 
   final String id;
@@ -54,6 +57,9 @@ class CashWithdrawalRequest {
   final String restaurantName;
   final String branchId;
   final String branchName;
+  final String source;
+  final String sourceName;
+  final bool isHistorical;
 
   bool get isPending => status == 'pending';
   bool get isApproved => status == 'approved';
@@ -93,6 +99,9 @@ class CashWithdrawalRequest {
       branchId: data['branchId'] as String? ?? AppConstants.defaultBranchId,
       branchName:
           data['branchName'] as String? ?? AppConstants.defaultBranchName,
+      source: data['source'] as String? ?? '',
+      sourceName: data['sourceName'] as String? ?? '',
+      isHistorical: data['isHistorical'] as bool? ?? false,
     );
   }
 

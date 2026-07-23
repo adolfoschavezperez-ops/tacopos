@@ -262,6 +262,28 @@ class HistoricalCashCorrectionPreview {
       pendingWithdrawalsTotal > 0;
 }
 
+class HistoricalCashExpenseResult {
+  const HistoricalCashExpenseResult({
+    required this.cashSession,
+    required this.withdrawalRequestId,
+    required this.previousApprovedWithdrawals,
+    required this.newApprovedWithdrawals,
+    required this.previousExpectedCash,
+    required this.newExpectedCash,
+    required this.previousCashDifference,
+    required this.newCashDifference,
+  });
+
+  final CashSession cashSession;
+  final String withdrawalRequestId;
+  final double previousApprovedWithdrawals;
+  final double newApprovedWithdrawals;
+  final double previousExpectedCash;
+  final double newExpectedCash;
+  final double previousCashDifference;
+  final double newCashDifference;
+}
+
 class CashPaymentDetails {
   const CashPaymentDetails({
     required this.receivedAmount,
@@ -5177,12 +5199,217 @@ class TacoPosRepository {
     return CashSession.fromDoc(updatedDoc);
   }
 
+  Future<HistoricalCashExpenseResult> addApprovedHistoricalCashExpense({
+    required String cashSessionId,
+    required double amount,
+    required String reason,
+    required String adminPin,
+    required String idempotencyKey,
+  }) async {
+    _requireHistoricalCashExpenseAdmin();
+    _requireHistoricalCashCorrectionPin(adminPin);
+    if (cashSessionId.trim().isEmpty) {
+      throw ArgumentError('Selecciona un corte cerrado.');
+    }
+    if (amount <= 0) {
+      throw ArgumentError('Captura un importe de gasto valido.');
+    }
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el comentario del gasto.');
+    }
+    final cleanKey = idempotencyKey.trim();
+    if (cleanKey.isEmpty) {
+      throw ArgumentError('No se pudo preparar el registro del gasto.');
+    }
+
+    final sessionRef = _cashSessionsRef.doc(cashSessionId.trim());
+    final sessionDoc = await sessionRef.get();
+    if (!sessionDoc.exists) {
+      throw StateError(
+        'No existe un corte cerrado para esta fecha. Utiliza primero la opcion Rehacer corte historico.',
+      );
+    }
+    final session = CashSession.fromDoc(sessionDoc);
+    if (session.isOpen || session.status != 'closed') {
+      throw StateError('El corte debe estar cerrado.');
+    }
+    final selectedDate = _dateFromBusinessDate(session.businessDate);
+    if (selectedDate == null) {
+      throw StateError('La fecha operativa del corte no es valida.');
+    }
+    final today = DateTime.now();
+    final todayOnly = DateTime(today.year, today.month, today.day);
+    if (selectedDate.isAfter(todayOnly)) {
+      throw StateError('La fecha operativa no puede ser futura.');
+    }
+    if (session.branchId.trim().isEmpty) {
+      throw StateError('La sucursal del corte no esta identificada.');
+    }
+
+    final branch = Branch(
+      id: session.branchId,
+      name: session.branchName,
+      normalizedName: normalizeBranchName(session.branchName),
+      active: true,
+      sortOrder: 0,
+      restaurantId: session.restaurantId,
+      restaurantName: session.restaurantName,
+    );
+    final withdrawalRef = _cashWithdrawalRequestsRef.doc(
+      'historical_${session.id}_$cleanKey',
+    );
+    final activityRef = _restaurantRef.collection('activityLog').doc();
+    final employee = AppSession.instance.employee;
+    final now = FieldValue.serverTimestamp();
+    final branchFields = _branchFields(branch);
+
+    await _db.runTransaction((transaction) async {
+      final freshSessionDoc = await transaction.get(sessionRef);
+      if (!freshSessionDoc.exists) {
+        throw StateError(
+          'No existe un corte cerrado para esta fecha. Utiliza primero la opcion Rehacer corte historico.',
+        );
+      }
+      final freshSession = CashSession.fromDoc(freshSessionDoc);
+      if (freshSession.isOpen || freshSession.status != 'closed') {
+        throw StateError('El corte debe estar cerrado.');
+      }
+      if (!_matchesBranch(freshSession.branchId, session.branchId) ||
+          freshSession.businessDate != session.businessDate) {
+        throw StateError(
+          'El corte seleccionado cambio. Recarga e intenta de nuevo.',
+        );
+      }
+
+      final existingWithdrawal = await transaction.get(withdrawalRef);
+      if (existingWithdrawal.exists) {
+        return;
+      }
+
+      final preview = await _historicalCashCorrectionPreview(
+        branch: branch,
+        businessDate: freshSession.businessDate,
+        countedCashAmount: freshSession.countedCashAmount,
+        terminalReportedAmount: freshSession.terminalReportedAmount,
+        openingCashAmount: freshSession.openingCashAmount,
+        extraWithdrawalAmount: amount,
+      );
+      if (preview.existingSession == null) {
+        throw StateError(
+          'No existe un corte cerrado para esta fecha. Utiliza primero la opcion Rehacer corte historico.',
+        );
+      }
+
+      transaction.set(withdrawalRef, {
+        'id': withdrawalRef.id,
+        'restaurantId': freshSession.restaurantId,
+        'restaurantName': freshSession.restaurantName,
+        'cashSessionId': freshSession.id,
+        'linkedCashSessionId': freshSession.id,
+        'businessDate': freshSession.businessDate,
+        ...branchFields,
+        'amount': amount,
+        'reason': cleanReason,
+        'notes': cleanReason,
+        'status': 'approved',
+        'requestedByEmployeeId': employee?.id ?? '',
+        'requestedByEmployeeName': employee?.name ?? '',
+        'requestedAt': now,
+        'authorizedByEmployeeId': employee?.id ?? '',
+        'authorizedByEmployeeName': employee?.name ?? '',
+        'authorizedAt': now,
+        'adminNotes': cleanReason,
+        'approvedByEmployeeId': employee?.id ?? '',
+        'approvedByEmployeeName': employee?.name ?? '',
+        'approvedAt': now,
+        'rejectedAt': null,
+        'rejectedByEmployeeId': null,
+        'rejectedByEmployeeName': null,
+        'rejectReason': null,
+        'source': 'historical_admin',
+        'sourceName': 'Gasto historico administrativo',
+        'isHistorical': true,
+        'idempotencyKey': cleanKey,
+        'createdAt': now,
+        'updatedAt': now,
+      });
+
+      transaction.update(sessionRef, {
+        'expectedCashAmount': preview.expectedCashAmount,
+        'expectedCardChargedAmount': preview.cardSalesAmount,
+        'expectedCardBaseAmount': preview.cardBaseAmount,
+        'expectedCardSurchargeAmount': preview.cardSurchargeAmount,
+        'expectedCardFeeAbsorbedAmount': preview.cardCommissionAmount,
+        'expectedPlatformAmount': preview.platformAmount,
+        'expectedEmployeeConsumptionAmount': preview.employeeConsumptionAmount,
+        'approvedWithdrawalsTotal': preview.approvedWithdrawalsTotal,
+        'pendingWithdrawalsTotal': preview.pendingWithdrawalsTotal,
+        'withdrawalRequestCount': preview.withdrawalRequestCount + 1,
+        'totalExpectedRealMoney': preview.totalExpectedRealMoney,
+        'totalCountedRealMoney': preview.totalCountedRealMoney,
+        'cashDifference': preview.cashDifference,
+        'cardDifference': preview.cardDifference,
+        'netDifference': preview.netDifference,
+        'shortageAmount': preview.shortageAmount,
+        'overAmount': preview.overAmount,
+        'historicalExpenseAdjustedAt': now,
+        'historicalExpenseAdjustedByEmployeeId': employee?.id ?? '',
+        'historicalExpenseAdjustedByEmployeeName': employee?.name ?? '',
+        'lastHistoricalExpenseId': withdrawalRef.id,
+        'lastHistoricalExpenseReason': cleanReason,
+        'updatedAt': now,
+      });
+
+      transaction.set(activityRef, {
+        'type': 'historical_cash_expense_added',
+        'actionType': 'historical_cash_expense_added',
+        ...branchFields,
+        'cashSessionId': freshSession.id,
+        'withdrawalRequestId': withdrawalRef.id,
+        'amount': amount,
+        'reason': cleanReason,
+        'previousApprovedWithdrawals': freshSession.approvedWithdrawalsTotal,
+        'newApprovedWithdrawals': preview.approvedWithdrawalsTotal,
+        'previousExpectedCash': freshSession.expectedCashAmount,
+        'newExpectedCash': preview.expectedCashAmount,
+        'previousCashDifference': freshSession.cashDifference,
+        'newCashDifference': preview.cashDifference,
+        'countedCashPreserved': freshSession.countedCashAmount,
+        'terminalReportedPreserved': freshSession.terminalReportedAmount,
+        'employeeId': employee?.id ?? '',
+        'employeeName': employee?.name ?? '',
+        'businessDate': freshSession.businessDate,
+        'timestamp': now,
+        'message':
+            'Se agrego un gasto historico de \$${amount.toStringAsFixed(2)} al corte de la sucursal ${freshSession.branchName} del dia ${freshSession.businessDate} y se regenero el corte.',
+        ..._employeeAuditFields(prefix: 'createdBy'),
+        'createdAt': now,
+        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      });
+    });
+
+    final updatedDoc = await sessionRef.get();
+    final updatedSession = CashSession.fromDoc(updatedDoc);
+    return HistoricalCashExpenseResult(
+      cashSession: updatedSession,
+      withdrawalRequestId: withdrawalRef.id,
+      previousApprovedWithdrawals: session.approvedWithdrawalsTotal,
+      newApprovedWithdrawals: updatedSession.approvedWithdrawalsTotal,
+      previousExpectedCash: session.expectedCashAmount,
+      newExpectedCash: updatedSession.expectedCashAmount,
+      previousCashDifference: session.cashDifference,
+      newCashDifference: updatedSession.cashDifference,
+    );
+  }
+
   Future<HistoricalCashCorrectionPreview> _historicalCashCorrectionPreview({
     required Branch branch,
     required String businessDate,
     required double countedCashAmount,
     required double terminalReportedAmount,
     double? openingCashAmount,
+    double extraWithdrawalAmount = 0,
   }) async {
     debugPrint('REHACER CORTE HISTORICO SIN COLLECTION GROUP');
     debugPrint(
@@ -5210,6 +5437,7 @@ class TacoPosRepository {
       payments,
       openingCashAmount: resolvedOpeningCashAmount,
       withdrawals: withdrawals,
+      extraApprovedWithdrawalAmount: extraWithdrawalAmount,
     );
     developer.log(
       'Recalculo historico totales fecha=$businessDate branchId=${branch.id} '
@@ -5605,6 +5833,7 @@ class TacoPosRepository {
     List<Payment> payments, {
     required double openingCashAmount,
     required List<CashWithdrawalRequest> withdrawals,
+    double extraApprovedWithdrawalAmount = 0,
   }) {
     double cash = 0;
     double cardCharged = 0;
@@ -5634,9 +5863,11 @@ class TacoPosRepository {
       }
     }
 
-    final approvedWithdrawals = withdrawals
-        .where((request) => request.isApproved)
-        .fold<double>(0, (total, request) => total + request.amount);
+    final approvedWithdrawals =
+        withdrawals
+            .where((request) => request.isApproved)
+            .fold<double>(0, (total, request) => total + request.amount) +
+        extraApprovedWithdrawalAmount;
     final pendingWithdrawals = withdrawals
         .where((request) => request.isPending)
         .fold<double>(0, (total, request) => total + request.amount);
@@ -8348,6 +8579,16 @@ class TacoPosRepository {
       return;
     }
     throw StateError('Solo un administrador puede rehacer cortes historicos.');
+  }
+
+  void _requireHistoricalCashExpenseAdmin() {
+    final employee = AppSession.instance.employee;
+    if (employee?.hasAdminAccess == true ||
+        employee?.canViewAdmin == true ||
+        employee?.canManageCash == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para agregar gastos historicos.');
   }
 
   void _requireHistoricalCashCorrectionPin(String pin) {

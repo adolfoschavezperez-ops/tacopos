@@ -288,7 +288,11 @@ class _CashSessionsTab extends StatelessWidget {
               ...sessions.map(
                 (session) => Padding(
                   padding: const EdgeInsets.only(bottom: 12),
-                  child: _CashSessionDetailCard(session: session),
+                  child: _CashSessionDetailCard(
+                    session: session,
+                    onAddHistoricalExpense: () =>
+                        _openHistoricalExpense(context, session),
+                  ),
                 ),
               ),
           ],
@@ -308,6 +312,27 @@ class _CashSessionsTab extends StatelessWidget {
       showAppSnackBar(
         context,
         'Corte histórico guardado.',
+        type: AppSnackBarType.success,
+      );
+    }
+  }
+
+  Future<void> _openHistoricalExpense(
+    BuildContext context,
+    CashSession session,
+  ) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      useSafeArea: true,
+      builder: (context) => _HistoricalCashExpenseDialog(
+        repository: TacoPosRepository(),
+        session: session,
+      ),
+    );
+    if (saved == true && context.mounted) {
+      showAppSnackBar(
+        context,
+        'Gasto registrado y corte regenerado correctamente.',
         type: AppSnackBarType.success,
       );
     }
@@ -781,10 +806,327 @@ class _HistoricalCashCorrectionDialogState
   }
 }
 
+double? _parseMoney(String value) {
+  final clean = value.replaceAll(RegExp(r'[\$, ]'), '').trim();
+  if (clean.isEmpty) return null;
+  return double.tryParse(clean);
+}
+
+String _moneyText(double value) {
+  return NumberFormat.currency(symbol: r'$', decimalDigits: 2).format(value);
+}
+
+DateTime? _dateFromBusinessDate(String businessDate) {
+  final parts = businessDate.split('-');
+  if (parts.length != 3) return null;
+  final year = int.tryParse(parts[0]);
+  final month = int.tryParse(parts[1]);
+  final day = int.tryParse(parts[2]);
+  if (year == null || month == null || day == null) return null;
+  return DateTime(year, month, day);
+}
+
+class _HistoricalCashExpenseDialog extends StatefulWidget {
+  const _HistoricalCashExpenseDialog({
+    required this.repository,
+    required this.session,
+  });
+
+  final TacoPosRepository repository;
+  final CashSession session;
+
+  @override
+  State<_HistoricalCashExpenseDialog> createState() =>
+      _HistoricalCashExpenseDialogState();
+}
+
+class _HistoricalCashExpenseDialogState
+    extends State<_HistoricalCashExpenseDialog> {
+  final _amountController = TextEditingController();
+  final _reasonController = TextEditingController();
+  final _pinController = TextEditingController();
+  late final String _idempotencyKey;
+  bool _saving = false;
+  bool _confirming = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _idempotencyKey =
+        '${DateTime.now().microsecondsSinceEpoch}_${widget.session.id}';
+  }
+
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _reasonController.dispose();
+    _pinController.dispose();
+    super.dispose();
+  }
+
+  double? get _amount => _parseMoney(_amountController.text);
+  String get _reason => _reasonController.text.trim();
+
+  String? _validate() {
+    final amount = _amount;
+    if (amount == null) return 'Captura el importe del gasto.';
+    if (amount <= 0) return 'El importe debe ser mayor a cero.';
+    if (_reason.isEmpty) return 'Captura el comentario o motivo.';
+    final pin = _pinController.text.trim();
+    if (pin.isEmpty) return 'Captura PIN de administrador.';
+    if (pin != '072026') return 'PIN de administrador incorrecto.';
+    if (widget.session.id.trim().isEmpty) return 'Selecciona un corte.';
+    if (widget.session.isOpen || widget.session.status != 'closed') {
+      return 'El corte debe estar cerrado.';
+    }
+    final businessDate = _dateFromBusinessDate(widget.session.businessDate);
+    if (businessDate == null) return 'La fecha operativa no es valida.';
+    final today = DateTime.now();
+    final todayOnly = DateTime(today.year, today.month, today.day);
+    if (businessDate.isAfter(todayOnly)) {
+      return 'La fecha operativa no puede ser futura.';
+    }
+    if (widget.session.branchId.trim().isEmpty) {
+      return 'La sucursal del corte no esta identificada.';
+    }
+    return null;
+  }
+
+  void _goToConfirmation() {
+    final validation = _validate();
+    if (validation != null) {
+      setState(() => _error = validation);
+      return;
+    }
+    setState(() {
+      _error = null;
+      _confirming = true;
+    });
+  }
+
+  Future<void> _save() async {
+    final validation = _validate();
+    if (validation != null) {
+      setState(() => _error = validation);
+      return;
+    }
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.repository.addApprovedHistoricalCashExpense(
+        cashSessionId: widget.session.id,
+        amount: _amount!,
+        reason: _reason,
+        adminPin: _pinController.text,
+        idempotencyKey: _idempotencyKey,
+      );
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } catch (error, stackTrace) {
+      debugPrint('[TacoPOS][HistoricalCashExpense] $error\n$stackTrace');
+      if (!mounted) return;
+      setState(
+        () => _error = error
+            .toString()
+            .replaceFirst('Bad state: ', '')
+            .replaceFirst('Invalid argument(s): ', ''),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = widget.session;
+    final amount = _amount ?? 0;
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.all(18),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: GlassPanel(
+          borderRadius: 18,
+          padding: const EdgeInsets.all(16),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: SectionHeader(
+                        title: 'Agregar gasto al corte',
+                        subtitle: 'Registra un gasto aprobado y regenera.',
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: _saving ? null : () => Navigator.pop(context),
+                      icon: const Icon(Icons.close),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                _CashSection(
+                  title: 'Corte seleccionado',
+                  icon: Icons.point_of_sale_outlined,
+                  accent: BrandColors.info,
+                  child: Column(
+                    children: [
+                      _InfoLine(label: 'Sucursal', value: session.branchName),
+                      _InfoLine(
+                        label: 'Fecha operativa',
+                        value: session.businessDate,
+                      ),
+                      _InfoLine(
+                        label: 'Efectivo contado actual',
+                        value: _moneyText(session.countedCashAmount),
+                      ),
+                      _InfoLine(
+                        label: 'Terminal reportada actual',
+                        value: _moneyText(session.terminalReportedAmount),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (!_confirming) ...[
+                  TextField(
+                    controller: _amountController,
+                    enabled: !_saving,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Importe del gasto',
+                      prefixText: r'$',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _reasonController,
+                    enabled: !_saving,
+                    minLines: 2,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      labelText: 'Comentario / motivo',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: _pinController,
+                    enabled: !_saving,
+                    obscureText: true,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'PIN administrador',
+                    ),
+                  ),
+                ] else ...[
+                  _CorrectionWarning(
+                    text:
+                        'Se registrara el gasto como aprobado y se recalculara el corte conservando los importes capturados por el cajero.',
+                  ),
+                  const SizedBox(height: 12),
+                  _CashSection(
+                    title: 'Resumen de confirmacion',
+                    icon: Icons.fact_check_outlined,
+                    accent: BrandColors.accentYellow,
+                    child: Column(
+                      children: [
+                        _InfoLine(
+                          label: 'Fecha operativa',
+                          value: session.businessDate,
+                        ),
+                        _InfoLine(label: 'Sucursal', value: session.branchName),
+                        _InfoLine(
+                          label: 'Gasto nuevo',
+                          value: _moneyText(amount),
+                        ),
+                        _InfoLine(label: 'Comentario', value: _reason),
+                        _InfoLine(
+                          label: 'Efectivo contado que se conservara',
+                          value: _moneyText(session.countedCashAmount),
+                        ),
+                        _InfoLine(
+                          label: 'Terminal reportada que se conservara',
+                          value: _moneyText(session.terminalReportedAmount),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: BrandColors.danger,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: _saving
+                          ? null
+                          : () {
+                              if (_confirming) {
+                                setState(() => _confirming = false);
+                              } else {
+                                Navigator.pop(context);
+                              }
+                            },
+                      child: Text(_confirming ? 'Regresar' : 'Cancelar'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : _confirming
+                          ? _save
+                          : _goToConfirmation,
+                      icon: Icon(
+                        _saving
+                            ? Icons.hourglass_empty
+                            : Icons.playlist_add_check_outlined,
+                      ),
+                      label: Text(
+                        _saving
+                            ? 'Procesando...'
+                            : _confirming
+                            ? 'Confirmar gasto y regeneracion'
+                            : 'Registrar gasto y regenerar corte',
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _CashSessionDetailCard extends StatelessWidget {
-  const _CashSessionDetailCard({required this.session});
+  const _CashSessionDetailCard({
+    required this.session,
+    required this.onAddHistoricalExpense,
+  });
 
   final CashSession session;
+  final VoidCallback onAddHistoricalExpense;
 
   @override
   Widget build(BuildContext context) {
@@ -821,7 +1163,19 @@ class _CashSessionDetailCard extends StatelessWidget {
             title: 'Fecha operativa ${session.businessDate}',
             subtitle:
                 '${session.isOpen ? 'Abierta' : 'Cerrada'} | abre ${_employeeName(session.openedByEmployeeName)} | cierra ${_employeeName(session.closedByEmployeeName)}',
-            trailing: Icon(Icons.point_of_sale_outlined, color: statusColor),
+            trailing: Wrap(
+              spacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                if (!session.isOpen && _canAddHistoricalExpense)
+                  OutlinedButton.icon(
+                    onPressed: onAddHistoricalExpense,
+                    icon: const Icon(Icons.add_card_outlined),
+                    label: const Text('Agregar gasto historico'),
+                  ),
+                Icon(Icons.point_of_sale_outlined, color: statusColor),
+              ],
+            ),
           ),
           const SizedBox(height: 10),
           _CashSection(
@@ -1167,6 +1521,13 @@ class _CashSessionDetailCard extends StatelessWidget {
 
   String _employeeName(String? name) {
     return name == null || name.isEmpty ? 'Empleado' : name;
+  }
+
+  bool get _canAddHistoricalExpense {
+    final employee = AppSession.instance.employee;
+    return employee?.hasAdminAccess == true ||
+        employee?.canViewAdmin == true ||
+        employee?.canManageCash == true;
   }
 
   double _cardCommission(double cardTotal) {
@@ -2144,6 +2505,8 @@ class _WithdrawalAdminCard extends StatelessWidget {
             label: 'Solicitado por',
             value: request.requestedByEmployeeName,
           ),
+          if (request.sourceName.trim().isNotEmpty)
+            _InfoLine(label: 'Origen', value: request.sourceName),
           _InfoLine(label: 'Fecha operativa', value: request.businessDate),
           _InfoLine(
             label: 'Solicitado',
