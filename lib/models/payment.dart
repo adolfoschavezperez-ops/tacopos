@@ -111,6 +111,72 @@ class Payment {
   bool get isActive => status == 'active';
   bool get isCancelled => status == 'cancelled';
 
+  Payment copyWith({
+    String? orderId,
+    String? tableId,
+    String? tableName,
+    String? businessDate,
+    String? restaurantId,
+    String? restaurantName,
+    String? branchId,
+    String? branchName,
+  }) {
+    return Payment(
+      id: id,
+      orderId: orderId ?? this.orderId,
+      tableId: tableId ?? this.tableId,
+      tableName: tableName ?? this.tableName,
+      type: type,
+      method: method,
+      baseAmount: baseAmount,
+      surchargeRate: surchargeRate,
+      surchargeAmount: surchargeAmount,
+      chargedAmount: chargedAmount,
+      appliedAmount: appliedAmount,
+      cardFeeRate: cardFeeRate,
+      cardFeeAbsorbedAmount: cardFeeAbsorbedAmount,
+      personNumber: personNumber,
+      personName: personName,
+      employeeId: employeeId,
+      employeeName: employeeName,
+      platformId: platformId,
+      platformName: platformName,
+      cashSessionId: cashSessionId,
+      businessDate: businessDate ?? this.businessDate,
+      cashReceivedAmount: cashReceivedAmount,
+      cashChangeAmount: cashChangeAmount,
+      subtotalBeforeDiscount: subtotalBeforeDiscount,
+      discountAmount: discountAmount,
+      totalAfterDiscount: totalAfterDiscount,
+      appliedDiscountType: appliedDiscountType,
+      appliedDiscountName: appliedDiscountName,
+      appliedDiscountPercent: appliedDiscountPercent,
+      discountAuthorizedByPartnerId: discountAuthorizedByPartnerId,
+      discountAuthorizedByPartnerName: discountAuthorizedByPartnerName,
+      discountAuthorizedByPartnerLinkedEmployeeId:
+          discountAuthorizedByPartnerLinkedEmployeeId,
+      discountAuthorizedByPartnerLinkedEmployeeName:
+          discountAuthorizedByPartnerLinkedEmployeeName,
+      discountEmployeeBeneficiaryId: discountEmployeeBeneficiaryId,
+      discountEmployeeBeneficiaryName: discountEmployeeBeneficiaryName,
+      discountAuthorizationRequestId: discountAuthorizationRequestId,
+      discountAuthorizationMode: discountAuthorizationMode,
+      discountAuthorizationStatus: discountAuthorizationStatus,
+      discountReason: discountReason,
+      createdAt: createdAt,
+      createdBy: createdBy,
+      status: status,
+      cancelledAt: cancelledAt,
+      cancelledByEmployeeId: cancelledByEmployeeId,
+      cancelledByEmployeeName: cancelledByEmployeeName,
+      cancelReason: cancelReason,
+      restaurantId: restaurantId ?? this.restaurantId,
+      restaurantName: restaurantName ?? this.restaurantName,
+      branchId: branchId ?? this.branchId,
+      branchName: branchName ?? this.branchName,
+    );
+  }
+
   factory Payment.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
     final legacyAmount = (data['amount'] as num?)?.toDouble();

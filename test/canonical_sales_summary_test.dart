@@ -171,6 +171,41 @@ void main() {
     )!;
     expect(report25.totalA, 0);
   });
+
+  test('pago anidado sin orderId se agrupa con la orden padre', () {
+    final businessOrder = order(
+      total: 91,
+      businessDate: '2026-07-23',
+      createdAt: DateTime(2026, 7, 23, 23, 42),
+    );
+    final rawPayment = payment(
+      orderId: '',
+      base: 91,
+      charged: 91,
+      businessDate: '2026-07-24',
+      createdAt: DateTime(2026, 7, 24, 0, 2),
+    );
+    final paymentWithOrderContext = rawPayment.copyWith(
+      orderId: businessOrder.id,
+      businessDate: businessOrder.businessDate,
+    );
+
+    final report23 = buildHourlySalesComparison(
+      mode: HourlyComparisonMode.previousWeek,
+      payments: [paymentWithOrderContext],
+      orders: [businessOrder],
+      baseDate: DateTime(2026, 7, 23),
+    )!;
+    expect(report23.totalA, 91);
+
+    final report24 = buildHourlySalesComparison(
+      mode: HourlyComparisonMode.previousWeek,
+      payments: [paymentWithOrderContext],
+      orders: [businessOrder],
+      baseDate: DateTime(2026, 7, 24),
+    )!;
+    expect(report24.totalA, 0);
+  });
 }
 
 SalesOrderBundleInput bundle({

@@ -3723,7 +3723,9 @@ class TacoPosRepository {
             .doc(order.id)
             .collection('payments')
             .get();
-        payments.addAll(snapshot.docs.map(Payment.fromDoc));
+        payments.addAll(
+          snapshot.docs.map((doc) => _paymentFromOrderPaymentDoc(doc, order)),
+        );
       }
       payments.sort((a, b) {
         final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -3738,24 +3740,32 @@ class TacoPosRepository {
     return _ordersRef.doc(orderId).collection('payments').snapshots().map((
       snapshot,
     ) {
-      final payments = snapshot.docs.map(Payment.fromDoc).toList()
-        ..sort((a, b) {
-          final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return bDate.compareTo(aDate);
-        });
+      final payments =
+          snapshot.docs
+              .map((doc) => Payment.fromDoc(doc).copyWith(orderId: orderId))
+              .toList()
+            ..sort((a, b) {
+              final aDate =
+                  a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+              final bDate =
+                  b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+              return bDate.compareTo(aDate);
+            });
       return payments;
     });
   }
 
   Future<List<Payment>> getOrderPaymentsOnce(String orderId) async {
     final snapshot = await _ordersRef.doc(orderId).collection('payments').get();
-    final payments = snapshot.docs.map(Payment.fromDoc).toList()
-      ..sort((a, b) {
-        final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return bDate.compareTo(aDate);
-      });
+    final payments =
+        snapshot.docs
+            .map((doc) => Payment.fromDoc(doc).copyWith(orderId: orderId))
+            .toList()
+          ..sort((a, b) {
+            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
     return payments;
   }
 
@@ -3814,16 +3824,26 @@ class TacoPosRepository {
       final orderRef = _ordersRef.doc(order.id);
       final itemsSnapshot = await orderRef.collection('items').get();
       final paymentsSnapshot = await orderRef.collection('payments').get();
-      bundles.add(
-        SalesOrderBundleInput(
-          order: order,
-          items: itemsSnapshot.docs.map(OrderItem.fromDoc).toList(),
-          payments: paymentsSnapshot.docs.map(Payment.fromDoc).where((payment) {
+      final payments = paymentsSnapshot.docs
+          .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
+          .where((payment) {
             if (!_matchesBranch(payment.branchId, effectiveBranchId)) {
               return false;
             }
             return true;
-          }).toList(),
+          })
+          .toList();
+      _debugSalesDateAssignment(
+        order: order,
+        payments: payments,
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+      );
+      bundles.add(
+        SalesOrderBundleInput(
+          order: order,
+          items: itemsSnapshot.docs.map(OrderItem.fromDoc).toList(),
+          payments: payments,
         ),
       );
     }
@@ -5664,15 +5684,15 @@ class TacoPosRepository {
       final order = PosOrder.fromDoc(orderDoc);
       final snapshot = await orderDoc.reference.collection('payments').get();
       payments.addAll(
-        snapshot.docs.map(Payment.fromDoc).where((payment) {
-          if (activeOnly && !_isHistoricalCorrectionPaymentActive(payment)) {
-            return false;
-          }
-          final paymentBranchId = payment.branchId.trim().isEmpty
-              ? order.branchId
-              : payment.branchId;
-          return _matchesBranch(paymentBranchId, branch.id);
-        }),
+        snapshot.docs
+            .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
+            .where((payment) {
+              if (activeOnly &&
+                  !_isHistoricalCorrectionPaymentActive(payment)) {
+                return false;
+              }
+              return _matchesBranch(payment.branchId, branch.id);
+            }),
       );
     }
     developer.log(
@@ -5683,6 +5703,71 @@ class TacoPosRepository {
     debugPrint('orders encontrados: ${orderDocs.length}');
     debugPrint('payments encontrados: ${payments.length}');
     return payments;
+  }
+
+  Payment _paymentFromOrderPaymentDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc,
+    PosOrder order,
+  ) {
+    final payment = Payment.fromDoc(doc);
+    final data = doc.data() ?? const <String, dynamic>{};
+    final orderBusinessDate = _businessDateForOrder(order);
+    final rawRestaurantId = data['restaurantId'] as String?;
+    final rawRestaurantName = data['restaurantName'] as String?;
+    final rawBranchId = data['branchId'] as String?;
+    final rawBranchName = data['branchName'] as String?;
+    return payment.copyWith(
+      orderId: order.id,
+      tableId: payment.tableId.trim().isEmpty ? order.tableId : payment.tableId,
+      tableName: payment.tableName.trim().isEmpty
+          ? order.tableName
+          : payment.tableName,
+      businessDate: orderBusinessDate ?? payment.businessDate,
+      restaurantId: rawRestaurantId == null || rawRestaurantId.trim().isEmpty
+          ? order.restaurantId
+          : payment.restaurantId,
+      restaurantName:
+          rawRestaurantName == null || rawRestaurantName.trim().isEmpty
+          ? order.restaurantName
+          : payment.restaurantName,
+      branchId: rawBranchId == null || rawBranchId.trim().isEmpty
+          ? order.branchId
+          : payment.branchId,
+      branchName: rawBranchName == null || rawBranchName.trim().isEmpty
+          ? order.branchName
+          : payment.branchName,
+    );
+  }
+
+  void _debugSalesDateAssignment({
+    required PosOrder order,
+    required List<Payment> payments,
+    required String startBusinessDate,
+    required String endBusinessDate,
+  }) {
+    if (!kDebugMode || !_isDebugFolio9rFQcx(order.id)) return;
+    final resolvedBusinessDate = _businessDateForOrder(order);
+    for (final payment in payments) {
+      developer.log(
+        'folio=9rFQcx orderId=${order.id} '
+        'orderBusinessDate=${order.businessDate} '
+        'orderOperationalDate=${order.operationalDate} '
+        'orderCreatedAt=${order.createdAt?.toIso8601String()} '
+        'paymentId=${payment.id} '
+        'paymentOrderId=${payment.orderId} '
+        'paymentBusinessDate=${payment.businessDate} '
+        'paymentCreatedAt=${payment.createdAt?.toIso8601String()} '
+        'resolvedBusinessDate=$resolvedBusinessDate '
+        'range=$startBusinessDate..$endBusinessDate '
+        'amount=${canonicalPaymentAppliedAmount(payment).toStringAsFixed(2)}',
+        name: 'TacoPOS.salesDateDebug',
+      );
+    }
+  }
+
+  bool _isDebugFolio9rFQcx(String orderId) {
+    final normalized = orderId.trim().toLowerCase();
+    return normalized == '9rfqcx' || normalized.contains('9rfqcx');
   }
 
   Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>>
