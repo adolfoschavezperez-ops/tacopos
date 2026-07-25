@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/reports/canonical_sales_summary.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
@@ -132,90 +133,122 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                                 message: 'Cargando finanzas...',
                                               );
                                             }
-                                            final data = _FinanceData(
-                                              suppliers:
-                                                  suppliersSnapshot.data ??
-                                                  const [],
-                                              purchases:
-                                                  purchasesSnapshot.data ??
-                                                  const [],
-                                              supplierPayments:
-                                                  supplierPaymentsSnapshot
-                                                      .data ??
-                                                  const [],
-                                              contributions:
-                                                  contributionsSnapshot.data ??
-                                                  const [],
-                                              partners:
-                                                  partnersSnapshot.data ??
-                                                  const [],
-                                              cashSessions:
-                                                  cashSessionsSnapshot.data ??
-                                                  const [],
-                                              withdrawals:
-                                                  withdrawalsSnapshot.data ??
-                                                  const [],
-                                              customerPayments:
-                                                  paymentsSnapshot.data ??
-                                                  const [],
-                                              startDate: _startDate,
-                                              endDate: _endDate,
-                                              startBusinessDate:
-                                                  _startBusinessDate,
-                                              endBusinessDate: _endBusinessDate,
-                                              supplierId: _supplierId,
-                                            );
-                                            final summary = _FinanceSummary(
-                                              data,
-                                            );
-                                            return Column(
-                                              children: [
-                                                _FinanceFilters(
+                                            return FutureBuilder<
+                                              CanonicalSalesSummary
+                                            >(
+                                              future: _repository
+                                                  .getCanonicalSalesSummary(
+                                                    startBusinessDate:
+                                                        _startBusinessDate,
+                                                    endBusinessDate:
+                                                        _endBusinessDate,
+                                                  ),
+                                              builder: (context, salesSnapshot) {
+                                                if (!salesSnapshot.hasData) {
+                                                  return const LoadingPanel(
+                                                    message:
+                                                        'Calculando venta canonica...',
+                                                  );
+                                                }
+                                                final data = _FinanceData(
                                                   suppliers:
                                                       suppliersSnapshot.data ??
                                                       const [],
-                                                  supplierId: _supplierId,
+                                                  purchases:
+                                                      purchasesSnapshot.data ??
+                                                      const [],
+                                                  supplierPayments:
+                                                      supplierPaymentsSnapshot
+                                                          .data ??
+                                                      const [],
+                                                  contributions:
+                                                      contributionsSnapshot
+                                                          .data ??
+                                                      const [],
+                                                  partners:
+                                                      partnersSnapshot.data ??
+                                                      const [],
+                                                  cashSessions:
+                                                      cashSessionsSnapshot
+                                                          .data ??
+                                                      const [],
+                                                  withdrawals:
+                                                      withdrawalsSnapshot
+                                                          .data ??
+                                                      const [],
+                                                  customerPayments:
+                                                      paymentsSnapshot.data ??
+                                                      const [],
+                                                  salesSummary:
+                                                      salesSnapshot.data!,
                                                   startDate: _startDate,
                                                   endDate: _endDate,
-                                                  onSupplierChanged: (value) =>
-                                                      setState(
-                                                        () =>
-                                                            _supplierId = value,
+                                                  startBusinessDate:
+                                                      _startBusinessDate,
+                                                  endBusinessDate:
+                                                      _endBusinessDate,
+                                                  supplierId: _supplierId,
+                                                );
+                                                final summary = _FinanceSummary(
+                                                  data,
+                                                );
+                                                return Column(
+                                                  children: [
+                                                    _FinanceFilters(
+                                                      suppliers:
+                                                          suppliersSnapshot
+                                                              .data ??
+                                                          const [],
+                                                      supplierId: _supplierId,
+                                                      startDate: _startDate,
+                                                      endDate: _endDate,
+                                                      onSupplierChanged:
+                                                          (value) => setState(
+                                                            () => _supplierId =
+                                                                value,
+                                                          ),
+                                                      onToday: _today,
+                                                      onWeek: _week,
+                                                      onMonth: _month,
+                                                      onPickStart: () =>
+                                                          _pickDate(
+                                                            isStart: true,
+                                                          ),
+                                                      onPickEnd: () =>
+                                                          _pickDate(
+                                                            isStart: false,
+                                                          ),
+                                                    ),
+                                                    Expanded(
+                                                      child: TabBarView(
+                                                        children: [
+                                                          _FinancialStateTab(
+                                                            summary: summary,
+                                                          ),
+                                                          _CashFlowTab(
+                                                            summary: summary,
+                                                          ),
+                                                          _PartnerContributionsTab(
+                                                            repository:
+                                                                _repository,
+                                                            partners:
+                                                                data.partners,
+                                                            contributions: summary
+                                                                .contributions,
+                                                          ),
+                                                          _SupplierPaymentsFinanceTab(
+                                                            payments: summary
+                                                                .supplierPayments,
+                                                          ),
+                                                          _FinanceReportsTab(
+                                                            summary: summary,
+                                                          ),
+                                                        ],
                                                       ),
-                                                  onToday: _today,
-                                                  onWeek: _week,
-                                                  onMonth: _month,
-                                                  onPickStart: () =>
-                                                      _pickDate(isStart: true),
-                                                  onPickEnd: () =>
-                                                      _pickDate(isStart: false),
-                                                ),
-                                                Expanded(
-                                                  child: TabBarView(
-                                                    children: [
-                                                      _FinancialStateTab(
-                                                        summary: summary,
-                                                      ),
-                                                      _CashFlowTab(
-                                                        summary: summary,
-                                                      ),
-                                                      _PartnerContributionsTab(
-                                                        repository: _repository,
-                                                        partners: data.partners,
-                                                        contributions: summary
-                                                            .contributions,
-                                                      ),
-                                                      _SupplierPaymentsFinanceTab(
-                                                        payments: summary
-                                                            .supplierPayments,
-                                                      ),
-                                                      _FinanceReportsTab(
-                                                        summary: summary,
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ],
+                                                    ),
+                                                  ],
+                                                );
+                                              },
                                             );
                                           },
                                         );
@@ -294,6 +327,7 @@ class _FinanceData {
     required this.cashSessions,
     required this.withdrawals,
     required this.customerPayments,
+    required this.salesSummary,
     required this.startDate,
     required this.endDate,
     required this.startBusinessDate,
@@ -309,6 +343,7 @@ class _FinanceData {
   final List<CashSession> cashSessions;
   final List<CashWithdrawalRequest> withdrawals;
   final List<Payment> customerPayments;
+  final CanonicalSalesSummary salesSummary;
   final DateTime startDate;
   final DateTime endDate;
   final String startBusinessDate;
@@ -369,7 +404,8 @@ class _FinanceSummary {
           return false;
         }
         return true;
-      }).toList() {
+      }).toList(),
+      salesSummary = data.salesSummary {
     _debugPartnerContributionTotals(data);
   }
 
@@ -380,28 +416,23 @@ class _FinanceSummary {
   final List<CashSession> cashSessions;
   final List<CashWithdrawalRequest> withdrawals;
   final List<SupplierPurchase> pendingPurchases;
+  final CanonicalSalesSummary salesSummary;
 
-  double get salesCollected =>
-      customerPayments.fold(0, (sum, payment) => sum + payment.chargedAmount);
-  double get ventaCobradaBruta => salesCollected;
-  double get cashCollected => customerPayments
-      .where((payment) => payment.method == 'cash')
-      .fold(0, (sum, payment) => sum + payment.chargedAmount);
-  double get cardCollected => customerPayments
-      .where((payment) => payment.method == 'card')
-      .fold(0, (sum, payment) => sum + payment.chargedAmount);
+  double get salesCollected => salesSummary.totalCollected;
+  double get ventaBruta => salesSummary.grossSales;
+  double get discountsApplied => salesSummary.discountTotal;
+  double get ventaNeta => salesSummary.netSales;
+  double get ventaCobradaBruta => salesSummary.netSales;
+  double get cashCollected => salesSummary.cashCollected;
+  double get cardCollected => salesSummary.cardCollected;
   double get cardCommission => cardCollected * 0.035 * 1.16;
   double get cardNetCollected => cardCollected - cardCommission;
   double get cashSessionShortages =>
       cashSessions.fold(0, (sum, session) => sum + session.shortageAmount);
   double get ventaNetaDisponible =>
-      ventaCobradaBruta - cardCommission - cashSessionShortages;
-  double get platformCollected => customerPayments
-      .where((payment) => payment.method == 'platform_paid')
-      .fold(0, (sum, payment) => sum + payment.chargedAmount);
-  double get employeeConsumption => customerPayments
-      .where((payment) => payment.method == 'employee_consumption')
-      .fold(0, (sum, payment) => sum + payment.chargedAmount);
+      ventaNeta - cardCommission - cashSessionShortages;
+  double get platformCollected => salesSummary.platformCollected;
+  double get employeeConsumption => salesSummary.employeeConsumption;
   double get registeredPurchases =>
       purchases.fold(0, (sum, purchase) => sum + purchase.total);
   double get supplierPaymentsTotal =>
@@ -693,7 +724,9 @@ class _FinancialStateTab extends StatelessWidget {
         const SizedBox(height: 14),
         _KpiGrid(
           items: [
-            _Kpi('Venta cobrada bruta', summary.ventaCobradaBruta),
+            _Kpi('Venta bruta', summary.ventaBruta),
+            _Kpi('Descuentos aplicados', summary.discountsApplied),
+            _Kpi('Venta neta', summary.ventaNeta),
             _Kpi('Comisiones de tarjeta', summary.cardCommission),
             _Kpi('Faltantes de cortes', summary.cashSessionShortages),
             _Kpi('Venta neta disponible', summary.ventaNetaDisponible),
@@ -732,8 +765,11 @@ class _CashFlowTab extends StatelessWidget {
       children: [
         _KpiGrid(
           items: [
+            _Kpi('Venta bruta', summary.ventaBruta),
+            _Kpi('Descuentos aplicados', summary.discountsApplied),
+            _Kpi('Venta neta', summary.ventaNeta),
             _Kpi('Efectivo cobrado', summary.cashCollected),
-            _Kpi('Tarjeta cobrada bruta', summary.cardCollected),
+            _Kpi('Tarjeta cobrada real', summary.cardCollected),
             _Kpi('Comisiones de tarjeta', summary.cardCommission),
             _Kpi('Tarjeta neta', summary.cardNetCollected),
             _Kpi('Plataforma cobrada', summary.platformCollected),
@@ -926,7 +962,9 @@ class _FinanceReportsTab extends StatelessWidget {
         _ReportGroup(
           title: 'Resultado por sucursal',
           rows: {
-            'Venta cobrada bruta': summary.ventaCobradaBruta,
+            'Venta bruta': summary.ventaBruta,
+            'Descuentos aplicados': summary.discountsApplied,
+            'Venta neta': summary.ventaNeta,
             'Comisiones de tarjeta': summary.cardCommission,
             'Faltantes de cortes': summary.cashSessionShortages,
             'Venta neta disponible': summary.ventaNetaDisponible,

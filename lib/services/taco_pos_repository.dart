@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
@@ -283,6 +284,18 @@ class HistoricalCashExpenseResult {
   final double newExpectedCash;
   final double previousCashDifference;
   final double newCashDifference;
+}
+
+class _CanonicalSalesSummaryCacheEntry {
+  const _CanonicalSalesSummaryCacheEntry({
+    required this.createdAt,
+    required this.summary,
+  });
+
+  final DateTime createdAt;
+  final CanonicalSalesSummary summary;
+
+  bool get isFresh => DateTime.now().difference(createdAt).inSeconds < 45;
 }
 
 class CashPaymentDetails {
@@ -608,6 +621,8 @@ class TacoPosRepository {
 
   static const cardSurchargeRate = 0.04;
   static const operationResetPin = '072026';
+  static final Map<String, _CanonicalSalesSummaryCacheEntry>
+  _canonicalSalesSummaryCache = {};
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
@@ -3762,6 +3777,86 @@ class TacoPosRepository {
     );
   }
 
+  void invalidateCanonicalSalesSummaryCache() {
+    _canonicalSalesSummaryCache.clear();
+  }
+
+  Future<CanonicalSalesSummary> getCanonicalSalesSummary({
+    String? restaurantId,
+    String? branchId,
+    required String startBusinessDate,
+    required String endBusinessDate,
+    bool forceRefresh = false,
+  }) async {
+    final selectedBranch = AppSession.instance.selectedBranch;
+    final effectiveRestaurantId = restaurantId?.trim().isNotEmpty == true
+        ? restaurantId!.trim()
+        : selectedBranch.restaurantId;
+    final effectiveBranchId = branchId?.trim().isNotEmpty == true
+        ? branchId!.trim()
+        : selectedBranch.id;
+    final cacheKey = [
+      effectiveRestaurantId,
+      effectiveBranchId,
+      startBusinessDate,
+      endBusinessDate,
+    ].join('|');
+    final cached = _canonicalSalesSummaryCache[cacheKey];
+    if (!forceRefresh && cached != null && cached.isFresh) {
+      return cached.summary;
+    }
+
+    final ordersSnapshot = await _ordersRef.get();
+    final orders = ordersSnapshot.docs
+        .map((doc) {
+          final order = PosOrder.fromDoc(doc);
+          final docBusinessDate = doc.data()['businessDate']?.toString().trim();
+          return MapEntry(
+            order,
+            docBusinessDate?.isEmpty == true ? null : docBusinessDate,
+          );
+        })
+        .where((entry) {
+          final order = entry.key;
+          if (!_matchesBranch(order.branchId, effectiveBranchId)) return false;
+          final businessDate = entry.value ?? _businessDateForOrder(order);
+          return businessDate != null &&
+              businessDate.compareTo(startBusinessDate) >= 0 &&
+              businessDate.compareTo(endBusinessDate) <= 0;
+        })
+        .map((entry) => entry.key)
+        .toList();
+
+    final bundles = <SalesOrderBundleInput>[];
+    for (final order in orders) {
+      final orderRef = _ordersRef.doc(order.id);
+      final itemsSnapshot = await orderRef.collection('items').get();
+      final paymentsSnapshot = await orderRef.collection('payments').get();
+      bundles.add(
+        SalesOrderBundleInput(
+          order: order,
+          items: itemsSnapshot.docs.map(OrderItem.fromDoc).toList(),
+          payments: paymentsSnapshot.docs.map(Payment.fromDoc).where((payment) {
+            if (!_matchesBranch(payment.branchId, effectiveBranchId)) {
+              return false;
+            }
+            final businessDate = payment.businessDate?.trim();
+            if (businessDate == null || businessDate.isEmpty) return true;
+            return businessDate.compareTo(startBusinessDate) >= 0 &&
+                businessDate.compareTo(endBusinessDate) <= 0;
+          }).toList(),
+        ),
+      );
+    }
+
+    final summary = buildCanonicalSalesSummary(bundles);
+    _canonicalSalesSummaryCache[cacheKey] = _CanonicalSalesSummaryCacheEntry(
+      createdAt: DateTime.now(),
+      summary: summary,
+    );
+    return summary;
+  }
+
   Future<HourlyComparisonReport> getKitchenHourlySalesComparison() async {
     final openCash = await getOpenCashSession();
     final businessDate = openCash?.businessDate ?? _currentBusinessDate();
@@ -6188,6 +6283,11 @@ class TacoPosRepository {
     final month = date.month.toString().padLeft(2, '0');
     final day = date.day.toString().padLeft(2, '0');
     return '${date.year}-$month-$day';
+  }
+
+  String? _businessDateForOrder(PosOrder order) {
+    final date = order.paidAt ?? order.createdAt ?? order.updatedAt;
+    return date == null ? null : _businessDateFor(date);
   }
 
   String _currentBusinessDate() {

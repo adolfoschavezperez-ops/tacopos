@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/reports/canonical_sales_summary.dart';
 import '../../core/reports/hourly_sales_comparison.dart' as hourly;
 import '../../core/reports/sales_discrepancy_audit.dart';
 import '../../core/theme/brand_colors.dart';
@@ -999,8 +1000,6 @@ class _DashboardSection extends StatelessWidget {
     final partialOrders = orders
         .where((order) => order.paymentStatus == 'partial')
         .toList();
-    final totalSales = _sum(payments, _dashboardCollectedAmount);
-    final collected = totalSales;
     final cash = _sum(
       payments.where((payment) => payment.method == 'cash'),
       _dashboardCollectedAmount,
@@ -1027,7 +1026,6 @@ class _DashboardSection extends StatelessWidget {
         .map((order) => order.tableId)
         .toSet()
         .length;
-    final avgTicket = paidOrders.isEmpty ? 0.0 : totalSales / paidOrders.length;
     final attentionDurations = paidOrders
         .map((order) => _durationBetween(order.createdAt, order.paidAt))
         .whereType<Duration>()
@@ -1057,6 +1055,10 @@ class _DashboardSection extends StatelessWidget {
     final peakHour = peakHourRows.isEmpty ? null : peakHourRows.first;
     final methodRows = _salesByMethod(payments);
     final platformRows = _salesByPlatform(payments);
+    final canonicalFuture = repository.getCanonicalSalesSummary(
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1075,101 +1077,143 @@ class _DashboardSection extends StatelessWidget {
           onMonth: onMonth,
         ),
         const SizedBox(height: 18),
-        _ExecutiveKpiGrid(
-          children: [
-            ExecutiveKpiCard(
-              title: 'Venta total',
-              value: _money(totalSales),
-              detail: '${paidOrders.length} ordenes pagadas',
-              icon: Icons.trending_up,
-            ),
-            ExecutiveKpiCard(
-              title: 'Cobrado real',
-              value: _money(collected),
-              detail: 'Monto cobrado al cliente',
-              icon: Icons.payments_outlined,
-              accent: BrandColors.success,
-            ),
-            ExecutiveKpiCard(
-              title: 'Ticket promedio',
-              value: _money(avgTicket),
-              detail: 'Sobre ordenes pagadas',
-              icon: Icons.receipt_long,
-              accent: BrandColors.info,
-            ),
-            ExecutiveKpiCard(
-              title: 'Ordenes pagadas',
-              value: '${paidOrders.length}',
-              detail: '${openOrders.length} abiertas',
-              icon: Icons.check_circle_outline,
-              accent: BrandColors.accentOrange,
-            ),
-            ExecutiveKpiCard(
-              title: 'Atencion promedio',
-              value: _durationText(avgAttention),
-              detail: 'Maxima ${_durationText(maxAttention)}',
-              icon: Icons.timer_outlined,
-            ),
-          ],
+        FutureBuilder<CanonicalSalesSummary>(
+          future: canonicalFuture,
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const LoadingPanel(
+                message: 'Calculando venta canonica...',
+              );
+            }
+            final summary = snapshot.data!;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (summary.hasReconciliationDifference) ...[
+                  _CanonicalSalesAlert(summary: summary),
+                  const SizedBox(height: 12),
+                ],
+                _ExecutiveKpiGrid(
+                  children: [
+                    ExecutiveKpiCard(
+                      title: 'Venta bruta',
+                      value: _money(summary.grossSales),
+                      detail: 'Articulos activos antes de descuentos',
+                      icon: Icons.trending_up,
+                    ),
+                    ExecutiveKpiCard(
+                      title: 'Descuentos aplicados',
+                      value: _money(summary.discountTotal),
+                      detail: 'Descuentos explicitos sin duplicar',
+                      icon: Icons.local_offer_outlined,
+                      accent: BrandColors.accentOrange,
+                    ),
+                    ExecutiveKpiCard(
+                      title: 'Venta neta',
+                      value: _money(summary.netSales),
+                      detail: 'Venta bruta menos descuentos',
+                      icon: Icons.receipt_long,
+                      accent: BrandColors.info,
+                    ),
+                    ExecutiveKpiCard(
+                      title: 'Cobrado real',
+                      value: _money(summary.totalCollected),
+                      detail: 'Suma de pagos activos aplicados',
+                      icon: Icons.payments_outlined,
+                      accent: BrandColors.success,
+                    ),
+                    ExecutiveKpiCard(
+                      title: 'Ticket promedio',
+                      value: _money(summary.averageTicket),
+                      detail: '${summary.paidOrdersCount} ordenes pagadas',
+                      icon: Icons.receipt_long,
+                      accent: BrandColors.info,
+                    ),
+                    ExecutiveKpiCard(
+                      title: 'Ordenes pagadas',
+                      value: '${summary.paidOrdersCount}',
+                      detail: '${openOrders.length} abiertas',
+                      icon: Icons.check_circle_outline,
+                      accent: BrandColors.accentOrange,
+                    ),
+                    ExecutiveKpiCard(
+                      title: 'Atencion promedio',
+                      value: _durationText(avgAttention),
+                      detail: 'Maxima ${_durationText(maxAttention)}',
+                      icon: Icons.timer_outlined,
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
         ),
         const SizedBox(height: 18),
-        DashboardSectionPanel(
-          title: 'Metricas financieras y operativas',
-          subtitle: 'Indicadores secundarios del rango seleccionado.',
-          child: _SecondaryMetricGrid(
-            children: [
-              SecondaryMetricCard(
-                label: 'Efectivo',
-                value: _money(cash),
-                icon: Icons.attach_money,
+        FutureBuilder<CanonicalSalesSummary>(
+          future: canonicalFuture,
+          builder: (context, snapshot) {
+            final summary = snapshot.data;
+            return DashboardSectionPanel(
+              title: 'Metricas financieras y operativas',
+              subtitle: 'Indicadores secundarios del rango seleccionado.',
+              child: _SecondaryMetricGrid(
+                children: [
+                  SecondaryMetricCard(
+                    label: 'Efectivo cobrado real',
+                    value: _money(summary?.cashCollected ?? cash),
+                    icon: Icons.attach_money,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Tarjeta cobrada real',
+                    value: _money(summary?.cardCollected ?? card),
+                    icon: Icons.credit_card,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Comision absorbida',
+                    value: _money(cardFee),
+                    icon: Icons.percent,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Neto estimado tarjeta',
+                    value: _money(cardNet),
+                    icon: Icons.account_balance_wallet_outlined,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Pagado plataforma',
+                    value: _money(summary?.platformCollected ?? platform),
+                    icon: Icons.delivery_dining,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Consumo empleado',
+                    value: _money(
+                      summary?.employeeConsumption ?? employeeConsumption,
+                    ),
+                    icon: Icons.badge_outlined,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Ordenes abiertas',
+                    value: '${openOrders.length}',
+                    icon: Icons.pending_actions,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Ordenes parciales',
+                    value: '${partialOrders.length}',
+                    icon: Icons.call_split,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Para llevar',
+                    value: '${takeoutOrders.length}',
+                    icon: Icons.shopping_bag_outlined,
+                  ),
+                  SecondaryMetricCard(
+                    label: 'Mesas atendidas',
+                    value: '$servedTables',
+                    icon: Icons.table_restaurant,
+                  ),
+                ],
               ),
-              SecondaryMetricCard(
-                label: 'Tarjeta',
-                value: _money(card),
-                icon: Icons.credit_card,
-              ),
-              SecondaryMetricCard(
-                label: 'Comision absorbida',
-                value: _money(cardFee),
-                icon: Icons.percent,
-              ),
-              SecondaryMetricCard(
-                label: 'Neto estimado tarjeta',
-                value: _money(cardNet),
-                icon: Icons.account_balance_wallet_outlined,
-              ),
-              SecondaryMetricCard(
-                label: 'Pagado plataforma',
-                value: _money(platform),
-                icon: Icons.delivery_dining,
-              ),
-              SecondaryMetricCard(
-                label: 'Consumo empleado',
-                value: _money(employeeConsumption),
-                icon: Icons.badge_outlined,
-              ),
-              SecondaryMetricCard(
-                label: 'Ordenes abiertas',
-                value: '${openOrders.length}',
-                icon: Icons.pending_actions,
-              ),
-              SecondaryMetricCard(
-                label: 'Ordenes parciales',
-                value: '${partialOrders.length}',
-                icon: Icons.call_split,
-              ),
-              SecondaryMetricCard(
-                label: 'Para llevar',
-                value: '${takeoutOrders.length}',
-                icon: Icons.shopping_bag_outlined,
-              ),
-              SecondaryMetricCard(
-                label: 'Mesas atendidas',
-                value: '$servedTables',
-                icon: Icons.table_restaurant,
-              ),
-            ],
-          ),
+            );
+          },
         ),
         const SizedBox(height: 18),
         _AlertStrip(repository: repository, orders: orders),
@@ -1330,6 +1374,44 @@ class _AlertStrip extends StatelessWidget {
   }
 }
 
+class _CanonicalSalesAlert extends StatelessWidget {
+  const _CanonicalSalesAlert({required this.summary});
+
+  final CanonicalSalesSummary summary;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      borderColor: BrandColors.danger.withValues(alpha: 0.45),
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: BrandColors.danger),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Existe una diferencia de ${_money(summary.reconciliationDifference.abs())} entre la venta neta y los pagos registrados.',
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
+          ),
+          const SizedBox(width: 10),
+          OutlinedButton.icon(
+            onPressed: () {
+              showAppSnackBar(
+                context,
+                'Abre Reportes > Auditoria de discrepancias de ventas.',
+                type: AppSnackBarType.info,
+              );
+            },
+            icon: const Icon(Icons.fact_check_outlined),
+            label: const Text('Ver auditoria'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _SalesSection extends StatefulWidget {
   const _SalesSection({
     required this.repository,
@@ -1470,6 +1552,10 @@ class _SaleTile extends StatelessWidget {
         .map((payment) => _paymentMethodLabel(payment.method))
         .toSet()
         .join(', ');
+    final totalCollected = payments.fold<double>(
+      0,
+      (sum, payment) => sum + canonicalPaymentAppliedAmount(payment),
+    );
     final attention = _durationBetween(order.createdAt, order.paidAt);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
@@ -1489,7 +1575,9 @@ class _SaleTile extends StatelessWidget {
                 _InfoText('Fecha', _dateTimeText(order.createdAt)),
                 _InfoText('Origen', order.displayName),
                 _InfoText('Plataforma', order.platformName ?? '-'),
-                _InfoText('Total', _money(order.total)),
+                _InfoText('Descuento aplicado', _money(order.explicitDiscount)),
+                _InfoText('Total neto', _money(order.total)),
+                _InfoText('Total cobrado', _money(totalCollected)),
                 _InfoText(
                   'Estado',
                   '${formatOrderStatus(order.status)} / ${formatPaymentStatus(order.paymentStatus)}',
@@ -4170,9 +4258,11 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Producto',
       'Categoria',
       'Cantidad',
-      'Venta base',
-      'Promedio precio',
-      '%',
+      'Venta bruta',
+      'Descuento asignado',
+      'Venta neta',
+      'Precio promedio neto',
+      'Participacion %',
     ],
     _ReportKind.hourly => [
       'Hora',
@@ -4186,7 +4276,11 @@ List<String> _reportHeaders(_ReportKind kind) {
     _ReportKind.hourlyPreviousWeek => _hourlyCsvHeaders,
     _ReportKind.dates => [
       'Dia',
-      'Venta total',
+      'Venta bruta',
+      'Descuentos',
+      'Venta neta',
+      'Cobrado real',
+      'Diferencia reconciliacion',
       'Ordenes',
       'Ticket promedio',
       'Efectivo',
@@ -4215,22 +4309,22 @@ List<String> _reportHeaders(_ReportKind kind) {
     ],
     _ReportKind.platform => [
       'Plataforma',
-      'Venta total',
+      'Venta neta',
       'Ticket promedio',
       'Productos vendidos',
     ],
     _ReportKind.paymentMethod => [
       'Metodo',
-      'Base',
+      'Cobrado real',
       'Recargo cliente',
       'Comision absorbida',
-      'Total cobrado',
       'Neto estimado',
+      'Descuentos aplicados',
     ],
     _ReportKind.employee => [
       'Empleado',
       'Ordenes',
-      'Venta total',
+      'Venta neta',
       'Ticket promedio',
       'Tiempo promedio',
     ],
@@ -4310,19 +4404,22 @@ Future<List<List<String>>> _reportRows(
 ) async {
   switch (kind) {
     case _ReportKind.products:
-      final summary = await _itemsSummary(repository, orders);
-      final totalSales = summary.products.fold<double>(
-        0,
-        (total, row) => total + row.value,
+      final summary = await repository.getCanonicalSalesSummary(
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
       );
-      return summary.products.map((row) {
-        final percent = totalSales <= 0 ? 0 : (row.value / totalSales) * 100;
+      return summary.productRows.map((row) {
+        final percent = summary.netSales <= 0
+            ? 0
+            : (row.netSales / summary.netSales) * 100;
         return [
           row.productName,
           row.categoryName,
           '${row.qty} vendidos',
-          _money(row.value),
-          _money(row.averagePrice),
+          _money(row.grossSales),
+          _money(row.discountAllocated),
+          _money(row.netSales),
+          _money(row.averageNetPrice),
           '${percent.toStringAsFixed(1)}%',
         ];
       }).toList();
@@ -4334,48 +4431,92 @@ Future<List<List<String>>> _reportRows(
     case _ReportKind.hourlyPreviousWeek:
       return const [];
     case _ReportKind.dates:
-      final byDate = <String, List<Payment>>{};
-      for (final payment in payments) {
+      final summary = await repository.getCanonicalSalesSummary(
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+      );
+      final byDate = <String, List<CanonicalOrderSalesRow>>{};
+      for (final row in summary.orderRows) {
         final key =
-            payment.businessDate ?? _businessDateFor(payment.createdAt) ?? '-';
-        byDate.putIfAbsent(key, () => []).add(payment);
+            _businessDateFor(row.order.paidAt ?? row.order.createdAt) ?? '-';
+        byDate.putIfAbsent(key, () => []).add(row);
       }
       return byDate.entries.map((entry) {
         final list = entry.value;
-        final total = _sum(list, (payment) => payment.baseAmount);
-        final ordersCount = list
-            .map((payment) => payment.orderId)
-            .toSet()
-            .length;
+        final gross = list.fold<double>(0, (sum, row) => sum + row.grossSales);
+        final discounts = list.fold<double>(
+          0,
+          (sum, row) => sum + row.discountTotal,
+        );
+        final net = list.fold<double>(0, (sum, row) => sum + row.netSales);
+        final collected = list.fold<double>(
+          0,
+          (sum, row) => sum + row.totalCollected,
+        );
+        final diff = collected - net;
+        final ordersCount = list.length;
+        final datePayments = payments.where((payment) {
+          final key =
+              payment.businessDate ?? _businessDateFor(payment.createdAt);
+          return key == entry.key;
+        }).toList();
         return [
           entry.key,
-          _money(total),
+          _money(gross),
+          _money(discounts),
+          _money(net),
+          _money(collected),
+          _money(diff),
           '$ordersCount',
-          _money(ordersCount == 0 ? 0 : total / ordersCount),
-          _money(
-            _sum(list.where((p) => p.method == 'cash'), (p) => p.baseAmount),
-          ),
-          _money(
-            _sum(list.where((p) => p.method == 'card'), (p) => p.baseAmount),
-          ),
+          _money(ordersCount == 0 ? 0 : net / ordersCount),
           _money(
             _sum(
-              list.where((p) => p.method == 'platform_paid'),
-              (p) => p.baseAmount,
+              datePayments.where((p) => p.method == 'cash'),
+              canonicalPaymentAppliedAmount,
             ),
           ),
           _money(
             _sum(
-              list.where((p) => p.method == 'employee_consumption'),
-              (p) => p.baseAmount,
+              datePayments.where((p) => p.method == 'card'),
+              canonicalPaymentAppliedAmount,
+            ),
+          ),
+          _money(
+            _sum(
+              datePayments.where((p) => p.method == 'platform_paid'),
+              canonicalPaymentAppliedAmount,
+            ),
+          ),
+          _money(
+            _sum(
+              datePayments.where((p) => p.method == 'employee_consumption'),
+              canonicalPaymentAppliedAmount,
             ),
           ),
         ];
       }).toList();
     case _ReportKind.platform:
-      return _salesByPlatform(
-        payments,
-      ).map((row) => [row.label, row.displayValue, '-', '-']).toList();
+      final summary = await repository.getCanonicalSalesSummary(
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+      );
+      final byPlatform = <String, List<CanonicalOrderSalesRow>>{};
+      for (final row in summary.orderRows) {
+        final label = row.order.platformName ?? 'En persona';
+        byPlatform.putIfAbsent(label, () => []).add(row);
+      }
+      return byPlatform.entries.map((entry) {
+        final net = entry.value.fold<double>(
+          0,
+          (sum, row) => sum + row.netSales,
+        );
+        return [
+          entry.key,
+          _money(net),
+          _money(entry.value.isEmpty ? 0 : net / entry.value.length),
+          '-',
+        ];
+      }).toList();
     case _ReportKind.kitchenWaste:
       final rows = await repository.kitchenYieldReport(
         startBusinessDate: startBusinessDate,
@@ -4417,31 +4558,47 @@ Future<List<List<String>>> _reportRows(
           )
           .toList();
     case _ReportKind.paymentMethod:
+      final summary = await repository.getCanonicalSalesSummary(
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+      );
       final byMethod = <String, List<Payment>>{};
       for (final payment in payments) {
         final label = _paymentMethodLabel(payment.method);
         byMethod.putIfAbsent(label, () => []).add(payment);
       }
-      return byMethod.entries.map((entry) {
+      final rows = byMethod.entries.map((entry) {
         final list = entry.value;
-        final base = _sum(list, (payment) => payment.baseAmount);
         final surcharge = _sum(list, (payment) => payment.surchargeAmount);
         final absorbedFee = _sum(
           list.where((payment) => payment.method == 'card'),
           (payment) => payment.cardFeeAbsorbedAmount,
         );
-        final charged = _sum(list, (payment) => payment.chargedAmount);
+        final charged = _sum(list, canonicalPaymentAppliedAmount);
         final net = charged - absorbedFee;
         return [
           entry.key,
-          _money(base),
+          _money(charged),
           _money(surcharge),
           _money(absorbedFee),
-          _money(charged),
           _money(net),
+          '-',
         ];
       }).toList();
+      rows.add([
+        'Descuentos aplicados',
+        '-',
+        '-',
+        '-',
+        '-',
+        _money(summary.discountTotal),
+      ]);
+      return rows;
     case _ReportKind.employee:
+      final summary = await repository.getCanonicalSalesSummary(
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+      );
       final byEmployee = <String, List<Payment>>{};
       for (final payment in payments) {
         byEmployee
@@ -4449,7 +4606,10 @@ Future<List<List<String>>> _reportRows(
             .add(payment);
       }
       return byEmployee.entries.map((entry) {
-        final total = _sum(entry.value, (payment) => payment.baseAmount);
+        final orderIds = entry.value.map((payment) => payment.orderId).toSet();
+        final net = summary.orderRows
+            .where((row) => orderIds.contains(row.order.id))
+            .fold<double>(0, (sum, row) => sum + row.netSales);
         final ordersCount = entry.value
             .map((payment) => payment.orderId)
             .toSet()
@@ -4457,8 +4617,8 @@ Future<List<List<String>>> _reportRows(
         return [
           entry.key,
           '$ordersCount',
-          _money(total),
-          _money(ordersCount == 0 ? 0 : total / ordersCount),
+          _money(net),
+          _money(ordersCount == 0 ? 0 : net / ordersCount),
           '-',
         ];
       }).toList();
@@ -5269,7 +5429,7 @@ class _SaleDetailDialog extends StatelessWidget {
                       ),
                       _InfoText('Plataforma', order.platformName ?? '-'),
                       _InfoText('Cliente', order.customerName ?? '-'),
-                      _InfoText('Total', _money(order.total)),
+                      _InfoText('Total neto orden', _money(order.total)),
                       _InfoText(
                         'Descuento aplicado',
                         order.explicitDiscount > 0.01 ? 'Si' : 'No',
@@ -5301,6 +5461,16 @@ class _SaleDetailDialog extends StatelessWidget {
                                   order.explicitDiscount)
                               .clamp(0, double.infinity)
                               .toDouble(),
+                        ),
+                      ),
+                      _InfoText(
+                        'Total cobrado',
+                        _money(
+                          payments.fold<double>(
+                            0,
+                            (sum, payment) =>
+                                sum + canonicalPaymentAppliedAmount(payment),
+                          ),
                         ),
                       ),
                       _InfoText(
@@ -5534,9 +5704,7 @@ bool _isDashboardActivePayment(Payment payment) {
 }
 
 double _dashboardCollectedAmount(Payment payment) {
-  if (payment.baseAmount > 0) return payment.baseAmount;
-  if (payment.chargedAmount > 0) return payment.chargedAmount;
-  return 0;
+  return canonicalPaymentAppliedAmount(payment);
 }
 
 double _dashboardCardCommission(double grossCardAmount) {

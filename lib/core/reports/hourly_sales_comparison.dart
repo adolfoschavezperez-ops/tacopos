@@ -1,3 +1,4 @@
+import 'canonical_sales_summary.dart';
 import '../../models/order.dart';
 import '../../models/payment.dart';
 
@@ -174,9 +175,7 @@ bool isHourlySalesActivePayment(Payment payment) {
 }
 
 double hourlySalesCollectedAmount(Payment payment) {
-  if (payment.baseAmount > 0) return payment.baseAmount;
-  if (payment.chargedAmount > 0) return payment.chargedAmount;
-  return 0;
+  return canonicalPaymentAppliedAmount(payment);
 }
 
 bool isHourlySalesCancelledOrder(PosOrder order) {

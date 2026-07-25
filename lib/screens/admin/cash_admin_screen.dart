@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/reports/canonical_sales_summary.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/branch.dart';
 import '../../models/cash_session.dart';
@@ -1153,6 +1154,11 @@ class _CashSessionDetailCard extends StatelessWidget {
         session.expectedEmployeeConsumptionAmount;
     final cardCommission = _cardCommission(session.expectedCardChargedAmount);
     final estimatedCardNet = session.expectedCardChargedAmount - cardCommission;
+    final canonicalFuture = TacoPosRepository().getCanonicalSalesSummary(
+      branchId: session.branchId,
+      startBusinessDate: session.businessDate,
+      endBusinessDate: session.businessDate,
+    );
     return GlassPanel(
       padding: const EdgeInsets.all(16),
       borderRadius: 16,
@@ -1182,40 +1188,62 @@ class _CashSessionDetailCard extends StatelessWidget {
             title: 'Resumen de venta',
             icon: Icons.payments_outlined,
             accent: BrandColors.accentYellow,
-            child: _MetricWrap(
-              children: [
-                _CashMetricCard(
-                  label: 'Venta total neta',
-                  value: netSalesAmount,
-                  accent: BrandColors.accentYellow,
-                  prominent: true,
-                ),
-                _CashMetricCard(
-                  label: 'Efectivo',
-                  value: cashSalesAmount,
-                  accent: BrandColors.success,
-                ),
-                _CashMetricCard(
-                  label: 'Tarjeta cobrada',
-                  value: session.expectedCardChargedAmount,
-                  accent: BrandColors.info,
-                ),
-                _CashMetricCard(
-                  label: 'Comision por pagar tarjeta',
-                  value: cardCommission,
-                  accent: BrandColors.accentOrange,
-                ),
-                _CashMetricCard(
-                  label: 'Plataforma',
-                  value: session.expectedPlatformAmount,
-                  accent: const Color(0xFFBCA7FF),
-                ),
-                _CashMetricCard(
-                  label: 'Consumo empleado',
-                  value: session.expectedEmployeeConsumptionAmount,
-                  accent: BrandColors.textSecondary,
-                ),
-              ],
+            child: FutureBuilder<CanonicalSalesSummary>(
+              future: canonicalFuture,
+              builder: (context, snapshot) {
+                final summary = snapshot.data;
+                return _MetricWrap(
+                  children: [
+                    _CashMetricCard(
+                      label: 'Venta bruta',
+                      value: summary?.grossSales ?? netSalesAmount,
+                      accent: BrandColors.accentYellow,
+                      prominent: true,
+                    ),
+                    _CashMetricCard(
+                      label: 'Descuentos aplicados',
+                      value: summary?.discountTotal ?? 0,
+                      accent: BrandColors.accentOrange,
+                    ),
+                    _CashMetricCard(
+                      label: 'Venta neta',
+                      value: summary?.netSales ?? netSalesAmount,
+                      accent: BrandColors.info,
+                    ),
+                    _CashMetricCard(
+                      label: 'Efectivo cobrado real',
+                      value: summary?.cashCollected ?? cashSalesAmount,
+                      accent: BrandColors.success,
+                    ),
+                    _CashMetricCard(
+                      label: 'Tarjeta cobrada real',
+                      value:
+                          summary?.cardCollected ??
+                          session.expectedCardChargedAmount,
+                      accent: BrandColors.info,
+                    ),
+                    _CashMetricCard(
+                      label: 'Comision por pagar tarjeta',
+                      value: cardCommission,
+                      accent: BrandColors.accentOrange,
+                    ),
+                    _CashMetricCard(
+                      label: 'Plataforma',
+                      value:
+                          summary?.platformCollected ??
+                          session.expectedPlatformAmount,
+                      accent: const Color(0xFFBCA7FF),
+                    ),
+                    _CashMetricCard(
+                      label: 'Consumo empleado',
+                      value:
+                          summary?.employeeConsumption ??
+                          session.expectedEmployeeConsumptionAmount,
+                      accent: BrandColors.textSecondary,
+                    ),
+                  ],
+                );
+              },
             ),
           ),
           const SizedBox(height: 12),
