@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/reports/canonical_sales_summary.dart';
+import 'package:tacopos/core/reports/hourly_sales_comparison.dart';
 import 'package:tacopos/models/order.dart';
 import 'package:tacopos/models/order_item.dart';
 import 'package:tacopos/models/payment.dart';
@@ -99,6 +100,77 @@ void main() {
     expect(summary.hasReconciliationDifference, isTrue);
     expect(summary.integrityIssues.single.message, contains('auditoria'));
   });
+
+  test('pago despues de medianoche pertenece al businessDate de la orden', () {
+    final orderDate = order(
+      total: 91,
+      businessDate: '2026-07-24',
+      createdAt: DateTime(2026, 7, 24, 23, 40),
+    );
+    final latePayment = payment(
+      base: 91,
+      charged: 91,
+      createdAt: DateTime(2026, 7, 25, 0, 10),
+    );
+
+    expect(
+      resolveOperationalBusinessDate(order: orderDate, payment: latePayment),
+      '2026-07-24',
+    );
+    expect(latePayment.createdAt!.day, 25);
+  });
+
+  test(
+    'fallback usa fecha del pago solo si no hay fecha operativa de orden',
+    () {
+      final legacyOrder = order(total: 50);
+      final latePayment = payment(
+        base: 50,
+        charged: 50,
+        businessDate: '2026-07-25',
+        createdAt: DateTime(2026, 7, 25, 0, 10),
+      );
+
+      expect(
+        resolveOperationalBusinessDate(
+          order: legacyOrder,
+          payment: latePayment,
+        ),
+        '2026-07-25',
+      );
+    },
+  );
+
+  test('reporte por hora usa fecha operativa y hora real del pago', () {
+    final businessOrder = order(
+      total: 91,
+      businessDate: '2026-07-24',
+      createdAt: DateTime(2026, 7, 24, 23, 40),
+    );
+    final latePayment = payment(
+      orderId: businessOrder.id,
+      base: 91,
+      charged: 91,
+      createdAt: DateTime(2026, 7, 25, 0, 10),
+    );
+
+    final report24 = buildHourlySalesComparison(
+      mode: HourlyComparisonMode.previousWeek,
+      payments: [latePayment],
+      orders: [businessOrder],
+      baseDate: DateTime(2026, 7, 24),
+    )!;
+    expect(report24.rows[0].a.sales, 91);
+    expect(report24.totalA, 91);
+
+    final report25 = buildHourlySalesComparison(
+      mode: HourlyComparisonMode.previousWeek,
+      payments: [latePayment],
+      orders: [businessOrder],
+      baseDate: DateTime(2026, 7, 25),
+    )!;
+    expect(report25.totalA, 0);
+  });
 }
 
 SalesOrderBundleInput bundle({
@@ -114,7 +186,12 @@ SalesOrderBundleInput bundle({
   );
 }
 
-PosOrder order({required double total, Map<String, double> fields = const {}}) {
+PosOrder order({
+  required double total,
+  Map<String, double> fields = const {},
+  String? businessDate,
+  DateTime? createdAt,
+}) {
   return PosOrder(
     id: 'order-$total',
     tableId: 't1',
@@ -128,6 +205,8 @@ PosOrder order({required double total, Map<String, double> fields = const {}}) {
     personNames: const {},
     orderType: 'dine_in',
     explicitDiscountFields: fields,
+    businessDate: businessDate,
+    createdAt: createdAt,
   );
 }
 
@@ -151,16 +230,19 @@ OrderItem item({required double total}) {
 
 Payment payment({
   String method = 'cash',
+  String orderId = 'order',
   required double base,
   required double charged,
   double? applied,
   double? received,
   double? change,
   double cardFee = 0,
+  String? businessDate,
+  DateTime? createdAt,
 }) {
   return Payment(
     id: 'payment-$base-$charged',
-    orderId: 'order',
+    orderId: orderId,
     tableId: 't1',
     tableName: 'Mesa 1',
     type: 'full_table',
@@ -173,5 +255,7 @@ Payment payment({
     cashReceivedAmount: received,
     cashChangeAmount: change,
     cardFeeAbsorbedAmount: cardFee,
+    businessDate: businessDate,
+    createdAt: createdAt,
   );
 }

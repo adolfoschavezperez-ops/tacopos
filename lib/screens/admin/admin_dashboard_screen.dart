@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/reports/canonical_sales_summary.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/order.dart';
@@ -285,10 +286,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   .where((order) => _orderTouchesRange(order))
                   .toList();
               final paidOrders = ordersInRange
-                  .where(
-                    (order) =>
-                        order.status == 'paid' && _isInRange(order.paidAt),
-                  )
+                  .where((order) => order.status == 'paid')
                   .length;
               final openOrders = ordersInRange
                   .where((order) => order.status != 'paid')
@@ -799,14 +797,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   List<Payment> _paymentsInRange(List<Payment> payments) {
-    return payments.where((payment) {
-      final businessDate = payment.businessDate;
-      if (businessDate != null && businessDate.isNotEmpty) {
-        return businessDate.compareTo(_startBusinessDate) >= 0 &&
-            businessDate.compareTo(_endBusinessDate) <= 0;
-      }
-      return _isInRange(payment.createdAt);
-    }).toList();
+    return payments;
   }
 
   double _baseByMethod(List<Payment> payments, String method) {
@@ -840,6 +831,11 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   bool _orderTouchesRange(PosOrder order) {
+    final businessDate = order.businessDate ?? order.operationalDate;
+    if (businessDate != null && businessDate.isNotEmpty) {
+      return businessDate.compareTo(_startBusinessDate) >= 0 &&
+          businessDate.compareTo(_endBusinessDate) <= 0;
+    }
     return _isInRange(order.paidAt) ||
         _isInRange(order.createdAt) ||
         _isInRange(order.updatedAt);
@@ -1299,7 +1295,7 @@ class _HourlySalesComparisonPanel extends StatelessWidget {
         ? _startOfDay(DateTime.now()).subtract(const Duration(days: 1))
         : _startOfDay(baseDate);
     final DateTime? bDate = mode == _HourlyReportMode.yesterdayVsLastSales
-        ? _lastSalesDateBefore(activePayments, aDate)
+        ? _lastSalesDateBefore(activePayments, orderById, aDate)
         : aDate.subtract(const Duration(days: 7));
     if (bDate == null) return null;
 
@@ -1324,14 +1320,21 @@ class _HourlySalesComparisonPanel extends StatelessWidget {
     );
   }
 
-  DateTime? _lastSalesDateBefore(List<Payment> payments, DateTime aDate) {
+  DateTime? _lastSalesDateBefore(
+    List<Payment> payments,
+    Map<String, PosOrder> orderById,
+    DateTime aDate,
+  ) {
     for (var offset = 1; offset <= 30; offset++) {
       final candidate = aDate.subtract(Duration(days: offset));
-      final total = payments
-          .where(
-            (payment) => _paymentBusinessDate(payment) == _dateKey(candidate),
-          )
-          .fold<double>(0, (sum, payment) => sum + payment.chargedAmount);
+      final total = payments.fold<double>(0, (sum, payment) {
+        final order = orderById[payment.orderId];
+        final businessDate = order == null
+            ? _paymentBusinessDate(payment)
+            : resolveOperationalBusinessDate(order: order, payment: payment);
+        if (businessDate != _dateKey(candidate)) return sum;
+        return sum + payment.chargedAmount;
+      });
       if (total > 0.01) return candidate;
     }
     return null;
@@ -1344,10 +1347,12 @@ class _HourlySalesComparisonPanel extends StatelessWidget {
   ) {
     final businessDate = _dateKey(date);
     final buckets = <int, _MutableHourlyBucket>{};
-    for (final payment in payments.where(
-      (payment) => _paymentBusinessDate(payment) == businessDate,
-    )) {
+    for (final payment in payments) {
       final order = orderById[payment.orderId];
+      final paymentBusinessDate = order == null
+          ? _paymentBusinessDate(payment)
+          : resolveOperationalBusinessDate(order: order, payment: payment);
+      if (paymentBusinessDate != businessDate) continue;
       final saleTime = payment.createdAt ?? order?.paidAt ?? order?.createdAt;
       final hour = (saleTime ?? date).hour;
       final bucket = buckets.putIfAbsent(hour, _MutableHourlyBucket.new);

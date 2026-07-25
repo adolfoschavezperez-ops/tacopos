@@ -1485,18 +1485,25 @@ Map<String, double> _groupContributionsByPartner(
 
 Map<String, double> _groupCashFlowByDay(_FinanceSummary summary) {
   final result = <String, double>{};
-  for (final payment in summary.customerPayments) {
-    final date = payment.businessDate ?? _dayKey(payment.createdAt);
+  final salesByOrderId = {
+    for (final row in summary.salesSummary.orderRows) row.order.id: row,
+  };
+  for (final row in summary.salesSummary.orderRows) {
+    final date = row.businessDate;
     result.update(
       date,
-      (value) => value + payment.chargedAmount,
-      ifAbsent: () => payment.chargedAmount,
+      (value) => value + row.netSales,
+      ifAbsent: () => row.netSales,
     );
   }
   for (final payment in summary.customerPayments.where(
     (payment) => payment.method == 'card',
   )) {
-    final date = payment.businessDate ?? _dayKey(payment.createdAt);
+    final order = salesByOrderId[payment.orderId];
+    final date =
+        order?.businessDate ??
+        payment.businessDate ??
+        _dayKey(payment.createdAt);
     final commission = payment.chargedAmount * 0.035 * 1.16;
     result.update(
       date,

@@ -3709,10 +3709,13 @@ class TacoPosRepository {
     required DateTime endDate,
   }) {
     return watchAllOrders().asyncMap((orders) async {
+      final startBusinessDate = _businessDateFor(startDate);
+      final endBusinessDate = _businessDateFor(endDate);
       final matchingOrders = orders.where((order) {
-        return _dateInRange(order.paidAt, startDate, endDate) ||
-            _dateInRange(order.createdAt, startDate, endDate) ||
-            _dateInRange(order.updatedAt, startDate, endDate);
+        final businessDate = _businessDateForOrder(order);
+        return businessDate != null &&
+            businessDate.compareTo(startBusinessDate) >= 0 &&
+            businessDate.compareTo(endBusinessDate) <= 0;
       });
       final payments = <Payment>[];
       for (final order in matchingOrders) {
@@ -3720,16 +3723,7 @@ class TacoPosRepository {
             .doc(order.id)
             .collection('payments')
             .get();
-        payments.addAll(
-          snapshot.docs.map(Payment.fromDoc).where((payment) {
-            final businessDate = payment.businessDate;
-            if (businessDate != null && businessDate.isNotEmpty) {
-              return businessDate.compareTo(_businessDateFor(startDate)) >= 0 &&
-                  businessDate.compareTo(_businessDateFor(endDate)) <= 0;
-            }
-            return _dateInRange(payment.createdAt, startDate, endDate);
-          }),
-        );
+        payments.addAll(snapshot.docs.map(Payment.fromDoc));
       }
       payments.sort((a, b) {
         final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
@@ -3807,25 +3801,13 @@ class TacoPosRepository {
     }
 
     final ordersSnapshot = await _ordersRef.get();
-    final orders = ordersSnapshot.docs
-        .map((doc) {
-          final order = PosOrder.fromDoc(doc);
-          final docBusinessDate = doc.data()['businessDate']?.toString().trim();
-          return MapEntry(
-            order,
-            docBusinessDate?.isEmpty == true ? null : docBusinessDate,
-          );
-        })
-        .where((entry) {
-          final order = entry.key;
-          if (!_matchesBranch(order.branchId, effectiveBranchId)) return false;
-          final businessDate = entry.value ?? _businessDateForOrder(order);
-          return businessDate != null &&
-              businessDate.compareTo(startBusinessDate) >= 0 &&
-              businessDate.compareTo(endBusinessDate) <= 0;
-        })
-        .map((entry) => entry.key)
-        .toList();
+    final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).where((order) {
+      if (!_matchesBranch(order.branchId, effectiveBranchId)) return false;
+      final businessDate = _businessDateForOrder(order);
+      return businessDate != null &&
+          businessDate.compareTo(startBusinessDate) >= 0 &&
+          businessDate.compareTo(endBusinessDate) <= 0;
+    }).toList();
 
     final bundles = <SalesOrderBundleInput>[];
     for (final order in orders) {
@@ -3840,10 +3822,7 @@ class TacoPosRepository {
             if (!_matchesBranch(payment.branchId, effectiveBranchId)) {
               return false;
             }
-            final businessDate = payment.businessDate?.trim();
-            if (businessDate == null || businessDate.isEmpty) return true;
-            return businessDate.compareTo(startBusinessDate) >= 0 &&
-                businessDate.compareTo(endBusinessDate) <= 0;
+            return true;
           }).toList(),
         ),
       );
@@ -5689,12 +5668,6 @@ class TacoPosRepository {
           if (activeOnly && !_isHistoricalCorrectionPaymentActive(payment)) {
             return false;
           }
-          final paymentBusinessDate = payment.businessDate?.trim();
-          if (paymentBusinessDate != null &&
-              paymentBusinessDate.isNotEmpty &&
-              paymentBusinessDate != businessDate) {
-            return false;
-          }
           final paymentBranchId = payment.branchId.trim().isEmpty
               ? order.branchId
               : payment.branchId;
@@ -6286,7 +6259,17 @@ class TacoPosRepository {
   }
 
   String? _businessDateForOrder(PosOrder order) {
-    final date = order.paidAt ?? order.createdAt ?? order.updatedAt;
+    final businessDate = order.businessDate?.trim();
+    if (businessDate != null && businessDate.isNotEmpty) return businessDate;
+    final operationalDate = order.operationalDate?.trim();
+    if (operationalDate != null && operationalDate.isNotEmpty) {
+      return operationalDate;
+    }
+    developer.log(
+      'Orden sin businessDate; usando fallback de fecha. orderId=${order.id}',
+      name: 'TacoPOS.canonicalSales',
+    );
+    final date = order.createdAt ?? order.paidAt ?? order.updatedAt;
     return date == null ? null : _businessDateFor(date);
   }
 
@@ -6333,17 +6316,15 @@ class TacoPosRepository {
     });
   }
 
-  bool _dateInRange(DateTime? date, DateTime startDate, DateTime endDate) {
-    if (date == null) {
-      return false;
-    }
-    final day = DateTime(date.year, date.month, date.day);
-    final start = DateTime(startDate.year, startDate.month, startDate.day);
-    final end = DateTime(endDate.year, endDate.month, endDate.day);
-    return !day.isBefore(start) && !day.isAfter(end);
-  }
-
   bool _orderBelongsToBusinessDate(PosOrder order, String businessDate) {
+    final orderBusinessDate = order.businessDate?.trim();
+    if (orderBusinessDate != null && orderBusinessDate.isNotEmpty) {
+      return orderBusinessDate == businessDate;
+    }
+    final operationalDate = order.operationalDate?.trim();
+    if (operationalDate != null && operationalDate.isNotEmpty) {
+      return operationalDate == businessDate;
+    }
     final candidates = [order.paidAt, order.createdAt, order.updatedAt];
     return candidates.whereType<DateTime>().any(
       (date) => _businessDateFor(date) == businessDate,

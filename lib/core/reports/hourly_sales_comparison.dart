@@ -106,7 +106,7 @@ HourlyComparisonReport? buildHourlySalesComparison({
   }).toList();
   final aDate = startOfDay(baseDate);
   final bDate = mode == HourlyComparisonMode.yesterdayVsLastSales
-      ? _lastSalesDateBefore(activePayments, aDate)
+      ? _lastSalesDateBefore(activePayments, orderById, aDate)
       : aDate.subtract(const Duration(days: 7));
   if (bDate == null) return null;
   final aBuckets = hourlyBucketsForDate(activePayments, orderById, aDate);
@@ -137,10 +137,12 @@ Map<int, HourlyBucket> hourlyBucketsForDate(
 ) {
   final key = businessDateFor(date);
   final buckets = <int, _MutableHourlyBucket>{};
-  for (final payment in payments.where(
-    (payment) => paymentBusinessDate(payment) == key,
-  )) {
+  for (final payment in payments) {
     final order = orderById[payment.orderId];
+    final paymentBusinessDate = order == null
+        ? paymentBusinessDateFallback(payment)
+        : resolveOperationalBusinessDate(order: order, payment: payment);
+    if (paymentBusinessDate != key) continue;
     final saleDate = payment.createdAt ?? order?.paidAt ?? order?.createdAt;
     final hour = (saleDate ?? date).hour;
     final bucket = buckets.putIfAbsent(hour, _MutableHourlyBucket.new);
@@ -187,7 +189,7 @@ bool isHourlySalesCancelledOrder(PosOrder order) {
       order.canceledAt != null;
 }
 
-String paymentBusinessDate(Payment payment) {
+String paymentBusinessDateFallback(Payment payment) {
   final businessDate = payment.businessDate?.trim();
   if (businessDate != null && businessDate.isNotEmpty) return businessDate;
   final createdAt = payment.createdAt;
@@ -219,16 +221,22 @@ String hourlyPercentLabel(double a, double b) {
   return '$sign${percent.toStringAsFixed(1)}%';
 }
 
-DateTime? _lastSalesDateBefore(List<Payment> payments, DateTime date) {
+DateTime? _lastSalesDateBefore(
+  List<Payment> payments,
+  Map<String, PosOrder> orderById,
+  DateTime date,
+) {
   for (var offset = 1; offset <= 30; offset++) {
     final candidate = date.subtract(Duration(days: offset));
     final key = businessDateFor(candidate);
-    final total = payments
-        .where((payment) => paymentBusinessDate(payment) == key)
-        .fold<double>(
-          0,
-          (sum, payment) => sum + hourlySalesCollectedAmount(payment),
-        );
+    final total = payments.fold<double>(0, (sum, payment) {
+      final order = orderById[payment.orderId];
+      final businessDate = order == null
+          ? paymentBusinessDateFallback(payment)
+          : resolveOperationalBusinessDate(order: order, payment: payment);
+      if (businessDate != key) return sum;
+      return sum + hourlySalesCollectedAmount(payment);
+    });
     if (total > 0.01) return candidate;
   }
   return null;

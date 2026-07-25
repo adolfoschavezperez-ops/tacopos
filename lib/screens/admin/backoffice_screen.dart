@@ -936,7 +936,10 @@ class _BackofficeBody extends StatelessWidget {
   }
 
   bool _orderInRange(PosOrder order) {
-    final businessDate = _businessDateFor(order.paidAt ?? order.createdAt);
+    final businessDate =
+        order.businessDate ??
+        order.operationalDate ??
+        _businessDateFor(order.createdAt);
     if (businessDate != null) {
       return businessDate.compareTo(startBusinessDate) >= 0 &&
           businessDate.compareTo(endBusinessDate) <= 0;
@@ -947,14 +950,7 @@ class _BackofficeBody extends StatelessWidget {
   }
 
   List<Payment> _paymentsInRange(List<Payment> payments) {
-    return payments.where((payment) {
-      final businessDate = payment.businessDate;
-      if (businessDate != null && businessDate.isNotEmpty) {
-        return businessDate.compareTo(startBusinessDate) >= 0 &&
-            businessDate.compareTo(endBusinessDate) <= 0;
-      }
-      return _dateInRange(payment.createdAt);
-    }).toList();
+    return payments;
   }
 
   bool _dateInRange(DateTime? value) {
@@ -4437,8 +4433,7 @@ Future<List<List<String>>> _reportRows(
       );
       final byDate = <String, List<CanonicalOrderSalesRow>>{};
       for (final row in summary.orderRows) {
-        final key =
-            _businessDateFor(row.order.paidAt ?? row.order.createdAt) ?? '-';
+        final key = row.businessDate.isEmpty ? '-' : row.businessDate;
         byDate.putIfAbsent(key, () => []).add(row);
       }
       return byDate.entries.map((entry) {
@@ -4455,11 +4450,10 @@ Future<List<List<String>>> _reportRows(
         );
         final diff = collected - net;
         final ordersCount = list.length;
-        final datePayments = payments.where((payment) {
-          final key =
-              payment.businessDate ?? _businessDateFor(payment.createdAt);
-          return key == entry.key;
-        }).toList();
+        final orderIds = list.map((row) => row.order.id).toSet();
+        final datePayments = payments
+            .where((payment) => orderIds.contains(payment.orderId))
+            .toList();
         return [
           entry.key,
           _money(gross),

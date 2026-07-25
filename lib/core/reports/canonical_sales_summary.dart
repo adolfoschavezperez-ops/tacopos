@@ -55,6 +55,7 @@ class CanonicalOrderSalesRow {
     required this.netSales,
     required this.totalCollected,
     required this.reconciliationDifference,
+    required this.businessDate,
   });
 
   final PosOrder order;
@@ -63,6 +64,7 @@ class CanonicalOrderSalesRow {
   final double netSales;
   final double totalCollected;
   final double reconciliationDifference;
+  final String businessDate;
 
   bool get hasExplicitDiscount => discountTotal > salesReconciliationTolerance;
   bool get hasReconciliationDifference =>
@@ -182,6 +184,7 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
     final activePayments = bundle.payments
         .where(isCanonicalActivePayment)
         .toList();
+    final businessDate = resolveOperationalBusinessDate(order: order);
     final discount = _roundMoney(
       _explicitOrderDiscount(order, gross) ??
           _explicitPaymentsDiscount(activePayments, gross) ??
@@ -252,6 +255,7 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
         netSales: net,
         totalCollected: collected,
         reconciliationDifference: difference,
+        businessDate: businessDate,
       ),
     );
   }
@@ -283,6 +287,27 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
     orderRows: orderRows,
     integrityIssues: issues,
   );
+}
+
+String resolveOperationalBusinessDate({
+  required PosOrder order,
+  Payment? payment,
+}) {
+  final businessDate = order.businessDate?.trim();
+  if (businessDate != null && businessDate.isNotEmpty) return businessDate;
+  final operationalDate = order.operationalDate?.trim();
+  if (operationalDate != null && operationalDate.isNotEmpty) {
+    return operationalDate;
+  }
+  final createdAt = order.createdAt;
+  if (createdAt != null) return businessDateFor(createdAt);
+  final paymentBusinessDate = payment?.businessDate?.trim();
+  if (paymentBusinessDate != null && paymentBusinessDate.isNotEmpty) {
+    return paymentBusinessDate;
+  }
+  final paymentCreatedAt = payment?.createdAt;
+  if (paymentCreatedAt != null) return businessDateFor(paymentCreatedAt);
+  return '';
 }
 
 bool isCanonicalCancelledOrder(PosOrder order) {
@@ -445,4 +470,10 @@ void _allocateProductDiscounts({
 
 double _roundMoney(num value) {
   return (value * 100).roundToDouble() / 100;
+}
+
+String businessDateFor(DateTime date) {
+  final month = date.month.toString().padLeft(2, '0');
+  final day = date.day.toString().padLeft(2, '0');
+  return '${date.year}-$month-$day';
 }

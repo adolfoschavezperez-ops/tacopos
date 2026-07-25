@@ -41,6 +41,8 @@ class PosOrder {
     this.discountAppliedByEmployeeId,
     this.discountAppliedByEmployeeName,
     this.discountAppliedAt,
+    this.businessDate,
+    this.operationalDate,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -84,6 +86,8 @@ class PosOrder {
   final String? discountAppliedByEmployeeId;
   final String? discountAppliedByEmployeeName;
   final DateTime? discountAppliedAt;
+  final String? businessDate;
+  final String? operationalDate;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -148,6 +152,8 @@ class PosOrder {
         data['discountAppliedByEmployeeName'],
       ),
       discountAppliedAt: _toDate(data['discountAppliedAt']),
+      businessDate: _readOptionalString(data['businessDate']),
+      operationalDate: _readOptionalString(data['operationalDate']),
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:
