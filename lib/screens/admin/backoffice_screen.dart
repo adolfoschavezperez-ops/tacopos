@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/reports/canonical_sales_summary.dart';
+import '../../core/reports/discounts_by_day_report.dart';
 import '../../core/reports/hourly_sales_comparison.dart' as hourly;
+import '../../core/reports/operational_blockers.dart';
 import '../../core/reports/sales_discrepancy_audit.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
@@ -70,6 +72,7 @@ enum _ReportKind {
   cancelledPayments,
   productStockOuts,
   salesDiscrepancyAudit,
+  discountsByDay,
 }
 
 class BackofficeScreen extends StatefulWidget {
@@ -211,6 +214,11 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                 onToday: _today,
                 onWeek: _week,
                 onMonth: _month,
+                onOpenDiscountsReport: () => setState(() {
+                  _section = _BackofficeSection.reports;
+                  _reportKind = _ReportKind.discountsByDay;
+                  _reportsExpanded = true;
+                }),
               );
 
               if (compact) {
@@ -761,6 +769,7 @@ class _BackofficeBody extends StatelessWidget {
     required this.onToday,
     required this.onWeek,
     required this.onMonth,
+    required this.onOpenDiscountsReport,
   });
 
   final _BackofficeSection section;
@@ -775,6 +784,7 @@ class _BackofficeBody extends StatelessWidget {
   final VoidCallback onToday;
   final VoidCallback onWeek;
   final VoidCallback onMonth;
+  final VoidCallback onOpenDiscountsReport;
 
   @override
   Widget build(BuildContext context) {
@@ -895,6 +905,7 @@ class _BackofficeBody extends StatelessWidget {
                         onToday: onToday,
                         onWeek: onWeek,
                         onMonth: onMonth,
+                        onOpenDiscountsReport: onOpenDiscountsReport,
                       ),
                       _BackofficeSection.sales => _SalesSection(
                         repository: repository,
@@ -972,6 +983,7 @@ class _DashboardSection extends StatelessWidget {
     required this.onToday,
     required this.onWeek,
     required this.onMonth,
+    required this.onOpenDiscountsReport,
   });
 
   final TacoPosRepository repository;
@@ -984,6 +996,7 @@ class _DashboardSection extends StatelessWidget {
   final VoidCallback onToday;
   final VoidCallback onWeek;
   final VoidCallback onMonth;
+  final VoidCallback onOpenDiscountsReport;
 
   @override
   Widget build(BuildContext context) {
@@ -1082,6 +1095,10 @@ class _DashboardSection extends StatelessWidget {
               );
             }
             final summary = snapshot.data!;
+            final discountReport = buildDiscountsByDayReport(
+              orderRows: summary.orderRows,
+              paymentsByOrder: _paymentsByOrder(payments),
+            );
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -1099,10 +1116,21 @@ class _DashboardSection extends StatelessWidget {
                     ),
                     ExecutiveKpiCard(
                       title: 'Descuentos aplicados',
-                      value: _money(summary.discountTotal),
-                      detail: 'Descuentos explicitos sin duplicar',
+                      value: _money(discountReport.normalDiscounts),
+                      detail: 'Socio, familia, empleado porcentual y otros',
                       icon: Icons.local_offer_outlined,
                       accent: BrandColors.accentOrange,
+                      actionLabel: 'Ver descuentos por dia',
+                      onAction: onOpenDiscountsReport,
+                    ),
+                    ExecutiveKpiCard(
+                      title: 'Comidas gratis empleados',
+                      value: _money(discountReport.employeeFreeMeals),
+                      detail: 'Consumos gratuitos registrados para empleados',
+                      icon: Icons.badge_outlined,
+                      accent: BrandColors.success,
+                      actionLabel: 'Ver descuentos por dia',
+                      onAction: onOpenDiscountsReport,
                     ),
                     ExecutiveKpiCard(
                       title: 'Venta neta',
@@ -1322,16 +1350,6 @@ class _AlertStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final openTables = orders
-        .where(
-          (order) => order.orderType != 'takeout' && order.status != 'paid',
-        )
-        .length;
-    final openTakeout = orders
-        .where(
-          (order) => order.orderType == 'takeout' && order.status != 'paid',
-        )
-        .length;
     final partial = orders
         .where((order) => order.paymentStatus == 'partial')
         .length;
@@ -1345,27 +1363,83 @@ class _AlertStrip extends StatelessWidget {
             return StreamBuilder<KitchenSession?>(
               stream: repository.watchOpenKitchenSession(),
               builder: (context, kitchenSnapshot) {
-                final pendingWithdrawals =
-                    withdrawalsSnapshot.data?.length ?? 0;
-                final alerts = <String>[
-                  if (pendingWithdrawals > 0)
-                    '$pendingWithdrawals solicitudes de gasto pendientes',
-                  if (cashSnapshot.data != null) 'Caja abierta sin cerrar',
-                  if (kitchenSnapshot.data != null) 'Cocina abierta sin cerrar',
-                  if (openTables > 0) '$openTables mesas abiertas',
-                  if (openTakeout > 0)
-                    '$openTakeout pedidos para llevar abiertos',
-                  if (partial > 0) '$partial cuentas parciales',
-                ];
-                if (alerts.isEmpty) {
-                  alerts.add('Sin alertas criticas en el rango.');
-                }
-                return AlertPanel(alerts: alerts);
+                final cashSession = cashSnapshot.data;
+                return FutureBuilder<OperationalOpenOrdersSummary>(
+                  future: repository.getOperationalOpenOrdersSummary(
+                    businessDate: cashSession?.businessDate,
+                    cashSessionId: cashSession?.id,
+                    reconcileTables: true,
+                  ),
+                  builder: (context, blockersSnapshot) {
+                    final pendingWithdrawals =
+                        withdrawalsSnapshot.data?.length ?? 0;
+                    final summary = blockersSnapshot.data;
+                    final alerts = <String>[
+                      if (pendingWithdrawals > 0)
+                        '$pendingWithdrawals solicitudes de gasto pendientes',
+                      if (cashSession != null) 'Caja abierta sin cerrar',
+                      if (cashSession == null) 'Sin caja abierta',
+                      if (kitchenSnapshot.data != null)
+                        'Cocina abierta sin cerrar',
+                      if ((summary?.openTableCount ?? 0) > 0)
+                        '${summary!.openTableCount} mesas abiertas',
+                      if ((summary?.openTakeoutCount ?? 0) > 0)
+                        '${summary!.openTakeoutCount} pedidos para llevar abiertos',
+                      if (partial > 0) '$partial cuentas parciales',
+                    ];
+                    if ((summary?.hasBlockers ?? false) || alerts.isNotEmpty) {
+                      return _OperationalAlertPanel(
+                        alerts: alerts,
+                        summary: summary,
+                      );
+                    }
+                    return const AlertPanel(
+                      alerts: ['Sin pendientes operativos'],
+                    );
+                  },
+                );
               },
             );
           },
         );
       },
+    );
+  }
+}
+
+class _OperationalAlertPanel extends StatelessWidget {
+  const _OperationalAlertPanel({required this.alerts, required this.summary});
+
+  final List<String> alerts;
+  final OperationalOpenOrdersSummary? summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final blockers = summary?.blockers ?? const <OperationalOrderBlocker>[];
+    final visibleAlerts = alerts
+        .where((alert) => !alert.startsWith('0 '))
+        .toList();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        AlertPanel(
+          alerts: visibleAlerts.isEmpty
+              ? const ['Sin pendientes operativos']
+              : visibleAlerts,
+        ),
+        if (blockers.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: () =>
+                  _showOperationalBlockersDetail(context, blockers),
+              icon: const Icon(Icons.list_alt_outlined),
+              label: const Text('Ver detalle'),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -1405,6 +1479,415 @@ class _CanonicalSalesAlert extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _DiscountsByDayReportView extends StatefulWidget {
+  const _DiscountsByDayReportView({
+    required this.repository,
+    required this.orders,
+    required this.payments,
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+  });
+
+  final TacoPosRepository repository;
+  final List<PosOrder> orders;
+  final List<Payment> payments;
+  final String startBusinessDate;
+  final String endBusinessDate;
+
+  @override
+  State<_DiscountsByDayReportView> createState() =>
+      _DiscountsByDayReportViewState();
+}
+
+class _DiscountsByDayReportViewState extends State<_DiscountsByDayReportView> {
+  final _searchController = TextEditingController();
+  String _category = 'all';
+  String _catalog = 'all';
+  String _beneficiary = 'all';
+  String _appliedBy = 'all';
+  String _authorizedBy = 'all';
+  bool _employeeFreeMealsOnly = false;
+  bool _unknownBeneficiaryOnly = false;
+  int? _sortColumnIndex;
+  bool _sortAscending = true;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<CanonicalSalesSummary>(
+      future: widget.repository.getCanonicalSalesSummary(
+        startBusinessDate: widget.startBusinessDate,
+        endBusinessDate: widget.endBusinessDate,
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return const LoadingPanel(message: 'Cargando descuentos...');
+        }
+        if (snapshot.hasError) {
+          return const _FriendlyError(
+            message: 'No se pudo cargar el reporte de descuentos.',
+          );
+        }
+        final source = buildDiscountsByDayReport(
+          orderRows: snapshot.data?.orderRows ?? const [],
+          paymentsByOrder: _paymentsByOrder(widget.payments),
+        );
+        final rows = _filteredRows(source.rows);
+        final filteredReport = discountsByDayReportFromRows(rows);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _reportToolbar(context, rows),
+            const SizedBox(height: 12),
+            _discountFilters(source.rows),
+            const SizedBox(height: 12),
+            _discountKpis(filteredReport),
+            const SizedBox(height: 12),
+            _dailySummary(filteredReport.daily),
+            const SizedBox(height: 12),
+            _discountDetailTable(rows),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _reportToolbar(BuildContext context, List<DiscountReportRow> rows) {
+    return GlassPanel(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        children: [
+          const Expanded(
+            child: Text(
+              'Descuentos por dia',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+            ),
+          ),
+          FilledButton.icon(
+            onPressed: rows.isEmpty
+                ? null
+                : () => _copyCsv(
+                    context,
+                    _discountsByDayCsvHeaders,
+                    rows.map(_discountCsvRow).toList(),
+                  ),
+            icon: const Icon(Icons.download_outlined),
+            label: const Text('CSV'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _discountFilters(List<DiscountReportRow> rows) {
+    final categories = {
+      'all': 'Todos los tipos',
+      for (final category in DiscountReportCategory.values)
+        category.name: discountCategoryLabel(category),
+    };
+    final catalogs = _optionMap(
+      rows.map((row) => row.discountName).where((value) => value.isNotEmpty),
+      'Todos los descuentos',
+    );
+    final beneficiaries = _optionMap(
+      rows.map((row) => row.beneficiary).where((value) => value.isNotEmpty),
+      'Todos los beneficiarios',
+    );
+    final appliedBy = _optionMap(
+      rows.map((row) => row.appliedBy).where((value) => value.isNotEmpty),
+      'Todos los usuarios',
+    );
+    final authorizedBy = _optionMap(
+      rows.map((row) => row.authorizedBy).where((value) => value.isNotEmpty),
+      'Todos los autorizadores',
+    );
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      child: Wrap(
+        spacing: 10,
+        runSpacing: 10,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          SizedBox(
+            width: 250,
+            child: TextField(
+              controller: _searchController,
+              decoration: const InputDecoration(
+                labelText: 'Folio / cliente / beneficiario',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          _FilterMenu(
+            value: 'current',
+            values: {'current': AppSession.instance.currentBranchName},
+            onChanged: (_) {},
+          ),
+          _FilterMenu(
+            value: _category,
+            values: categories,
+            onChanged: (value) => setState(() => _category = value),
+          ),
+          _FilterMenu(
+            value: catalogs.containsKey(_catalog) ? _catalog : 'all',
+            values: catalogs,
+            onChanged: (value) => setState(() => _catalog = value),
+          ),
+          _FilterMenu(
+            value: beneficiaries.containsKey(_beneficiary)
+                ? _beneficiary
+                : 'all',
+            values: beneficiaries,
+            onChanged: (value) => setState(() => _beneficiary = value),
+          ),
+          _FilterMenu(
+            value: appliedBy.containsKey(_appliedBy) ? _appliedBy : 'all',
+            values: appliedBy,
+            onChanged: (value) => setState(() => _appliedBy = value),
+          ),
+          _FilterMenu(
+            value: authorizedBy.containsKey(_authorizedBy)
+                ? _authorizedBy
+                : 'all',
+            values: authorizedBy,
+            onChanged: (value) => setState(() => _authorizedBy = value),
+          ),
+          FilterChip(
+            selected: _employeeFreeMealsOnly,
+            label: const Text('Solo comidas gratis'),
+            onSelected: (value) =>
+                setState(() => _employeeFreeMealsOnly = value),
+          ),
+          FilterChip(
+            selected: _unknownBeneficiaryOnly,
+            label: const Text('Sin beneficiario identificado'),
+            onSelected: (value) =>
+                setState(() => _unknownBeneficiaryOnly = value),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _discountKpis(DiscountsByDayReport report) {
+    return _SecondaryMetricGrid(
+      children: [
+        SecondaryMetricCard(
+          label: 'Documentos con descuento',
+          value: '${report.documents}',
+          icon: Icons.receipt_long,
+        ),
+        SecondaryMetricCard(
+          label: 'Descuento total',
+          value: _money(report.discountTotal),
+          icon: Icons.local_offer_outlined,
+        ),
+        SecondaryMetricCard(
+          label: 'Descuentos normales',
+          value: _money(report.normalDiscounts),
+          icon: Icons.percent,
+        ),
+        SecondaryMetricCard(
+          label: 'Comidas gratis empleados',
+          value: _money(report.employeeFreeMeals),
+          icon: Icons.badge_outlined,
+        ),
+        SecondaryMetricCard(
+          label: 'Descuento empleado porcentual',
+          value: _money(report.employeeDiscount),
+          icon: Icons.group_outlined,
+        ),
+        SecondaryMetricCard(
+          label: 'Descuento socio',
+          value: _money(report.partnerDiscount),
+          icon: Icons.verified_user_outlined,
+        ),
+        SecondaryMetricCard(
+          label: 'Amigos/familia',
+          value: _money(report.friendsFamily),
+          icon: Icons.diversity_3_outlined,
+        ),
+        SecondaryMetricCard(
+          label: 'Venta bruta afectada',
+          value: _money(report.grossSalesAffected),
+          icon: Icons.trending_up,
+        ),
+        SecondaryMetricCard(
+          label: 'Venta neta resultante',
+          value: _money(report.netSalesResult),
+          icon: Icons.receipt_long,
+        ),
+      ],
+    );
+  }
+
+  Widget _dailySummary(List<DiscountDailySummary> daily) {
+    if (daily.isEmpty) {
+      return const EmptyState(
+        icon: Icons.local_offer_outlined,
+        title: 'Sin descuentos',
+        message: 'No hay documentos con descuento en el rango seleccionado.',
+      );
+    }
+    return GlassPanel(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        children: daily.map((day) {
+          return ExpansionTile(
+            tilePadding: const EdgeInsets.symmetric(horizontal: 8),
+            title: Text(_displayBusinessDate(day.businessDate)),
+            subtitle: Text('${day.documents} documentos con descuento'),
+            children: [
+              _ReportTable(
+                headers: const [
+                  'Fecha',
+                  'Docs',
+                  'Venta bruta',
+                  'Desc. empleado',
+                  'Comidas gratis',
+                  'Desc. socio',
+                  'Amigos/familia',
+                  'Cortesias',
+                  'Promociones',
+                  'Otros',
+                  'Desc. total',
+                  'Venta neta',
+                ],
+                rows: [
+                  [
+                    _displayBusinessDate(day.businessDate),
+                    '${day.documents}',
+                    _money(day.grossSales),
+                    _money(day.employeeDiscount),
+                    _money(day.employeeFreeMeals),
+                    _money(day.partnerDiscount),
+                    _money(day.friendsFamily),
+                    _money(day.courtesy),
+                    _money(day.promotion),
+                    _money(day.other + day.historicalUnknown),
+                    _money(day.totalDiscount),
+                    _money(day.netSales),
+                  ],
+                ],
+              ),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _discountDetailTable(List<DiscountReportRow> rows) {
+    if (rows.isEmpty) {
+      return const EmptyState(
+        icon: Icons.table_chart_outlined,
+        title: 'Sin detalle',
+        message: 'No hay documentos que coincidan con los filtros.',
+      );
+    }
+    final sortedRows = [...rows];
+    final sortColumnIndex = _sortColumnIndex;
+    if (sortColumnIndex != null) {
+      sortedRows.sort((a, b) {
+        final result = _compareReportCells(
+          _discountCell(a, sortColumnIndex),
+          _discountCell(b, sortColumnIndex),
+        );
+        return _sortAscending ? result : -result;
+      });
+    }
+    return GlassPanel(
+      padding: const EdgeInsets.all(10),
+      child: SingleChildScrollView(
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            sortColumnIndex: _sortColumnIndex,
+            sortAscending: _sortAscending,
+            columns: [
+              for (var i = 0; i < _discountDetailHeaders.length; i++)
+                DataColumn(
+                  label: Text(_discountDetailHeaders[i]),
+                  onSort: i == _discountDetailHeaders.length - 1
+                      ? null
+                      : (columnIndex, ascending) {
+                          setState(() {
+                            _sortColumnIndex = columnIndex;
+                            _sortAscending = ascending;
+                          });
+                        },
+                ),
+            ],
+            rows: sortedRows.map((row) {
+              return DataRow(
+                cells: [
+                  for (var i = 0; i < _discountDetailHeaders.length - 1; i++)
+                    DataCell(Text(_discountCell(row, i))),
+                  DataCell(
+                    TextButton.icon(
+                      onPressed: () => _openSaleDetail(
+                        context,
+                        widget.repository,
+                        row.order,
+                      ),
+                      icon: const Icon(Icons.visibility_outlined, size: 18),
+                      label: const Text('Ver venta'),
+                    ),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<DiscountReportRow> _filteredRows(List<DiscountReportRow> rows) {
+    final query = _searchController.text.trim().toLowerCase();
+    return rows.where((row) {
+      final matchesCategory =
+          _category == 'all' || row.category.name == _category;
+      final matchesCatalog = _catalog == 'all' || row.discountName == _catalog;
+      final matchesBeneficiary =
+          _beneficiary == 'all' || row.beneficiary == _beneficiary;
+      final matchesAppliedBy =
+          _appliedBy == 'all' || row.appliedBy == _appliedBy;
+      final matchesAuthorizedBy =
+          _authorizedBy == 'all' || row.authorizedBy == _authorizedBy;
+      final matchesEmployeeFreeMeal =
+          !_employeeFreeMealsOnly || row.isEmployeeFreeMeal;
+      final matchesUnknown =
+          !_unknownBeneficiaryOnly || !row.hasIdentifiedBeneficiary;
+      final haystack = [
+        row.order.id,
+        row.order.customerName,
+        row.beneficiary,
+        row.discountName,
+        row.appliedBy,
+        row.authorizedBy,
+      ].whereType<String>().join(' ').toLowerCase();
+      return matchesCategory &&
+          matchesCatalog &&
+          matchesBeneficiary &&
+          matchesAppliedBy &&
+          matchesAuthorizedBy &&
+          matchesEmployeeFreeMeal &&
+          matchesUnknown &&
+          (query.isEmpty || haystack.contains(query));
+    }).toList();
   }
 }
 
@@ -1675,6 +2158,15 @@ class _ReportsSectionState extends State<_ReportsSection> {
     }
     if (widget.reportKind == _ReportKind.salesDiscrepancyAudit) {
       return _buildSalesDiscrepancyAuditReport(context);
+    }
+    if (widget.reportKind == _ReportKind.discountsByDay) {
+      return _DiscountsByDayReportView(
+        repository: widget.repository,
+        orders: widget.orders,
+        payments: widget.payments,
+        startBusinessDate: widget.startBusinessDate,
+        endBusinessDate: widget.endBusinessDate,
+      );
     }
     if (widget.reportKind == _ReportKind.hourlyYesterdayLastSales ||
         widget.reportKind == _ReportKind.hourlyPreviousWeek) {
@@ -2205,6 +2697,25 @@ const _salesAuditHeaders = [
   'Cambio',
   'Diferencia real',
   'Tipo discrepancia',
+  'Accion',
+];
+
+const _discountDetailHeaders = [
+  'Fecha operativa',
+  'Hora',
+  'Folio',
+  'Mesa / Para llevar',
+  'Cliente',
+  'Subtotal bruto',
+  'Descuento del catalogo',
+  'Tipo',
+  'Porcentaje',
+  'Importe descuento',
+  'Total neto',
+  'Beneficiario',
+  'Aplico',
+  'Autorizo',
+  'Motivo',
   'Accion',
 ];
 
@@ -3304,6 +3815,27 @@ const _salesAuditCsvHeaders = [
   'validaciones fallidas',
 ];
 
+const _discountsByDayCsvHeaders = [
+  'fecha operativa',
+  'folio',
+  'tipo de orden',
+  'mesa/plataforma',
+  'subtotal bruto',
+  'discountCatalogId',
+  'discountName',
+  'discountType',
+  'discountPercent',
+  'discountAmount',
+  'netTotal',
+  'beneficiario',
+  'beneficiaryEmployeeId',
+  'beneficiaryPartnerId',
+  'aplico',
+  'autorizo',
+  'motivo',
+  'fecha de aplicacion',
+];
+
 _SalesAuditRow _buildSalesAuditRow(
   PosOrder order,
   List<OrderItem> items,
@@ -4166,6 +4698,12 @@ List<_NavItem> _reportNavItems(Employee? employee) {
       'Auditoria de discrepancias de ventas',
       reportKind: _ReportKind.salesDiscrepancyAudit,
     ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.local_offer_outlined,
+      'Descuentos por dia',
+      reportKind: _ReportKind.discountsByDay,
+    ),
     if (canKitchen) ...const [
       _NavItem(
         _BackofficeSection.reports,
@@ -4245,6 +4783,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.cancelledPayments => 'Pagos cancelados',
     _ReportKind.productStockOuts => 'Productos agotados',
     _ReportKind.salesDiscrepancyAudit => 'Auditoria de discrepancias de ventas',
+    _ReportKind.discountsByDay => 'Descuentos por dia',
   };
 }
 
@@ -4387,6 +4926,7 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Motivo liberacion',
     ],
     _ReportKind.salesDiscrepancyAudit => _salesAuditHeaders,
+    _ReportKind.discountsByDay => _discountsByDayCsvHeaders,
   };
 }
 
@@ -4759,6 +5299,8 @@ Future<List<List<String>>> _reportRows(
           .first;
       return rows.map(_stockOutReportRow).toList();
     case _ReportKind.salesDiscrepancyAudit:
+      return const [];
+    case _ReportKind.discountsByDay:
       return const [];
   }
 }
@@ -5364,6 +5906,61 @@ void _openSaleDetail(
   );
 }
 
+void _showOperationalBlockersDetail(
+  BuildContext context,
+  List<OperationalOrderBlocker> blockers,
+) {
+  showDialog<void>(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: const Text('Pendientes operativos'),
+        content: SizedBox(
+          width: 760,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columns: const [
+                DataColumn(label: Text('Folio')),
+                DataColumn(label: Text('Mesa / Para llevar')),
+                DataColumn(label: Text('Estado')),
+                DataColumn(label: Text('Saldo')),
+                DataColumn(label: Text('Fecha operativa')),
+                DataColumn(label: Text('Hora')),
+                DataColumn(label: Text('Motivo')),
+              ],
+              rows: blockers.map((blocker) {
+                final order = blocker.order;
+                return DataRow(
+                  cells: [
+                    DataCell(Text(_shortId(order.id))),
+                    DataCell(Text(order.displayName)),
+                    DataCell(
+                      Text(
+                        '${formatOrderStatus(order.status)} / ${formatPaymentStatus(order.paymentStatus)}',
+                      ),
+                    ),
+                    DataCell(Text(_money(order.pendingTotal))),
+                    DataCell(Text(order.businessDate ?? '-')),
+                    DataCell(Text(_timeText(order.createdAt))),
+                    DataCell(Text(blocker.reason)),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cerrar'),
+          ),
+        ],
+      );
+    },
+  );
+}
+
 class _SaleDetailDialog extends StatelessWidget {
   const _SaleDetailDialog({required this.repository, required this.order});
 
@@ -5711,6 +6308,64 @@ Map<String, List<Payment>> _paymentsByOrder(List<Payment> payments) {
     grouped.putIfAbsent(payment.orderId, () => []).add(payment);
   }
   return grouped;
+}
+
+Map<String, String> _optionMap(Iterable<String> values, String allLabel) {
+  final sorted =
+      values
+          .map((value) => value.trim())
+          .where((value) => value.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+  return {'all': allLabel, for (final value in sorted) value: value};
+}
+
+String _discountCell(DiscountReportRow row, int index) {
+  return switch (index) {
+    0 => _displayBusinessDate(row.businessDate),
+    1 => _timeText(row.order.createdAt),
+    2 => _shortId(row.order.id),
+    3 => row.order.displayName,
+    4 => row.order.customerName ?? '-',
+    5 => _money(row.grossSales),
+    6 => row.discountName,
+    7 => discountCategoryLabel(row.category),
+    8 =>
+      row.discountPercent == null
+          ? '-'
+          : '${row.discountPercent!.toStringAsFixed(2)}%',
+    9 => _money(row.discountAmount),
+    10 => _money(row.netTotal),
+    11 => row.beneficiary,
+    12 => row.appliedBy.isEmpty ? '-' : row.appliedBy,
+    13 => row.authorizedBy.isEmpty ? '-' : row.authorizedBy,
+    14 => row.reason.isEmpty ? '-' : row.reason,
+    _ => '',
+  };
+}
+
+List<String> _discountCsvRow(DiscountReportRow row) {
+  return [
+    row.businessDate,
+    row.order.id,
+    row.order.orderType,
+    row.order.displayName,
+    row.grossSales.toStringAsFixed(2),
+    row.catalogId,
+    row.discountName,
+    row.discountType,
+    row.discountPercent?.toStringAsFixed(2) ?? '',
+    row.discountAmount.toStringAsFixed(2),
+    row.netTotal.toStringAsFixed(2),
+    row.beneficiary,
+    row.beneficiaryEmployeeId,
+    row.beneficiaryPartnerId,
+    row.appliedBy,
+    row.authorizedBy,
+    row.reason,
+    row.appliedAt?.toIso8601String() ?? '',
+  ];
 }
 
 double _sum(Iterable<Payment> payments, double Function(Payment) value) {

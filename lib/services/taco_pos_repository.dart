@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../core/constants/app_constants.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/hourly_sales_comparison.dart';
+import '../core/reports/operational_blockers.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../models/active_session.dart';
@@ -541,6 +542,7 @@ class CashCloseBlockers {
     required this.pendingPaymentCount,
     required this.kitchenNotClosed,
     required this.kitchenCloseIncomplete,
+    this.operationalSummary,
   });
 
   final int openTableCount;
@@ -549,6 +551,7 @@ class CashCloseBlockers {
   final int pendingPaymentCount;
   final bool kitchenNotClosed;
   final bool kitchenCloseIncomplete;
+  final OperationalOpenOrdersSummary? operationalSummary;
 
   bool get canClose =>
       openTableCount == 0 &&
@@ -565,10 +568,28 @@ class CashCloseBlockers {
     if (kitchenCloseIncomplete) {
       return 'No puedes cerrar caja. El cierre de cocina esta incompleto.';
     }
+    final orderCount = operationalSummary?.blockers.length ?? 0;
+    if (orderCount > 0) {
+      return 'No se puede cerrar la caja porque existen $orderCount ordenes activas:';
+    }
     return 'No puedes cerrar caja. Hay mesas, pedidos o cocina pendientes.';
   }
 
   String get detail {
+    final blockers = operationalSummary?.blockers ?? const [];
+    if (blockers.isNotEmpty) {
+      return blockers
+          .map((row) {
+            final origin = row.order.orderType == 'takeout'
+                ? 'Para llevar'
+                : row.order.tableName;
+            final folio = row.order.id.length <= 6
+                ? row.order.id
+                : row.order.id.substring(0, 6);
+            return '$origin - Folio $folio - ${row.reason}';
+          })
+          .join('\n');
+    }
     return [
       '$openTableCount mesas abiertas',
       '$openTakeoutCount pedidos para llevar abiertos',
@@ -576,6 +597,13 @@ class CashCloseBlockers {
       '$pendingPaymentCount cuentas pendientes de cobrar',
     ].join('\n');
   }
+}
+
+class _TableLinkCleanupResult {
+  const _TableLinkCleanupResult({required this.stale, required this.released});
+
+  final int stale;
+  final int released;
 }
 
 class KitchenYieldReportRow {
@@ -5020,35 +5048,15 @@ class TacoPosRepository {
   Future<CashCloseBlockers> _cashCloseBlockersForSession(
     CashSession session,
   ) async {
-    var openTableCount = 0;
-    var openTakeoutCount = 0;
+    final operationalSummary = await getOperationalOpenOrdersSummary(
+      businessDate: session.businessDate,
+      cashSessionId: session.id,
+      reconcileTables: true,
+    );
     var pendingKitchenItemCount = 0;
-    var pendingPaymentCount = 0;
-
-    final ordersSnapshot = await _ordersRef.get();
-    final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).where((order) {
-      return _matchesCurrentBranch(order.branchId) &&
-          _orderBelongsToBusinessDate(order, session.businessDate);
-    }).toList();
-
-    for (final order in orders) {
-      final finalStatus = _isFinalOrderStatus(order.status);
-      final paymentPending =
-          ['pending', 'partial'].contains(order.paymentStatus) &&
-          !['paid', 'cancelled', 'voided'].contains(order.status);
-      final operationalOpen = !finalStatus || paymentPending;
-
-      if (operationalOpen && order.orderType == 'takeout') {
-        openTakeoutCount++;
-      } else if (operationalOpen && order.orderType != 'takeout') {
-        openTableCount++;
-      }
-      if (paymentPending) {
-        pendingPaymentCount++;
-      }
-
+    for (final blocker in operationalSummary.blockers) {
       final itemsSnapshot = await _ordersRef
-          .doc(order.id)
+          .doc(blocker.order.id)
           .collection('items')
           .get();
       for (final item in itemsSnapshot.docs.map(OrderItem.fromDoc)) {
@@ -5079,13 +5087,105 @@ class TacoPosRepository {
         !hasValidClosedKitchen && hasIncompleteClosedKitchen;
 
     return CashCloseBlockers(
-      openTableCount: openTableCount,
-      openTakeoutCount: openTakeoutCount,
+      openTableCount: operationalSummary.openTableCount,
+      openTakeoutCount: operationalSummary.openTakeoutCount,
       pendingKitchenItemCount: pendingKitchenItemCount,
-      pendingPaymentCount: pendingPaymentCount,
+      pendingPaymentCount: operationalSummary.pendingPaymentCount,
       kitchenNotClosed: kitchenNotClosed,
       kitchenCloseIncomplete: kitchenCloseIncomplete,
+      operationalSummary: operationalSummary,
     );
+  }
+
+  Future<OperationalOpenOrdersSummary> getOperationalOpenOrdersSummary({
+    String? businessDate,
+    String? cashSessionId,
+    bool reconcileTables = false,
+  }) async {
+    final branchId = AppSession.instance.currentBranchId;
+    final effectiveBusinessDate = businessDate?.trim().isNotEmpty == true
+        ? businessDate!.trim()
+        : (await getOpenCashSession())?.businessDate ?? _currentBusinessDate();
+    final ordersSnapshot = await _ordersRef.get();
+    final discardedReasons = <String, int>{};
+    final blockers = <OperationalOrderBlocker>[];
+    var ordersChecked = 0;
+
+    for (final orderDoc in ordersSnapshot.docs) {
+      final order = PosOrder.fromDoc(orderDoc);
+      final data = orderDoc.data();
+      final orderCashSessionId = data['cashSessionId']?.toString().trim() ?? '';
+      final hasCurrentCashSession = cashSessionId?.trim().isNotEmpty == true;
+      final linkedToCashSession =
+          hasCurrentCashSession && orderCashSessionId == cashSessionId!.trim();
+      final fallbackByDate =
+          orderCashSessionId.isEmpty &&
+          _matchesCurrentBranch(order.branchId) &&
+          _orderBelongsToBusinessDate(order, effectiveBusinessDate);
+      final belongsToScope =
+          linkedToCashSession ||
+          (!hasCurrentCashSession &&
+              _matchesCurrentBranch(order.branchId) &&
+              _orderBelongsToBusinessDate(order, effectiveBusinessDate)) ||
+          (hasCurrentCashSession && fallbackByDate);
+      if (!belongsToScope) continue;
+
+      ordersChecked++;
+      final itemsSnapshot = await orderDoc.reference.collection('items').get();
+      final paymentsSnapshot = await orderDoc.reference
+          .collection('payments')
+          .get();
+      final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+      final payments = paymentsSnapshot.docs
+          .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
+          .toList();
+      final blocker = evaluateOperationalOrderBlocker(
+        order: order,
+        items: items,
+        payments: payments,
+        belongsToBranchAndDate:
+            _matchesCurrentBranch(order.branchId) &&
+            _orderBelongsToBusinessDate(order, effectiveBusinessDate),
+      );
+      if (blocker == null) {
+        final reason = operationalDiscardReason(
+          order: order,
+          items: items,
+          payments: payments,
+          belongsToBranchAndDate:
+              _matchesCurrentBranch(order.branchId) &&
+              _orderBelongsToBusinessDate(order, effectiveBusinessDate),
+        );
+        discardedReasons[reason] = (discardedReasons[reason] ?? 0) + 1;
+      } else {
+        blockers.add(blocker);
+      }
+    }
+
+    final cleanup = reconcileTables
+        ? await _reconcileStaleTableOrderLinks(
+            businessDate: effectiveBusinessDate,
+            blockers: blockers,
+          )
+        : const _TableLinkCleanupResult(stale: 0, released: 0);
+    blockers.sort((a, b) {
+      final aDate = a.order.createdAt ?? DateTime(1970);
+      final bDate = b.order.createdAt ?? DateTime(1970);
+      return aDate.compareTo(bDate);
+    });
+
+    final summary = OperationalOpenOrdersSummary(
+      businessDate: effectiveBusinessDate,
+      branchId: branchId,
+      cashSessionId: cashSessionId?.trim() ?? '',
+      ordersChecked: ordersChecked,
+      discardedReasons: discardedReasons,
+      staleTableLinks: cleanup.stale,
+      releasedTableLinks: cleanup.released,
+      blockers: blockers,
+    );
+    _debugOperationalBlockers(summary);
+    return summary;
   }
 
   Future<CashSession> closeCashSession({
@@ -6360,6 +6460,66 @@ class TacoPosRepository {
 
   String _currentBusinessDate() {
     return _businessDateFor(DateTime.now());
+  }
+
+  Future<_TableLinkCleanupResult> _reconcileStaleTableOrderLinks({
+    required String businessDate,
+    required List<OperationalOrderBlocker> blockers,
+  }) async {
+    final activeOrderIds = blockers.map((row) => row.order.id).toSet();
+    final tablesSnapshot = await _tablesRef.get();
+    final staleTables = <PosTable>[];
+    for (final table in tablesSnapshot.docs.map(PosTable.fromDoc)) {
+      if (!_matchesCurrentBranch(table.branchId)) continue;
+      final currentOrderId = table.currentOrderId?.trim();
+      if (currentOrderId == null || currentOrderId.isEmpty) continue;
+      if (activeOrderIds.contains(currentOrderId)) continue;
+      staleTables.add(table);
+    }
+    if (staleTables.isEmpty) {
+      return const _TableLinkCleanupResult(stale: 0, released: 0);
+    }
+
+    final batch = _db.batch();
+    for (final table in staleTables) {
+      batch.set(_tablesRef.doc(table.id), {
+        'status': 'available',
+        'currentOrderId': FieldValue.delete(),
+        'currentOrderStatus': FieldValue.delete(),
+        'occupiedAt': null,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      batch.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': 'stale_table_order_link_released',
+        ..._currentBranchFields,
+        'tableId': table.id,
+        'tableName': table.name,
+        'staleOrderId': table.currentOrderId,
+        'businessDate': businessDate,
+        ..._employeeAuditFields(prefix: 'createdBy'),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+    return _TableLinkCleanupResult(
+      stale: staleTables.length,
+      released: staleTables.length,
+    );
+  }
+
+  void _debugOperationalBlockers(OperationalOpenOrdersSummary summary) {
+    if (!kDebugMode) return;
+    developer.log(
+      'OPERATIONAL_BLOCKERS_DEBUG businessDate=${summary.businessDate} '
+      'branchId=${summary.branchId} cashSessionId=${summary.cashSessionId} '
+      'ordenesConsultadas=${summary.ordersChecked} '
+      'ordenesActivas=${summary.blockers.length} '
+      'descartadas=${summary.discardedReasons} '
+      'mesasObsoletas=${summary.staleTableLinks} '
+      'mesasLiberadas=${summary.releasedTableLinks} '
+      'takeoutsActivos=${summary.openTakeoutCount}',
+      name: 'TacoPOS.operationalBlockers',
+    );
   }
 
   String _productStockOutId(

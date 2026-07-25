@@ -175,6 +175,8 @@ class ExecutiveKpiCard extends StatelessWidget {
     required this.detail,
     required this.icon,
     this.accent = BrandColors.accentYellow,
+    this.actionLabel,
+    this.onAction,
   });
 
   final String title;
@@ -182,6 +184,8 @@ class ExecutiveKpiCard extends StatelessWidget {
   final String detail;
   final IconData icon;
   final Color accent;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) {
@@ -228,6 +232,14 @@ class ExecutiveKpiCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(color: BrandColors.textSecondary),
           ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: onAction,
+              icon: const Icon(Icons.open_in_new, size: 16),
+              label: Text(actionLabel!),
+            ),
+          ],
         ],
       ),
     );
