@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/reports/canonical_sales_summary.dart';
+import '../../core/reports/report_data_bundle.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
@@ -94,11 +95,15 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                       stream: _repository
                                           .watchCashWithdrawalRequests(),
                                       builder: (context, withdrawalsSnapshot) {
-                                        return StreamBuilder<List<Payment>>(
-                                          stream: _repository
-                                              .watchDashboardPayments(
-                                                startDate: _startDate,
-                                                endDate: _endDate,
+                                        return FutureBuilder<ReportDataBundle>(
+                                          future: _repository
+                                              .getReportDataBundle(
+                                                startBusinessDate:
+                                                    _startBusinessDate,
+                                                endBusinessDate:
+                                                    _endBusinessDate,
+                                                includeItems: true,
+                                                reportName: 'Finanzas',
                                               ),
                                           builder: (context, paymentsSnapshot) {
                                             final nestedError =
@@ -177,7 +182,9 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                                           .data ??
                                                       const [],
                                                   customerPayments:
-                                                      paymentsSnapshot.data ??
+                                                      paymentsSnapshot
+                                                          .data
+                                                          ?.payments ??
                                                       const [],
                                                   salesSummary:
                                                       salesSnapshot.data!,

@@ -9,6 +9,8 @@ import '../core/constants/app_constants.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
+import '../core/reports/report_data_bundle.dart';
+import '../core/reports/report_performance_tracer.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../models/active_session.dart';
@@ -285,18 +287,6 @@ class HistoricalCashExpenseResult {
   final double newExpectedCash;
   final double previousCashDifference;
   final double newCashDifference;
-}
-
-class _CanonicalSalesSummaryCacheEntry {
-  const _CanonicalSalesSummaryCacheEntry({
-    required this.createdAt,
-    required this.summary,
-  });
-
-  final DateTime createdAt;
-  final CanonicalSalesSummary summary;
-
-  bool get isFresh => DateTime.now().difference(createdAt).inSeconds < 45;
 }
 
 class CashPaymentDetails {
@@ -649,8 +639,8 @@ class TacoPosRepository {
 
   static const cardSurchargeRate = 0.04;
   static const operationResetPin = '072026';
-  static final Map<String, _CanonicalSalesSummaryCacheEntry>
-  _canonicalSalesSummaryCache = {};
+  static final ReportDataRepository _reportDataRepository =
+      ReportDataRepository();
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
@@ -2594,6 +2584,7 @@ class TacoPosRepository {
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
     });
     await batch.commit();
+    invalidateReportDataCache(branchId: currentPurchase.branchId);
   }
 
   Future<void> updateSupplierPurchaseDueDate({
@@ -3736,32 +3727,14 @@ class TacoPosRepository {
     required DateTime startDate,
     required DateTime endDate,
   }) {
-    return watchAllOrders().asyncMap((orders) async {
-      final startBusinessDate = _businessDateFor(startDate);
-      final endBusinessDate = _businessDateFor(endDate);
-      final matchingOrders = orders.where((order) {
-        final businessDate = _businessDateForOrder(order);
-        return businessDate != null &&
-            businessDate.compareTo(startBusinessDate) >= 0 &&
-            businessDate.compareTo(endBusinessDate) <= 0;
-      });
-      final payments = <Payment>[];
-      for (final order in matchingOrders) {
-        final snapshot = await _ordersRef
-            .doc(order.id)
-            .collection('payments')
-            .get();
-        payments.addAll(
-          snapshot.docs.map((doc) => _paymentFromOrderPaymentDoc(doc, order)),
-        );
-      }
-      payments.sort((a, b) {
-        final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-        return bDate.compareTo(aDate);
-      });
-      return payments;
-    });
+    return Stream.fromFuture(
+      getReportDataBundle(
+        startBusinessDate: _businessDateFor(startDate),
+        endBusinessDate: _businessDateFor(endDate),
+        includeItems: false,
+        reportName: 'DashboardPayments',
+      ).then((bundle) => bundle.payments),
+    );
   }
 
   Stream<List<Payment>> watchOrderPayments(String orderId) {
@@ -3810,7 +3783,239 @@ class TacoPosRepository {
   }
 
   void invalidateCanonicalSalesSummaryCache() {
-    _canonicalSalesSummaryCache.clear();
+    _reportDataRepository.clear();
+  }
+
+  void invalidateReportDataCache({
+    String? branchId,
+    String? startBusinessDate,
+    String? endBusinessDate,
+  }) {
+    _reportDataRepository.invalidate(
+      restaurantId: AppConstants.restaurantId,
+      branchId: branchId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+    );
+  }
+
+  Future<ReportDataBundle> getReportDataBundle({
+    String? restaurantId,
+    String? branchId,
+    required String startBusinessDate,
+    required String endBusinessDate,
+    bool includeItems = false,
+    bool forceRefresh = false,
+    String reportName = 'ReportDataBundle',
+  }) async {
+    final selectedBranch = AppSession.instance.selectedBranch;
+    final effectiveRestaurantId = restaurantId?.trim().isNotEmpty == true
+        ? restaurantId!.trim()
+        : selectedBranch.restaurantId;
+    final effectiveBranchId = branchId?.trim().isNotEmpty == true
+        ? branchId!.trim()
+        : selectedBranch.id;
+    final key = ReportDataKey(
+      restaurantId: effectiveRestaurantId,
+      branchId: effectiveBranchId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      includeItems: includeItems,
+    );
+    final tracer = ReportPerformanceTracer(
+      reportName: reportName,
+      branchId: effectiveBranchId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      cacheKey: key.value,
+    );
+    final result = await _reportDataRepository.load(
+      key: key,
+      forceRefresh: forceRefresh,
+      loader: () => _loadReportDataBundle(key, tracer),
+    );
+    final bundle = result.bundle;
+    if (result.fromCache || result.sharedInFlight) {
+      tracer.finish(
+        cacheUsed: result.fromCache,
+        sharedInFlight: result.sharedInFlight,
+        cachedOrders: bundle.orderDocuments,
+        cachedPayments: bundle.paymentDocuments,
+        cachedItems: bundle.itemDocuments,
+        cachedQueries: result.fromCache ? 0 : bundle.firestoreQueries,
+      );
+    }
+    return bundle;
+  }
+
+  Future<ReportDataBundle> _loadReportDataBundle(
+    ReportDataKey key,
+    ReportPerformanceTracer tracer,
+  ) async {
+    final orderLoad = await tracer.traceOrders(
+      () => _ordersForReportRange(key),
+      documents: (result) => result.$2,
+      queries: 5,
+    );
+    final orders = orderLoad.$1;
+
+    final paymentFuture = tracer.tracePayments(
+      () => runInBatches<PosOrder, (String, List<Payment>)>(
+        orders,
+        batchSize: 15,
+        action: (order) async {
+          final snapshot = await _ordersRef
+              .doc(order.id)
+              .collection('payments')
+              .get();
+          return (
+            order.id,
+            snapshot.docs
+                .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
+                .where(
+                  (payment) => _matchesBranch(payment.branchId, key.branchId),
+                )
+                .toList(),
+          );
+        },
+      ),
+      documents: (result) =>
+          result.fold<int>(0, (total, entry) => total + entry.$2.length),
+      queries: orders.length,
+    );
+    final itemFuture = key.includeItems
+        ? tracer.traceItems(
+            () => runInBatches<PosOrder, (String, List<OrderItem>)>(
+              orders,
+              batchSize: 15,
+              action: (order) async {
+                final snapshot = await _ordersRef
+                    .doc(order.id)
+                    .collection('items')
+                    .get();
+                return (
+                  order.id,
+                  _sortedOrderItems(snapshot.docs.map(OrderItem.fromDoc)),
+                );
+              },
+            ),
+            documents: (result) =>
+                result.fold<int>(0, (total, entry) => total + entry.$2.length),
+            queries: orders.length,
+          )
+        : Future<List<(String, List<OrderItem>)>>.value(const []);
+
+    final paymentEntries = await paymentFuture;
+    final itemEntries = await itemFuture;
+    final paymentsByOrder = {
+      for (final entry in paymentEntries) entry.$1: entry.$2,
+    };
+    final itemsByOrder = {for (final entry in itemEntries) entry.$1: entry.$2};
+    final payments = paymentEntries.expand((entry) => entry.$2).toList()
+      ..sort((a, b) {
+        final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bDate.compareTo(aDate);
+      });
+    final canonicalSummary = key.includeItems
+        ? tracer.traceProcessing(
+            () => buildCanonicalSalesSummary(
+              orders.map(
+                (order) => SalesOrderBundleInput(
+                  order: order,
+                  items: itemsByOrder[order.id] ?? const [],
+                  payments: paymentsByOrder[order.id] ?? const [],
+                ),
+              ),
+            ),
+          )
+        : null;
+    final bundle = ReportDataBundle(
+      key: key,
+      orders: orders,
+      payments: payments,
+      paymentsByOrder: paymentsByOrder,
+      itemsByOrder: itemsByOrder,
+      canonicalSummary: canonicalSummary,
+      firestoreQueries:
+          5 + orders.length + (key.includeItems ? orders.length : 0),
+      orderDocuments: orderLoad.$2,
+      paymentDocuments: payments.length,
+      itemDocuments: itemEntries.fold<int>(
+        0,
+        (total, entry) => total + entry.$2.length,
+      ),
+    );
+    tracer.finish(cacheUsed: false);
+    return bundle;
+  }
+
+  Future<(List<PosOrder>, int)> _ordersForReportRange(ReportDataKey key) async {
+    final startDate = DateTime.parse(key.startBusinessDate);
+    final endExclusive = DateTime.parse(
+      key.endBusinessDate,
+    ).add(const Duration(days: 1));
+    final snapshots = await Future.wait([
+      _ordersRef
+          .where('businessDate', isGreaterThanOrEqualTo: key.startBusinessDate)
+          .where('businessDate', isLessThanOrEqualTo: key.endBusinessDate)
+          .get(),
+      _ordersRef
+          .where(
+            'operationalDate',
+            isGreaterThanOrEqualTo: key.startBusinessDate,
+          )
+          .where('operationalDate', isLessThanOrEqualTo: key.endBusinessDate)
+          .get(),
+      _ordersRef
+          .where('createdAt', isGreaterThanOrEqualTo: startDate)
+          .where('createdAt', isLessThan: endExclusive)
+          .get(),
+      _ordersRef
+          .where('updatedAt', isGreaterThanOrEqualTo: startDate)
+          .where('updatedAt', isLessThan: endExclusive)
+          .get(),
+      _ordersRef
+          .where('paidAt', isGreaterThanOrEqualTo: startDate)
+          .where('paidAt', isLessThan: endExclusive)
+          .get(),
+    ]);
+    final docsByPath = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    for (final snapshot in snapshots) {
+      for (final doc in snapshot.docs) {
+        docsByPath[doc.reference.path] = doc;
+      }
+    }
+    final documentsRead = snapshots.fold<int>(
+      0,
+      (total, snapshot) => total + snapshot.docs.length,
+    );
+    final orders =
+        docsByPath.values.map(PosOrder.fromDoc).where((order) {
+          if (!_matchesBranch(order.branchId, key.branchId)) return false;
+          final businessDate = _businessDateForOrder(order);
+          if (businessDate != null) {
+            return businessDate.compareTo(key.startBusinessDate) >= 0 &&
+                businessDate.compareTo(key.endBusinessDate) <= 0;
+          }
+          return _reportDateInRange(order.updatedAt, startDate, endExclusive) ||
+              _reportDateInRange(order.paidAt, startDate, endExclusive);
+        }).toList()..sort((a, b) {
+          final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bDate.compareTo(aDate);
+        });
+    return (orders, documentsRead);
+  }
+
+  bool _reportDateInRange(
+    DateTime? value,
+    DateTime start,
+    DateTime endExclusive,
+  ) {
+    return value != null &&
+        !value.isBefore(start) &&
+        value.isBefore(endExclusive);
   }
 
   Future<CanonicalSalesSummary> getCanonicalSalesSummary({
@@ -3820,68 +4025,24 @@ class TacoPosRepository {
     required String endBusinessDate,
     bool forceRefresh = false,
   }) async {
-    final selectedBranch = AppSession.instance.selectedBranch;
-    final effectiveRestaurantId = restaurantId?.trim().isNotEmpty == true
-        ? restaurantId!.trim()
-        : selectedBranch.restaurantId;
-    final effectiveBranchId = branchId?.trim().isNotEmpty == true
-        ? branchId!.trim()
-        : selectedBranch.id;
-    final cacheKey = [
-      effectiveRestaurantId,
-      effectiveBranchId,
-      startBusinessDate,
-      endBusinessDate,
-    ].join('|');
-    final cached = _canonicalSalesSummaryCache[cacheKey];
-    if (!forceRefresh && cached != null && cached.isFresh) {
-      return cached.summary;
-    }
-
-    final ordersSnapshot = await _ordersRef.get();
-    final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).where((order) {
-      if (!_matchesBranch(order.branchId, effectiveBranchId)) return false;
-      final businessDate = _businessDateForOrder(order);
-      return businessDate != null &&
-          businessDate.compareTo(startBusinessDate) >= 0 &&
-          businessDate.compareTo(endBusinessDate) <= 0;
-    }).toList();
-
-    final bundles = <SalesOrderBundleInput>[];
-    for (final order in orders) {
-      final orderRef = _ordersRef.doc(order.id);
-      final itemsSnapshot = await orderRef.collection('items').get();
-      final paymentsSnapshot = await orderRef.collection('payments').get();
-      final payments = paymentsSnapshot.docs
-          .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
-          .where((payment) {
-            if (!_matchesBranch(payment.branchId, effectiveBranchId)) {
-              return false;
-            }
-            return true;
-          })
-          .toList();
+    final bundle = await getReportDataBundle(
+      restaurantId: restaurantId,
+      branchId: branchId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      includeItems: true,
+      forceRefresh: forceRefresh,
+      reportName: 'CanonicalSales',
+    );
+    for (final order in bundle.orders) {
       _debugSalesDateAssignment(
         order: order,
-        payments: payments,
+        payments: bundle.paymentsByOrder[order.id] ?? const [],
         startBusinessDate: startBusinessDate,
         endBusinessDate: endBusinessDate,
       );
-      bundles.add(
-        SalesOrderBundleInput(
-          order: order,
-          items: itemsSnapshot.docs.map(OrderItem.fromDoc).toList(),
-          payments: payments,
-        ),
-      );
     }
-
-    final summary = buildCanonicalSalesSummary(bundles);
-    _canonicalSalesSummaryCache[cacheKey] = _CanonicalSalesSummaryCacheEntry(
-      createdAt: DateTime.now(),
-      summary: summary,
-    );
-    return summary;
+    return bundle.canonicalSummary!;
   }
 
   Future<HourlyComparisonReport> getKitchenHourlySalesComparison() async {
@@ -5106,15 +5267,65 @@ class TacoPosRepository {
     final effectiveBusinessDate = businessDate?.trim().isNotEmpty == true
         ? businessDate!.trim()
         : (await getOpenCashSession())?.businessDate ?? _currentBusinessDate();
-    final ordersSnapshot = await _ordersRef.get();
+    final reportData = await getReportDataBundle(
+      branchId: branchId,
+      startBusinessDate: effectiveBusinessDate,
+      endBusinessDate: effectiveBusinessDate,
+      includeItems: true,
+      reportName: 'OperationalOpenOrders',
+    );
+    final linkedSnapshot = cashSessionId?.trim().isNotEmpty == true
+        ? await _ordersRef
+              .where('cashSessionId', isEqualTo: cashSessionId!.trim())
+              .get()
+        : null;
+    final ordersById = {
+      for (final order in reportData.orders) order.id: order,
+      if (linkedSnapshot != null)
+        for (final doc in linkedSnapshot.docs) doc.id: PosOrder.fromDoc(doc),
+    };
+    final extraOrders = ordersById.values
+        .where((order) => !reportData.itemsByOrder.containsKey(order.id))
+        .toList();
+    final extraItemsFuture = runInBatches<PosOrder, (String, List<OrderItem>)>(
+      extraOrders,
+      batchSize: 15,
+      action: (order) async => (order.id, await getOrderItemsOnce(order.id)),
+    );
+    final extraPaymentsFuture = runInBatches<PosOrder, (String, List<Payment>)>(
+      extraOrders,
+      batchSize: 15,
+      action: (order) async => (
+        order.id,
+        await _ordersRef
+            .doc(order.id)
+            .collection('payments')
+            .get()
+            .then(
+              (snapshot) => snapshot.docs
+                  .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
+                  .toList(),
+            ),
+      ),
+    );
+    final itemsByOrder = Map<String, List<OrderItem>>.from(
+      reportData.itemsByOrder,
+    );
+    final paymentsByOrder = Map<String, List<Payment>>.from(
+      reportData.paymentsByOrder,
+    );
+    for (final entry in await extraItemsFuture) {
+      itemsByOrder[entry.$1] = entry.$2;
+    }
+    for (final entry in await extraPaymentsFuture) {
+      paymentsByOrder[entry.$1] = entry.$2;
+    }
     final discardedReasons = <String, int>{};
     final blockers = <OperationalOrderBlocker>[];
     var ordersChecked = 0;
 
-    for (final orderDoc in ordersSnapshot.docs) {
-      final order = PosOrder.fromDoc(orderDoc);
-      final data = orderDoc.data();
-      final orderCashSessionId = data['cashSessionId']?.toString().trim() ?? '';
+    for (final order in ordersById.values) {
+      final orderCashSessionId = order.cashSessionId?.trim() ?? '';
       final hasCurrentCashSession = cashSessionId?.trim().isNotEmpty == true;
       final linkedToCashSession =
           hasCurrentCashSession && orderCashSessionId == cashSessionId!.trim();
@@ -5131,14 +5342,8 @@ class TacoPosRepository {
       if (!belongsToScope) continue;
 
       ordersChecked++;
-      final itemsSnapshot = await orderDoc.reference.collection('items').get();
-      final paymentsSnapshot = await orderDoc.reference
-          .collection('payments')
-          .get();
-      final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
-      final payments = paymentsSnapshot.docs
-          .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
-          .toList();
+      final items = itemsByOrder[order.id] ?? const [];
+      final payments = paymentsByOrder[order.id] ?? const [];
       final blocker = evaluateOperationalOrderBlocker(
         order: order,
         items: items,
@@ -5289,6 +5494,11 @@ class TacoPosRepository {
     }
 
     final updatedDoc = await docRef.get();
+    invalidateReportDataCache(
+      branchId: session.branchId,
+      startBusinessDate: session.businessDate,
+      endBusinessDate: session.businessDate,
+    );
     return CashSession.fromDoc(updatedDoc);
   }
 
@@ -5438,6 +5648,11 @@ class TacoPosRepository {
     });
 
     final updatedDoc = await docRef.get();
+    invalidateReportDataCache(
+      branchId: branch.id,
+      startBusinessDate: preview.businessDate,
+      endBusinessDate: preview.businessDate,
+    );
     return CashSession.fromDoc(updatedDoc);
   }
 
@@ -5633,6 +5848,11 @@ class TacoPosRepository {
 
     final updatedDoc = await sessionRef.get();
     final updatedSession = CashSession.fromDoc(updatedDoc);
+    invalidateReportDataCache(
+      branchId: session.branchId,
+      startBusinessDate: session.businessDate,
+      endBusinessDate: session.businessDate,
+    );
     return HistoricalCashExpenseResult(
       cashSession: updatedSession,
       withdrawalRequestId: withdrawalRef.id,
@@ -8287,6 +8507,7 @@ class TacoPosRepository {
         'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       });
     });
+    invalidateReportDataCache();
   }
 
   OrderTotalsCorrectionPreview _safeOrderTotalsCorrectionPreview(
@@ -8828,6 +9049,11 @@ class TacoPosRepository {
       },
     );
     await batch.commit();
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
   }
 
   Map<String, Object> _employeeAuditFields({required String prefix}) {

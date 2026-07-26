@@ -6,6 +6,7 @@ import '../../core/reports/canonical_sales_summary.dart';
 import '../../core/reports/discounts_by_day_report.dart';
 import '../../core/reports/hourly_sales_comparison.dart' as hourly;
 import '../../core/reports/operational_blockers.dart';
+import '../../core/reports/report_data_bundle.dart';
 import '../../core/reports/sales_discrepancy_audit.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
@@ -73,6 +74,20 @@ enum _ReportKind {
   productStockOuts,
   salesDiscrepancyAudit,
   discountsByDay,
+}
+
+bool _reportNeedsCanonicalItems(_ReportKind kind) {
+  return switch (kind) {
+    _ReportKind.products ||
+    _ReportKind.dates ||
+    _ReportKind.platform ||
+    _ReportKind.paymentMethod ||
+    _ReportKind.employee ||
+    _ReportKind.cancellations ||
+    _ReportKind.salesDiscrepancyAudit ||
+    _ReportKind.discountsByDay => true,
+    _ => false,
+  };
 }
 
 class BackofficeScreen extends StatefulWidget {
@@ -205,8 +220,6 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                 section: effectiveSection,
                 reportKind: _reportKind,
                 repository: _repository,
-                startDate: _startDate,
-                endDate: _endDate,
                 startBusinessDate: _startBusinessDate,
                 endBusinessDate: _endBusinessDate,
                 onPickStart: _pickStartDate,
@@ -760,8 +773,6 @@ class _BackofficeBody extends StatelessWidget {
     required this.section,
     required this.reportKind,
     required this.repository,
-    required this.startDate,
-    required this.endDate,
     required this.startBusinessDate,
     required this.endBusinessDate,
     required this.onPickStart,
@@ -775,8 +786,6 @@ class _BackofficeBody extends StatelessWidget {
   final _BackofficeSection section;
   final _ReportKind reportKind;
   final TacoPosRepository repository;
-  final DateTime startDate;
-  final DateTime endDate;
   final String startBusinessDate;
   final String endBusinessDate;
   final VoidCallback onPickStart;
@@ -830,53 +839,70 @@ class _BackofficeBody extends StatelessWidget {
       return withBranchHeader(_SettingsSection(repository: repository));
     }
 
-    return StreamBuilder<List<PosOrder>>(
-      stream: repository.watchAllOrders(),
-      builder: (context, ordersSnapshot) {
-        if (ordersSnapshot.hasError) {
-          return _FriendlyError(message: 'No se pudieron cargar ordenes.');
+    final includeItems =
+        section == _BackofficeSection.dashboard ||
+        (section == _BackofficeSection.reports &&
+            _reportNeedsCanonicalItems(reportKind));
+    return FutureBuilder<ReportDataBundle>(
+      future: repository.getReportDataBundle(
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+        includeItems: includeItems,
+        reportName: section == _BackofficeSection.reports
+            ? _reportTitle(reportKind)
+            : _sectionTitle(section),
+      ),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          debugPrint('Backoffice report load failed: ${snapshot.error}');
+          return const _FriendlyError(
+            message: 'No se pudo cargar la informacion del reporte.',
+          );
         }
-        if (ordersSnapshot.connectionState == ConnectionState.waiting) {
+        if (!snapshot.hasData) {
           return const LoadingPanel(message: 'Cargando backoffice...');
         }
-        final allOrders = ordersSnapshot.data ?? [];
-        final orders = allOrders.where(_orderInRange).toList();
-        orders.sort((a, b) {
-          final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-          return bDate.compareTo(aDate);
-        });
+        final reportData = snapshot.data!;
+        final orders = reportData.orders;
+        final payments = reportData.payments;
+        final activePayments = payments
+            .where(_isDashboardActivePayment)
+            .toList();
 
-        return StreamBuilder<List<Payment>>(
-          stream: repository.watchDashboardPayments(
-            startDate: startDate,
-            endDate: endDate,
-          ),
-          builder: (context, paymentsSnapshot) {
-            if (paymentsSnapshot.hasError) {
-              return _FriendlyError(message: 'No se pudieron cargar pagos.');
-            }
-            if (paymentsSnapshot.connectionState == ConnectionState.waiting &&
-                !paymentsSnapshot.hasData) {
-              return const LoadingPanel(message: 'Cargando reportes...');
-            }
-            final payments = _paymentsInRange(paymentsSnapshot.data ?? []);
-            final activePayments = payments
-                .where(_isDashboardActivePayment)
-                .toList();
-
-            return ListView(
-              padding: const EdgeInsets.all(22),
-              children: [
-                _BackofficeBranchSelector(repository: repository),
-                const SizedBox(height: 14),
-                if (section != _BackofficeSection.dashboard) ...[
-                  _HeaderRow(
-                    title: _sectionTitle(section),
-                    subtitle: 'Informacion filtrada por fecha de reporte.',
-                  ),
-                  const SizedBox(height: 14),
-                  _GlobalFilters(
+        return ListView(
+          padding: const EdgeInsets.all(22),
+          children: [
+            _BackofficeBranchSelector(repository: repository),
+            const SizedBox(height: 14),
+            if (section != _BackofficeSection.dashboard) ...[
+              _HeaderRow(
+                title: _sectionTitle(section),
+                subtitle: 'Informacion filtrada por fecha de reporte.',
+              ),
+              const SizedBox(height: 14),
+              _GlobalFilters(
+                startBusinessDate: startBusinessDate,
+                endBusinessDate: endBusinessDate,
+                onPickStart: onPickStart,
+                onPickEnd: onPickEnd,
+                onToday: onToday,
+                onWeek: onWeek,
+                onMonth: onMonth,
+              ),
+              const SizedBox(height: 18),
+            ],
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 180),
+              switchInCurve: Curves.easeOutCubic,
+              switchOutCurve: Curves.easeInCubic,
+              child: KeyedSubtree(
+                key: ValueKey('${section.name}-${reportKind.name}'),
+                child: switch (section) {
+                  _BackofficeSection.dashboard => _DashboardSection(
+                    repository: repository,
+                    reportData: reportData,
+                    orders: orders,
+                    payments: activePayments,
                     startBusinessDate: startBusinessDate,
                     endBusinessDate: endBusinessDate,
                     onPickStart: onPickStart,
@@ -884,96 +910,45 @@ class _BackofficeBody extends StatelessWidget {
                     onToday: onToday,
                     onWeek: onWeek,
                     onMonth: onMonth,
+                    onOpenDiscountsReport: onOpenDiscountsReport,
                   ),
-                  const SizedBox(height: 18),
-                ],
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  switchInCurve: Curves.easeOutCubic,
-                  switchOutCurve: Curves.easeInCubic,
-                  child: KeyedSubtree(
-                    key: ValueKey('${section.name}-${reportKind.name}'),
-                    child: switch (section) {
-                      _BackofficeSection.dashboard => _DashboardSection(
-                        repository: repository,
-                        orders: orders,
-                        payments: activePayments,
-                        startBusinessDate: startBusinessDate,
-                        endBusinessDate: endBusinessDate,
-                        onPickStart: onPickStart,
-                        onPickEnd: onPickEnd,
-                        onToday: onToday,
-                        onWeek: onWeek,
-                        onMonth: onMonth,
-                        onOpenDiscountsReport: onOpenDiscountsReport,
-                      ),
-                      _BackofficeSection.sales => _SalesSection(
-                        repository: repository,
-                        orders: orders,
-                        payments: activePayments,
-                      ),
-                      _BackofficeSection.reports => _ReportsSection(
-                        repository: repository,
-                        orders:
-                            reportKind ==
-                                    _ReportKind.hourlyYesterdayLastSales ||
-                                reportKind == _ReportKind.hourlyPreviousWeek
-                            ? allOrders
-                            : orders,
-                        payments: reportKind == _ReportKind.cancelledPayments
-                            ? payments
-                            : activePayments,
-                        reportKind: reportKind,
-                        startBusinessDate: startBusinessDate,
-                        endBusinessDate: endBusinessDate,
-                      ),
-                      _BackofficeSection.authorizations =>
-                        const SizedBox.shrink(),
-                      _BackofficeSection.live => const SizedBox.shrink(),
-                      _BackofficeSection.cash => const SizedBox.shrink(),
-                      _BackofficeSection.kitchen => const SizedBox.shrink(),
-                      _BackofficeSection.purchases => const SizedBox.shrink(),
-                      _BackofficeSection.finance => const SizedBox.shrink(),
-                      _BackofficeSection.settings => const SizedBox.shrink(),
-                    },
+                  _BackofficeSection.sales => _SalesSection(
+                    repository: repository,
+                    orders: orders,
+                    payments: activePayments,
                   ),
-                ),
-              ],
-            );
-          },
+                  _BackofficeSection.reports => _ReportsSection(
+                    repository: repository,
+                    reportData: reportData,
+                    orders: orders,
+                    payments: reportKind == _ReportKind.cancelledPayments
+                        ? payments
+                        : activePayments,
+                    reportKind: reportKind,
+                    startBusinessDate: startBusinessDate,
+                    endBusinessDate: endBusinessDate,
+                  ),
+                  _BackofficeSection.authorizations => const SizedBox.shrink(),
+                  _BackofficeSection.live => const SizedBox.shrink(),
+                  _BackofficeSection.cash => const SizedBox.shrink(),
+                  _BackofficeSection.kitchen => const SizedBox.shrink(),
+                  _BackofficeSection.purchases => const SizedBox.shrink(),
+                  _BackofficeSection.finance => const SizedBox.shrink(),
+                  _BackofficeSection.settings => const SizedBox.shrink(),
+                },
+              ),
+            ),
+          ],
         );
       },
     );
-  }
-
-  bool _orderInRange(PosOrder order) {
-    final businessDate =
-        order.businessDate ??
-        order.operationalDate ??
-        _businessDateFor(order.createdAt);
-    if (businessDate != null) {
-      return businessDate.compareTo(startBusinessDate) >= 0 &&
-          businessDate.compareTo(endBusinessDate) <= 0;
-    }
-    return _dateInRange(order.createdAt) ||
-        _dateInRange(order.updatedAt) ||
-        _dateInRange(order.paidAt);
-  }
-
-  List<Payment> _paymentsInRange(List<Payment> payments) {
-    return payments;
-  }
-
-  bool _dateInRange(DateTime? value) {
-    if (value == null) return false;
-    final date = DateTime(value.year, value.month, value.day);
-    return !date.isBefore(startDate) && !date.isAfter(endDate);
   }
 }
 
 class _DashboardSection extends StatelessWidget {
   const _DashboardSection({
     required this.repository,
+    required this.reportData,
     required this.orders,
     required this.payments,
     required this.startBusinessDate,
@@ -987,6 +962,7 @@ class _DashboardSection extends StatelessWidget {
   });
 
   final TacoPosRepository repository;
+  final ReportDataBundle reportData;
   final List<PosOrder> orders;
   final List<Payment> payments;
   final String startBusinessDate;
@@ -1064,10 +1040,7 @@ class _DashboardSection extends StatelessWidget {
     final peakHour = peakHourRows.isEmpty ? null : peakHourRows.first;
     final methodRows = _salesByMethod(payments);
     final platformRows = _salesByPlatform(payments);
-    final canonicalFuture = repository.getCanonicalSalesSummary(
-      startBusinessDate: startBusinessDate,
-      endBusinessDate: endBusinessDate,
-    );
+    final canonicalFuture = Future.value(reportData.canonicalSummary!);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1243,7 +1216,7 @@ class _DashboardSection extends StatelessWidget {
         _AlertStrip(repository: repository, orders: orders),
         const SizedBox(height: 18),
         FutureBuilder<_ItemsSummary>(
-          future: _itemsSummary(repository, orders),
+          future: Future.value(_itemsSummary(reportData, orders)),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting &&
                 !snapshot.hasData) {
@@ -1485,6 +1458,7 @@ class _CanonicalSalesAlert extends StatelessWidget {
 class _DiscountsByDayReportView extends StatefulWidget {
   const _DiscountsByDayReportView({
     required this.repository,
+    required this.reportData,
     required this.orders,
     required this.payments,
     required this.startBusinessDate,
@@ -1492,6 +1466,7 @@ class _DiscountsByDayReportView extends StatefulWidget {
   });
 
   final TacoPosRepository repository;
+  final ReportDataBundle reportData;
   final List<PosOrder> orders;
   final List<Payment> payments;
   final String startBusinessDate;
@@ -1523,10 +1498,7 @@ class _DiscountsByDayReportViewState extends State<_DiscountsByDayReportView> {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<CanonicalSalesSummary>(
-      future: widget.repository.getCanonicalSalesSummary(
-        startBusinessDate: widget.startBusinessDate,
-        endBusinessDate: widget.endBusinessDate,
-      ),
+      future: Future.value(widget.reportData.canonicalSummary!),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
@@ -2106,6 +2078,7 @@ class _SaleTile extends StatelessWidget {
 class _ReportsSection extends StatefulWidget {
   const _ReportsSection({
     required this.repository,
+    required this.reportData,
     required this.orders,
     required this.payments,
     required this.reportKind,
@@ -2114,6 +2087,7 @@ class _ReportsSection extends StatefulWidget {
   });
 
   final TacoPosRepository repository;
+  final ReportDataBundle reportData;
   final List<PosOrder> orders;
   final List<Payment> payments;
   final _ReportKind reportKind;
@@ -2162,6 +2136,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
     if (widget.reportKind == _ReportKind.discountsByDay) {
       return _DiscountsByDayReportView(
         repository: widget.repository,
+        reportData: widget.reportData,
         orders: widget.orders,
         payments: widget.payments,
         startBusinessDate: widget.startBusinessDate,
@@ -2175,6 +2150,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
     return FutureBuilder<List<List<String>>>(
       future: _reportRows(
         widget.repository,
+        widget.reportData,
         widget.orders,
         widget.payments,
         widget.reportKind,
@@ -2256,10 +2232,11 @@ class _ReportsSectionState extends State<_ReportsSection> {
         ? _HourlyComparisonMode.yesterdayVsLastSales
         : _HourlyComparisonMode.previousWeek;
     final range = _hourlyQueryRange(mode, _hourlyBaseDate);
-    return StreamBuilder<List<Payment>>(
-      stream: widget.repository.watchDashboardPayments(
-        startDate: range.start,
-        endDate: range.end,
+    return FutureBuilder<ReportDataBundle>(
+      future: widget.repository.getReportDataBundle(
+        startBusinessDate: _businessDateFor(range.start)!,
+        endBusinessDate: _businessDateFor(range.end)!,
+        reportName: _reportTitle(widget.reportKind),
       ),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting &&
@@ -2298,8 +2275,8 @@ class _ReportsSectionState extends State<_ReportsSection> {
         }
         final report = _buildHourlyComparison(
           mode: mode,
-          payments: snapshot.data ?? const <Payment>[],
-          orders: widget.orders,
+          payments: snapshot.data?.payments ?? const <Payment>[],
+          orders: snapshot.data?.orders ?? const <PosOrder>[],
           baseDate: _hourlyBaseDate,
         );
         final rows = report?.csvRows ?? const <List<String>>[];
@@ -2480,6 +2457,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
   Widget _buildSalesDiscrepancyAuditReport(BuildContext context) {
     return _SalesDiscrepancyAuditReport(
       repository: widget.repository,
+      reportData: widget.reportData,
       orders: widget.orders,
       startBusinessDate: widget.startBusinessDate,
       endBusinessDate: widget.endBusinessDate,
@@ -2746,12 +2724,14 @@ const _salesAuditOrderStatuses = {
 class _SalesDiscrepancyAuditReport extends StatefulWidget {
   const _SalesDiscrepancyAuditReport({
     required this.repository,
+    required this.reportData,
     required this.orders,
     required this.startBusinessDate,
     required this.endBusinessDate,
   });
 
   final TacoPosRepository repository;
+  final ReportDataBundle reportData;
   final List<PosOrder> orders;
   final String startBusinessDate;
   final String endBusinessDate;
@@ -2768,10 +2748,12 @@ class _SalesDiscrepancyAuditReportState
   String _discrepancyType = 'all';
   String _orderStatus = 'all';
   late Future<List<_SalesAuditRow>> _future;
+  late ReportDataBundle _reportData;
 
   @override
   void initState() {
     super.initState();
+    _reportData = widget.reportData;
     _future = _loadRows();
   }
 
@@ -2781,6 +2763,7 @@ class _SalesDiscrepancyAuditReportState
     if (oldWidget.orders != widget.orders ||
         oldWidget.startBusinessDate != widget.startBusinessDate ||
         oldWidget.endBusinessDate != widget.endBusinessDate) {
+      _reportData = widget.reportData;
       _future = _loadRows();
     }
   }
@@ -2791,12 +2774,21 @@ class _SalesDiscrepancyAuditReportState
     super.dispose();
   }
 
-  Future<List<_SalesAuditRow>> _loadRows() async {
+  Future<List<_SalesAuditRow>> _loadRows({bool forceRefresh = false}) async {
+    if (forceRefresh) {
+      _reportData = await widget.repository.getReportDataBundle(
+        startBusinessDate: widget.startBusinessDate,
+        endBusinessDate: widget.endBusinessDate,
+        includeItems: true,
+        forceRefresh: true,
+        reportName: 'Auditoria de discrepancias',
+      );
+    }
     final rows = <_SalesAuditRow>[];
-    for (final order in widget.orders) {
+    for (final order in _reportData.orders) {
       try {
-        final items = await widget.repository.getOrderItemsOnce(order.id);
-        final payments = await widget.repository.getOrderPaymentsOnce(order.id);
+        final items = _reportData.itemsByOrder[order.id] ?? const [];
+        final payments = _reportData.paymentsByOrder[order.id] ?? const [];
         final correctionPreview = await widget.repository
             .previewSafeOrderTotalsCorrection(
               order: order,
@@ -2928,7 +2920,8 @@ class _SalesDiscrepancyAuditReportState
             onSelected: (value) => setState(() => _onlyDiscrepancies = value),
           ),
           FilledButton.icon(
-            onPressed: () => setState(() => _future = _loadRows()),
+            onPressed: () =>
+                setState(() => _future = _loadRows(forceRefresh: true)),
             icon: const Icon(Icons.refresh),
             label: const Text('Actualizar'),
           ),
@@ -3002,7 +2995,7 @@ class _SalesDiscrepancyAuditReportState
         adminPin: confirmed.pin,
       );
       if (!mounted) return;
-      setState(() => _future = _loadRows());
+      setState(() => _future = _loadRows(forceRefresh: true));
       _showAuditMessage('Totales corregidos correctamente.');
     } catch (error) {
       if (!mounted) return;
@@ -4932,6 +4925,7 @@ List<String> _reportHeaders(_ReportKind kind) {
 
 Future<List<List<String>>> _reportRows(
   TacoPosRepository repository,
+  ReportDataBundle reportData,
   List<PosOrder> orders,
   List<Payment> payments,
   _ReportKind kind,
@@ -4940,10 +4934,7 @@ Future<List<List<String>>> _reportRows(
 ) async {
   switch (kind) {
     case _ReportKind.products:
-      final summary = await repository.getCanonicalSalesSummary(
-        startBusinessDate: startBusinessDate,
-        endBusinessDate: endBusinessDate,
-      );
+      final summary = reportData.canonicalSummary!;
       return summary.productRows.map((row) {
         final percent = summary.netSales <= 0
             ? 0
@@ -4967,10 +4958,7 @@ Future<List<List<String>>> _reportRows(
     case _ReportKind.hourlyPreviousWeek:
       return const [];
     case _ReportKind.dates:
-      final summary = await repository.getCanonicalSalesSummary(
-        startBusinessDate: startBusinessDate,
-        endBusinessDate: endBusinessDate,
-      );
+      final summary = reportData.canonicalSummary!;
       final byDate = <String, List<CanonicalOrderSalesRow>>{};
       for (final row in summary.orderRows) {
         final key = row.businessDate.isEmpty ? '-' : row.businessDate;
@@ -5030,10 +5018,7 @@ Future<List<List<String>>> _reportRows(
         ];
       }).toList();
     case _ReportKind.platform:
-      final summary = await repository.getCanonicalSalesSummary(
-        startBusinessDate: startBusinessDate,
-        endBusinessDate: endBusinessDate,
-      );
+      final summary = reportData.canonicalSummary!;
       final byPlatform = <String, List<CanonicalOrderSalesRow>>{};
       for (final row in summary.orderRows) {
         final label = row.order.platformName ?? 'En persona';
@@ -5092,10 +5077,7 @@ Future<List<List<String>>> _reportRows(
           )
           .toList();
     case _ReportKind.paymentMethod:
-      final summary = await repository.getCanonicalSalesSummary(
-        startBusinessDate: startBusinessDate,
-        endBusinessDate: endBusinessDate,
-      );
+      final summary = reportData.canonicalSummary!;
       final byMethod = <String, List<Payment>>{};
       for (final payment in payments) {
         final label = _paymentMethodLabel(payment.method);
@@ -5129,10 +5111,7 @@ Future<List<List<String>>> _reportRows(
       ]);
       return rows;
     case _ReportKind.employee:
-      final summary = await repository.getCanonicalSalesSummary(
-        startBusinessDate: startBusinessDate,
-        endBusinessDate: endBusinessDate,
-      );
+      final summary = reportData.canonicalSummary!;
       final byEmployee = <String, List<Payment>>{};
       for (final payment in payments) {
         byEmployee
@@ -5237,7 +5216,7 @@ Future<List<List<String>>> _reportRows(
         ]);
       }
       for (final order in orders) {
-        final items = await repository.getOrderItemsOnce(order.id);
+        final items = reportData.itemsByOrder[order.id] ?? const [];
         for (final item in items.where(
           (item) =>
               item.isCancelled ||
@@ -5398,14 +5377,14 @@ String _timeText(DateTime? value) {
   return DateFormat('HH:mm').format(value);
 }
 
-Future<_ItemsSummary> _itemsSummary(
-  TacoPosRepository repository,
+_ItemsSummary _itemsSummary(
+  ReportDataBundle reportData,
   List<PosOrder> orders,
-) async {
+) {
   final products = <String, _ProductSalesAccumulator>{};
   var totalQty = 0;
   for (final order in orders.where((order) => order.status != 'cancelled')) {
-    final items = await repository.getOrderItemsOnce(order.id);
+    final items = reportData.itemsByOrder[order.id] ?? const [];
     for (final item in items.where((item) => !item.isCancelled)) {
       final productName = _reportValue(item.productName, fallback: 'Producto');
       final categoryName = _reportValue(item.category);

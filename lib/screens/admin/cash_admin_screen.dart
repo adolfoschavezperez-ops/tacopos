@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/reports/canonical_sales_summary.dart';
+import '../../core/reports/report_data_bundle.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/branch.dart';
 import '../../models/cash_session.dart';
@@ -2186,14 +2187,21 @@ class _CashCancellationSummary extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final repository = TacoPosRepository();
-    return StreamBuilder<List<PosOrder>>(
-      stream: repository.watchAllOrders(),
+    return FutureBuilder<ReportDataBundle>(
+      future: repository.getReportDataBundle(
+        branchId: session.branchId,
+        startBusinessDate: session.businessDate,
+        endBusinessDate: session.businessDate,
+        includeItems: true,
+        reportName: 'CajaCancelaciones',
+      ),
       builder: (context, orderSnapshot) {
         if (orderSnapshot.connectionState == ConnectionState.waiting &&
             !orderSnapshot.hasData) {
           return const LoadingPanel(message: 'Cargando cancelaciones...');
         }
-        final orders = (orderSnapshot.data ?? const <PosOrder>[])
+        final reportData = orderSnapshot.data;
+        final orders = (reportData?.orders ?? const <PosOrder>[])
             .where(
               (order) =>
                   order.status == 'cancelled' &&
@@ -2202,19 +2210,7 @@ class _CashCancellationSummary extends StatelessWidget {
             )
             .toList();
         return FutureBuilder<List<Payment>>(
-          future: repository.getPaymentsForBranchBusinessDate(
-            branch: Branch(
-              id: session.branchId,
-              restaurantId: session.restaurantId,
-              restaurantName: session.restaurantName,
-              name: session.branchName,
-              normalizedName: session.branchId,
-              active: true,
-              sortOrder: 0,
-            ),
-            businessDate: session.businessDate,
-            activeOnly: false,
-          ),
+          future: Future.value(reportData?.payments ?? const <Payment>[]),
           builder: (context, paymentSnapshot) {
             if (paymentSnapshot.connectionState == ConnectionState.waiting &&
                 !paymentSnapshot.hasData) {
@@ -2233,7 +2229,9 @@ class _CashCancellationSummary extends StatelessWidget {
             );
 
             return FutureBuilder<List<_CancelledItemLine>>(
-              future: _cancelledItemLines(repository, orderSnapshot.data ?? []),
+              future: Future.value(
+                _cancelledItemLines(reportData ?? orderSnapshot.data!),
+              ),
               builder: (context, itemSnapshot) {
                 if (itemSnapshot.connectionState == ConnectionState.waiting &&
                     !itemSnapshot.hasData) {
@@ -2331,13 +2329,10 @@ class _CashCancellationSummary extends StatelessWidget {
 
   String _shortId(String id) => id.length <= 6 ? id : id.substring(0, 6);
 
-  Future<List<_CancelledItemLine>> _cancelledItemLines(
-    TacoPosRepository repository,
-    List<PosOrder> orders,
-  ) async {
+  List<_CancelledItemLine> _cancelledItemLines(ReportDataBundle reportData) {
     final lines = <_CancelledItemLine>[];
-    for (final order in orders) {
-      final items = await repository.getOrderItemsOnce(order.id);
+    for (final order in reportData.orders) {
+      final items = reportData.itemsByOrder[order.id] ?? const [];
       for (final item in items.where(
         (item) => item.isCancelled || item.wasCancellationRejected,
       )) {

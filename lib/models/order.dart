@@ -55,6 +55,7 @@ class PosOrder {
     this.netTotal,
     this.businessDate,
     this.operationalDate,
+    this.cashSessionId,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -112,6 +113,7 @@ class PosOrder {
   final double? netTotal;
   final String? businessDate;
   final String? operationalDate;
+  final String? cashSessionId;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -204,6 +206,7 @@ class PosOrder {
       netTotal: _readOptionalDouble(data['netTotal']),
       businessDate: _readOptionalString(data['businessDate']),
       operationalDate: _readOptionalString(data['operationalDate']),
+      cashSessionId: _readOptionalString(data['cashSessionId']),
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:
