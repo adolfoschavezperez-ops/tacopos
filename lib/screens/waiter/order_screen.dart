@@ -249,7 +249,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
     setState(() => _busy = true);
     try {
-      await _repository.recalculateOrderBeforeCheckout(_boundOrderId);
+      await _repository.prepareOrderForCheckout(_boundOrderId);
     } catch (error) {
       if (!mounted) return;
       _showMessage('No se pudo validar el total: $error');

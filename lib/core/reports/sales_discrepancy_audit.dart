@@ -797,6 +797,10 @@ String _discountTypeLabel({
 
 String _paymentDiscountMetadata(Payment payment) {
   return [
+    if ((payment.discountSource ?? '').trim().isNotEmpty)
+      'origen=${payment.discountSource}',
+    if ((payment.discountCatalogId ?? '').trim().isNotEmpty)
+      'catalogo=${payment.discountCatalogId}',
     if ((payment.appliedDiscountType ?? '').trim().isNotEmpty)
       'tipo=${payment.appliedDiscountType}',
     if ((payment.appliedDiscountName ?? '').trim().isNotEmpty)
@@ -807,6 +811,12 @@ String _paymentDiscountMetadata(Payment payment) {
       'autorizacion=${payment.discountAuthorizationStatus}',
     if ((payment.employeeName ?? '').trim().isNotEmpty)
       'empleado=${payment.employeeName}',
+    if (payment.orderGrossSubtotal > 0)
+      'subtotalOrden=${payment.orderGrossSubtotal.toStringAsFixed(2)}',
+    if (payment.orderDiscountAmount > 0)
+      'descuentoOrden=${payment.orderDiscountAmount.toStringAsFixed(2)}',
+    if (payment.orderNetTotal > 0)
+      'netoOrden=${payment.orderNetTotal.toStringAsFixed(2)}',
   ].join(' | ');
 }
 

@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_types.dart';
 import '../core/reports/canonical_sales_summary.dart';
@@ -162,6 +163,33 @@ class OrderTotalsRecalculation {
   final double discountAmount;
   final double netTotal;
   final bool changed;
+}
+
+class CheckoutPreparation {
+  const CheckoutPreparation({
+    required this.orderId,
+    required this.grossSubtotal,
+    required this.discountAmount,
+    required this.netTotal,
+    required this.discountSource,
+    required this.discountCatalogId,
+    required this.discountName,
+    required this.discountPercent,
+    required this.frozenByPayments,
+  });
+
+  final String orderId;
+  final double grossSubtotal;
+  final double discountAmount;
+  final double netTotal;
+  final String discountSource;
+  final String? discountCatalogId;
+  final String? discountName;
+  final double discountPercent;
+  final bool frozenByPayments;
+
+  bool get hasGlobalDiscount =>
+      discountSource == globalDiscountSource && discountAmount > 0.01;
 }
 
 class OrderTotalsCorrectionPreview {
@@ -353,6 +381,7 @@ class GeneralDiscountConfig {
     required this.active,
     required this.name,
     required this.percent,
+    this.catalogId = globalDiscountCatalogId,
     this.description = '',
     this.branchId = 'all',
   });
@@ -360,6 +389,7 @@ class GeneralDiscountConfig {
   final bool active;
   final String name;
   final double percent;
+  final String catalogId;
   final String description;
   final String branchId;
 
@@ -8718,7 +8748,13 @@ class TacoPosRepository {
       return const PaymentResult(allPaid: true);
     }
 
-    await _ensureDiscountAuthorizationStillUsable(discount, order);
+    final effectiveDiscount = await _resolvePreparedGlobalDiscount(
+      order: order,
+      requestedDiscount: discount,
+      amountBeforeDiscount: baseAmount,
+      remainingGrossSubtotal: baseAmount,
+    );
+    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
     _setPayment(
@@ -8732,7 +8768,7 @@ class TacoPosRepository {
       employeeId: employeeId,
       employeeName: employeeName,
       cashDetails: cashDetails,
-      discount: discount,
+      discount: effectiveDiscount,
     );
 
     for (final doc in itemsSnapshot.docs) {
@@ -8753,18 +8789,18 @@ class TacoPosRepository {
       order: order,
       paymentId: paymentRef.id,
       cashSession: cashSession,
-      discount: discount,
+      discount: effectiveDiscount,
     );
     _markDiscountAuthorizationUsedInBatch(
       batch,
-      discount: discount,
+      discount: effectiveDiscount,
       paymentId: paymentRef.id,
     );
     _closeOrderInBatch(
       batch,
       order,
       paidTotal: order.total,
-      discount: discount,
+      discount: effectiveDiscount,
     );
     await batch.commit();
     return const PaymentResult(allPaid: true);
@@ -8815,7 +8851,16 @@ class TacoPosRepository {
       return PaymentResult(allPaid: order.pendingTotal <= 0.01);
     }
 
-    await _ensureDiscountAuthorizationStillUsable(discount, order);
+    final remainingGrossSubtotal = items
+        .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
+        .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
+    final effectiveDiscount = await _resolvePreparedGlobalDiscount(
+      order: order,
+      requestedDiscount: discount,
+      amountBeforeDiscount: baseAmount,
+      remainingGrossSubtotal: remainingGrossSubtotal,
+    );
+    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
     _setPayment(
@@ -8831,7 +8876,7 @@ class TacoPosRepository {
       employeeId: employeeId,
       employeeName: employeeName,
       cashDetails: cashDetails,
-      discount: discount,
+      discount: effectiveDiscount,
     );
 
     for (final doc in itemsSnapshot.docs) {
@@ -8853,7 +8898,7 @@ class TacoPosRepository {
       order,
       baseAmount: baseAmount,
       closeItemsSnapshot: itemsSnapshot,
-      discount: discount,
+      discount: effectiveDiscount,
     );
     _recordDiscountUsageInBatch(
       batch,
@@ -8861,11 +8906,11 @@ class TacoPosRepository {
       order: order,
       paymentId: paymentRef.id,
       cashSession: cashSession,
-      discount: discount,
+      discount: effectiveDiscount,
     );
     _markDiscountAuthorizationUsedInBatch(
       batch,
-      discount: discount,
+      discount: effectiveDiscount,
       paymentId: paymentRef.id,
     );
     await batch.commit();
@@ -8931,7 +8976,16 @@ class TacoPosRepository {
     }
 
     final names = selectedPeople.map((person) => order.personName(person));
-    await _ensureDiscountAuthorizationStillUsable(discount, order);
+    final remainingGrossSubtotal = items
+        .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
+        .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
+    final effectiveDiscount = await _resolvePreparedGlobalDiscount(
+      order: order,
+      requestedDiscount: discount,
+      amountBeforeDiscount: baseAmount,
+      remainingGrossSubtotal: remainingGrossSubtotal,
+    );
+    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
     _setPayment(
@@ -8946,7 +9000,7 @@ class TacoPosRepository {
       employeeId: employeeId,
       employeeName: employeeName,
       cashDetails: cashDetails,
-      discount: discount,
+      discount: effectiveDiscount,
     );
 
     for (final doc in itemsSnapshot.docs) {
@@ -8968,7 +9022,7 @@ class TacoPosRepository {
       order,
       baseAmount: baseAmount,
       closeItemsSnapshot: itemsSnapshot,
-      discount: discount,
+      discount: effectiveDiscount,
     );
     _recordDiscountUsageInBatch(
       batch,
@@ -8976,11 +9030,11 @@ class TacoPosRepository {
       order: order,
       paymentId: paymentRef.id,
       cashSession: cashSession,
-      discount: discount,
+      discount: effectiveDiscount,
     );
     _markDiscountAuthorizationUsedInBatch(
       batch,
-      discount: discount,
+      discount: effectiveDiscount,
       paymentId: paymentRef.id,
     );
     await batch.commit();
@@ -9016,7 +9070,13 @@ class TacoPosRepository {
         .doc(orderId)
         .collection('items')
         .get();
-    await _ensureDiscountAuthorizationStillUsable(discount, order);
+    final effectiveDiscount = await _resolvePreparedGlobalDiscount(
+      order: order,
+      requestedDiscount: discount,
+      amountBeforeDiscount: baseAmount,
+      remainingGrossSubtotal: order.pendingTotal,
+    );
+    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final batch = _db.batch();
     _setPayment(
@@ -9030,7 +9090,7 @@ class TacoPosRepository {
       employeeId: employeeId,
       employeeName: employeeName,
       cashDetails: cashDetails,
-      discount: discount,
+      discount: effectiveDiscount,
     );
 
     final allPaid = _updateOrderPaymentTotalsInBatch(
@@ -9039,7 +9099,7 @@ class TacoPosRepository {
       baseAmount: baseAmount,
       closeItemsSnapshot: itemsSnapshot,
       markItemsOnlyIfClosed: true,
-      discount: discount,
+      discount: effectiveDiscount,
     );
     _recordDiscountUsageInBatch(
       batch,
@@ -9047,11 +9107,11 @@ class TacoPosRepository {
       order: order,
       paymentId: paymentRef.id,
       cashSession: cashSession,
-      discount: discount,
+      discount: effectiveDiscount,
     );
     _markDiscountAuthorizationUsedInBatch(
       batch,
-      discount: discount,
+      discount: effectiveDiscount,
       paymentId: paymentRef.id,
     );
     await batch.commit();
@@ -9114,6 +9174,239 @@ class TacoPosRepository {
     _closeOrderInBatch(batch, order, paidTotal: order.total);
     await batch.commit();
     return const PaymentResult(allPaid: true);
+  }
+
+  Future<CheckoutPreparation> prepareOrderForCheckout(String orderId) async {
+    _requireCharge();
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) {
+      throw StateError('No se encontro la orden.');
+    }
+
+    final order = PosOrder.fromDoc(orderDoc);
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final paymentsSnapshot = await orderRef.collection('payments').get();
+    final activeItems = itemsSnapshot.docs
+        .map(OrderItem.fromDoc)
+        .where(isActiveOrderItem)
+        .toList();
+    final activePayments = paymentsSnapshot.docs
+        .map(Payment.fromDoc)
+        .where((payment) => payment.isActive)
+        .toList();
+    final hasActivePaymentEvidence =
+        activePayments.isNotEmpty ||
+        normalizeStatus(order.paymentStatus) == 'partial' ||
+        order.paidTotal > 0.01;
+    final grossSubtotal = roundCheckoutMoney(
+      _activeItemsGrossSubtotal(activeItems),
+    );
+
+    if (!shouldRefreshGlobalDiscountSnapshot(
+      hasActivePayments: hasActivePaymentEvidence,
+    )) {
+      return _checkoutPreparationFromOrder(
+        order,
+        fallbackGrossSubtotal: grossSubtotal,
+        frozenByPayments: true,
+      );
+    }
+
+    if (_hasSpecificDiscountSnapshot(order)) {
+      return _checkoutPreparationFromOrder(
+        order,
+        fallbackGrossSubtotal: grossSubtotal,
+        frozenByPayments: false,
+      );
+    }
+
+    final config = await getGeneralDiscountConfigOnce();
+    final platformOnlyPayment =
+        order.orderType == takeoutOrderType &&
+        order.platformId != null &&
+        order.platformId != 'en_persona';
+    final applies =
+        !platformOnlyPayment &&
+        config.appliesToCurrentBranch(AppSession.instance.currentBranchId);
+    final employee = AppSession.instance.employee;
+
+    if (!applies) {
+      await orderRef.update({
+        'total': grossSubtotal,
+        'paidTotal': 0.0,
+        'pendingTotal': grossSubtotal,
+        'discountApplied': false,
+        'discountSource': noDiscountSource,
+        'discountCatalogId': null,
+        'discountType': 'none',
+        'discountName': null,
+        'discountConcept': null,
+        'discountPercent': 0.0,
+        'discountRate': 0.0,
+        'discountAmount': 0.0,
+        'totalDiscountAmount': 0.0,
+        'grossSubtotal': grossSubtotal,
+        'netTotal': grossSubtotal,
+        'discountAppliedAt': null,
+        'discountAppliedByEmployeeId': null,
+        'discountAppliedByEmployeeName': null,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return CheckoutPreparation(
+        orderId: orderId,
+        grossSubtotal: grossSubtotal,
+        discountAmount: 0,
+        netTotal: grossSubtotal,
+        discountSource: noDiscountSource,
+        discountCatalogId: null,
+        discountName: null,
+        discountPercent: 0,
+        frozenByPayments: false,
+      );
+    }
+
+    final amounts = calculateGlobalDiscountAmounts(
+      grossSubtotal: grossSubtotal,
+      percent: config.percent,
+    );
+    await orderRef.update({
+      'total': amounts.grossSubtotal,
+      'paidTotal': 0.0,
+      'pendingTotal': amounts.grossSubtotal,
+      'discountApplied': amounts.discountAmount > 0.01,
+      'discountSource': globalDiscountSource,
+      'discountCatalogId': config.catalogId,
+      'discountType': 'general',
+      'discountName': config.name,
+      'discountConcept': config.name,
+      'discountPercent': config.percent,
+      'discountRate': config.percent / 100,
+      'discountAmount': amounts.discountAmount,
+      'totalDiscountAmount': amounts.discountAmount,
+      'grossSubtotal': amounts.grossSubtotal,
+      'netTotal': amounts.netTotal,
+      'discountDescription': config.description,
+      'discountBranchId': config.branchId,
+      'discountAppliedAt': FieldValue.serverTimestamp(),
+      'discountAppliedByEmployeeId': employee?.id ?? '',
+      'discountAppliedByEmployeeName': employee?.name ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return CheckoutPreparation(
+      orderId: orderId,
+      grossSubtotal: amounts.grossSubtotal,
+      discountAmount: amounts.discountAmount,
+      netTotal: amounts.netTotal,
+      discountSource: globalDiscountSource,
+      discountCatalogId: config.catalogId,
+      discountName: config.name,
+      discountPercent: config.percent,
+      frozenByPayments: false,
+    );
+  }
+
+  AppliedDiscountDetails? preparedGlobalDiscountForAmount({
+    required PosOrder order,
+    required double amountBeforeDiscount,
+    required double remainingGrossSubtotal,
+    required Iterable<Payment> activePayments,
+  }) {
+    if (order.discountSource != globalDiscountSource ||
+        order.explicitDiscount <= 0.01) {
+      return null;
+    }
+    final previouslyAllocated = activePayments
+        .where(
+          (payment) =>
+              payment.isActive &&
+              payment.discountSource == globalDiscountSource,
+        )
+        .fold<double>(
+          0,
+          (runningTotal, payment) => runningTotal + payment.discountAmount,
+        );
+    final discountAmount = allocateGlobalDiscount(
+      orderGrossSubtotal: order.grossSubtotal ?? order.total,
+      orderDiscountAmount: order.explicitDiscount,
+      selectedGrossSubtotal: amountBeforeDiscount,
+      remainingGrossSubtotal: remainingGrossSubtotal,
+      previouslyAllocatedDiscount: previouslyAllocated,
+    );
+    if (discountAmount <= 0.01) return null;
+    return AppliedDiscountDetails(
+      type: order.discountType ?? 'general',
+      name: order.discountConcept ?? order.discountName ?? 'Descuento general',
+      percent:
+          order.discountPercent ??
+          ((order.discountRate ?? 0) <= 1
+              ? (order.discountRate ?? 0) * 100
+              : order.discountRate ?? 0),
+      amountBeforeDiscount: roundCheckoutMoney(amountBeforeDiscount),
+      discountAmount: discountAmount,
+      totalAfterDiscount: roundCheckoutMoney(
+        amountBeforeDiscount - discountAmount,
+      ),
+    );
+  }
+
+  Future<AppliedDiscountDetails?> _resolvePreparedGlobalDiscount({
+    required PosOrder order,
+    required AppliedDiscountDetails? requestedDiscount,
+    required double amountBeforeDiscount,
+    required double remainingGrossSubtotal,
+  }) async {
+    final requestedIsDifferent =
+        requestedDiscount != null &&
+        requestedDiscount.type != (order.discountType ?? 'general');
+    if (order.discountSource != globalDiscountSource || requestedIsDifferent) {
+      return requestedDiscount;
+    }
+    final payments = await getOrderPaymentsOnce(order.id);
+    return preparedGlobalDiscountForAmount(
+      order: order,
+      amountBeforeDiscount: amountBeforeDiscount,
+      remainingGrossSubtotal: remainingGrossSubtotal,
+      activePayments: payments.where((payment) => payment.isActive),
+    );
+  }
+
+  bool _hasSpecificDiscountSnapshot(PosOrder order) {
+    if (order.explicitDiscount <= 0.01) return false;
+    final source = order.discountSource?.trim().toLowerCase();
+    final type = order.discountType?.trim().toLowerCase();
+    return source != globalDiscountSource &&
+        source != noDiscountSource &&
+        type != 'general';
+  }
+
+  CheckoutPreparation _checkoutPreparationFromOrder(
+    PosOrder order, {
+    required double fallbackGrossSubtotal,
+    required bool frozenByPayments,
+  }) {
+    final gross = order.grossSubtotal ?? fallbackGrossSubtotal;
+    final discount = order.explicitDiscount.clamp(0, gross).toDouble();
+    final net = order.netTotal ?? roundCheckoutMoney(gross - discount);
+    return CheckoutPreparation(
+      orderId: order.id,
+      grossSubtotal: gross,
+      discountAmount: discount,
+      netTotal: net,
+      discountSource:
+          order.discountSource ??
+          (discount > 0.01
+              ? order.discountType ?? 'unknown'
+              : noDiscountSource),
+      discountCatalogId: order.discountCatalogId,
+      discountName: order.discountConcept ?? order.discountName,
+      discountPercent:
+          order.discountPercent ??
+          ((order.discountRate ?? 0) <= 1
+              ? (order.discountRate ?? 0) * 100
+              : order.discountRate ?? 0),
+      frozenByPayments: frozenByPayments,
+    );
   }
 
   Future<OrderTotalsRecalculation> recalculateOrderBeforeCheckout(
@@ -9440,7 +9733,7 @@ class TacoPosRepository {
         'paymentStatus': 'partial',
         'paidTotal': paidTotal,
         'pendingTotal': pendingTotal,
-        ..._orderDiscountSnapshot(discount, baseAmount),
+        ..._orderDiscountSnapshot(discount, baseAmount, order: order),
         'updatedAt': FieldValue.serverTimestamp(),
       });
       if (!markItemsOnlyIfClosed) {
@@ -9462,7 +9755,7 @@ class TacoPosRepository {
       'paymentStatus': 'paid',
       'paidTotal': paidTotal,
       'pendingTotal': 0.0,
-      ..._orderDiscountSnapshot(discount, order.total),
+      ..._orderDiscountSnapshot(discount, order.total, order: order),
       'paidAt': FieldValue.serverTimestamp(),
       ..._currentBranchFields,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -9537,6 +9830,17 @@ class TacoPosRepository {
       0,
       double.infinity,
     );
+    final isGlobalDiscount =
+        discount != null &&
+        order.discountSource == globalDiscountSource &&
+        discount.type == (order.discountType ?? 'general');
+    final orderGrossSubtotal = order.grossSubtotal ?? order.total;
+    final orderDiscountAmount = isGlobalDiscount
+        ? order.explicitDiscount
+        : discountAmount;
+    final orderNetTotal = isGlobalDiscount
+        ? order.netTotal ?? orderGrossSubtotal - orderDiscountAmount
+        : orderGrossSubtotal - orderDiscountAmount;
     final cardFeeAbsorbedAmount = chargedAmount * cardFeeRate;
     final surchargeRate = 0.0;
     final surchargeAmount = 0.0;
@@ -9569,6 +9873,20 @@ class TacoPosRepository {
       'appliedDiscountType': discount?.type,
       'appliedDiscountName': discount?.name,
       'appliedDiscountPercent': discount?.percent ?? 0.0,
+      'discountApplied': discountAmount > 0.01,
+      'discountSource': isGlobalDiscount
+          ? globalDiscountSource
+          : discount == null
+          ? noDiscountSource
+          : discount.type,
+      'discountCatalogId': isGlobalDiscount
+          ? order.discountCatalogId ?? globalDiscountCatalogId
+          : discount?.discountAuthorizationRequestId,
+      'discountName': discount?.name,
+      'discountPercent': discount?.percent ?? 0.0,
+      'orderDiscountAmount': orderDiscountAmount,
+      'orderGrossSubtotal': orderGrossSubtotal,
+      'orderNetTotal': orderNetTotal,
       'discountAuthorizedByPartnerId': discount?.authorizedByPartnerId,
       'discountAuthorizedByPartnerName': discount?.authorizedByPartnerName,
       'discountAuthorizedByPartnerLinkedEmployeeId':
@@ -9587,7 +9905,7 @@ class TacoPosRepository {
         ..._employeeAuditFields(prefix: 'discountAppliedBy'),
       },
       'baseAmount': baseAmount,
-      'amount': baseAmount,
+      'amount': chargedAmount,
       'surchargeRate': surchargeRate,
       'surchargeAmount': surchargeAmount,
       'chargedAmount': chargedAmount,
@@ -9611,15 +9929,38 @@ class TacoPosRepository {
 
   Map<String, Object?> _orderDiscountSnapshot(
     AppliedDiscountDetails? discount,
-    double grossSubtotal,
-  ) {
+    double grossSubtotal, {
+    PosOrder? order,
+  }) {
+    if (discount == null &&
+        order?.discountSource == globalDiscountSource &&
+        order!.explicitDiscount > 0.01) {
+      return {
+        'discountApplied': true,
+        'discountSource': globalDiscountSource,
+        'discountCatalogId': order.discountCatalogId ?? globalDiscountCatalogId,
+        'discountType': order.discountType ?? 'general',
+        'discountName': order.discountName,
+        'discountConcept': order.discountConcept ?? order.discountName,
+        'discountPercent': order.discountPercent ?? 0.0,
+        'discountRate': order.discountRate ?? 0.0,
+        'discountAmount': order.explicitDiscount,
+        'totalDiscountAmount': order.explicitDiscount,
+        'grossSubtotal': order.grossSubtotal ?? order.total,
+        'netTotal':
+            order.netTotal ??
+            (order.grossSubtotal ?? order.total) - order.explicitDiscount,
+      };
+    }
     final netTotal = discount?.totalAfterDiscount ?? grossSubtotal;
     if (discount == null || discount.discountAmount <= 0.01) {
       return {
         'discountApplied': false,
+        'discountSource': noDiscountSource,
         'discountCatalogId': null,
         'discountType': 'none',
         'discountName': null,
+        'discountConcept': null,
         'discountPercent': 0.0,
         'discountRate': 0.0,
         'discountAmount': 0.0,
@@ -9629,22 +9970,37 @@ class TacoPosRepository {
       };
     }
     final employee = AppSession.instance.employee;
+    final isGlobalDiscount =
+        order?.discountSource == globalDiscountSource &&
+        discount.type == (order?.discountType ?? 'general');
+    final snapshotGross = isGlobalDiscount
+        ? order?.grossSubtotal ?? order?.total ?? grossSubtotal
+        : discount.amountBeforeDiscount;
+    final snapshotDiscount = isGlobalDiscount
+        ? order?.explicitDiscount ?? discount.discountAmount
+        : discount.discountAmount;
+    final snapshotNet = isGlobalDiscount
+        ? order?.netTotal ?? snapshotGross - snapshotDiscount
+        : netTotal;
     return {
       'discountApplied': true,
-      'discountCatalogId':
-          discount.discountAuthorizationRequestId?.trim().isNotEmpty == true
+      'discountSource': isGlobalDiscount ? globalDiscountSource : discount.type,
+      'discountCatalogId': isGlobalDiscount
+          ? order?.discountCatalogId ?? globalDiscountCatalogId
+          : discount.discountAuthorizationRequestId?.trim().isNotEmpty == true
           ? discount.discountAuthorizationRequestId
           : discount.type,
       'discountType': discount.type,
       'discountName': discount.name,
+      'discountConcept': discount.name,
       'discountPercent': discount.percent,
       'discountRate': discount.percent / 100,
-      'discountAmount': discount.discountAmount,
-      'totalDiscountAmount': discount.discountAmount,
-      'grossSubtotal': discount.amountBeforeDiscount,
-      'netTotal': netTotal,
+      'discountAmount': snapshotDiscount,
+      'totalDiscountAmount': snapshotDiscount,
+      'grossSubtotal': snapshotGross,
+      'netTotal': snapshotNet,
       'discountReason': discount.reason,
-      'discountAppliedAt': FieldValue.serverTimestamp(),
+      if (!isGlobalDiscount) 'discountAppliedAt': FieldValue.serverTimestamp(),
       'discountAppliedByEmployeeId': employee?.id ?? '',
       'discountAppliedByEmployeeName': employee?.name ?? '',
       'discountAuthorizedByEmployeeId':

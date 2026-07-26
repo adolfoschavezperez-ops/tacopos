@@ -33,6 +33,14 @@ class Payment {
     this.appliedDiscountType,
     this.appliedDiscountName,
     this.appliedDiscountPercent = 0,
+    this.discountApplied = false,
+    this.discountSource,
+    this.discountCatalogId,
+    this.discountName,
+    this.discountPercent = 0,
+    this.orderDiscountAmount = 0,
+    this.orderGrossSubtotal = 0,
+    this.orderNetTotal = 0,
     this.discountAuthorizedByPartnerId,
     this.discountAuthorizedByPartnerName,
     this.discountAuthorizedByPartnerLinkedEmployeeId,
@@ -85,6 +93,14 @@ class Payment {
   final String? appliedDiscountType;
   final String? appliedDiscountName;
   final double appliedDiscountPercent;
+  final bool discountApplied;
+  final String? discountSource;
+  final String? discountCatalogId;
+  final String? discountName;
+  final double discountPercent;
+  final double orderDiscountAmount;
+  final double orderGrossSubtotal;
+  final double orderNetTotal;
   final String? discountAuthorizedByPartnerId;
   final String? discountAuthorizedByPartnerName;
   final String? discountAuthorizedByPartnerLinkedEmployeeId;
@@ -151,6 +167,14 @@ class Payment {
       appliedDiscountType: appliedDiscountType,
       appliedDiscountName: appliedDiscountName,
       appliedDiscountPercent: appliedDiscountPercent,
+      discountApplied: discountApplied,
+      discountSource: discountSource,
+      discountCatalogId: discountCatalogId,
+      discountName: discountName,
+      discountPercent: discountPercent,
+      orderDiscountAmount: orderDiscountAmount,
+      orderGrossSubtotal: orderGrossSubtotal,
+      orderNetTotal: orderNetTotal,
       discountAuthorizedByPartnerId: discountAuthorizedByPartnerId,
       discountAuthorizedByPartnerName: discountAuthorizedByPartnerName,
       discountAuthorizedByPartnerLinkedEmployeeId:
@@ -230,6 +254,20 @@ class Payment {
       appliedDiscountName: data['appliedDiscountName'] as String?,
       appliedDiscountPercent:
           (data['appliedDiscountPercent'] as num?)?.toDouble() ?? 0,
+      discountApplied: data['discountApplied'] as bool? ?? false,
+      discountSource: data['discountSource'] as String?,
+      discountCatalogId: data['discountCatalogId'] as String?,
+      discountName:
+          data['discountName'] as String? ??
+          data['appliedDiscountName'] as String?,
+      discountPercent:
+          (data['discountPercent'] as num?)?.toDouble() ??
+          (data['appliedDiscountPercent'] as num?)?.toDouble() ??
+          0,
+      orderDiscountAmount:
+          (data['orderDiscountAmount'] as num?)?.toDouble() ?? 0,
+      orderGrossSubtotal: (data['orderGrossSubtotal'] as num?)?.toDouble() ?? 0,
+      orderNetTotal: (data['orderNetTotal'] as num?)?.toDouble() ?? 0,
       discountAuthorizedByPartnerId:
           data['discountAuthorizedByPartnerId'] as String?,
       discountAuthorizedByPartnerName:

@@ -24,6 +24,7 @@ class DiscountReportRow {
     required this.catalogId,
     required this.discountName,
     required this.discountType,
+    required this.discountSource,
     required this.discountPercent,
     required this.beneficiary,
     required this.beneficiaryEmployeeId,
@@ -43,6 +44,7 @@ class DiscountReportRow {
   final String catalogId;
   final String discountName;
   final String discountType;
+  final String discountSource;
   final double? discountPercent;
   final String beneficiary;
   final String beneficiaryEmployeeId;
@@ -239,6 +241,10 @@ DiscountReportRow _discountRow(
     order.discountName,
     primaryPayment?.appliedDiscountName,
   ]);
+  final rawSource = _firstText([
+    order.discountSource,
+    primaryPayment?.discountSource,
+  ]);
   final category = classifyDiscountType(type: rawType, name: rawName);
   final beneficiary = _beneficiaryFor(category, order, primaryPayment);
   return DiscountReportRow(
@@ -253,8 +259,13 @@ DiscountReportRow _discountRow(
       primaryPayment?.discountAuthorizationRequestId,
       rawType,
     ]),
-    discountName: rawName.isEmpty ? discountCategoryLabel(category) : rawName,
+    discountName: rawName.isEmpty
+        ? rawType.isEmpty && rawSource.isEmpty
+              ? 'Descuento histórico sin concepto identificado'
+              : discountCategoryLabel(category)
+        : rawName,
     discountType: rawType.isEmpty ? discountCategoryLabel(category) : rawType,
+    discountSource: rawSource.isEmpty ? 'Histórico' : rawSource,
     discountPercent: _discountPercent(order, primaryPayment),
     beneficiary: beneficiary,
     beneficiaryEmployeeId: _firstText([

@@ -37,9 +37,12 @@ class PosOrder {
     this.cancelReason,
     this.explicitDiscount = 0,
     this.explicitDiscountFields = const {},
+    this.discountApplied = false,
+    this.discountSource,
     this.discountCatalogId,
     this.discountType,
     this.discountName,
+    this.discountConcept,
     this.discountPercent,
     this.discountRate,
     this.discountReason,
@@ -101,9 +104,12 @@ class PosOrder {
   final String? cancelReason;
   final double explicitDiscount;
   final Map<String, double> explicitDiscountFields;
+  final bool discountApplied;
+  final String? discountSource;
   final String? discountCatalogId;
   final String? discountType;
   final String? discountName;
+  final String? discountConcept;
   final double? discountPercent;
   final double? discountRate;
   final String? discountReason;
@@ -168,6 +174,8 @@ class PosOrder {
       cancelReason: data['cancelReason'] as String?,
       explicitDiscount: _readExplicitDiscount(data),
       explicitDiscountFields: _readExplicitDiscountFields(data),
+      discountApplied: data['discountApplied'] as bool? ?? false,
+      discountSource: _readOptionalString(data['discountSource']),
       discountCatalogId: _readOptionalString(data['discountCatalogId']),
       discountType:
           _readOptionalString(data['discountType']) ??
@@ -175,6 +183,9 @@ class PosOrder {
       discountName:
           _readOptionalString(data['discountName']) ??
           _readOptionalString(data['lastAppliedDiscountName']),
+      discountConcept:
+          _readOptionalString(data['discountConcept']) ??
+          _readOptionalString(data['discountName']),
       discountPercent: _readOptionalDouble(
         data['discountPercent'] ?? data['discountPercentage'],
       ),

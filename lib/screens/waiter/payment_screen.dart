@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/orders/global_discount_checkout.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/employee.dart';
@@ -175,9 +176,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   Future<void> _payPlatformOrder(PosOrder order) async {
-    if (await _recalculateBeforeOpeningSheet()) {
-      return;
-    }
     final confirmed = await _confirm(
       title: 'Registrar pagado en plataforma',
       message: 'Se cerrara ${order.displayName} como pagado en plataforma.',
@@ -330,6 +328,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   Future<void> _openFullTableSheet({
     required PosOrder order,
     required List<Employee> employees,
+    required List<Payment> activePayments,
     required bool hasClientPayment,
     required bool hasPersonPayments,
   }) async {
@@ -341,16 +340,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _showMessage('No hay saldo pendiente por cobrar.');
       return;
     }
-    if (await _recalculateBeforeOpeningSheet()) {
-      return;
-    }
-    if (!mounted) return;
-
-    final initialDiscount = await _autoGeneralDiscount(
-      order,
-      order.pendingTotal,
+    final initialDiscount = _repository.preparedGlobalDiscountForAmount(
+      order: order,
+      amountBeforeDiscount: order.pendingTotal,
+      remainingGrossSubtotal: order.pendingTotal,
+      activePayments: activePayments,
     );
-    if (!mounted) return;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -363,6 +358,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         employeeDisabled: hasClientPayment,
         primaryIcon: Icons.point_of_sale_outlined,
         initialDiscount: initialDiscount,
+        lockInitialDiscount: initialDiscount != null,
         onApplyDiscount: (amount) => _openDiscountDialog(order, amount),
         onConfirm: (method, cashDetails, employee, discount) {
           return _payFullTable(
@@ -381,6 +377,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     required PosOrder order,
     required List<OrderItem> items,
     required List<Employee> employees,
+    required List<Payment> activePayments,
     required bool hasClientPayment,
     required bool hasPartialPayments,
   }) async {
@@ -388,11 +385,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _showMessage('Esta cuenta ya tiene pagos parciales.');
       return;
     }
-    if (await _recalculateBeforeOpeningSheet()) {
-      return;
-    }
-    if (!mounted) return;
-
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -404,7 +396,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
         employeeDisabled: hasClientPayment,
         personName: _personName,
         pendingForItems: _pendingForItems,
-        onAutoDiscount: (amount) => _autoGeneralDiscount(order, amount),
+        onPreparedDiscount: (amount) async {
+          return _repository.preparedGlobalDiscountForAmount(
+            order: order,
+            amountBeforeDiscount: amount,
+            remainingGrossSubtotal: order.pendingTotal,
+            activePayments: activePayments,
+          );
+        },
         onApplyDiscount: (amount) => _openDiscountDialog(order, amount),
         onConfirm:
             (people, label, total, method, cashDetails, employee, discount) {
@@ -424,6 +423,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   Future<void> _openPartialSheet({
     required PosOrder order,
+    required List<Payment> activePayments,
     required bool hasPersonPayments,
   }) async {
     if (hasPersonPayments) {
@@ -434,18 +434,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
       _showMessage('No hay saldo pendiente por cobrar.');
       return;
     }
-    if (await _recalculateBeforeOpeningSheet()) {
-      return;
-    }
-    if (!mounted) return;
-
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => _PartialPaymentSheet(
         order: order,
-        onAutoDiscount: (amount) => _autoGeneralDiscount(order, amount),
+        onPreparedDiscount: (amount) async {
+          return _repository.preparedGlobalDiscountForAmount(
+            order: order,
+            amountBeforeDiscount: amount,
+            remainingGrossSubtotal: order.pendingTotal,
+            activePayments: activePayments,
+          );
+        },
         onApplyDiscount: (amount) => _openDiscountDialog(order, amount),
         onConfirm: (amount, method, cashDetails, discount) {
           return _payPartial(
@@ -458,22 +460,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
         },
       ),
     );
-  }
-
-  Future<bool> _recalculateBeforeOpeningSheet() async {
-    try {
-      final result = await _repository.recalculateOrderBeforeCheckout(
-        widget.orderId,
-      );
-      if (result.changed) {
-        _showMessage('Total actualizado. Vuelve a tocar Cobrar.');
-        return true;
-      }
-    } catch (error) {
-      _showMessage('No se pudo validar el total: $error');
-      return true;
-    }
-    return false;
   }
 
   Future<AppliedDiscountDetails?> _openDiscountDialog(
@@ -500,25 +486,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (mounted) {
         _showMessage(error.toString().replaceFirst('Bad state: ', ''));
       }
-      return null;
-    }
-  }
-
-  Future<AppliedDiscountDetails?> _autoGeneralDiscount(
-    PosOrder order,
-    double amount,
-  ) async {
-    try {
-      final config = await _repository.getGeneralDiscountConfigOnce();
-      if (!config.appliesToCurrentBranch(AppSession.instance.currentBranchId)) {
-        return null;
-      }
-      return _repository.authorizeDiscount(
-        order: order,
-        amountBeforeDiscount: amount,
-        discountType: 'general',
-      );
-    } catch (_) {
       return null;
     }
   }
@@ -658,6 +625,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                   _TotalsPanel(order: order, compact: compact),
                                   SizedBox(height: gap),
                                   _PaymentMainActions(
+                                    order: order,
                                     peopleCount: people.length,
                                     tableDisabled:
                                         hasPersonPayments ||
@@ -673,6 +641,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                       _openFullTableSheet(
                                         order: order,
                                         employees: employeeBenefitOptions,
+                                        activePayments: activePayments,
                                         hasClientPayment: hasClientPayment,
                                         hasPersonPayments: hasPersonPayments,
                                       );
@@ -685,6 +654,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                         order: order,
                                         items: items,
                                         employees: employeeBenefitOptions,
+                                        activePayments: activePayments,
                                         hasClientPayment: hasClientPayment,
                                         hasPartialPayments: hasPartialPayments,
                                       );
@@ -695,6 +665,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                       );
                                       _openPartialSheet(
                                         order: order,
+                                        activePayments: activePayments,
                                         hasPersonPayments: hasPersonPayments,
                                       );
                                     },
@@ -782,6 +753,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
 class _PaymentMainActions extends StatelessWidget {
   const _PaymentMainActions({
+    required this.order,
     required this.peopleCount,
     required this.tableDisabled,
     required this.personDisabled,
@@ -791,6 +763,7 @@ class _PaymentMainActions extends StatelessWidget {
     required this.onPartialSelected,
   });
 
+  final PosOrder order;
   final int peopleCount;
   final bool tableDisabled;
   final bool personDisabled;
@@ -836,6 +809,8 @@ class _PaymentMainActions extends StatelessWidget {
             subtitle: 'Elige una opcion para continuar.',
           ),
           const SizedBox(height: 12),
+          _CheckoutDiscountSummary(order: order),
+          const SizedBox(height: 12),
           compact
               ? Column(
                   children: [
@@ -856,6 +831,70 @@ class _PaymentMainActions extends StatelessWidget {
                 ),
         ],
       ),
+    );
+  }
+}
+
+class _CheckoutDiscountSummary extends StatelessWidget {
+  const _CheckoutDiscountSummary({required this.order});
+
+  final PosOrder order;
+
+  @override
+  Widget build(BuildContext context) {
+    final grossSubtotal = order.grossSubtotal ?? order.total;
+    final discountAmount = order.explicitDiscount.clamp(0, grossSubtotal);
+    final netTotal =
+        order.netTotal ??
+        (grossSubtotal - discountAmount).clamp(0, double.infinity).toDouble();
+    final hasGlobalDiscount =
+        order.discountSource == globalDiscountSource && discountAmount > 0.01;
+    final percent =
+        order.discountPercent ??
+        ((order.discountRate ?? 0) <= 1
+            ? (order.discountRate ?? 0) * 100
+            : order.discountRate ?? 0);
+    final concept =
+        order.discountConcept ?? order.discountName ?? 'Descuento global';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _PreviewRow(label: 'Subtotal bruto', value: grossSubtotal),
+        if (hasGlobalDiscount) ...[
+          const SizedBox(height: 4),
+          const Text(
+            'Descuento global',
+            style: TextStyle(
+              color: BrandColors.textMuted,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '$concept ${percent.toStringAsFixed(percent % 1 == 0 ? 0 : 2)}%',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+              Text(
+                '-\$${discountAmount.toStringAsFixed(2)}',
+                style: const TextStyle(
+                  color: BrandColors.success,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
+        ],
+        const Divider(height: 18),
+        _PreviewRow(label: 'Total final', value: netTotal, highlight: true),
+      ],
     );
   }
 }
@@ -988,6 +1027,7 @@ class _PaymentMethodSheet extends StatefulWidget {
     required this.onConfirm,
     required this.onApplyDiscount,
     this.initialDiscount,
+    this.lockInitialDiscount = false,
     this.allowEmployeeConsumption = true,
   });
 
@@ -1000,6 +1040,7 @@ class _PaymentMethodSheet extends StatefulWidget {
   final _PaymentConfirmCallback onConfirm;
   final _ApplyDiscountCallback onApplyDiscount;
   final AppliedDiscountDetails? initialDiscount;
+  final bool lockInitialDiscount;
   final bool allowEmployeeConsumption;
 
   @override
@@ -1138,7 +1179,7 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
             subtotal: widget.total,
             discount: _discount,
             onApply: _applyDiscount,
-            onClear: _discount == null
+            onClear: _discount == null || widget.lockInitialDiscount
                 ? null
                 : () => setState(() {
                     _discount = null;
@@ -1210,13 +1251,13 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
 class _PartialPaymentSheet extends StatefulWidget {
   const _PartialPaymentSheet({
     required this.order,
-    required this.onAutoDiscount,
+    required this.onPreparedDiscount,
     required this.onApplyDiscount,
     required this.onConfirm,
   });
 
   final PosOrder order;
-  final _ApplyDiscountCallback onAutoDiscount;
+  final _ApplyDiscountCallback onPreparedDiscount;
   final _ApplyDiscountCallback onApplyDiscount;
   final _PartialPaymentConfirmCallback onConfirm;
 
@@ -1264,7 +1305,7 @@ class _PartialPaymentSheetState extends State<_PartialPaymentSheet> {
       return;
     }
     setState(() => _loadingDiscount = true);
-    final discount = await widget.onAutoDiscount(amount);
+    final discount = await widget.onPreparedDiscount(amount);
     if (!mounted) return;
     setState(() {
       _amount = amount;
@@ -1287,6 +1328,7 @@ class _PartialPaymentSheetState extends State<_PartialPaymentSheet> {
         allowEmployeeConsumption: false,
         primaryIcon: Icons.payments_outlined,
         initialDiscount: _initialDiscount,
+        lockInitialDiscount: _initialDiscount != null,
         onApplyDiscount: widget.onApplyDiscount,
         onConfirm: (method, cashDetails, employee, discount) {
           return widget.onConfirm(_amount, method, cashDetails, discount);
@@ -1542,7 +1584,9 @@ class _DiscountSummary extends StatelessWidget {
                 style: const TextStyle(fontWeight: FontWeight.w900),
               ),
             ),
-            TextButton(onPressed: onClear, child: const Text('Quitar')),
+            TextButton(onPressed: onApply, child: const Text('Cambiar')),
+            if (onClear != null)
+              TextButton(onPressed: onClear, child: const Text('Quitar')),
           ],
         ),
         _PreviewRow(label: 'Subtotal', value: subtotal),
@@ -1823,7 +1867,7 @@ class _PeoplePaymentSheet extends StatefulWidget {
     required this.employeeDisabled,
     required this.personName,
     required this.pendingForItems,
-    required this.onAutoDiscount,
+    required this.onPreparedDiscount,
     required this.onApplyDiscount,
     required this.onConfirm,
   });
@@ -1835,7 +1879,7 @@ class _PeoplePaymentSheet extends StatefulWidget {
   final String Function(int person, List<OrderItem> items, PosOrder order)
   personName;
   final double Function(List<OrderItem> items) pendingForItems;
-  final _ApplyDiscountCallback onAutoDiscount;
+  final _ApplyDiscountCallback onPreparedDiscount;
   final _ApplyDiscountCallback onApplyDiscount;
   final _PeoplePaymentConfirmCallback onConfirm;
 
@@ -1888,6 +1932,7 @@ class _PeoplePaymentSheetState extends State<_PeoplePaymentSheet> {
         employeeDisabled: widget.employeeDisabled,
         primaryIcon: Icons.groups_2_outlined,
         initialDiscount: _initialDiscount,
+        lockInitialDiscount: _initialDiscount != null,
         onApplyDiscount: widget.onApplyDiscount,
         onConfirm: (method, cashDetails, employee, discount) {
           return widget.onConfirm(
@@ -2042,7 +2087,7 @@ class _PeoplePaymentSheetState extends State<_PeoplePaymentSheet> {
 
   Future<void> _continue() async {
     setState(() => _loadingDiscount = true);
-    final discount = await widget.onAutoDiscount(_selectedTotal);
+    final discount = await widget.onPreparedDiscount(_selectedTotal);
     if (!mounted) return;
     setState(() {
       _initialDiscount = discount;

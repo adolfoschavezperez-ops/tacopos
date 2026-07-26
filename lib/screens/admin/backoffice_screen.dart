@@ -2706,6 +2706,7 @@ const _discountDetailHeaders = [
   'Subtotal bruto',
   'Descuento del catalogo',
   'Tipo',
+  'Origen',
   'Porcentaje',
   'Importe descuento',
   'Total neto',
@@ -3283,7 +3284,16 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                     ),
                     _InfoText('Descuento %', row.discountPercentText),
                     _InfoText('Tipo descuento', row.discountTypeLabel),
-                    _InfoText('Nombre descuento', row.discountName),
+                    _InfoText(
+                      'Origen',
+                      _orderDiscountSourceLabel(row.order, row.payments),
+                    ),
+                    _InfoText(
+                      'Nombre descuento',
+                      row.discountName.isEmpty && row.explicitDiscount > 0.01
+                          ? 'Descuento histórico sin concepto identificado'
+                          : row.discountName,
+                    ),
                     _InfoText('Motivo descuento', row.discountReason),
                     _InfoText('Beneficiario', row.discountBeneficiary),
                     _InfoText('Autorizo', row.discountAuthorizedBy),
@@ -3769,6 +3779,7 @@ class _SalesAuditRow {
     discountPercentText,
     _money(explicitDiscount),
     discountTypeLabel,
+    _orderDiscountSourceLabel(order, payments),
     discountName.isEmpty ? '-' : discountName,
     discountReason.isEmpty ? '-' : discountReason,
     discountBeneficiary.isEmpty ? '-' : discountBeneficiary,
@@ -3811,6 +3822,7 @@ const _salesAuditCsvHeaders = [
   'discountPercent',
   'descuento monetario valido',
   'discountType',
+  'discountSource',
   'discountName',
   'discountReason',
   'discountBeneficiary',
@@ -3838,6 +3850,7 @@ const _discountsByDayCsvHeaders = [
   'discountCatalogId',
   'discountName',
   'discountType',
+  'discountSource',
   'discountPercent',
   'discountAmount',
   'netTotal',
@@ -6020,7 +6033,16 @@ class _SaleDetailDialog extends StatelessWidget {
                       ),
                       _InfoText('Plataforma', order.platformName ?? '-'),
                       _InfoText('Cliente', order.customerName ?? '-'),
-                      _InfoText('Total neto orden', _money(order.total)),
+                      _InfoText(
+                        'Total neto orden',
+                        _money(
+                          order.netTotal ??
+                              (_saleDetailGrossSubtotal(order, items) -
+                                      order.explicitDiscount)
+                                  .clamp(0, double.infinity)
+                                  .toDouble(),
+                        ),
+                      ),
                       _InfoText(
                         'Descuento aplicado',
                         order.explicitDiscount > 0.01 ? 'Si' : 'No',
@@ -6028,10 +6050,15 @@ class _SaleDetailDialog extends StatelessWidget {
                       _InfoText(
                         'Descuento',
                         order.explicitDiscount > 0.01
-                            ? (order.discountName ??
+                            ? (order.discountConcept ??
+                                  order.discountName ??
                                   order.discountType ??
-                                  'Descuento historico no identificado')
+                                  'Descuento histórico sin concepto identificado')
                             : 'Sin descuento',
+                      ),
+                      _InfoText(
+                        'Origen',
+                        _orderDiscountSourceLabel(order, payments),
                       ),
                       _InfoText(
                         'Porcentaje',
@@ -6331,16 +6358,17 @@ String _discountCell(DiscountReportRow row, int index) {
     5 => _money(row.grossSales),
     6 => row.discountName,
     7 => discountCategoryLabel(row.category),
-    8 =>
+    8 => _discountSourceLabel(row.discountSource),
+    9 =>
       row.discountPercent == null
           ? '-'
           : '${row.discountPercent!.toStringAsFixed(2)}%',
-    9 => _money(row.discountAmount),
-    10 => _money(row.netTotal),
-    11 => row.beneficiary,
-    12 => row.appliedBy.isEmpty ? '-' : row.appliedBy,
-    13 => row.authorizedBy.isEmpty ? '-' : row.authorizedBy,
-    14 => row.reason.isEmpty ? '-' : row.reason,
+    10 => _money(row.discountAmount),
+    11 => _money(row.netTotal),
+    12 => row.beneficiary,
+    13 => row.appliedBy.isEmpty ? '-' : row.appliedBy,
+    14 => row.authorizedBy.isEmpty ? '-' : row.authorizedBy,
+    15 => row.reason.isEmpty ? '-' : row.reason,
     _ => '',
   };
 }
@@ -6355,6 +6383,7 @@ List<String> _discountCsvRow(DiscountReportRow row) {
     row.catalogId,
     row.discountName,
     row.discountType,
+    row.discountSource,
     row.discountPercent?.toStringAsFixed(2) ?? '',
     row.discountAmount.toStringAsFixed(2),
     row.netTotal.toStringAsFixed(2),
@@ -6438,6 +6467,33 @@ String _orderDiscountPercentText(PosOrder order) {
     return '${((order.explicitDiscount / order.total) * 100).toStringAsFixed(2)}%';
   }
   return '-';
+}
+
+String _orderDiscountSourceLabel(
+  PosOrder order, [
+  Iterable<Payment> payments = const [],
+]) {
+  final paymentSource = payments
+      .map((payment) => payment.discountSource?.trim())
+      .whereType<String>()
+      .where((source) => source.isNotEmpty)
+      .firstOrNull;
+  final source = order.discountSource?.trim() ?? paymentSource ?? '';
+  if (source.isEmpty) {
+    return order.explicitDiscount > 0.01 ? 'Histórico' : 'Sin descuento';
+  }
+  return _discountSourceLabel(source);
+}
+
+String _discountSourceLabel(String source) {
+  return switch (source.trim().toLowerCase()) {
+    'global' => 'Global',
+    'none' => 'Sin descuento',
+    'historical' || 'historico' || 'histórico' => 'Histórico',
+    final value when value.isNotEmpty =>
+      value[0].toUpperCase() + value.substring(1).replaceAll('_', ' '),
+    _ => '-',
+  };
 }
 
 String _money(double value) => '\$${value.toStringAsFixed(2)}';

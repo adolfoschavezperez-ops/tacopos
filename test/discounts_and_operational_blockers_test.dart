@@ -49,6 +49,33 @@ void main() {
     expect(category, DiscountReportCategory.courtesy);
   });
 
+  test('lee concepto, origen y porcentaje del snapshot global de la orden', () {
+    final report = buildDiscountsByDayReport(
+      orderRows: [
+        discountRow(
+          order: order(
+            discountType: 'general',
+            discountSource: 'global',
+            discountCatalogId: 'discounts',
+            discountName: 'Promocion de reapertura',
+            discountPercent: 20,
+            explicitDiscount: 100,
+          ),
+          discountAmount: 100,
+        ),
+      ],
+      paymentsByOrder: const {},
+    );
+
+    final row = report.rows.single;
+    expect(row.catalogId, 'discounts');
+    expect(row.discountName, 'Promocion de reapertura');
+    expect(row.discountSource, 'global');
+    expect(row.discountPercent, 20);
+    expect(row.grossSales, 100);
+    expect(row.netTotal, 0);
+  });
+
   test('orden pagada con currentOrderId obsoleto no bloquea', () {
     final blocker = evaluateOperationalOrderBlocker(
       order: order(
@@ -148,7 +175,11 @@ PosOrder order({
   double pendingTotal = 100,
   DateTime? paidAt,
   String? discountType,
+  String? discountSource,
+  String? discountCatalogId,
   String? discountName,
+  double? discountPercent,
+  double explicitDiscount = 0,
   String? discountBeneficiaryEmployeeName,
   String? discountBeneficiaryPartnerName,
 }) {
@@ -166,8 +197,15 @@ PosOrder order({
     orderType: orderType,
     paidAt: paidAt,
     businessDate: '2026-07-23',
+    explicitDiscount: explicitDiscount,
+    explicitDiscountFields: explicitDiscount > 0
+        ? {'discountAmount': explicitDiscount}
+        : const {},
+    discountSource: discountSource,
+    discountCatalogId: discountCatalogId,
     discountType: discountType,
     discountName: discountName,
+    discountPercent: discountPercent,
     discountBeneficiaryEmployeeName: discountBeneficiaryEmployeeName,
     discountBeneficiaryPartnerName: discountBeneficiaryPartnerName,
   );
