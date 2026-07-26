@@ -1,0 +1,260 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function validRestaurantField(restaurantId) {
+      return !('restaurantId' in request.resource.data) ||
+        request.resource.data.restaurantId == restaurantId;
+    }
+
+    function validBranchField() {
+      return !('branchId' in request.resource.data) ||
+        request.resource.data.branchId is string;
+    }
+
+    function immutableRestaurantId() {
+      return !('restaurantId' in resource.data) ||
+        request.resource.data.restaurantId == resource.data.restaurantId;
+    }
+
+    function immutableBranchId() {
+      return !('branchId' in resource.data) ||
+        request.resource.data.branchId == resource.data.branchId;
+    }
+
+    function validCreate(restaurantId) {
+      return signedIn() &&
+        validRestaurantField(restaurantId) &&
+        validBranchField();
+    }
+
+    function validUpdate() {
+      return signedIn() &&
+        immutableRestaurantId() &&
+        immutableBranchId();
+    }
+
+    function validWrite(restaurantId) {
+      return request.method == 'create'
+        ? validCreate(restaurantId)
+        : validUpdate();
+    }
+
+    match /restaurants/{restaurantId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();
+      allow delete: if false;
+
+      match /branches/{branchId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /employees/{employeeId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if signedIn();
+      }
+
+      match /tables/{tableId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /products/{productId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /productCategories/{categoryId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /orderPlatforms/{platformId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /orders/{orderId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+
+        match /items/{itemId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if signedIn();
+        }
+
+        match /payments/{paymentId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if false;
+        }
+
+        match /kitchenBatches/{batchId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if false;
+        }
+      }
+
+      match /cashSessions/{cashSessionId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /cashWithdrawalRequests/{requestId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /kitchenStockItems/{itemId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /kitchenSessions/{sessionId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+
+        match /items/{itemId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if false;
+        }
+
+        match /additionalEntries/{entryId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if false;
+        }
+      }
+
+      match /activeSessions/{sessionId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /activityLog/{eventId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update, delete: if false;
+      }
+
+      match /suppliers/{supplierId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /purchaseItems/{itemId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /supplierPurchases/{purchaseId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+
+        match /items/{itemId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if signedIn();
+        }
+      }
+
+      match /supplierPayments/{paymentId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /partners/{partnerId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /partnerContributions/{contributionId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /discountUsage/{usageId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /discountAuthorizationRequests/{requestId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /productStockOuts/{stockOutId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /settings/{settingId} {
+        allow read: if signedIn();
+        allow create: if signedIn();
+        allow update: if signedIn();
+        allow delete: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

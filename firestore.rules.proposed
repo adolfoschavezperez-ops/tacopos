@@ -1,0 +1,215 @@
+rules_version = '2';
+
+// Propuesta futura. No desplegar hasta crear
+// restaurants/{restaurantId}/authUsers/{request.auth.uid}
+// mediante backend/Admin SDK.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(restaurantId) {
+      return /databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid);
+    }
+
+    function userProfile(restaurantId) {
+      return get(userPath(restaurantId)).data;
+    }
+
+    function employeeActive(restaurantId) {
+      return signedIn() &&
+        exists(userPath(restaurantId)) &&
+        userProfile(restaurantId).active == true;
+    }
+
+    function superAdmin(restaurantId) {
+      return employeeActive(restaurantId) &&
+        userProfile(restaurantId).isSuperAdmin == true;
+    }
+
+    function can(restaurantId, permission) {
+      return superAdmin(restaurantId) ||
+        (employeeActive(restaurantId) &&
+          userProfile(restaurantId).permissions[permission] == true);
+    }
+
+    function branchAllowed(restaurantId, branchId) {
+      return superAdmin(restaurantId) ||
+        (employeeActive(restaurantId) &&
+          branchId in userProfile(restaurantId).branchAccess);
+    }
+
+    function docBranchAllowed(restaurantId) {
+      return !('branchId' in resource.data) ||
+        branchAllowed(restaurantId, resource.data.branchId);
+    }
+
+    function createBranchAllowed(restaurantId) {
+      return !('branchId' in request.resource.data) ||
+        branchAllowed(restaurantId, request.resource.data.branchId);
+    }
+
+    function immutableScope(restaurantId) {
+      return (!('restaurantId' in resource.data) ||
+          request.resource.data.restaurantId == resource.data.restaurantId) &&
+        (!('branchId' in resource.data) ||
+          request.resource.data.branchId == resource.data.branchId);
+    }
+
+    function scopedRead(restaurantId) {
+      return employeeActive(restaurantId) && docBranchAllowed(restaurantId);
+    }
+
+    function scopedCreate(restaurantId) {
+      return employeeActive(restaurantId) && createBranchAllowed(restaurantId);
+    }
+
+    function scopedUpdate(restaurantId) {
+      return employeeActive(restaurantId) &&
+        docBranchAllowed(restaurantId) &&
+        immutableScope(restaurantId);
+    }
+
+    match /restaurants/{restaurantId} {
+      allow read: if employeeActive(restaurantId);
+      allow write: if superAdmin(restaurantId);
+
+      match /authUsers/{uid} {
+        allow read: if request.auth.uid == uid || can(restaurantId, 'canManageEmployees');
+        allow write: if false;
+      }
+
+      match /branches/{id} {
+        allow read: if employeeActive(restaurantId);
+        allow write: if superAdmin(restaurantId);
+      }
+
+      match /employees/{id} {
+        allow read: if employeeActive(restaurantId);
+        allow write: if can(restaurantId, 'canManageEmployees');
+      }
+
+      match /products/{id} {
+        allow read: if employeeActive(restaurantId);
+        allow create: if can(restaurantId, 'canManageProducts') && scopedCreate(restaurantId);
+        allow update: if can(restaurantId, 'canManageProducts') && scopedUpdate(restaurantId);
+        allow delete: if false;
+      }
+
+      match /productCategories/{id} {
+        allow read: if employeeActive(restaurantId);
+        allow create: if can(restaurantId, 'canManageProducts') && scopedCreate(restaurantId);
+        allow update: if can(restaurantId, 'canManageProducts') && scopedUpdate(restaurantId);
+        allow delete: if false;
+      }
+
+      match /tables/{id} {
+        allow read: if employeeActive(restaurantId);
+        allow create: if can(restaurantId, 'canManageTables') && scopedCreate(restaurantId);
+        allow update: if (can(restaurantId, 'canManageTables') ||
+            can(restaurantId, 'canTakeOrders') ||
+            can(restaurantId, 'canCharge')) && scopedUpdate(restaurantId);
+        allow delete: if false;
+      }
+
+      match /orderPlatforms/{id} {
+        allow read: if employeeActive(restaurantId);
+        allow create: if can(restaurantId, 'canManagePlatforms') && scopedCreate(restaurantId);
+        allow update: if can(restaurantId, 'canManagePlatforms') && scopedUpdate(restaurantId);
+        allow delete: if false;
+      }
+
+      match /orders/{orderId} {
+        allow read: if scopedRead(restaurantId);
+        allow create: if can(restaurantId, 'canTakeOrders') && scopedCreate(restaurantId);
+        allow update: if (can(restaurantId, 'canTakeOrders') ||
+            can(restaurantId, 'canCharge') ||
+            can(restaurantId, 'canCancelOrders')) && scopedUpdate(restaurantId);
+        allow delete: if false;
+
+        match /items/{itemId} {
+          allow read: if employeeActive(restaurantId);
+          allow create, update: if (can(restaurantId, 'canTakeOrders') ||
+              can(restaurantId, 'canViewKitchen') ||
+              can(restaurantId, 'canApproveKitchenCancellations')) &&
+            scopedCreate(restaurantId);
+          allow delete: if can(restaurantId, 'canCancelItems');
+        }
+
+        match /payments/{paymentId} {
+          allow read: if employeeActive(restaurantId);
+          allow create: if can(restaurantId, 'canCharge') && scopedCreate(restaurantId);
+          allow update: if (can(restaurantId, 'canCharge') ||
+              can(restaurantId, 'canCancelPayments')) && scopedUpdate(restaurantId);
+          allow delete: if false;
+        }
+      }
+
+      match /cashSessions/{id} {
+        allow read: if can(restaurantId, 'canManageCash') || can(restaurantId, 'canViewAdmin');
+        allow create, update: if can(restaurantId, 'canManageCash') && scopedCreate(restaurantId);
+        allow delete: if false;
+      }
+
+      match /cashWithdrawalRequests/{id} {
+        allow read: if can(restaurantId, 'canManageCash') ||
+          can(restaurantId, 'canAuthorizeCashWithdrawals');
+        allow create: if can(restaurantId, 'canManageCash') && scopedCreate(restaurantId);
+        allow update: if can(restaurantId, 'canAuthorizeCashWithdrawals') && scopedUpdate(restaurantId);
+        allow delete: if false;
+      }
+
+      match /kitchenStockItems/{id} {
+        allow read: if can(restaurantId, 'canViewKitchen') ||
+          can(restaurantId, 'canManageKitchenStock');
+        allow create, update: if can(restaurantId, 'canManageKitchenStock') && scopedCreate(restaurantId);
+        allow delete: if false;
+      }
+
+      match /kitchenSessions/{sessionId}/{doc=**} {
+        allow read: if can(restaurantId, 'canViewKitchen') ||
+          can(restaurantId, 'canViewKitchenReports');
+        allow write: if can(restaurantId, 'canOpenKitchen') ||
+          can(restaurantId, 'canCloseKitchen') ||
+          can(restaurantId, 'canManageKitchenStock');
+      }
+
+      match /suppliers/{id} {
+        allow read: if can(restaurantId, 'canViewPurchases') ||
+          can(restaurantId, 'canManageSuppliers');
+        allow write: if can(restaurantId, 'canManageSuppliers');
+      }
+
+      match /supplierPurchases/{purchaseId}/{doc=**} {
+        allow read: if can(restaurantId, 'canViewPurchases') ||
+          can(restaurantId, 'canViewAccountsPayable') ||
+          can(restaurantId, 'canViewPurchaseReports');
+        allow write: if can(restaurantId, 'canRegisterPurchases');
+      }
+
+      match /supplierPayments/{id} {
+        allow read: if can(restaurantId, 'canViewAccountsPayable') ||
+          can(restaurantId, 'canViewPurchaseReports');
+        allow write: if can(restaurantId, 'canPaySuppliers') ||
+          can(restaurantId, 'canCancelSupplierPayments');
+      }
+
+      match /activityLog/{id} {
+        allow read: if can(restaurantId, 'canViewAdmin') ||
+          can(restaurantId, 'canViewLiveOperations');
+        allow create: if employeeActive(restaurantId);
+        allow update, delete: if false;
+      }
+
+      match /{known}/{id} {
+        allow read: if employeeActive(restaurantId);
+        allow write: if can(restaurantId, 'canViewAdmin');
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
