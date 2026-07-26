@@ -2,6 +2,7 @@ import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
 import '../../models/pos_table.dart';
+import 'order_types.dart';
 
 const double ghostOrderTolerance = 0.02;
 
@@ -192,6 +193,7 @@ bool shouldReleaseTableForGhostOrder({
   required PosTable? table,
 }) {
   return order.orderType != 'takeout' &&
+      orderUsesPhysicalTables(order) &&
       table != null &&
       table.currentOrderId?.trim() == order.id.trim();
 }

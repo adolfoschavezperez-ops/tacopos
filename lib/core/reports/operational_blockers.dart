@@ -39,9 +39,11 @@ class OperationalOpenOrdersSummary {
   final List<OperationalOrderBlocker> blockers;
 
   int get openTableCount =>
-      blockers.where((row) => row.order.orderType != 'takeout').length;
+      blockers.where((row) => row.order.orderType == 'dine_in').length;
   int get openTakeoutCount =>
       blockers.where((row) => row.order.orderType == 'takeout').length;
+  int get openStandingCount =>
+      blockers.where((row) => row.order.orderType == 'standing').length;
   int get pendingPaymentCount => blockers
       .where(
         (row) =>

@@ -19,6 +19,7 @@ class CanonicalSalesSummary {
     required this.paidOrdersCount,
     required this.takeoutOrdersCount,
     required this.dineInOrdersCount,
+    required this.standingOrdersCount,
     required this.productRows,
     required this.orderRows,
     required this.integrityIssues,
@@ -37,6 +38,7 @@ class CanonicalSalesSummary {
   final int paidOrdersCount;
   final int takeoutOrdersCount;
   final int dineInOrdersCount;
+  final int standingOrdersCount;
   final List<CanonicalProductSalesRow> productRows;
   final List<CanonicalOrderSalesRow> orderRows;
   final List<SalesIntegrityIssue> integrityIssues;
@@ -167,6 +169,7 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
   var paidOrdersCount = 0;
   var takeoutOrdersCount = 0;
   var dineInOrdersCount = 0;
+  var standingOrdersCount = 0;
   final products = <String, _ProductAccumulator>{};
   final orderRows = <CanonicalOrderSalesRow>[];
   final issues = <SalesIntegrityIssue>[];
@@ -224,10 +227,13 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
         order.paymentStatus.trim().toLowerCase() == 'paid') {
       paidOrdersCount++;
     }
-    if (order.orderType == 'takeout') {
-      takeoutOrdersCount++;
-    } else {
-      dineInOrdersCount++;
+    switch (order.orderType) {
+      case 'takeout':
+        takeoutOrdersCount++;
+      case 'standing':
+        standingOrdersCount++;
+      default:
+        dineInOrdersCount++;
     }
 
     if (difference.abs() > salesReconciliationTolerance) {
@@ -283,6 +289,7 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
     paidOrdersCount: paidOrdersCount,
     takeoutOrdersCount: takeoutOrdersCount,
     dineInOrdersCount: dineInOrdersCount,
+    standingOrdersCount: standingOrdersCount,
     productRows: productRows,
     orderRows: orderRows,
     integrityIssues: issues,

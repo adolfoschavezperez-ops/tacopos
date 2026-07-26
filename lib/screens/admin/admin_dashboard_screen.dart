@@ -307,6 +307,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               final partialOrders = ordersInRange
                   .where((order) => order.paymentStatus == 'partial')
                   .length;
+              final standingOrders = ordersInRange
+                  .where((order) => order.orderType == standingOrderType)
+                  .length;
 
               return StreamBuilder<List<Product>>(
                 stream: repository.watchProducts(),
@@ -538,6 +541,12 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                                 icon: Icons.pie_chart_outline,
                                 value: '$partialOrders',
                                 accent: BrandColors.info,
+                              ),
+                              _MetricCard(
+                                title: 'Parados sin mesa',
+                                icon: Icons.accessibility_new,
+                                value: '$standingOrders',
+                                accent: BrandColors.accentYellow,
                               ),
                             ],
                           );

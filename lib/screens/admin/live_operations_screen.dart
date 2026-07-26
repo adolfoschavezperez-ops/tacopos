@@ -453,6 +453,23 @@ class _TablesLiveTabState extends State<_TablesLiveTab> {
           builder: (context, ordersSnapshot) {
             final orders = ordersSnapshot.data ?? const <PosOrder>[];
             final tables = tablesSnapshot.data!;
+            final visibleTables = <PosTable>[];
+            final seenOrders = <String>{};
+            for (final table in tables) {
+              final orderId = table.currentOrderId?.trim() ?? '';
+              final grouped =
+                  table.isPhysicalTable &&
+                  orderId.isNotEmpty &&
+                  tables
+                          .where(
+                            (candidate) =>
+                                candidate.currentOrderId?.trim() == orderId,
+                          )
+                          .length >
+                      1;
+              if (grouped && !seenOrders.add(orderId)) continue;
+              visibleTables.add(table);
+            }
             return GridView.builder(
               padding: const EdgeInsets.all(18),
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -461,9 +478,9 @@ class _TablesLiveTabState extends State<_TablesLiveTab> {
                 crossAxisSpacing: 12,
                 mainAxisSpacing: 12,
               ),
-              itemCount: tables.length,
+              itemCount: visibleTables.length,
               itemBuilder: (context, index) {
-                final table = tables[index];
+                final table = visibleTables[index];
                 final order = getActiveOrderForTable(table.id, orders);
                 _debugLiveTableOrders(table, orders, order);
                 return _LiveTableCard(
@@ -511,7 +528,7 @@ class _LiveTableCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            table.name,
+            currentOrder?.displayName ?? table.name,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 8),
@@ -555,7 +572,7 @@ void _debugLiveTableOrders(
   if (!kDebugMode) return;
 
   final tableOrders =
-      orders.where((order) => order.tableId.trim() == table.id.trim()).toList()
+      orders.where((order) => order.linkedTableIds.contains(table.id)).toList()
         ..sort((a, b) {
           final aDate =
               a.updatedAt ??

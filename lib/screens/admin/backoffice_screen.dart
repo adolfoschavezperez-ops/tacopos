@@ -1006,11 +1006,12 @@ class _DashboardSection extends StatelessWidget {
       _dashboardCollectedAmount,
     );
     final takeoutOrders = orders.where((order) => order.orderType == 'takeout');
+    final standingOrders = orders.where(
+      (order) => order.orderType == standingOrderType,
+    );
     final servedTables = orders
-        .where(
-          (order) => order.orderType != 'takeout' && order.tableId.isNotEmpty,
-        )
-        .map((order) => order.tableId)
+        .where((order) => order.orderType == dineInOrderType)
+        .expand((order) => order.linkedTableIds)
         .toSet()
         .length;
     final attentionDurations = paidOrders
@@ -1205,6 +1206,11 @@ class _DashboardSection extends StatelessWidget {
                     icon: Icons.shopping_bag_outlined,
                   ),
                   SecondaryMetricCard(
+                    label: 'Parados sin mesa',
+                    value: '${standingOrders.length}',
+                    icon: Icons.accessibility_new,
+                  ),
+                  SecondaryMetricCard(
                     label: 'Mesas atendidas',
                     value: '$servedTables',
                     icon: Icons.table_restaurant,
@@ -1367,6 +1373,8 @@ class _AlertStrip extends StatelessWidget {
                         '${summary!.openTableCount} mesas abiertas',
                       if ((summary?.openTakeoutCount ?? 0) > 0)
                         '${summary!.openTakeoutCount} pedidos para llevar abiertos',
+                      if ((summary?.openStandingCount ?? 0) > 0)
+                        '${summary!.openStandingCount} ordenes sin mesa abiertas',
                       if (partial > 0) '$partial cuentas parciales',
                     ];
                     if ((summary?.hasBlockers ?? false) || alerts.isNotEmpty) {
@@ -1948,6 +1956,7 @@ class _SalesSectionState extends State<_SalesSection> {
                   'all': 'Todos',
                   'dine_in': 'Mesas',
                   'takeout': 'Para llevar',
+                  'standing': 'Parados sin mesa',
                 },
                 onChanged: (value) => setState(() => _orderType = value),
               ),
@@ -2034,6 +2043,7 @@ class _SaleTile extends StatelessWidget {
                 _InfoText('Folio', _shortId(order.id)),
                 _InfoText('Fecha', _dateTimeText(order.createdAt)),
                 _InfoText('Origen', order.displayName),
+                _InfoText('Tipo de orden', order.orderTypeLabel),
                 _InfoText('Plataforma', order.platformName ?? '-'),
                 _InfoText('Descuento aplicado', _money(order.explicitDiscount)),
                 _InfoText('Total neto', _money(order.total)),
@@ -2668,7 +2678,7 @@ class _SmallMetric extends StatelessWidget {
 const _salesAuditHeaders = [
   'Fecha',
   'Folio',
-  'Mesa / Para llevar',
+  'Mesa / pedido',
   'Cliente',
   'Estado orden',
   'Total articulos bruto',
@@ -3752,6 +3762,7 @@ class _SalesAuditRow {
     _businessDateFor(order.createdAt ?? order.paidAt) ?? '-',
     _shortId(order.id),
     order.id,
+    order.orderTypeLabel,
     order.status,
     order.paymentStatus,
     _money(itemsSubtotal),
@@ -3793,6 +3804,7 @@ const _salesAuditCsvHeaders = [
   'fecha',
   'folio',
   'orderId',
+  'tipo de orden',
   'estado orden',
   'estado pago',
   'total articulos bruto',
@@ -6337,7 +6349,7 @@ List<String> _discountCsvRow(DiscountReportRow row) {
   return [
     row.businessDate,
     row.order.id,
-    row.order.orderType,
+    row.order.orderTypeLabel,
     row.order.displayName,
     row.grossSales.toStringAsFixed(2),
     row.catalogId,

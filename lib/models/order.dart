@@ -19,6 +19,12 @@ class PosOrder {
     this.platformName,
     this.takeoutNumber,
     this.customerName,
+    this.isTableGroup = false,
+    this.primaryTableId,
+    this.primaryTableName,
+    this.tableIds = const [],
+    this.tableNames = const [],
+    this.tableGroupLabel,
     this.createdAt,
     this.updatedAt,
     this.sentToKitchenAt,
@@ -77,6 +83,12 @@ class PosOrder {
   final String? platformName;
   final int? takeoutNumber;
   final String? customerName;
+  final bool isTableGroup;
+  final String? primaryTableId;
+  final String? primaryTableName;
+  final List<String> tableIds;
+  final List<String> tableNames;
+  final String? tableGroupLabel;
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final DateTime? sentToKitchenAt;
@@ -138,6 +150,12 @@ class PosOrder {
       platformName: data['platformName'] as String?,
       takeoutNumber: (data['takeoutNumber'] as num?)?.toInt(),
       customerName: data['customerName'] as String?,
+      isTableGroup: data['isTableGroup'] as bool? ?? false,
+      primaryTableId: data['primaryTableId'] as String?,
+      primaryTableName: data['primaryTableName'] as String?,
+      tableIds: _readStringList(data['tableIds']),
+      tableNames: _readStringList(data['tableNames']),
+      tableGroupLabel: _readOptionalString(data['tableGroupLabel']),
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),
       sentToKitchenAt: _toDate(data['sentToKitchenAt']),
@@ -226,6 +244,10 @@ class PosOrder {
   }
 
   String get displayName {
+    if (orderType == 'standing') {
+      final name = customerName?.trim();
+      return 'Sin mesa · ${name == null || name.isEmpty ? 'Sin nombre' : name}';
+    }
     if (orderType == 'takeout') {
       final platform = platformName?.trim();
       final number = takeoutNumber == null ? '' : ' · #$takeoutNumber';
@@ -234,7 +256,28 @@ class PosOrder {
       }
       return 'Para llevar$number';
     }
-    return tableName;
+    final groupLabel = tableGroupLabel?.trim();
+    return groupLabel == null || groupLabel.isEmpty ? tableName : groupLabel;
+  }
+
+  String get customerDisplayName {
+    final clean = customerName?.trim();
+    return clean == null || clean.isEmpty ? 'Sin nombre' : clean;
+  }
+
+  String get orderTypeLabel {
+    return switch (orderType) {
+      'takeout' => 'Para llevar',
+      'standing' => 'Parados sin mesa',
+      'dine_in' || 'table' => 'En mesa',
+      _ => orderType,
+    };
+  }
+
+  List<String> get linkedTableIds {
+    if (tableIds.isNotEmpty) return tableIds;
+    if (orderType == 'dine_in' && tableId.trim().isNotEmpty) return [tableId];
+    return const [];
   }
 
   static Map<int, String> _readPersonNames(Object? value) {
@@ -251,6 +294,14 @@ class PosOrder {
       }
     }
     return names;
+  }
+
+  static List<String> _readStringList(Object? value) {
+    if (value is! List) return const [];
+    return value
+        .map((entry) => entry.toString().trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
   }
 
   static DateTime? _toDate(Object? value) {

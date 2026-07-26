@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/orders/order_activity.dart';
+import '../core/orders/order_types.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
@@ -41,6 +42,7 @@ export '../core/orders/order_activity.dart'
         isActivePayment,
         isGhostOrder,
         isOperationalOrderActive;
+export '../core/orders/order_types.dart';
 
 double _numberToDouble(Object? value) {
   return value is num ? value.toDouble() : 0.0;
@@ -537,6 +539,7 @@ class CashCloseBlockers {
   const CashCloseBlockers({
     required this.openTableCount,
     required this.openTakeoutCount,
+    required this.openStandingCount,
     required this.pendingKitchenItemCount,
     required this.pendingPaymentCount,
     required this.kitchenNotClosed,
@@ -546,6 +549,7 @@ class CashCloseBlockers {
 
   final int openTableCount;
   final int openTakeoutCount;
+  final int openStandingCount;
   final int pendingKitchenItemCount;
   final int pendingPaymentCount;
   final bool kitchenNotClosed;
@@ -555,6 +559,7 @@ class CashCloseBlockers {
   bool get canClose =>
       openTableCount == 0 &&
       openTakeoutCount == 0 &&
+      openStandingCount == 0 &&
       pendingKitchenItemCount == 0 &&
       pendingPaymentCount == 0 &&
       !kitchenNotClosed &&
@@ -579,9 +584,7 @@ class CashCloseBlockers {
     if (blockers.isNotEmpty) {
       return blockers
           .map((row) {
-            final origin = row.order.orderType == 'takeout'
-                ? 'Para llevar'
-                : row.order.tableName;
+            final origin = row.order.displayName;
             final folio = row.order.id.length <= 6
                 ? row.order.id
                 : row.order.id.substring(0, 6);
@@ -596,6 +599,7 @@ class CashCloseBlockers {
     return [
       '$openTableCount mesas abiertas',
       '$openTakeoutCount pedidos para llevar abiertos',
+      '$openStandingCount ordenes sin mesa abiertas',
       '$pendingKitchenItemCount productos pendientes en cocina',
       '$pendingPaymentCount cuentas pendientes de cobrar',
     ].join('\n');
@@ -1770,8 +1774,9 @@ class TacoPosRepository {
       'businessDate': cashSession.businessDate,
       'orderId': order.id,
       'tableId': order.tableId,
-      'tableName': order.tableName,
+      'tableName': order.displayName,
       'orderType': order.orderType,
+      'customerName': order.customerName,
       'requestedDiscountType': 'family_friend_20',
       'requestedDiscountName': 'Familia / amigos 20%',
       'requestedDiscountPercent': 20.0,
@@ -3550,6 +3555,27 @@ class TacoPosRepository {
                 .where(
                   (order) =>
                       order.orderType == 'takeout' && isActiveOrder(order),
+                ),
+            (order) => order.branchId,
+          )..sort((a, b) {
+            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+            return bDate.compareTo(aDate);
+          });
+      return orders;
+    });
+  }
+
+  Stream<List<PosOrder>> watchOpenStandingOrders() {
+    return _ordersRef.snapshots().map((snapshot) {
+      final orders =
+          _filterCurrentBranch(
+            snapshot.docs
+                .map(PosOrder.fromDoc)
+                .where(
+                  (order) =>
+                      order.orderType == standingOrderType &&
+                      isActiveOrder(order),
                 ),
             (order) => order.branchId,
           )..sort((a, b) {
@@ -5435,10 +5461,9 @@ class TacoPosRepository {
         : cancellationItem?.cancelledByEmployeeName?.trim().isNotEmpty == true
         ? cancellationItem!.cancelledByEmployeeName!.trim()
         : employee?.name ?? '';
-    final tableRef =
-        order.orderType == 'takeout' || order.tableId.trim().isEmpty
-        ? null
-        : _tablesRef.doc(order.tableId);
+    final tableRefs = orderUsesPhysicalTables(order)
+        ? order.linkedTableIds.map(_tablesRef.doc).toList()
+        : const <DocumentReference<Map<String, dynamic>>>[];
 
     final repair = await _db.runTransaction<_GhostOrderRepair?>((
       transaction,
@@ -5450,17 +5475,19 @@ class TacoPosRepository {
           !_sameInstant(freshOrder.updatedAt, order.updatedAt)) {
         return null;
       }
-      DocumentSnapshot<Map<String, dynamic>>? tableDoc;
-      if (tableRef != null) {
-        tableDoc = await transaction.get(tableRef);
+      final linkedTables = <PosTable>[];
+      for (final tableRef in tableRefs) {
+        final tableDoc = await transaction.get(tableRef);
+        if (tableDoc.exists) linkedTables.add(PosTable.fromDoc(tableDoc));
       }
-      final table = tableDoc?.exists == true
-          ? PosTable.fromDoc(tableDoc!)
-          : null;
-      final releaseTable = shouldReleaseTableForGhostOrder(
-        order: freshOrder,
-        table: table,
-      );
+      final tablesToRelease = linkedTables
+          .where(
+            (table) => shouldReleaseTableForGhostOrder(
+              order: freshOrder,
+              table: table,
+            ),
+          )
+          .toList();
       final now = FieldValue.serverTimestamp();
       transaction.update(orderRef, {
         'status': 'cancelled',
@@ -5477,11 +5504,14 @@ class TacoPosRepository {
         'pendingTotal': 0.0,
         'updatedAt': now,
       });
-      if (releaseTable && tableRef != null) {
-        transaction.set(tableRef, {
+      for (final table in tablesToRelease) {
+        transaction.set(_tablesRef.doc(table.id), {
           'status': 'available',
           'currentOrderId': null,
           'currentOrderStatus': null,
+          'tableGroupId': null,
+          'tableGroupLabel': null,
+          'groupPrimaryTableId': null,
           'occupiedAt': null,
           'updatedAt': now,
         }, SetOptions(merge: true));
@@ -5514,12 +5544,12 @@ class TacoPosRepository {
         'createdAt': now,
         'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       });
-      if (releaseTable && tableRef != null) {
+      if (tablesToRelease.isNotEmpty) {
         transaction.set(_restaurantRef.collection('activityLog').doc(), {
           'type': 'stale_table_link_cleared',
           'actionType': 'stale_table_link_cleared',
           'message':
-              'Se liberó ${freshOrder.tableName} al cancelar automáticamente la orden $folio.',
+              'Se liberó ${freshOrder.displayName} al cancelar automáticamente la orden $folio.',
           'orderId': freshOrder.id,
           'folio': folio,
           'tableId': freshOrder.tableId,
@@ -5535,10 +5565,28 @@ class TacoPosRepository {
           'createdAt': now,
           'createdBy': _auth.currentUser?.uid ?? 'anonymous',
         });
+        if (freshOrder.isTableGroup) {
+          transaction.set(_restaurantRef.collection('activityLog').doc(), {
+            'type': 'table_group_released',
+            'actionType': 'table_group_released',
+            'orderId': freshOrder.id,
+            'folio': folio,
+            'tableIds': freshOrder.linkedTableIds,
+            'tableNames': freshOrder.tableNames,
+            'tableGroupLabel': freshOrder.displayName,
+            ..._currentBranchFields,
+            'businessDate':
+                _businessDateForOrder(freshOrder) ?? _currentBusinessDate(),
+            'employeeId': cancellationEmployeeId,
+            'employeeName': cancellationEmployeeName,
+            'timestamp': now,
+            'createdAt': now,
+          });
+        }
       }
       return _GhostOrderRepair(
         orderId: freshOrder.id,
-        tableReleased: releaseTable,
+        tableReleased: tablesToRelease.isNotEmpty,
       );
     });
     if (repair != null) {
@@ -5600,6 +5648,7 @@ class TacoPosRepository {
     return CashCloseBlockers(
       openTableCount: operationalSummary.openTableCount,
       openTakeoutCount: operationalSummary.openTakeoutCount,
+      openStandingCount: operationalSummary.openStandingCount,
       pendingKitchenItemCount: pendingKitchenItemCount,
       pendingPaymentCount: operationalSummary.pendingPaymentCount,
       kitchenNotClosed: kitchenNotClosed,
@@ -7090,6 +7139,9 @@ class TacoPosRepository {
         'status': 'available',
         'currentOrderId': null,
         'currentOrderStatus': null,
+        'tableGroupId': null,
+        'tableGroupLabel': null,
+        'groupPrimaryTableId': null,
         'occupiedAt': null,
         'updatedAt': now,
       }, SetOptions(merge: true));
@@ -7271,6 +7323,7 @@ class TacoPosRepository {
       await _tablesRef.doc(table.id).set({
         'status': order.status == 'open' ? 'occupied' : order.status,
         'currentOrderId': order.id,
+        'currentOrderStatus': order.status,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
       final itemCount = await _orderItemCount(order.id);
@@ -7288,6 +7341,11 @@ class TacoPosRepository {
       'tableId': table.id,
       'tableName': table.name,
       'orderType': 'dine_in',
+      'isTableGroup': false,
+      'primaryTableId': table.id,
+      'primaryTableName': table.name,
+      'tableIds': [table.id],
+      'tableNames': [table.name],
       'status': 'open',
       'kitchenStatus': 'pending',
       'paymentStatus': 'pending',
@@ -7307,6 +7365,11 @@ class TacoPosRepository {
     batch.set(_tablesRef.doc(table.id), {
       'status': 'occupied',
       'currentOrderId': orderRef.id,
+      'currentOrderStatus': 'open',
+      'tableGroupId': null,
+      'tableGroupLabel': null,
+      'groupPrimaryTableId': null,
+      'occupiedAt': FieldValue.serverTimestamp(),
       ..._currentBranchFields,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -7322,8 +7385,8 @@ class TacoPosRepository {
   }
 
   bool _isActiveDineInOrderForTable(PosOrder order, String tableId) {
-    return order.tableId == tableId &&
-        order.orderType == 'dine_in' &&
+    return order.linkedTableIds.contains(tableId) &&
+        isDineInOrder(order) &&
         ['open', 'sent', 'ready', 'cooking'].contains(order.status) &&
         ['pending', 'partial'].contains(order.paymentStatus);
   }
@@ -7368,9 +7431,12 @@ class TacoPosRepository {
     String? customerName,
   }) async {
     _requireTakeOrders();
+    final cleanCustomer = requireCustomerName(
+      customerName,
+      message: 'Captura el nombre del cliente.',
+    );
     final orderRef = _ordersRef.doc();
     final takeoutNumber = await _nextTakeoutNumber();
-    final cleanCustomer = customerName?.trim();
     final data = {
       'tableId': 'takeout',
       'tableName': 'Para llevar',
@@ -7378,8 +7444,7 @@ class TacoPosRepository {
       'platformId': platform.id,
       'platformName': platform.name,
       'takeoutNumber': takeoutNumber,
-      if (cleanCustomer != null && cleanCustomer.isNotEmpty)
-        'customerName': cleanCustomer,
+      'customerName': cleanCustomer,
       'status': 'open',
       'kitchenStatus': 'pending',
       'paymentStatus': 'pending',
@@ -7397,6 +7462,334 @@ class TacoPosRepository {
     await orderRef.set(data);
     final doc = await orderRef.get();
     return PosOrder.fromDoc(doc);
+  }
+
+  Future<PosOrder> createStandingOrder({required String customerName}) async {
+    _requireTakeOrders();
+    final cleanCustomer = requireCustomerName(
+      customerName,
+      message: 'Captura el nombre de la persona.',
+    );
+    final platformsSnapshot = await _platformsRef.get();
+    final platform = findInPersonPlatform(
+      platformsSnapshot.docs.map(OrderPlatform.fromDoc),
+    );
+    if (platform == null) {
+      throw StateError(
+        'No se encontró la plataforma En persona en la configuración.',
+      );
+    }
+    final cashSession = await getOpenCashSession();
+    final orderRef = _ordersRef.doc();
+    await orderRef.set({
+      'tableId': '',
+      'tableName': 'Parados sin mesa',
+      'orderType': standingOrderType,
+      'customerName': cleanCustomer,
+      'platformId': platform.id,
+      'platformName': 'En persona',
+      'status': 'open',
+      'kitchenStatus': 'pending',
+      'paymentStatus': 'pending',
+      'total': 0.0,
+      'paidTotal': 0.0,
+      'pendingTotal': 0.0,
+      'personNames': {'1': cleanCustomer},
+      'businessDate': cashSession?.businessDate ?? _currentBusinessDate(),
+      'cashSessionId': cashSession?.id ?? '',
+      ..._currentBranchFields,
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      ..._employeeAuditFields(prefix: 'createdBy'),
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    return PosOrder.fromDoc(await orderRef.get());
+  }
+
+  Future<PosOrder> joinTables(List<PosTable> selectedTables) async {
+    _requireTakeOrders();
+    final decision = evaluateTableJoinSelection(selectedTables);
+    if (!decision.allowed) throw StateError(decision.message);
+    final selectedIds = selectedTables.map((table) => table.id).toSet();
+    final tablesSnapshot = await _tablesRef.get();
+    final branchTables = tablesSnapshot.docs
+        .map(PosTable.fromDoc)
+        .where((table) => _matchesCurrentBranch(table.branchId))
+        .toList();
+    final currentSelected = branchTables
+        .where((table) => selectedIds.contains(table.id))
+        .toList();
+    if (currentSelected.length != selectedIds.length) {
+      throw StateError('Una de las mesas ya no está disponible.');
+    }
+    final currentDecision = evaluateTableJoinSelection(currentSelected);
+    if (!currentDecision.allowed) throw StateError(currentDecision.message);
+
+    PosOrder? existingOrder;
+    if (currentDecision.baseOrderId != null) {
+      final doc = await _ordersRef.doc(currentDecision.baseOrderId).get();
+      if (!doc.exists) {
+        throw StateError('La mesa conserva un vínculo obsoleto.');
+      }
+      existingOrder = PosOrder.fromDoc(doc);
+      if (!isActiveOrderState(existingOrder) ||
+          !isDineInOrder(existingOrder) ||
+          !_matchesCurrentBranch(existingOrder.branchId)) {
+        throw StateError('La mesa conserva una orden cerrada u obsoleta.');
+      }
+    }
+
+    final linkedIds = <String>{
+      ...selectedIds,
+      ...?existingOrder?.linkedTableIds,
+      if (existingOrder != null)
+        ...branchTables
+            .where((table) => table.currentOrderId?.trim() == existingOrder!.id)
+            .map((table) => table.id),
+    };
+    final groupedTables =
+        branchTables.where((table) => linkedIds.contains(table.id)).toList()
+          ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    if (groupedTables.length != linkedIds.length ||
+        groupedTables.any((table) => !table.active || !table.isPhysicalTable)) {
+      throw StateError('Una de las mesas no es válida para la unión.');
+    }
+
+    final primary = existingOrder == null
+        ? groupedTables.first
+        : groupedTables.firstWhere(
+            (table) =>
+                table.id ==
+                (existingOrder!.primaryTableId ?? existingOrder.tableId),
+            orElse: () => groupedTables.first,
+          );
+    final orderedTables = groupedTables;
+    final tableIds = orderedTables.map((table) => table.id).toList();
+    final tableNames = orderedTables.map((table) => table.name).toList();
+    final label = tableNames.join(' + ');
+    final orderRef = existingOrder == null
+        ? _ordersRef.doc()
+        : _ordersRef.doc(existingOrder.id);
+    final cashSession = existingOrder == null
+        ? await getOpenCashSession()
+        : null;
+    final employee = AppSession.instance.employee;
+
+    await _db.runTransaction((transaction) async {
+      DocumentSnapshot<Map<String, dynamic>>? freshOrderDoc;
+      if (existingOrder != null) {
+        freshOrderDoc = await transaction.get(orderRef);
+        if (!freshOrderDoc.exists) {
+          throw StateError('La orden base ya no está activa.');
+        }
+        final freshOrder = PosOrder.fromDoc(freshOrderDoc);
+        if (!isActiveOrderState(freshOrder) ||
+            !setEquals(
+              freshOrder.linkedTableIds.toSet(),
+              existingOrder.linkedTableIds.toSet(),
+            )) {
+          throw StateError(
+            'La agrupación cambió. Actualiza e intenta de nuevo.',
+          );
+        }
+      }
+      final freshTables = <PosTable>[];
+      for (final table in orderedTables) {
+        final doc = await transaction.get(_tablesRef.doc(table.id));
+        if (!doc.exists) throw StateError('Una de las mesas ya no existe.');
+        freshTables.add(PosTable.fromDoc(doc));
+      }
+      for (final table in freshTables) {
+        final linkedOrderId = table.currentOrderId?.trim() ?? '';
+        if (!table.active ||
+            !table.isPhysicalTable ||
+            !_matchesCurrentBranch(table.branchId) ||
+            (linkedOrderId.isNotEmpty && linkedOrderId != orderRef.id)) {
+          throw StateError(
+            'No se pueden juntar mesas que ya tienen órdenes diferentes.',
+          );
+        }
+      }
+
+      final groupFields = {
+        'isTableGroup': true,
+        'primaryTableId': primary.id,
+        'primaryTableName': primary.name,
+        'tableIds': tableIds,
+        'tableNames': tableNames,
+        'tableGroupLabel': label,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      if (existingOrder == null) {
+        transaction.set(orderRef, {
+          'tableId': primary.id,
+          'tableName': primary.name,
+          'orderType': dineInOrderType,
+          'status': 'open',
+          'kitchenStatus': 'pending',
+          'paymentStatus': 'pending',
+          'total': 0.0,
+          'paidTotal': 0.0,
+          'pendingTotal': 0.0,
+          'personNames': {'1': 'Persona 1'},
+          'businessDate': cashSession?.businessDate ?? _currentBusinessDate(),
+          'cashSessionId': cashSession?.id ?? '',
+          ..._currentBranchFields,
+          'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+          ..._employeeAuditFields(prefix: 'createdBy'),
+          'createdAt': FieldValue.serverTimestamp(),
+          ...groupFields,
+        });
+      } else {
+        transaction.set(orderRef, groupFields, SetOptions(merge: true));
+      }
+      for (final table in freshTables) {
+        transaction.set(_tablesRef.doc(table.id), {
+          'status': 'occupied',
+          'currentOrderId': orderRef.id,
+          'currentOrderStatus': existingOrder?.status ?? 'open',
+          'tableGroupId': orderRef.id,
+          'tableGroupLabel': label,
+          'groupPrimaryTableId': primary.id,
+          'occupiedAt': table.occupiedAt == null
+              ? FieldValue.serverTimestamp()
+              : Timestamp.fromDate(table.occupiedAt!),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      final actionType = existingOrder == null
+          ? 'tables_joined'
+          : 'table_added_to_group';
+      transaction.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': actionType,
+        'actionType': actionType,
+        'orderId': orderRef.id,
+        'folio': _shortLogFolio(orderRef.id),
+        'tableIds': tableIds,
+        'tableNames': tableNames,
+        'tableGroupLabel': label,
+        ..._currentBranchFields,
+        'businessDate':
+            existingOrder?.businessDate ??
+            cashSession?.businessDate ??
+            _currentBusinessDate(),
+        'employeeId': employee?.id ?? '',
+        'employeeName': employee?.name ?? '',
+        'timestamp': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    });
+    return PosOrder.fromDoc(await orderRef.get());
+  }
+
+  Future<void> removeTableFromGroup({
+    required String orderId,
+    required String tableId,
+  }) async {
+    _requireTakeOrders();
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+    final order = PosOrder.fromDoc(orderDoc);
+    if (!order.isTableGroup || order.linkedTableIds.length < 2) {
+      throw StateError('La orden no tiene mesas secundarias.');
+    }
+    final primaryId = order.primaryTableId ?? order.tableId;
+    if (tableId == primaryId) {
+      throw StateError('No se puede quitar la mesa principal.');
+    }
+    final tablesSnapshot = await _tablesRef.get();
+    final tablesById = {
+      for (final doc in tablesSnapshot.docs) doc.id: PosTable.fromDoc(doc),
+    };
+    final remainingIds = order.linkedTableIds
+        .where((id) => id != tableId)
+        .toList();
+    final remainingTables = remainingIds
+        .map((id) => tablesById[id])
+        .whereType<PosTable>()
+        .toList();
+    final removed = tablesById[tableId];
+    if (removed == null || remainingTables.length != remainingIds.length) {
+      throw StateError('No se pudieron validar las mesas del grupo.');
+    }
+    final remainingNames = remainingTables.map((table) => table.name).toList();
+    final nextLabel = remainingNames.join(' + ');
+    final stillGrouped = remainingIds.length > 1;
+    final employee = AppSession.instance.employee;
+
+    await _db.runTransaction((transaction) async {
+      final freshOrderDoc = await transaction.get(orderRef);
+      final freshRemoved = await transaction.get(_tablesRef.doc(tableId));
+      final freshRemaining = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final remainingId in remainingIds) {
+        freshRemaining.add(await transaction.get(_tablesRef.doc(remainingId)));
+      }
+      if (!freshOrderDoc.exists ||
+          !freshRemoved.exists ||
+          freshRemoved.data()?['currentOrderId'] != orderId ||
+          freshRemaining.any(
+            (doc) => !doc.exists || doc.data()?['currentOrderId'] != orderId,
+          )) {
+        throw StateError(
+          'La mesa cambió de orden. Actualiza e intenta de nuevo.',
+        );
+      }
+      final freshOrder = PosOrder.fromDoc(freshOrderDoc);
+      if (!setEquals(
+        freshOrder.linkedTableIds.toSet(),
+        order.linkedTableIds.toSet(),
+      )) {
+        throw StateError('La agrupación cambió. Actualiza e intenta de nuevo.');
+      }
+      transaction.update(orderRef, {
+        'isTableGroup': stillGrouped,
+        if (stillGrouped) 'tableIds': remainingIds,
+        if (!stillGrouped) 'tableIds': FieldValue.delete(),
+        if (stillGrouped) 'tableNames': remainingNames,
+        if (!stillGrouped) 'tableNames': FieldValue.delete(),
+        if (!stillGrouped) 'primaryTableId': FieldValue.delete(),
+        if (!stillGrouped) 'primaryTableName': FieldValue.delete(),
+        if (stillGrouped) 'tableGroupLabel': nextLabel,
+        if (!stillGrouped) 'tableGroupLabel': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      transaction.set(_tablesRef.doc(tableId), {
+        'status': 'available',
+        'currentOrderId': null,
+        'currentOrderStatus': null,
+        'tableGroupId': null,
+        'tableGroupLabel': null,
+        'groupPrimaryTableId': null,
+        'occupiedAt': null,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      for (final table in remainingTables) {
+        transaction.set(_tablesRef.doc(table.id), {
+          'tableGroupId': stillGrouped ? orderId : null,
+          'tableGroupLabel': stillGrouped ? nextLabel : null,
+          'groupPrimaryTableId': stillGrouped ? primaryId : null,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      transaction.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': 'table_removed_from_group',
+        'actionType': 'table_removed_from_group',
+        'orderId': orderId,
+        'folio': _shortLogFolio(orderId),
+        'tableId': tableId,
+        'tableName': removed.name,
+        'tableIds': remainingIds,
+        'tableNames': remainingNames,
+        'tableGroupLabel': nextLabel,
+        ..._currentBranchFields,
+        'businessDate': _businessDateForOrder(order) ?? _currentBusinessDate(),
+        'employeeId': employee?.id ?? '',
+        'employeeName': employee?.name ?? '',
+        'timestamp': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    });
   }
 
   Future<int> _nextTakeoutNumber() async {
@@ -7798,16 +8191,14 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    if (order.orderType != 'takeout') {
-      batch.set(_tablesRef.doc(order.tableId), {
-        'status': _tableStatusForKitchenState(
-          nextKitchenStatus,
-          hasActiveBillableItems: activeBillableItems.isNotEmpty,
-        ),
-        'currentOrderId': order.id,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
+    _setLinkedTablesStateInBatch(
+      batch,
+      order,
+      status: _tableStatusForKitchenState(
+        nextKitchenStatus,
+        hasActiveBillableItems: activeBillableItems.isNotEmpty,
+      ),
+    );
 
     await batch.commit();
   }
@@ -7953,13 +8344,7 @@ class TacoPosRepository {
       );
     }
 
-    if (order.orderType != 'takeout') {
-      batch.set(_tablesRef.doc(order.tableId), {
-        'status': 'available',
-        'currentOrderId': FieldValue.delete(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
+    _setLinkedTablesStateInBatch(batch, order, release: true);
 
     _logActivityInBatch(
       batch,
@@ -8007,13 +8392,7 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    if (order.orderType != 'takeout') {
-      batch.set(_tablesRef.doc(order.tableId), {
-        'status': 'available',
-        'currentOrderId': FieldValue.delete(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    }
+    _setLinkedTablesStateInBatch(batch, order, release: true);
 
     await batch.commit();
   }
@@ -8091,9 +8470,7 @@ class TacoPosRepository {
     }
 
     final orderDoc = await _ordersRef.doc(orderId).get();
-    final orderData = orderDoc.data();
-    final tableId = orderData?['tableId'] as String?;
-    final orderType = orderData?['orderType'] as String? ?? 'dine_in';
+    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
     batch.update(_ordersRef.doc(orderId), {
       'status': 'sent',
       'kitchenStatus': 'sent',
@@ -8104,11 +8481,8 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    if (tableId != null && orderType != 'takeout') {
-      batch.set(_tablesRef.doc(tableId), {
-        'status': 'sent',
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    if (order != null) {
+      _setLinkedTablesStateInBatch(batch, order, status: 'sent');
     }
 
     await batch.commit();
@@ -8154,9 +8528,7 @@ class TacoPosRepository {
     }
 
     final orderDoc = await _ordersRef.doc(orderId).get();
-    final orderData = orderDoc.data();
-    final tableId = orderData?['tableId'] as String?;
-    final orderType = orderData?['orderType'] as String? ?? 'dine_in';
+    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
     final orderStatus = normalizedStatus == 'ready'
         ? 'ready'
         : normalizedStatus == 'cooking'
@@ -8175,11 +8547,8 @@ class TacoPosRepository {
       data: {'kitchenStatus': normalizedStatus},
     );
 
-    if (tableId != null && orderType != 'takeout') {
-      batch.set(_tablesRef.doc(tableId), {
-        'status': orderStatus,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    if (order != null) {
+      _setLinkedTablesStateInBatch(batch, order, status: orderStatus);
     }
 
     await batch.commit();
@@ -8227,9 +8596,7 @@ class TacoPosRepository {
     }
 
     final orderDoc = await _ordersRef.doc(orderId).get();
-    final orderData = orderDoc.data();
-    final tableId = orderData?['tableId'] as String?;
-    final orderType = orderData?['orderType'] as String? ?? 'dine_in';
+    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
     final kitchenStatus = _aggregateKitchenStatus(
       allItems: allItems,
       changedIds: changedIds,
@@ -8253,11 +8620,8 @@ class TacoPosRepository {
       data: {'kitchenStatus': kitchenStatus},
     );
 
-    if (tableId != null && orderType != 'takeout') {
-      batch.set(_tablesRef.doc(tableId), {
-        'status': orderStatus,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+    if (order != null) {
+      _setLinkedTablesStateInBatch(batch, order, status: orderStatus);
     }
 
     await batch.commit();
@@ -9103,13 +9467,45 @@ class TacoPosRepository {
       ..._currentBranchFields,
       'updatedAt': FieldValue.serverTimestamp(),
     });
-    if (order.orderType != 'takeout') {
-      batch.set(_tablesRef.doc(order.tableId), {
-        'status': 'available',
-        'currentOrderId': FieldValue.delete(),
+    _setLinkedTablesStateInBatch(batch, order, release: true);
+  }
+
+  void _setLinkedTablesStateInBatch(
+    WriteBatch batch,
+    PosOrder order, {
+    String? status,
+    bool release = false,
+  }) {
+    if (!orderUsesPhysicalTables(order)) return;
+    for (final tableId in order.linkedTableIds.toSet()) {
+      batch.set(_tablesRef.doc(tableId), {
+        'status': release ? 'available' : status ?? order.status,
+        'currentOrderId': release ? null : order.id,
+        'currentOrderStatus': release ? null : status ?? order.status,
+        if (release) 'tableGroupId': null,
+        if (release) 'tableGroupLabel': null,
+        if (release) 'groupPrimaryTableId': null,
+        if (release) 'occupiedAt': null,
         ..._currentBranchFields,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+    }
+    if (release && order.isTableGroup) {
+      _logActivityInBatch(
+        batch,
+        type: 'table_group_released',
+        orderId: order.id,
+        data: {
+          'actionType': 'table_group_released',
+          'folio': _shortLogFolio(order.id),
+          'tableIds': order.linkedTableIds,
+          'tableNames': order.tableNames,
+          'tableGroupLabel': order.displayName,
+          'businessDate':
+              _businessDateForOrder(order) ?? _currentBusinessDate(),
+          'timestamp': FieldValue.serverTimestamp(),
+        },
+      );
     }
   }
 
@@ -9153,7 +9549,9 @@ class TacoPosRepository {
     batch.set(paymentRef, {
       'orderId': order.id,
       'tableId': order.tableId,
-      'tableName': order.tableName,
+      'tableName': order.displayName,
+      'orderType': order.orderType,
+      'customerName': order.customerName,
       'restaurantId': order.restaurantId,
       'restaurantName': order.restaurantName,
       'branchId': order.branchId,
@@ -10189,7 +10587,7 @@ PosOrder? getActiveOrderForTable(String tableId, List<PosOrder> orders) {
   final cleanTableId = tableId.trim();
   final activeOrders =
       orders
-          .where((order) => order.tableId.trim() == cleanTableId)
+          .where((order) => order.linkedTableIds.contains(cleanTableId))
           .where(isActiveOrderForLiveTables)
           .toList()
         ..sort((a, b) {
