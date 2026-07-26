@@ -346,6 +346,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
       remainingGrossSubtotal: order.pendingTotal,
       activePayments: activePayments,
     );
+    final netPending =
+        initialDiscount?.totalAfterDiscount ??
+        _checkoutAccountTotals(order, activePayments).pendingTotal;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -354,6 +357,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         title: 'Cobrar mesa completa',
         subtitle: order.displayName,
         total: order.pendingTotal,
+        totalToCharge: netPending,
         employees: employees,
         employeeDisabled: hasClientPayment,
         primaryIcon: Icons.point_of_sale_outlined,
@@ -396,6 +400,15 @@ class _PaymentScreenState extends State<PaymentScreen> {
         employeeDisabled: hasClientPayment,
         personName: _personName,
         pendingForItems: _pendingForItems,
+        netForAmount: (amount) {
+          final prepared = _repository.preparedGlobalDiscountForAmount(
+            order: order,
+            amountBeforeDiscount: amount,
+            remainingGrossSubtotal: order.pendingTotal,
+            activePayments: activePayments,
+          );
+          return prepared?.totalAfterDiscount ?? amount;
+        },
         onPreparedDiscount: (amount) async {
           return _repository.preparedGlobalDiscountForAmount(
             order: order,
@@ -596,6 +609,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                           if (platformOnlyPayment) {
                             return _PlatformPaymentView(
                               order: order,
+                              activePayments: activePayments,
                               busy: _busy,
                               onPay: () => _payPlatformOrder(order),
                             );
@@ -622,10 +636,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
                                       12,
                                 ),
                                 children: [
-                                  _TotalsPanel(order: order, compact: compact),
+                                  _TotalsPanel(
+                                    order: order,
+                                    activePayments: activePayments,
+                                    compact: compact,
+                                  ),
                                   SizedBox(height: gap),
                                   _PaymentMainActions(
-                                    order: order,
                                     peopleCount: people.length,
                                     tableDisabled:
                                         hasPersonPayments ||
@@ -753,7 +770,6 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
 class _PaymentMainActions extends StatelessWidget {
   const _PaymentMainActions({
-    required this.order,
     required this.peopleCount,
     required this.tableDisabled,
     required this.personDisabled,
@@ -763,7 +779,6 @@ class _PaymentMainActions extends StatelessWidget {
     required this.onPartialSelected,
   });
 
-  final PosOrder order;
   final int peopleCount;
   final bool tableDisabled;
   final bool personDisabled;
@@ -805,11 +820,9 @@ class _PaymentMainActions extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SectionHeader(
-            title: 'Como quieres cobrar?',
+            title: '¿Cómo quieres cobrar?',
             subtitle: 'Elige una opcion para continuar.',
           ),
-          const SizedBox(height: 12),
-          _CheckoutDiscountSummary(order: order),
           const SizedBox(height: 12),
           compact
               ? Column(
@@ -831,70 +844,6 @@ class _PaymentMainActions extends StatelessWidget {
                 ),
         ],
       ),
-    );
-  }
-}
-
-class _CheckoutDiscountSummary extends StatelessWidget {
-  const _CheckoutDiscountSummary({required this.order});
-
-  final PosOrder order;
-
-  @override
-  Widget build(BuildContext context) {
-    final grossSubtotal = order.grossSubtotal ?? order.total;
-    final discountAmount = order.explicitDiscount.clamp(0, grossSubtotal);
-    final netTotal =
-        order.netTotal ??
-        (grossSubtotal - discountAmount).clamp(0, double.infinity).toDouble();
-    final hasGlobalDiscount =
-        order.discountSource == globalDiscountSource && discountAmount > 0.01;
-    final percent =
-        order.discountPercent ??
-        ((order.discountRate ?? 0) <= 1
-            ? (order.discountRate ?? 0) * 100
-            : order.discountRate ?? 0);
-    final concept =
-        order.discountConcept ?? order.discountName ?? 'Descuento global';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _PreviewRow(label: 'Subtotal bruto', value: grossSubtotal),
-        if (hasGlobalDiscount) ...[
-          const SizedBox(height: 4),
-          const Text(
-            'Descuento global',
-            style: TextStyle(
-              color: BrandColors.textMuted,
-              fontSize: 12,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '$concept ${percent.toStringAsFixed(percent % 1 == 0 ? 0 : 2)}%',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w900),
-                ),
-              ),
-              Text(
-                '-\$${discountAmount.toStringAsFixed(2)}',
-                style: const TextStyle(
-                  color: BrandColors.success,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          ),
-        ],
-        const Divider(height: 18),
-        _PreviewRow(label: 'Total final', value: netTotal, highlight: true),
-      ],
     );
   }
 }
@@ -1021,6 +970,7 @@ class _PaymentMethodSheet extends StatefulWidget {
     required this.title,
     required this.subtitle,
     required this.total,
+    required this.totalToCharge,
     required this.employees,
     required this.employeeDisabled,
     required this.primaryIcon,
@@ -1034,6 +984,7 @@ class _PaymentMethodSheet extends StatefulWidget {
   final String title;
   final String subtitle;
   final double total;
+  final double totalToCharge;
   final List<Employee> employees;
   final bool employeeDisabled;
   final IconData primaryIcon;
@@ -1090,7 +1041,8 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
     });
   }
 
-  double get _totalToCharge => _discount?.totalAfterDiscount ?? widget.total;
+  double get _totalToCharge =>
+      _discount?.totalAfterDiscount ?? widget.totalToCharge;
 
   CashPaymentDetails? _cashDetails() {
     final received = double.tryParse(
@@ -1323,6 +1275,7 @@ class _PartialPaymentSheetState extends State<_PartialPaymentSheet> {
         title: 'Pago parcial',
         subtitle: 'Monto parcial \$${_amount.toStringAsFixed(2)}',
         total: _amount,
+        totalToCharge: _initialDiscount?.totalAfterDiscount ?? _amount,
         employees: const [],
         employeeDisabled: true,
         allowEmployeeConsumption: false,
@@ -1859,6 +1812,8 @@ typedef _PeoplePaymentConfirmCallback =
       AppliedDiscountDetails? discount,
     );
 
+typedef _NetAmountCallback = double Function(double grossAmount);
+
 class _PeoplePaymentSheet extends StatefulWidget {
   const _PeoplePaymentSheet({
     required this.order,
@@ -1867,6 +1822,7 @@ class _PeoplePaymentSheet extends StatefulWidget {
     required this.employeeDisabled,
     required this.personName,
     required this.pendingForItems,
+    required this.netForAmount,
     required this.onPreparedDiscount,
     required this.onApplyDiscount,
     required this.onConfirm,
@@ -1879,6 +1835,7 @@ class _PeoplePaymentSheet extends StatefulWidget {
   final String Function(int person, List<OrderItem> items, PosOrder order)
   personName;
   final double Function(List<OrderItem> items) pendingForItems;
+  final _NetAmountCallback netForAmount;
   final _ApplyDiscountCallback onPreparedDiscount;
   final _ApplyDiscountCallback onApplyDiscount;
   final _PeoplePaymentConfirmCallback onConfirm;
@@ -1914,6 +1871,8 @@ class _PeoplePaymentSheetState extends State<_PeoplePaymentSheet> {
     );
   }
 
+  double get _selectedNetTotal => widget.netForAmount(_selectedTotal);
+
   String get _selectedLabel {
     final names = _selected.map(
       (person) => widget.personName(person, _itemsFor(person), widget.order),
@@ -1928,6 +1887,7 @@ class _PeoplePaymentSheetState extends State<_PeoplePaymentSheet> {
         title: 'Cobrar personas seleccionadas',
         subtitle: _selectedLabel,
         total: _selectedTotal,
+        totalToCharge: _selectedNetTotal,
         employees: widget.employees,
         employeeDisabled: widget.employeeDisabled,
         primaryIcon: Icons.groups_2_outlined,
@@ -1938,7 +1898,7 @@ class _PeoplePaymentSheetState extends State<_PeoplePaymentSheet> {
           return widget.onConfirm(
             _selected.toList()..sort(),
             _selectedLabel,
-            _selectedTotal,
+            _selectedNetTotal,
             method,
             cashDetails,
             employee,
@@ -2057,7 +2017,7 @@ class _PeoplePaymentSheetState extends State<_PeoplePaymentSheet> {
           const Divider(height: 18),
           _PreviewRow(
             label: 'Total seleccionado',
-            value: _selectedTotal,
+            value: _selectedNetTotal,
             highlight: true,
           ),
           const SizedBox(height: 12),
@@ -2110,14 +2070,51 @@ class _PeoplePaymentSheetState extends State<_PeoplePaymentSheet> {
   }
 }
 
+CheckoutAccountTotals _checkoutAccountTotals(
+  PosOrder order,
+  Iterable<Payment> activePayments,
+) {
+  return calculateCheckoutAccountTotals(
+    orderTotal: order.total,
+    grossSubtotal: order.grossSubtotal,
+    discountAmount: order.explicitDiscount,
+    netTotal: order.netTotal,
+    activePaymentAmounts: activePayments.map(
+      (payment) => checkoutAppliedPaymentAmount(
+        baseAmount: payment.baseAmount,
+        chargedAmount: payment.chargedAmount,
+        totalAfterDiscount: payment.totalAfterDiscount,
+        discountAmount: payment.discountAmount,
+        appliedAmount: payment.appliedAmount,
+      ),
+    ),
+  );
+}
+
 class _TotalsPanel extends StatelessWidget {
-  const _TotalsPanel({required this.order, this.compact = false});
+  const _TotalsPanel({
+    required this.order,
+    required this.activePayments,
+    this.compact = false,
+  });
 
   final PosOrder order;
+  final List<Payment> activePayments;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    final totals = _checkoutAccountTotals(order, activePayments);
+    final percent =
+        order.discountPercent ??
+        ((order.discountRate ?? 0) <= 1
+            ? (order.discountRate ?? 0) * 100
+            : order.discountRate ?? 0);
+    final discountIndicator = checkoutDiscountIndicator(
+      hasDiscount: totals.hasDiscount,
+      concept: order.discountConcept ?? order.discountName,
+      percent: percent,
+    );
     return GlassPanel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2126,8 +2123,12 @@ class _TotalsPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: SectionHeader(
-                  title: order.displayName,
-                  subtitle: 'Cuenta actual',
+                  title: checkoutAccountTitle(
+                    orderType: order.orderType,
+                    displayName: order.displayName,
+                    customerName: order.customerName,
+                  ),
+                  subtitle: discountIndicator,
                 ),
               ),
               StatusBadge(style: tableStatusStyle(order.status)),
@@ -2137,15 +2138,15 @@ class _TotalsPanel extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: _MoneyStat(label: 'Total', value: order.total),
+                child: _MoneyStat(label: 'Total', value: totals.netTotal),
               ),
               Expanded(
-                child: _MoneyStat(label: 'Pagado', value: order.paidTotal),
+                child: _MoneyStat(label: 'Pagado', value: totals.paidTotal),
               ),
               Expanded(
                 child: _MoneyStat(
                   label: 'Pendiente',
-                  value: order.pendingTotal,
+                  value: totals.pendingTotal,
                   highlight: true,
                 ),
               ),
@@ -2258,11 +2259,13 @@ class _MoneyStat extends StatelessWidget {
 class _PlatformPaymentView extends StatelessWidget {
   const _PlatformPaymentView({
     required this.order,
+    required this.activePayments,
     required this.busy,
     required this.onPay,
   });
 
   final PosOrder order;
+  final List<Payment> activePayments;
   final bool busy;
   final VoidCallback onPay;
 
@@ -2271,7 +2274,7 @@ class _PlatformPaymentView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(22),
       children: [
-        _TotalsPanel(order: order),
+        _TotalsPanel(order: order, activePayments: activePayments),
         const SizedBox(height: 16),
         GlassPanel(
           child: Column(

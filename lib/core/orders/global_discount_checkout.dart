@@ -14,8 +14,115 @@ class CheckoutDiscountAmounts {
   final double netTotal;
 }
 
+class CheckoutAccountTotals {
+  const CheckoutAccountTotals({
+    required this.grossSubtotal,
+    required this.discountAmount,
+    required this.netTotal,
+    required this.paidTotal,
+    required this.pendingTotal,
+  });
+
+  final double grossSubtotal;
+  final double discountAmount;
+  final double netTotal;
+  final double paidTotal;
+  final double pendingTotal;
+
+  bool get hasDiscount => discountAmount > 0.01;
+}
+
 double roundCheckoutMoney(double value) {
   return (value * 100).roundToDouble() / 100;
+}
+
+CheckoutAccountTotals calculateCheckoutAccountTotals({
+  required double orderTotal,
+  required double discountAmount,
+  required Iterable<double> activePaymentAmounts,
+  double? grossSubtotal,
+  double? netTotal,
+}) {
+  final gross = roundCheckoutMoney(
+    (grossSubtotal ?? orderTotal).clamp(0, double.infinity).toDouble(),
+  );
+  final discount = roundCheckoutMoney(
+    discountAmount.clamp(0, gross).toDouble(),
+  );
+  final savedNetIsValid =
+      netTotal != null && netTotal.isFinite && netTotal >= 0;
+  final resolvedNet = roundCheckoutMoney(
+    savedNetIsValid ? netTotal : gross - discount,
+  );
+  final paid = roundCheckoutMoney(
+    activePaymentAmounts.fold<double>(
+      0,
+      (total, amount) => total + amount.clamp(0, double.infinity).toDouble(),
+    ),
+  );
+  return CheckoutAccountTotals(
+    grossSubtotal: gross,
+    discountAmount: discount,
+    netTotal: resolvedNet,
+    paidTotal: paid,
+    pendingTotal: roundCheckoutMoney(
+      (resolvedNet - paid).clamp(0, double.infinity).toDouble(),
+    ),
+  );
+}
+
+double checkoutAppliedPaymentAmount({
+  required double baseAmount,
+  required double chargedAmount,
+  required double totalAfterDiscount,
+  required double discountAmount,
+  double? appliedAmount,
+}) {
+  if (appliedAmount != null && appliedAmount.isFinite && appliedAmount >= 0) {
+    return roundCheckoutMoney(appliedAmount);
+  }
+  if (totalAfterDiscount > 0 || discountAmount > 0) {
+    return roundCheckoutMoney(
+      totalAfterDiscount.clamp(0, double.infinity).toDouble(),
+    );
+  }
+  if (chargedAmount > 0) {
+    return roundCheckoutMoney(chargedAmount);
+  }
+  return roundCheckoutMoney(
+    (baseAmount - discountAmount).clamp(0, double.infinity).toDouble(),
+  );
+}
+
+String checkoutAccountTitle({
+  required String orderType,
+  required String displayName,
+  String? customerName,
+}) {
+  final customer = customerName?.trim() ?? '';
+  return switch (orderType) {
+    'takeout' when customer.isNotEmpty =>
+      'Cuenta actual · Para llevar · $customer',
+    'standing' when customer.isNotEmpty =>
+      'Cuenta actual · Parados sin mesa · $customer',
+    'standing' => 'Cuenta actual · Parados sin mesa',
+    _ => 'Cuenta actual · $displayName',
+  };
+}
+
+String? checkoutDiscountIndicator({
+  required bool hasDiscount,
+  required String? concept,
+  required double percent,
+}) {
+  if (!hasDiscount) return null;
+  final cleanConcept = concept?.trim();
+  final name = cleanConcept == null || cleanConcept.isEmpty
+      ? 'Descuento aplicado'
+      : cleanConcept;
+  if (percent <= 0) return name;
+  final formattedPercent = percent.toStringAsFixed(percent % 1 == 0 ? 0 : 2);
+  return '$name · $formattedPercent% aplicado';
 }
 
 CheckoutDiscountAmounts calculateGlobalDiscountAmounts({
