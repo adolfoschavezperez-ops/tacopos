@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/orders/backoffice_sales_cancellation.dart';
 import '../../core/reports/canonical_sales_summary.dart';
 import '../../core/reports/discounts_by_day_report.dart';
 import '../../core/reports/hourly_sales_comparison.dart' as hourly;
@@ -232,6 +233,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                   _reportKind = _ReportKind.discountsByDay;
                   _reportsExpanded = true;
                 }),
+                onSalesDataChanged: () => setState(() {}),
               );
 
               if (compact) {
@@ -781,6 +783,7 @@ class _BackofficeBody extends StatelessWidget {
     required this.onWeek,
     required this.onMonth,
     required this.onOpenDiscountsReport,
+    required this.onSalesDataChanged,
   });
 
   final _BackofficeSection section;
@@ -794,6 +797,7 @@ class _BackofficeBody extends StatelessWidget {
   final VoidCallback onWeek;
   final VoidCallback onMonth;
   final VoidCallback onOpenDiscountsReport;
+  final VoidCallback onSalesDataChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -916,6 +920,7 @@ class _BackofficeBody extends StatelessWidget {
                     repository: repository,
                     orders: orders,
                     payments: activePayments,
+                    onDataChanged: onSalesDataChanged,
                   ),
                   _BackofficeSection.reports => _ReportsSection(
                     repository: repository,
@@ -1830,6 +1835,7 @@ class _DiscountsByDayReportViewState extends State<_DiscountsByDayReportView> {
                         context,
                         widget.repository,
                         row.order,
+                        onDataChanged: () => setState(() {}),
                       ),
                       icon: const Icon(Icons.visibility_outlined, size: 18),
                       label: const Text('Ver venta'),
@@ -1885,11 +1891,13 @@ class _SalesSection extends StatefulWidget {
     required this.repository,
     required this.orders,
     required this.payments,
+    required this.onDataChanged,
   });
 
   final TacoPosRepository repository;
   final List<PosOrder> orders;
   final List<Payment> payments;
+  final VoidCallback onDataChanged;
 
   @override
   State<_SalesSection> createState() => _SalesSectionState();
@@ -1900,6 +1908,45 @@ class _SalesSectionState extends State<_SalesSection> {
   String _orderType = 'all';
   String _status = 'all';
   String _method = 'all';
+
+  bool get _canCancelOrders {
+    final employee = AppSession.instance.employee;
+    return employee != null &&
+        hasBackofficeCancellationPermission(
+          specificPermission: employee.canCancelOrders,
+          canViewAdmin: employee.canViewAdmin,
+          hasAdminAccess: employee.hasAdminAccess,
+        );
+  }
+
+  Future<void> _openDetail(PosOrder order) async {
+    await _openSaleDetail(
+      context,
+      widget.repository,
+      order,
+      onDataChanged: widget.onDataChanged,
+    );
+  }
+
+  Future<void> _cancelOrder(PosOrder order) async {
+    try {
+      final detail = await _loadSaleDetailData(widget.repository, order.id);
+      if (!mounted) return;
+      final cancelled = await _showOrderCancellationDialog(
+        context,
+        repository: widget.repository,
+        detail: detail,
+      );
+      if (cancelled && mounted) widget.onDataChanged();
+    } catch (error) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        _backofficeCancellationError(error),
+        type: AppSnackBarType.error,
+      );
+    }
+  }
 
   @override
   void dispose() {
@@ -1990,7 +2037,14 @@ class _SalesSectionState extends State<_SalesSection> {
           (order) => _SaleTile(
             order: order,
             payments: paymentsByOrder[order.id] ?? const [],
-            onOpen: () => _openSaleDetail(context, widget.repository, order),
+            onOpen: () => _openDetail(order),
+            onCancelOrder:
+                _canCancelOrders &&
+                    !isTerminalCancellationStatus(order.status) &&
+                    order.cancelledAt == null &&
+                    order.canceledAt == null
+                ? () => _cancelOrder(order)
+                : null,
           ),
         ),
         if (filtered.isEmpty)
@@ -2009,11 +2063,13 @@ class _SaleTile extends StatelessWidget {
     required this.order,
     required this.payments,
     required this.onOpen,
+    required this.onCancelOrder,
   });
 
   final PosOrder order;
   final List<Payment> payments;
   final VoidCallback onOpen;
+  final VoidCallback? onCancelOrder;
 
   @override
   Widget build(BuildContext context) {
@@ -2067,10 +2123,9 @@ class _SaleTile extends StatelessWidget {
                   const SizedBox(height: 10),
                   Align(
                     alignment: Alignment.centerRight,
-                    child: OutlinedButton.icon(
-                      onPressed: onOpen,
-                      icon: const Icon(Icons.visibility_outlined),
-                      label: const Text('Ver detalle'),
+                    child: _SaleActionsMenu(
+                      onOpen: onOpen,
+                      onCancelOrder: onCancelOrder,
                     ),
                   ),
                 ],
@@ -2080,16 +2135,52 @@ class _SaleTile extends StatelessWidget {
               children: [
                 Expanded(child: info),
                 const SizedBox(width: 12),
-                OutlinedButton.icon(
-                  onPressed: onOpen,
-                  icon: const Icon(Icons.visibility_outlined),
-                  label: const Text('Ver detalle'),
-                ),
+                _SaleActionsMenu(onOpen: onOpen, onCancelOrder: onCancelOrder),
               ],
             );
           },
         ),
       ),
+    );
+  }
+}
+
+class _SaleActionsMenu extends StatelessWidget {
+  const _SaleActionsMenu({required this.onOpen, required this.onCancelOrder});
+
+  final VoidCallback onOpen;
+  final VoidCallback? onCancelOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<String>(
+      tooltip: 'Acciones de venta',
+      icon: const Icon(Icons.more_vert),
+      onSelected: (value) {
+        if (value == 'detail') onOpen();
+        if (value == 'cancel') onCancelOrder?.call();
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: 'detail',
+          child: ListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.visibility_outlined),
+            title: Text('Ver detalle'),
+          ),
+        ),
+        if (onCancelOrder != null)
+          const PopupMenuItem(
+            value: 'cancel',
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.cancel_outlined),
+              title: Text('Cancelar orden'),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -2989,7 +3080,12 @@ class _SalesDiscrepancyAuditReportState
         row: row,
         onOpenSale: () {
           Navigator.pop(context);
-          _openSaleDetail(context, widget.repository, row.order);
+          _openSaleDetail(
+            context,
+            widget.repository,
+            row.order,
+            onDataChanged: () => setState(() {}),
+          );
         },
       ),
     );
@@ -4574,7 +4670,9 @@ List<_NavItem> _navItems(Employee? employee) {
         Icons.monitor_heart_outlined,
         'Visor operativo',
       ),
-    if (employee?.hasAdminAccess == true)
+    if (employee?.hasAdminAccess == true ||
+        employee?.canCancelOrders == true ||
+        employee?.canCancelPayments == true)
       const _NavItem(_BackofficeSection.sales, Icons.receipt_long, 'Ventas'),
     if (employee?.hasAdminAccess == true ||
         employee?.canViewKitchenReports == true)
@@ -4762,6 +4860,8 @@ List<_NavItem> _reportNavItems(Employee? employee) {
 
 bool _canUseBackoffice(Employee? employee) {
   return employee?.hasAdminAccess == true ||
+      employee?.canCancelOrders == true ||
+      employee?.canCancelPayments == true ||
       employee?.canManageCash == true ||
       employee?.canViewKitchenReports == true ||
       employee?.canAuthorizeCashWithdrawals == true ||
@@ -5908,14 +6008,19 @@ List<_BarRow> _salesByPlatform(List<Payment> payments) {
     ..sort((a, b) => b.value.compareTo(a.value));
 }
 
-void _openSaleDetail(
+Future<void> _openSaleDetail(
   BuildContext context,
   TacoPosRepository repository,
-  PosOrder order,
-) {
-  showDialog<void>(
+  PosOrder order, {
+  required VoidCallback onDataChanged,
+}) {
+  return showDialog<void>(
     context: context,
-    builder: (_) => _SaleDetailDialog(repository: repository, order: order),
+    builder: (_) => _SaleDetailDialog(
+      repository: repository,
+      initialOrder: order,
+      onDataChanged: onDataChanged,
+    ),
   );
 }
 
@@ -5974,16 +6079,87 @@ void _showOperationalBlockersDetail(
   );
 }
 
-class _SaleDetailDialog extends StatelessWidget {
-  const _SaleDetailDialog({required this.repository, required this.order});
+class _SaleDetailDialog extends StatefulWidget {
+  const _SaleDetailDialog({
+    required this.repository,
+    required this.initialOrder,
+    required this.onDataChanged,
+  });
 
   final TacoPosRepository repository;
-  final PosOrder order;
+  final PosOrder initialOrder;
+  final VoidCallback onDataChanged;
 
-  Future<_SaleDetailData> _loadDetail() async {
-    final items = await repository.getOrderItemsOnce(order.id);
-    final payments = await repository.getOrderPaymentsOnce(order.id);
-    return _SaleDetailData(items: items, payments: payments);
+  @override
+  State<_SaleDetailDialog> createState() => _SaleDetailDialogState();
+}
+
+class _SaleDetailDialogState extends State<_SaleDetailDialog> {
+  late Future<_SaleDetailData> _future;
+
+  bool get _canCancelPayments {
+    final employee = AppSession.instance.employee;
+    return employee != null &&
+        hasBackofficeCancellationPermission(
+          specificPermission: employee.canCancelPayments,
+          canViewAdmin: employee.canViewAdmin,
+          hasAdminAccess: employee.hasAdminAccess,
+        );
+  }
+
+  bool get _canCancelOrders {
+    final employee = AppSession.instance.employee;
+    return employee != null &&
+        hasBackofficeCancellationPermission(
+          specificPermission: employee.canCancelOrders,
+          canViewAdmin: employee.canViewAdmin,
+          hasAdminAccess: employee.hasAdminAccess,
+        );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _loadSaleDetailData(widget.repository, widget.initialOrder.id);
+  }
+
+  void _reload() {
+    setState(() {
+      _future = _loadSaleDetailData(widget.repository, widget.initialOrder.id);
+    });
+    widget.onDataChanged();
+  }
+
+  Future<void> _cancelPayment(_SaleDetailData detail, Payment payment) async {
+    final cancelled = await _showPaymentCancellationDialog(
+      context,
+      repository: widget.repository,
+      detail: detail,
+      payment: payment,
+    );
+    if (!cancelled || !mounted) return;
+    _reload();
+    showAppSnackBar(
+      context,
+      'Pago cancelado. La orden volvió a quedar pendiente. Si también es una orden de prueba, cancela ahora la orden completa.',
+      type: AppSnackBarType.success,
+      duration: const Duration(seconds: 6),
+    );
+  }
+
+  Future<void> _cancelOrder(_SaleDetailData detail) async {
+    final cancelled = await _showOrderCancellationDialog(
+      context,
+      repository: widget.repository,
+      detail: detail,
+    );
+    if (!cancelled || !mounted) return;
+    _reload();
+    showAppSnackBar(
+      context,
+      'Orden cancelada. El registro se conservó para auditoría.',
+      type: AppSnackBarType.success,
+    );
   }
 
   @override
@@ -5993,13 +6169,24 @@ class _SaleDetailDialog extends StatelessWidget {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 980, maxHeight: 760),
         child: FutureBuilder<_SaleDetailData>(
-          future: _loadDetail(),
+          future: _future,
           builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return _FriendlyError(
+                message: _backofficeCancellationError(snapshot.error!),
+              );
+            }
             if (!snapshot.hasData) {
               return const LoadingPanel(message: 'Cargando venta...');
             }
-            final items = snapshot.data!.items;
-            final payments = snapshot.data!.payments;
+            final detail = snapshot.data!;
+            final order = detail.order;
+            final items = detail.items;
+            final payments = detail.payments;
+            final orderIsCancelled =
+                isTerminalCancellationStatus(order.status) ||
+                order.cancelledAt != null ||
+                order.canceledAt != null;
             return SingleChildScrollView(
               padding: const EdgeInsets.all(22),
               child: Column(
@@ -6014,6 +6201,14 @@ class _SaleDetailDialog extends StatelessWidget {
                               '${order.displayName} | ${_dateTimeText(order.createdAt)}',
                         ),
                       ),
+                      if (_canCancelOrders && !orderIsCancelled) ...[
+                        const SizedBox(width: 10),
+                        OutlinedButton.icon(
+                          onPressed: () => _cancelOrder(detail),
+                          icon: const Icon(Icons.cancel_outlined),
+                          label: const Text('Cancelar orden'),
+                        ),
+                      ],
                       IconButton(
                         onPressed: () => Navigator.pop(context),
                         icon: const Icon(Icons.close),
@@ -6118,6 +6313,20 @@ class _SaleDetailDialog extends StatelessWidget {
                           _durationBetween(order.createdAt, order.paidAt),
                         ),
                       ),
+                      if (orderIsCancelled) ...[
+                        _InfoText(
+                          'Motivo de cancelación',
+                          order.cancelReason ?? '-',
+                        ),
+                        _InfoText(
+                          'Canceló',
+                          order.cancelledByEmployeeName ?? '-',
+                        ),
+                        _InfoText(
+                          'Fecha de cancelación',
+                          _dateTimeText(order.cancelledAt ?? order.canceledAt),
+                        ),
+                      ],
                     ],
                   ),
                   const SizedBox(height: 18),
@@ -6158,38 +6367,11 @@ class _SaleDetailDialog extends StatelessWidget {
                         .toList(),
                   ),
                   const SizedBox(height: 18),
-                  _DetailTable(
-                    title: 'Pagos',
-                    headers: const [
-                      'Metodo',
-                      'Base',
-                      'Recargo',
-                      'Comision absorbida',
-                      'Cobrado',
-                      'Recibido',
-                      'Cambio',
-                      'Usuario',
-                      'Hora',
-                    ],
-                    rows: payments
-                        .map(
-                          (payment) => [
-                            _paymentMethodLabel(payment.method),
-                            _money(payment.baseAmount),
-                            _money(payment.surchargeAmount),
-                            _money(payment.cardFeeAbsorbedAmount),
-                            _money(payment.chargedAmount),
-                            payment.cashReceivedAmount == null
-                                ? '-'
-                                : _money(payment.cashReceivedAmount!),
-                            payment.cashChangeAmount == null
-                                ? '-'
-                                : _money(payment.cashChangeAmount!),
-                            payment.employeeName ?? payment.createdBy ?? '-',
-                            _dateTimeText(payment.createdAt),
-                          ],
-                        )
-                        .toList(),
+                  _SalePaymentsTable(
+                    payments: payments,
+                    canCancelPayments: _canCancelPayments && !orderIsCancelled,
+                    onCancelPayment: (payment) =>
+                        _cancelPayment(detail, payment),
                   ),
                 ],
               ),
@@ -6202,10 +6384,418 @@ class _SaleDetailDialog extends StatelessWidget {
 }
 
 class _SaleDetailData {
-  const _SaleDetailData({required this.items, required this.payments});
+  const _SaleDetailData({
+    required this.order,
+    required this.items,
+    required this.payments,
+    required this.hasClosedCashSession,
+  });
 
+  final PosOrder order;
   final List<OrderItem> items;
   final List<Payment> payments;
+  final bool hasClosedCashSession;
+}
+
+Future<_SaleDetailData> _loadSaleDetailData(
+  TacoPosRepository repository,
+  String orderId,
+) async {
+  final order = await repository.getOrderOnce(orderId);
+  final items = await repository.getOrderItemsOnce(orderId);
+  final payments = await repository.getOrderPaymentsOnce(orderId);
+  final hasClosedCashSession = await repository
+      .backofficeSaleHasClosedCashSession(order: order, payments: payments);
+  return _SaleDetailData(
+    order: order,
+    items: items,
+    payments: payments,
+    hasClosedCashSession: hasClosedCashSession,
+  );
+}
+
+List<Payment> _activeBackofficePayments(Iterable<Payment> payments) {
+  return payments.where((payment) {
+    return isBackofficeActivePayment(
+      status: payment.status,
+      hasCancelledAt: payment.cancelledAt != null,
+      appliedAmount: canonicalPaymentAppliedAmount(payment),
+    );
+  }).toList();
+}
+
+double _activeBackofficePaymentsTotal(Iterable<Payment> payments) {
+  return _activeBackofficePayments(payments).fold<double>(
+    0,
+    (total, payment) => total + canonicalPaymentAppliedAmount(payment),
+  );
+}
+
+bool _hasActiveKitchenItems(Iterable<OrderItem> items) {
+  return items.any(
+    (item) =>
+        !item.isCancelled &&
+        const {'sent', 'cooking', 'ready'}.contains(item.kitchenStatus),
+  );
+}
+
+Future<bool> _showPaymentCancellationDialog(
+  BuildContext context, {
+  required TacoPosRepository repository,
+  required _SaleDetailData detail,
+  required Payment payment,
+}) async {
+  final warnings = <String>[
+    'Este pago dejará de contar en ventas, métodos de pago y corte. El registro se conservará como cancelado.',
+    if (detail.hasClosedCashSession)
+      'Esta venta pertenece a un corte cerrado. La cancelación modificará ventas y reportes históricos. Revisa posteriormente el corte desde Caja Admin.',
+  ];
+  return await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => _BackofficeCancellationDialog(
+          title: 'Cancelar pago',
+          details: [
+            _InfoText('Folio de la orden', _shortId(detail.order.id)),
+            _InfoText('Método de pago', _paymentMethodLabel(payment.method)),
+            _InfoText(
+              'Importe aplicado',
+              _money(canonicalPaymentAppliedAmount(payment)),
+            ),
+            _InfoText(
+              'Fecha y hora del pago',
+              _dateTimeText(payment.createdAt),
+            ),
+            _InfoText(
+              'Usuario que lo registró',
+              payment.employeeName ?? payment.createdBy ?? '-',
+            ),
+          ],
+          warnings: warnings,
+          onConfirm: (reason) => repository.cancelCustomerPaymentFromBackoffice(
+            orderId: detail.order.id,
+            paymentId: payment.id,
+            reason: reason,
+          ),
+        ),
+      ) ??
+      false;
+}
+
+Future<bool> _showOrderCancellationDialog(
+  BuildContext context, {
+  required TacoPosRepository repository,
+  required _SaleDetailData detail,
+}) async {
+  final order = detail.order;
+  final grossSubtotal = _saleDetailGrossSubtotal(order, detail.items);
+  final netTotal =
+      order.netTotal ??
+      (grossSubtotal - order.explicitDiscount)
+          .clamp(0, double.infinity)
+          .toDouble();
+  final activePaymentsTotal = _activeBackofficePaymentsTotal(detail.payments);
+  final blockingMessage = activePaymentsTotal > backofficeCancellationTolerance
+      ? 'No se puede cancelar esta orden porque todavía tiene pagos activos por ${_money(activePaymentsTotal)}. Cancela primero los pagos desde esta misma ventana.'
+      : null;
+  final warnings = <String>[
+    'La orden dejará de contar en ventas y reportes. Sus artículos y pagos cancelados se conservarán para auditoría.',
+    if (_hasActiveKitchenItems(detail.items))
+      'Esta orden tiene productos registrados en Cocina. Al confirmar se cancelarán administrativamente y dejarán de aparecer como pendientes.',
+    if (detail.hasClosedCashSession)
+      'Esta venta pertenece a un corte cerrado. La cancelación modificará ventas y reportes históricos. Revisa posteriormente el corte desde Caja Admin.',
+  ];
+  return await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => _BackofficeCancellationDialog(
+          title: 'Cancelar orden',
+          details: [
+            _InfoText('Folio', _shortId(order.id)),
+            _InfoText(
+              'Mesa / Para llevar / Parados sin mesa',
+              order.displayName,
+            ),
+            _InfoText('Cliente', order.customerName ?? '-'),
+            _InfoText('Total bruto', _money(grossSubtotal)),
+            _InfoText('Descuento', _money(order.explicitDiscount)),
+            _InfoText('Total neto', _money(netTotal)),
+            _InfoText('Pagos activos', _money(activePaymentsTotal)),
+            _InfoText(
+              'Estado actual',
+              '${formatOrderStatus(order.status)} / ${formatPaymentStatus(order.paymentStatus)}',
+            ),
+          ],
+          warnings: warnings,
+          blockingMessage: blockingMessage,
+          onConfirm: (reason) => repository.cancelCustomerOrderFromBackoffice(
+            orderId: order.id,
+            reason: reason,
+          ),
+        ),
+      ) ??
+      false;
+}
+
+class _BackofficeCancellationDialog extends StatefulWidget {
+  const _BackofficeCancellationDialog({
+    required this.title,
+    required this.details,
+    required this.warnings,
+    required this.onConfirm,
+    this.blockingMessage,
+  });
+
+  final String title;
+  final List<Widget> details;
+  final List<String> warnings;
+  final String? blockingMessage;
+  final Future<BackofficeCancellationResult> Function(String reason) onConfirm;
+
+  @override
+  State<_BackofficeCancellationDialog> createState() =>
+      _BackofficeCancellationDialogState();
+}
+
+class _BackofficeCancellationDialogState
+    extends State<_BackofficeCancellationDialog> {
+  final _reasonController = TextEditingController();
+  final _guard = BackofficeCancellationGuard();
+  String? _error;
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final reason = _reasonController.text.trim();
+    if (!isValidCancellationReason(reason)) {
+      setState(() => _error = 'Captura el motivo de cancelación.');
+      return;
+    }
+    if (widget.blockingMessage != null || !_guard.tryStart()) return;
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+    try {
+      await widget.onConfirm(reason);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      _guard.release();
+      if (!mounted) return;
+      setState(() {
+        _submitting = false;
+        _error = _backofficeCancellationError(error);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Wrap(spacing: 14, runSpacing: 10, children: widget.details),
+              const SizedBox(height: 18),
+              for (final warning in widget.warnings) ...[
+                _CancellationWarning(message: warning, isCritical: false),
+                const SizedBox(height: 8),
+              ],
+              if (widget.blockingMessage case final message?) ...[
+                _CancellationWarning(message: message, isCritical: true),
+                const SizedBox(height: 12),
+              ],
+              TextField(
+                controller: _reasonController,
+                enabled: !_submitting && widget.blockingMessage == null,
+                minLines: 2,
+                maxLines: 4,
+                autofocus: widget.blockingMessage == null,
+                decoration: InputDecoration(
+                  labelText: 'Motivo de cancelación',
+                  errorText: _error,
+                ),
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting
+              ? null
+              : () => Navigator.of(context).pop(false),
+          child: const Text('Regresar'),
+        ),
+        FilledButton.icon(
+          onPressed: _submitting || widget.blockingMessage != null
+              ? null
+              : _submit,
+          icon: _submitting
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.cancel_outlined),
+          label: const Text('Confirmar cancelación'),
+        ),
+      ],
+    );
+  }
+}
+
+class _CancellationWarning extends StatelessWidget {
+  const _CancellationWarning({required this.message, required this.isCritical});
+
+  final String message;
+  final bool isCritical;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isCritical ? BrandColors.danger : BrandColors.accentOrange;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.warning_amber_outlined, color: color, size: 20),
+            const SizedBox(width: 10),
+            Expanded(child: Text(message)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SalePaymentsTable extends StatelessWidget {
+  const _SalePaymentsTable({
+    required this.payments,
+    required this.canCancelPayments,
+    required this.onCancelPayment,
+  });
+
+  final List<Payment> payments;
+  final bool canCancelPayments;
+  final ValueChanged<Payment> onCancelPayment;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Pagos', style: TextStyle(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columns: const [
+                DataColumn(label: Text('Método')),
+                DataColumn(label: Text('Aplicado')),
+                DataColumn(label: Text('Cobrado')),
+                DataColumn(label: Text('Usuario')),
+                DataColumn(label: Text('Hora')),
+                DataColumn(label: Text('Estado')),
+                DataColumn(label: Text('Cancelación')),
+                DataColumn(label: Text('Acciones')),
+              ],
+              rows: payments.map((payment) {
+                final active = isBackofficeActivePayment(
+                  status: payment.status,
+                  hasCancelledAt: payment.cancelledAt != null,
+                  appliedAmount: canonicalPaymentAppliedAmount(payment),
+                );
+                final cancelled =
+                    !active &&
+                    (isTerminalCancellationStatus(payment.status) ||
+                        payment.cancelledAt != null);
+                return DataRow(
+                  cells: [
+                    DataCell(Text(_paymentMethodLabel(payment.method))),
+                    DataCell(
+                      Text(_money(canonicalPaymentAppliedAmount(payment))),
+                    ),
+                    DataCell(Text(_money(payment.chargedAmount))),
+                    DataCell(
+                      Text(payment.employeeName ?? payment.createdBy ?? '-'),
+                    ),
+                    DataCell(Text(_dateTimeText(payment.createdAt))),
+                    DataCell(
+                      Chip(
+                        visualDensity: VisualDensity.compact,
+                        label: Text(cancelled ? 'Pago cancelado' : 'Activo'),
+                        backgroundColor: cancelled
+                            ? BrandColors.danger.withValues(alpha: 0.16)
+                            : BrandColors.success.withValues(alpha: 0.16),
+                      ),
+                    ),
+                    DataCell(
+                      cancelled
+                          ? Text(
+                              [
+                                payment.cancelReason ?? 'Sin motivo',
+                                payment.cancelledByEmployeeName ?? '-',
+                                _dateTimeText(payment.cancelledAt),
+                              ].join(' | '),
+                            )
+                          : const Text('-'),
+                    ),
+                    DataCell(
+                      canCancelPayments && active
+                          ? PopupMenuButton<String>(
+                              tooltip: 'Acciones del pago',
+                              icon: const Icon(Icons.more_vert),
+                              onSelected: (_) => onCancelPayment(payment),
+                              itemBuilder: (context) => const [
+                                PopupMenuItem(
+                                  value: 'cancel',
+                                  child: ListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    leading: Icon(Icons.money_off_outlined),
+                                    title: Text('Cancelar pago'),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : const SizedBox.shrink(),
+                    ),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _backofficeCancellationError(Object error) {
+  return error
+      .toString()
+      .replaceFirst('Bad state: ', '')
+      .replaceFirst('Invalid argument(s): ', '');
 }
 
 class _Timeline extends StatelessWidget {

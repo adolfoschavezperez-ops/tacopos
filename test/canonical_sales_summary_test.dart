@@ -206,6 +206,43 @@ void main() {
     )!;
     expect(report24.totalA, 0);
   });
+
+  test('pago cancelado se conserva pero no cuenta como cobrado real', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(
+        total: 100,
+        payment: payment(
+          base: 100,
+          charged: 100,
+          status: 'cancelled',
+          cancelledAt: DateTime(2026, 7, 26),
+        ),
+      ),
+    ]);
+
+    expect(summary.grossSales, 100);
+    expect(summary.netSales, 100);
+    expect(summary.totalCollected, 0);
+  });
+
+  test('orden cancelada se conserva pero no cuenta en ventas', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(
+          total: 100,
+          status: 'cancelled',
+          cancelledAt: DateTime(2026, 7, 26),
+        ),
+        items: [item(total: 100)],
+        payments: [payment(base: 100, charged: 100)],
+      ),
+    ]);
+
+    expect(summary.grossSales, 0);
+    expect(summary.netSales, 0);
+    expect(summary.totalCollected, 0);
+    expect(summary.paidOrdersCount, 0);
+  });
 }
 
 SalesOrderBundleInput bundle({
@@ -226,12 +263,14 @@ PosOrder order({
   Map<String, double> fields = const {},
   String? businessDate,
   DateTime? createdAt,
+  String status = 'paid',
+  DateTime? cancelledAt,
 }) {
   return PosOrder(
     id: 'order-$total',
     tableId: 't1',
     tableName: 'Mesa 1',
-    status: 'paid',
+    status: status,
     kitchenStatus: 'ready',
     paymentStatus: 'paid',
     total: total,
@@ -242,6 +281,7 @@ PosOrder order({
     explicitDiscountFields: fields,
     businessDate: businessDate,
     createdAt: createdAt,
+    cancelledAt: cancelledAt,
   );
 }
 
@@ -274,6 +314,8 @@ Payment payment({
   double cardFee = 0,
   String? businessDate,
   DateTime? createdAt,
+  String status = 'active',
+  DateTime? cancelledAt,
 }) {
   return Payment(
     id: 'payment-$base-$charged',
@@ -292,5 +334,7 @@ Payment payment({
     cardFeeAbsorbedAmount: cardFee,
     businessDate: businessDate,
     createdAt: createdAt,
+    status: status,
+    cancelledAt: cancelledAt,
   );
 }

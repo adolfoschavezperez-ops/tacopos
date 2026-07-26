@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/cash/cash_close_execution.dart';
+import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_types.dart';
@@ -148,6 +149,24 @@ class PaymentResult {
   const PaymentResult({required this.allPaid});
 
   final bool allPaid;
+}
+
+class BackofficeCancellationResult {
+  const BackofficeCancellationResult({
+    required this.affectedClosedCashSession,
+    this.previousPaidTotal = 0,
+    this.newPaidTotal = 0,
+    this.previousPendingTotal = 0,
+    this.newPendingTotal = 0,
+    this.cancelledItemsCount = 0,
+  });
+
+  final bool affectedClosedCashSession;
+  final double previousPaidTotal;
+  final double newPaidTotal;
+  final double previousPendingTotal;
+  final double newPendingTotal;
+  final int cancelledItemsCount;
 }
 
 class OrderTotalsRecalculation {
@@ -3695,6 +3714,14 @@ class TacoPosRepository {
       }
       return PosOrder.fromDoc(doc);
     });
+  }
+
+  Future<PosOrder> getOrderOnce(String orderId) async {
+    final doc = await _ordersRef.doc(orderId).get();
+    if (!doc.exists) {
+      throw StateError('La orden ya no existe.');
+    }
+    return PosOrder.fromDoc(doc);
   }
 
   Stream<List<OrderItem>> watchOrderItems(String orderId) {
@@ -10230,6 +10257,401 @@ class TacoPosRepository {
     );
   }
 
+  Future<bool> backofficeSaleHasClosedCashSession({
+    required PosOrder order,
+    required Iterable<Payment> payments,
+  }) async {
+    return await _closedCashSessionIdForSale(
+          order: order,
+          payments: payments,
+        ) !=
+        null;
+  }
+
+  Future<BackofficeCancellationResult> cancelCustomerPaymentFromBackoffice({
+    required String orderId,
+    required String paymentId,
+    required String reason,
+  }) async {
+    _requireBackofficeCancelPayments();
+    final cleanReason = reason.trim();
+    if (!isValidCancellationReason(cleanReason)) {
+      throw ArgumentError('Captura el motivo de cancelacion.');
+    }
+
+    final orderRef = _ordersRef.doc(orderId);
+    final paymentRef = orderRef.collection('payments').doc(paymentId);
+    final orderDoc = await orderRef.get();
+    final paymentDoc = await paymentRef.get();
+    if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+    if (!paymentDoc.exists) throw StateError('El pago ya no existe.');
+
+    final initialOrder = PosOrder.fromDoc(orderDoc);
+    final initialPayment = Payment.fromDoc(paymentDoc);
+    final paymentsSnapshot = await orderRef.collection('payments').get();
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final usageSnapshot = await _discountUsageRef
+        .where('paymentId', isEqualTo: paymentId)
+        .where('status', isEqualTo: 'active')
+        .get();
+    final closedCashSessionId = await _closedCashSessionIdForSale(
+      order: initialOrder,
+      payments: [
+        initialPayment,
+        ...paymentsSnapshot.docs
+            .where((doc) => doc.id != paymentId)
+            .map(Payment.fromDoc),
+      ],
+    );
+    final activityRef = _restaurantRef.collection('activityLog').doc();
+    final employee = AppSession.instance.employee;
+
+    final result = await _db.runTransaction<BackofficeCancellationResult>((
+      transaction,
+    ) async {
+      final freshOrderDoc = await transaction.get(orderRef);
+      final freshPaymentDoc = await transaction.get(paymentRef);
+      if (!freshOrderDoc.exists) throw StateError('La orden ya no existe.');
+      if (!freshPaymentDoc.exists) throw StateError('El pago ya no existe.');
+
+      final freshPaymentDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in paymentsSnapshot.docs) {
+        freshPaymentDocs.add(await transaction.get(doc.reference));
+      }
+      final freshItemDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in itemsSnapshot.docs) {
+        freshItemDocs.add(await transaction.get(doc.reference));
+      }
+      final freshUsageDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in usageSnapshot.docs) {
+        freshUsageDocs.add(await transaction.get(doc.reference));
+      }
+
+      final order = PosOrder.fromDoc(freshOrderDoc);
+      final payment = Payment.fromDoc(freshPaymentDoc);
+      if (isTerminalCancellationStatus(payment.status) ||
+          payment.cancelledAt != null) {
+        throw StateError('Este registro ya fue cancelado.');
+      }
+      final cancelledAmount = canonicalPaymentAppliedAmount(payment);
+      if (cancelledAmount <= backofficeCancellationTolerance) {
+        throw StateError('Este pago ya no tiene un importe activo.');
+      }
+
+      final remainingPayments = freshPaymentDocs
+          .where((doc) => doc.id != paymentId && doc.exists)
+          .map(Payment.fromDoc)
+          .where(
+            (item) => isBackofficeActivePayment(
+              status: item.status,
+              hasCancelledAt: item.cancelledAt != null,
+              appliedAmount: canonicalPaymentAppliedAmount(item),
+            ),
+          )
+          .toList();
+      final grossSubtotal = order.grossSubtotal ?? order.total;
+      final savedNet = order.netTotal;
+      final orderNetTotal =
+          savedNet != null && savedNet.isFinite && savedNet >= 0
+          ? savedNet
+          : (grossSubtotal - order.explicitDiscount)
+                .clamp(0, double.infinity)
+                .toDouble();
+      final totals = deriveCustomerPaymentCancellationTotals(
+        orderNetTotal: orderNetTotal,
+        activePaymentAmounts: remainingPayments.map(
+          canonicalPaymentAppliedAmount,
+        ),
+      );
+      final activeItems = freshItemDocs
+          .where((doc) => doc.exists)
+          .map(OrderItem.fromDoc)
+          .where(isActiveOrderItem)
+          .toList();
+      final nextOrderStatus = deriveOrderStatusAfterCustomerPaymentCancellation(
+        currentOrderStatus: order.status,
+        paymentStatus: totals.paymentStatus,
+        hasActiveItems: activeItems.isNotEmpty,
+        activeKitchenStatuses: activeItems.map((item) => item.kitchenStatus),
+      );
+      final now = FieldValue.serverTimestamp();
+
+      transaction.update(paymentRef, {
+        'status': 'cancelled',
+        'cancelledAt': now,
+        'cancelledByEmployeeId': employee?.id ?? '',
+        'cancelledByEmployeeName': employee?.name ?? '',
+        'cancelReason': cleanReason,
+        'updatedAt': now,
+      });
+      for (final doc in freshItemDocs) {
+        if (!doc.exists) continue;
+        final item = OrderItem.fromDoc(doc);
+        if (item.paymentId == paymentId && !item.isCancelled) {
+          transaction.update(doc.reference, {
+            'paymentStatus': 'pending',
+            'paymentId': FieldValue.delete(),
+            'paidAt': FieldValue.delete(),
+            'updatedAt': now,
+          });
+        }
+      }
+      for (final doc in freshUsageDocs) {
+        if (!doc.exists) continue;
+        transaction.update(doc.reference, {
+          'status': 'cancelled',
+          'cancelledAt': now,
+          'cancelReason': cleanReason,
+          'cancelledByEmployeeId': employee?.id ?? '',
+          'cancelledByEmployeeName': employee?.name ?? '',
+          'updatedAt': now,
+        });
+      }
+      transaction.update(orderRef, {
+        'status': nextOrderStatus,
+        'paymentStatus': totals.paymentStatus,
+        'paidTotal': totals.paidTotal,
+        'pendingTotal': totals.pendingTotal,
+        if (totals.paymentStatus != 'paid') ...{
+          'paidAt': FieldValue.delete(),
+          'closedAt': FieldValue.delete(),
+        },
+        'updatedAt': now,
+      });
+      transaction.set(activityRef, {
+        'type': 'customer_payment_cancelled',
+        'actionType': 'customer_payment_cancelled',
+        'message':
+            'Se canceló un pago de \$${cancelledAmount.toStringAsFixed(2)} de la venta ${_shortLogFolio(order.id)}.',
+        'orderId': order.id,
+        'folio': _shortLogFolio(order.id),
+        'paymentId': payment.id,
+        'method': payment.method,
+        'amount': cancelledAmount,
+        'cancelReason': cleanReason,
+        'previousPaidTotal': order.paidTotal,
+        'newPaidTotal': totals.paidTotal,
+        'previousPendingTotal': order.pendingTotal,
+        'newPendingTotal': totals.pendingTotal,
+        'cashSessionId': payment.cashSessionId ?? order.cashSessionId ?? '',
+        'businessDate': payment.businessDate ?? order.businessDate ?? '',
+        'branchId': order.branchId,
+        'branchName': order.branchName,
+        'employeeId': employee?.id ?? '',
+        'employeeName': employee?.name ?? '',
+        'cashSessionRecalculationRecommended': closedCashSessionId != null,
+        'timestamp': now,
+        'createdAt': now,
+        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      });
+
+      return BackofficeCancellationResult(
+        affectedClosedCashSession: closedCashSessionId != null,
+        previousPaidTotal: order.paidTotal,
+        newPaidTotal: totals.paidTotal,
+        previousPendingTotal: order.pendingTotal,
+        newPendingTotal: totals.pendingTotal,
+      );
+    });
+
+    invalidateReportDataCache(
+      branchId: initialOrder.branchId,
+      startBusinessDate: initialOrder.businessDate,
+      endBusinessDate: initialOrder.businessDate,
+    );
+    return result;
+  }
+
+  Future<BackofficeCancellationResult> cancelCustomerOrderFromBackoffice({
+    required String orderId,
+    required String reason,
+  }) async {
+    _requireBackofficeCancelOrders();
+    final cleanReason = reason.trim();
+    if (!isValidCancellationReason(cleanReason)) {
+      throw ArgumentError('Captura el motivo de cancelacion.');
+    }
+
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+    final initialOrder = PosOrder.fromDoc(orderDoc);
+    final paymentsSnapshot = await orderRef.collection('payments').get();
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final tableRefs = orderUsesPhysicalTables(initialOrder)
+        ? initialOrder.linkedTableIds.map(_tablesRef.doc).toList()
+        : <DocumentReference<Map<String, dynamic>>>[];
+    final closedCashSessionId = await _closedCashSessionIdForSale(
+      order: initialOrder,
+      payments: paymentsSnapshot.docs.map(Payment.fromDoc),
+    );
+    final activityRef = _restaurantRef.collection('activityLog').doc();
+    final employee = AppSession.instance.employee;
+
+    final result = await _db.runTransaction<BackofficeCancellationResult>((
+      transaction,
+    ) async {
+      final freshOrderDoc = await transaction.get(orderRef);
+      if (!freshOrderDoc.exists) throw StateError('La orden ya no existe.');
+      final freshPaymentDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in paymentsSnapshot.docs) {
+        freshPaymentDocs.add(await transaction.get(doc.reference));
+      }
+      final freshItemDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in itemsSnapshot.docs) {
+        freshItemDocs.add(await transaction.get(doc.reference));
+      }
+      final freshTableDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final ref in tableRefs) {
+        freshTableDocs.add(await transaction.get(ref));
+      }
+
+      final order = PosOrder.fromDoc(freshOrderDoc);
+      if (isTerminalCancellationStatus(order.status) ||
+          order.cancelledAt != null ||
+          order.canceledAt != null) {
+        throw StateError('Este registro ya fue cancelado.');
+      }
+      final activePayments = freshPaymentDocs
+          .where((doc) => doc.exists)
+          .map(Payment.fromDoc)
+          .where(
+            (payment) => isBackofficeActivePayment(
+              status: payment.status,
+              hasCancelledAt: payment.cancelledAt != null,
+              appliedAmount: canonicalPaymentAppliedAmount(payment),
+            ),
+          )
+          .toList();
+      final activePaymentsTotal = activePayments.fold<double>(
+        0,
+        (total, payment) => total + canonicalPaymentAppliedAmount(payment),
+      );
+      if (activePaymentsTotal > backofficeCancellationTolerance) {
+        throw StateError(
+          'No se puede cancelar esta orden porque todavía tiene pagos activos por \$${activePaymentsTotal.toStringAsFixed(2)}. Cancela primero los pagos desde esta misma ventana.',
+        );
+      }
+
+      final activeItemDocs = freshItemDocs.where((doc) {
+        return doc.exists && isActiveOrderItem(OrderItem.fromDoc(doc));
+      }).toList();
+      final grossSubtotal = order.grossSubtotal ?? order.total;
+      final netTotal =
+          order.netTotal ??
+          (grossSubtotal - order.explicitDiscount)
+              .clamp(0, double.infinity)
+              .toDouble();
+      final now = FieldValue.serverTimestamp();
+
+      transaction.update(orderRef, {
+        'status': 'cancelled',
+        'kitchenStatus': 'cancelled',
+        'paymentStatus': 'cancelled',
+        'cancelStatus': 'accepted',
+        'cancelledAt': now,
+        'cancelledByEmployeeId': employee?.id ?? '',
+        'cancelledByEmployeeName': employee?.name ?? '',
+        'cancelReason': cleanReason,
+        'pendingTotal': 0.0,
+        'paidTotal': 0.0,
+        'updatedAt': now,
+      });
+      for (final doc in activeItemDocs) {
+        transaction.update(doc.reference, {
+          'status': 'cancelled',
+          'kitchenStatus': 'cancelled',
+          'paymentStatus': 'cancelled',
+          'cancelStatus': 'accepted',
+          'cancelReason': cleanReason,
+          'cancelledAt': now,
+          'cancelledByEmployeeId': employee?.id ?? '',
+          'cancelledByEmployeeName': employee?.name ?? '',
+          'updatedAt': now,
+        });
+      }
+      for (final doc in freshTableDocs) {
+        if (!doc.exists) continue;
+        final currentOrderId = doc.data()?['currentOrderId']?.toString();
+        if (!shouldReleaseBackofficeCancelledOrderTable(
+          currentOrderId: currentOrderId,
+          cancelledOrderId: order.id,
+        )) {
+          continue;
+        }
+        transaction.update(doc.reference, {
+          'status': 'available',
+          'currentOrderId': null,
+          'currentOrderStatus': null,
+          'tableGroupId': null,
+          'tableGroupLabel': null,
+          'groupPrimaryTableId': null,
+          'occupiedAt': null,
+          'updatedAt': now,
+        });
+      }
+      transaction.set(activityRef, {
+        'type': 'customer_order_cancelled',
+        'actionType': 'customer_order_cancelled',
+        'message': 'Se canceló la orden ${_shortLogFolio(order.id)}.',
+        'orderId': order.id,
+        'folio': _shortLogFolio(order.id),
+        'orderType': order.orderType,
+        'tableId': order.tableId,
+        'tableIds': order.linkedTableIds,
+        'grossSubtotal': grossSubtotal,
+        'discountAmount': order.explicitDiscount,
+        'netTotal': netTotal,
+        'cancelReason': cleanReason,
+        'cancelledItemsCount': activeItemDocs.length,
+        'cashSessionId': order.cashSessionId ?? '',
+        'businessDate': order.businessDate ?? '',
+        'branchId': order.branchId,
+        'branchName': order.branchName,
+        'employeeId': employee?.id ?? '',
+        'employeeName': employee?.name ?? '',
+        'cashSessionRecalculationRecommended': closedCashSessionId != null,
+        'timestamp': now,
+        'createdAt': now,
+        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      });
+
+      return BackofficeCancellationResult(
+        affectedClosedCashSession: closedCashSessionId != null,
+        previousPaidTotal: order.paidTotal,
+        previousPendingTotal: order.pendingTotal,
+        cancelledItemsCount: activeItemDocs.length,
+      );
+    });
+
+    invalidateReportDataCache(
+      branchId: initialOrder.branchId,
+      startBusinessDate: initialOrder.businessDate,
+      endBusinessDate: initialOrder.businessDate,
+    );
+    return result;
+  }
+
+  Future<String?> _closedCashSessionIdForSale({
+    required PosOrder order,
+    required Iterable<Payment> payments,
+  }) async {
+    final ids = <String>{
+      if (order.cashSessionId?.trim().isNotEmpty == true)
+        order.cashSessionId!.trim(),
+      ...payments
+          .map((payment) => payment.cashSessionId?.trim() ?? '')
+          .where((id) => id.isNotEmpty),
+    };
+    for (final id in ids) {
+      final doc = await _cashSessionsRef.doc(id).get();
+      if (!doc.exists) continue;
+      final session = CashSession.fromDoc(doc);
+      if (!session.isOpen) return id;
+    }
+    return null;
+  }
+
   Map<String, Object> _employeeAuditFields({required String prefix}) {
     final employee = AppSession.instance.employee;
     if (employee == null) {
@@ -10269,11 +10691,37 @@ class TacoPosRepository {
     throw StateError('No tienes permiso para cancelar tickets.');
   }
 
+  void _requireBackofficeCancelOrders() {
+    final employee = AppSession.instance.employee;
+    if (employee != null &&
+        hasBackofficeCancellationPermission(
+          specificPermission: employee.canCancelOrders,
+          canViewAdmin: employee.canViewAdmin,
+          hasAdminAccess: employee.hasAdminAccess,
+        )) {
+      return;
+    }
+    throw StateError('No tienes permiso para cancelar órdenes.');
+  }
+
   void _requireCancelPayments() {
     final employee = AppSession.instance.employee;
     if (employee?.canCancelPayments == true ||
         employee?.canViewAdmin == true ||
         employee?.canControlLiveOperations == true) {
+      return;
+    }
+    throw StateError('No tienes permiso para cancelar pagos.');
+  }
+
+  void _requireBackofficeCancelPayments() {
+    final employee = AppSession.instance.employee;
+    if (employee != null &&
+        hasBackofficeCancellationPermission(
+          specificPermission: employee.canCancelPayments,
+          canViewAdmin: employee.canViewAdmin,
+          hasAdminAccess: employee.hasAdminAccess,
+        )) {
       return;
     }
     throw StateError('No tienes permiso para cancelar pagos.');
