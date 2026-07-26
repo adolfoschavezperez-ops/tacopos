@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/cash/cash_close_execution.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
@@ -9,6 +10,7 @@ import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
+import '../../widgets/cash_close_progress_dialog.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
@@ -27,6 +29,10 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
   final _openingCashController = TextEditingController(text: '0');
   late DateTime _selectedDate;
   bool _opening = false;
+  final _closeGuard = CashCloseExecutionGuard();
+  final _progressStage = ValueNotifier(CashCloseProgressStage.validating);
+  BuildContext? _progressDialogContext;
+  Future<void>? _progressDialogFuture;
 
   @override
   void initState() {
@@ -42,6 +48,7 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
   @override
   void dispose() {
     _openingCashController.dispose();
+    _progressStage.dispose();
     super.dispose();
   }
 
@@ -102,82 +109,154 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
   }
 
   Future<void> _closeCashSession(CashSession session) async {
-    final result = await Navigator.push<CashSession>(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CloseCashSessionScreen(session: session),
-      ),
-    );
-
-    if (!mounted || result == null) {
+    if (!_closeGuard.tryStart()) {
       return;
     }
 
-    if (result.netDifference < 0) {
-      await showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Corte con diferencias'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'El corte cuenta con diferencias. Hizo falta \$${result.shortageAmount.toStringAsFixed(2)} en caja.',
-              ),
-              const SizedBox(height: 12),
-              _CashCloseDiffRow(
-                label: 'Efectivo esperado',
-                value: result.expectedCashAmount,
-              ),
-              _CashCloseDiffRow(
-                label: 'Efectivo contado',
-                value: result.countedCashAmount,
-              ),
-              _CashCloseDiffRow(
-                label: 'Diferencia efectivo',
-                value: result.cashDifference,
-              ),
-              _CashCloseDiffRow(
-                label: 'Tarjeta esperada',
-                value: result.expectedCardChargedAmount,
-              ),
-              _CashCloseDiffRow(
-                label: 'Comision absorbida',
-                value: result.expectedCardFeeAbsorbedAmount,
-              ),
-              _CashCloseDiffRow(
-                label: 'Neto estimado tarjeta',
-                value: result.estimatedCardNetAmount,
-              ),
-              _CashCloseDiffRow(
-                label: 'Terminal reportada',
-                value: result.terminalReportedAmount,
-              ),
-              _CashCloseDiffRow(
-                label: 'Diferencia tarjeta',
-                value: result.cardDifference,
-              ),
-              _CashCloseDiffRow(
-                label: 'Retiros aprobados',
-                value: result.approvedWithdrawalsTotal,
-              ),
-              _CashCloseDiffRow(
-                label: 'Faltante neto',
-                value: result.netDifference,
+    setState(() {});
+    try {
+      await _showProgressDialog();
+      final blockers = await _repository.cashCloseBlockers(session.id);
+      await _dismissProgressDialog();
+      if (!mounted) {
+        return;
+      }
+      if (!blockers.canClose) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Cierre bloqueado'),
+            content: Text('${blockers.message}\n\n${blockers.detail}'),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Entendido'),
               ),
             ],
           ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Entendido'),
-            ),
-          ],
+        );
+        return;
+      }
+
+      final result = await Navigator.push<CashSession>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CloseCashSessionScreen(session: session),
         ),
       );
-    } else {
-      _showMessage('Corte grabado con exito.');
+
+      if (!mounted || result == null) {
+        return;
+      }
+
+      _showMessage('Corte guardado correctamente.');
+      if (result.netDifference < 0) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Corte con diferencias'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'El corte cuenta con diferencias. Hizo falta \$${result.shortageAmount.toStringAsFixed(2)} en caja.',
+                ),
+                const SizedBox(height: 12),
+                _CashCloseDiffRow(
+                  label: 'Efectivo esperado',
+                  value: result.expectedCashAmount,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Efectivo contado',
+                  value: result.countedCashAmount,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Diferencia efectivo',
+                  value: result.cashDifference,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Tarjeta esperada',
+                  value: result.expectedCardChargedAmount,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Comision absorbida',
+                  value: result.expectedCardFeeAbsorbedAmount,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Neto estimado tarjeta',
+                  value: result.estimatedCardNetAmount,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Terminal reportada',
+                  value: result.terminalReportedAmount,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Diferencia tarjeta',
+                  value: result.cardDifference,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Retiros aprobados',
+                  value: result.approvedWithdrawalsTotal,
+                ),
+                _CashCloseDiffRow(
+                  label: 'Faltante neto',
+                  value: result.netDifference,
+                ),
+              ],
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Entendido'),
+              ),
+            ],
+          ),
+        );
+      }
+    } catch (error, stackTrace) {
+      await _dismissProgressDialog();
+      debugPrint(
+        'Error al validar cierre de caja ${session.id}: $error\n$stackTrace',
+      );
+      if (!mounted) {
+        return;
+      }
+      _showMessage(_closeErrorText(error), type: AppSnackBarType.error);
+    } finally {
+      await _dismissProgressDialog();
+      _closeGuard.release();
+      if (mounted) {
+        setState(() {});
+      }
     }
+  }
+
+  Future<void> _showProgressDialog() async {
+    if (!mounted || _progressDialogFuture != null) {
+      return;
+    }
+    _progressStage.value = CashCloseProgressStage.validating;
+    final dialogFuture = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        _progressDialogContext = dialogContext;
+        return CashCloseProgressDialog(stageListenable: _progressStage);
+      },
+    );
+    _progressDialogFuture = dialogFuture;
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  Future<void> _dismissProgressDialog() async {
+    final dialogContext = _progressDialogContext;
+    final dialogFuture = _progressDialogFuture;
+    _progressDialogContext = null;
+    _progressDialogFuture = null;
+    if (dialogContext != null && dialogContext.mounted) {
+      Navigator.of(dialogContext).pop();
+    }
+    await dialogFuture;
   }
 
   Future<void> _requestWithdrawal(CashSession session) async {
@@ -194,12 +273,25 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
     _showMessage('Solicitud enviada. Pendiente de autorizacion.');
   }
 
-  void _showMessage(String message) {
-    showAppSnackBar(context, message);
+  void _showMessage(
+    String message, {
+    AppSnackBarType type = AppSnackBarType.success,
+  }) {
+    showAppSnackBar(context, message, type: type);
+  }
+
+  String _closeErrorText(Object error) {
+    if (error is StateError || error is ArgumentError) {
+      return _errorText(error);
+    }
+    return 'No se pudo grabar el corte. Revisa tu conexión e inténtalo nuevamente.';
   }
 
   String _errorText(Object error) {
-    return error.toString().replaceFirst('Bad state: ', '');
+    return error
+        .toString()
+        .replaceFirst('Bad state: ', '')
+        .replaceFirst('Invalid argument(s): ', '');
   }
 
   double? _parseAmount(String text) {
@@ -266,6 +358,7 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
                   canRequestWithdrawal:
                       employee?.canCharge == true ||
                       employee?.canManageCash == true,
+                  closing: _closeGuard.isActive,
                   repository: _repository,
                   onClose: () => _closeCashSession(session),
                   onRequestWithdrawal: () => _requestWithdrawal(session),
@@ -377,6 +470,7 @@ class _OpenSessionPanel extends StatelessWidget {
     required this.session,
     required this.canManageCash,
     required this.canRequestWithdrawal,
+    required this.closing,
     required this.repository,
     required this.onClose,
     required this.onRequestWithdrawal,
@@ -385,6 +479,7 @@ class _OpenSessionPanel extends StatelessWidget {
   final CashSession session;
   final bool canManageCash;
   final bool canRequestWithdrawal;
+  final bool closing;
   final TacoPosRepository repository;
   final VoidCallback onClose;
   final VoidCallback onRequestWithdrawal;
@@ -473,9 +568,10 @@ class _OpenSessionPanel extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: GlassButton(
                   icon: Icons.lock_outline,
-                  label: 'Cerrar caja',
+                  label: closing ? 'Validando...' : 'Cerrar caja',
                   prominent: true,
-                  onTap: hasPending ? null : onClose,
+                  loading: closing,
+                  onTap: hasPending || closing ? null : onClose,
                 ),
               )
             else

@@ -155,12 +155,14 @@ class GlassButton extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.prominent = false,
+    this.loading = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onTap;
   final bool prominent;
+  final bool loading;
 
   @override
   Widget build(BuildContext context) {
@@ -176,13 +178,25 @@ class GlassButton extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            icon,
-            size: 20,
-            color: prominent
-                ? BrandColors.backgroundPrimary
-                : BrandColors.textPrimary,
-          ),
+          if (loading)
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.3,
+                color: prominent
+                    ? BrandColors.backgroundPrimary
+                    : BrandColors.textPrimary,
+              ),
+            )
+          else
+            Icon(
+              icon,
+              size: 20,
+              color: prominent
+                  ? BrandColors.backgroundPrimary
+                  : BrandColors.textPrimary,
+            ),
           const SizedBox(width: 8),
           Flexible(
             child: Text(

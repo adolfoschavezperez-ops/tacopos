@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../../core/cash/cash_close_execution.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
+import '../../widgets/cash_close_progress_dialog.dart';
 import '../../widgets/glass.dart';
 
 class CloseCashSessionScreen extends StatefulWidget {
@@ -24,7 +26,12 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
   final _countedCashFocusNode = FocusNode();
   final _terminalFocusNode = FocusNode();
   final _notesFocusNode = FocusNode();
-  bool _closing = false;
+  final _closeGuard = CashCloseExecutionGuard();
+  final _progressStage = ValueNotifier(CashCloseProgressStage.validating);
+  BuildContext? _progressDialogContext;
+  Future<void>? _progressDialogFuture;
+
+  bool get _isClosingCash => _closeGuard.isActive;
 
   @override
   void dispose() {
@@ -34,6 +41,7 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
     _countedCashController.dispose();
     _terminalController.dispose();
     _notesController.dispose();
+    _progressStage.dispose();
     super.dispose();
   }
 
@@ -42,88 +50,139 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
   }
 
   Future<void> _confirmClose() async {
-    if (_closing) {
+    if (!_closeGuard.tryStart()) {
       return;
     }
 
-    final countedCash = _amount(_countedCashController);
-    final terminalReported = _amount(_terminalController);
-    final blockers = await _repository.cashCloseBlockers(widget.session.id);
-    if (!mounted) {
-      return;
-    }
-    if (!blockers.canClose) {
-      await showDialog<void>(
+    setState(() {});
+
+    try {
+      final countedCash = _amount(_countedCashController);
+      final terminalReported = _amount(_terminalController);
+      await _showProgressDialog(CashCloseProgressStage.validating);
+
+      final blockers = await _repository.cashCloseBlockers(widget.session.id);
+      await _dismissProgressDialog();
+      if (!mounted) {
+        return;
+      }
+      if (!blockers.canClose) {
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Cierre bloqueado'),
+            content: Text('${blockers.message}\n\n${blockers.detail}'),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Entendido'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Cierre bloqueado'),
-          content: Text('${blockers.message}\n\n${blockers.detail}'),
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Cerrar caja'),
+          content: const Text(
+            'Se guardara el conteo fisico y el sistema calculara el corte.',
+          ),
           actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancelar'),
+            ),
             FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Entendido'),
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Cerrar caja'),
             ),
           ],
         ),
       );
-      return;
-    }
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Cerrar caja'),
-        content: Text(
-          'Se guardara el conteo fisico y el sistema calculara el corte.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Cerrar caja'),
-          ),
-        ],
-      ),
-    );
+      if (!mounted || confirmed != true) {
+        return;
+      }
 
-    if (!mounted || confirmed != true) {
-      return;
-    }
-
-    setState(() {
-      _closing = true;
-    });
-
-    try {
+      _closeGuard.markSaving();
+      setState(() {});
+      await _showProgressDialog(CashCloseProgressStage.saving);
       final result = await _repository.closeCashSession(
         cashSessionId: widget.session.id,
         countedCashAmount: countedCash,
         terminalReportedAmount: terminalReported,
         notes: _notesController.text,
       );
+      await _dismissProgressDialog();
       if (!mounted) {
         return;
       }
       Navigator.pop(context, result);
-    } catch (error) {
+    } catch (error, stackTrace) {
+      await _dismissProgressDialog();
+      debugPrint(
+        'Error al cerrar caja ${widget.session.id}: $error\n$stackTrace',
+      );
       if (!mounted) {
         return;
       }
-      showAppSnackBar(context, _errorText(error), type: AppSnackBarType.error);
+      showAppSnackBar(
+        context,
+        _closeErrorText(error),
+        type: AppSnackBarType.error,
+      );
     } finally {
+      await _dismissProgressDialog();
+      _closeGuard.release();
       if (mounted) {
-        setState(() {
-          _closing = false;
-        });
+        setState(() {});
       }
     }
   }
 
+  Future<void> _showProgressDialog(CashCloseProgressStage stage) async {
+    if (!mounted || _progressDialogFuture != null) {
+      return;
+    }
+    _progressStage.value = stage;
+    final dialogFuture = showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        _progressDialogContext = dialogContext;
+        return CashCloseProgressDialog(stageListenable: _progressStage);
+      },
+    );
+    _progressDialogFuture = dialogFuture;
+    await WidgetsBinding.instance.endOfFrame;
+  }
+
+  Future<void> _dismissProgressDialog() async {
+    final dialogContext = _progressDialogContext;
+    final dialogFuture = _progressDialogFuture;
+    _progressDialogContext = null;
+    _progressDialogFuture = null;
+    if (dialogContext != null && dialogContext.mounted) {
+      Navigator.of(dialogContext).pop();
+    }
+    await dialogFuture;
+  }
+
+  String _closeErrorText(Object error) {
+    if (error is StateError || error is ArgumentError) {
+      return _errorText(error);
+    }
+    return 'No se pudo grabar el corte. Revisa tu conexión e inténtalo nuevamente.';
+  }
+
   String _errorText(Object error) {
-    return error.toString().replaceFirst('Bad state: ', '');
+    return error
+        .toString()
+        .replaceFirst('Bad state: ', '')
+        .replaceFirst('Invalid argument(s): ', '');
   }
 
   @override
@@ -150,7 +209,7 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
                 TextField(
                   controller: _countedCashController,
                   focusNode: _countedCashFocusNode,
-                  enabled: !_closing,
+                  enabled: !_isClosingCash,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
@@ -163,7 +222,7 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
                 TextField(
                   controller: _terminalController,
                   focusNode: _terminalFocusNode,
-                  enabled: !_closing,
+                  enabled: !_isClosingCash,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
@@ -176,7 +235,7 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
                 TextField(
                   controller: _notesController,
                   focusNode: _notesFocusNode,
-                  enabled: !_closing,
+                  enabled: !_isClosingCash,
                   minLines: 2,
                   maxLines: 4,
                   decoration: const InputDecoration(
@@ -201,9 +260,10 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
             alignment: Alignment.centerRight,
             child: GlassButton(
               icon: Icons.check_circle_outline,
-              label: _closing ? 'Cerrando...' : 'Confirmar cierre',
+              label: _closeGuard.stage?.buttonLabel ?? 'Grabar corte',
               prominent: true,
-              onTap: _closing ? null : _confirmClose,
+              loading: _isClosingCash,
+              onTap: _isClosingCash ? null : _confirmClose,
             ),
           ),
         ],

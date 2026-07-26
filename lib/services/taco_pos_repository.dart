@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/cash/cash_close_execution.dart';
 import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_types.dart';
@@ -5841,8 +5842,11 @@ class TacoPosRepository {
     }
 
     final session = CashSession.fromDoc(doc);
-    if (session.status != 'open') {
-      throw StateError('Esta caja ya esta cerrada.');
+    if (!canFinalizeCashSessionClose(
+      status: session.status,
+      hasClosedAt: session.closedAt != null,
+    )) {
+      throw StateError('Esta caja ya fue cerrada.');
     }
 
     final blockers = await _cashCloseBlockersForSession(session);
@@ -5881,7 +5885,7 @@ class TacoPosRepository {
     );
     final employee = AppSession.instance.employee;
 
-    await docRef.update({
+    final closeData = <String, Object?>{
       'status': 'closed',
       'closedAt': FieldValue.serverTimestamp(),
       'closedByEmployeeId': employee?.id ?? '',
@@ -5908,20 +5912,37 @@ class TacoPosRepository {
       'overAmount': overAmount,
       'notes': notes.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
+    };
+    final shortageActivityRef = netDifference < 0
+        ? _restaurantRef.collection('activityLog').doc()
+        : null;
+    await _db.runTransaction((transaction) async {
+      final freshDoc = await transaction.get(docRef);
+      if (!freshDoc.exists) {
+        throw StateError('La caja ya no existe.');
+      }
+      final freshSession = CashSession.fromDoc(freshDoc);
+      if (!canFinalizeCashSessionClose(
+        status: freshSession.status,
+        hasClosedAt: freshSession.closedAt != null,
+      )) {
+        throw StateError('Esta caja ya fue cerrada.');
+      }
+      transaction.update(docRef, closeData);
+      if (shortageActivityRef != null) {
+        transaction.set(shortageActivityRef, {
+          'type': 'cash_close_shortage',
+          ..._currentBranchFields,
+          'cashSessionId': cashSessionId,
+          'businessDate': session.businessDate,
+          'shortageAmount': shortageAmount,
+          'netDifference': netDifference,
+          ..._employeeAuditFields(prefix: 'createdBy'),
+          'createdAt': FieldValue.serverTimestamp(),
+          'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+        });
+      }
     });
-    if (netDifference < 0) {
-      await _restaurantRef.collection('activityLog').add({
-        'type': 'cash_close_shortage',
-        ..._currentBranchFields,
-        'cashSessionId': cashSessionId,
-        'businessDate': session.businessDate,
-        'shortageAmount': shortageAmount,
-        'netDifference': netDifference,
-        ..._employeeAuditFields(prefix: 'createdBy'),
-        'createdAt': FieldValue.serverTimestamp(),
-        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
-      });
-    }
 
     final updatedDoc = await docRef.get();
     invalidateReportDataCache(
