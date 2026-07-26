@@ -16,6 +16,8 @@ import '../../widgets/status_badge.dart';
 import 'order_screen.dart';
 import 'takeout_orders_screen.dart';
 
+const IconData takeoutEntryIcon = Icons.two_wheeler;
+
 class TablesScreen extends StatefulWidget {
   const TablesScreen({super.key});
 
@@ -80,7 +82,7 @@ class _TablesScreenState extends State<TablesScreen> {
       return;
     }
 
-    if (table.type == 'takeout' || table.type == 'takeout_entry') {
+    if (isTakeoutEntryTableType(table.type)) {
       await Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const TakeoutOrdersScreen()),
@@ -571,13 +573,13 @@ class _TableCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isTakeout = table.type == 'takeout' || table.type == 'takeout_entry';
+    final isTakeout = isTakeoutEntryTableType(table.type);
     final status = tableStatusStyle(isTakeout ? 'available' : table.status);
     final hasOrder =
         !isTakeout &&
         (table.currentOrderId != null || table.status != 'available');
     final takeoutActive = isTakeout && takeoutCount > 0;
-    final accent = takeoutActive ? BrandColors.accentOrange : status.color;
+    final accent = isTakeout ? BrandColors.accentOrange : status.color;
     final elapsedMinutes = order?.createdAt == null
         ? null
         : DateTime.now().difference(order!.createdAt!).inMinutes.clamp(0, 9999);
@@ -591,12 +593,20 @@ class _TableCard extends StatelessWidget {
       onTap: onTap,
       accent: accent,
       selected: selected || hasOrder || takeoutActive,
+      selectedAccent: isTakeout ? BrandColors.accentOrange : null,
+      borderAccent: isTakeout
+          ? BrandColors.accentOrange.withValues(alpha: 0.55)
+          : null,
       padding: EdgeInsets.all(compact ? 8 : 18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
+              if (isTakeout) ...[
+                const Icon(takeoutEntryIcon, color: BrandColors.accentOrange),
+                SizedBox(width: compact ? 6 : 10),
+              ],
               Expanded(
                 child: Text(
                   order?.displayName ?? table.tableGroupLabel ?? table.name,
@@ -641,7 +651,9 @@ class _TableCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: BrandColors.textMuted,
+                    color: isTakeout
+                        ? BrandColors.accentOrange
+                        : BrandColors.textMuted,
                     fontSize: compact ? 12 : 14,
                     fontWeight: FontWeight.w500,
                   ),

@@ -30,6 +30,14 @@ void main() {
         hasBackofficeCancellationPermission(
           specificPermission: false,
           canViewAdmin: false,
+          hasAdminAccess: true,
+        ),
+        isTrue,
+      );
+      expect(
+        hasBackofficeCancellationPermission(
+          specificPermission: false,
+          canViewAdmin: false,
           hasAdminAccess: false,
         ),
         isFalse,
@@ -53,6 +61,16 @@ void main() {
         ),
         isFalse,
       );
+      for (final status in ['cancelled', 'canceled', 'cancelado']) {
+        expect(
+          isBackofficeActivePayment(
+            status: status,
+            hasCancelledAt: false,
+            appliedAmount: 50,
+          ),
+          isFalse,
+        );
+      }
       expect(
         isBackofficeActivePayment(
           status: 'active',
@@ -137,6 +155,12 @@ void main() {
   });
 
   group('cancelación de orden', () {
+    test('se habilita al cancelar el último pago activo', () {
+      expect(canCancelBackofficeSale(50), isFalse);
+      expect(canCancelBackofficeSale(0.02), isTrue);
+      expect(canCancelBackofficeSale(0), isTrue);
+    });
+
     test('solo libera una mesa que todavía apunta a la orden', () {
       expect(
         shouldReleaseBackofficeCancelledOrderTable(

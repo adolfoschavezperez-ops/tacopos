@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -44,7 +45,8 @@ export '../core/orders/order_activity.dart'
         isActiveOrderItem,
         isActivePayment,
         isGhostOrder,
-        isOperationalOrderActive;
+        isOperationalOrderActive,
+        isStandingOrderVisibleInLiveViewer;
 export '../core/orders/order_types.dart';
 
 double _numberToDouble(Object? value) {
@@ -143,6 +145,18 @@ class KitchenOrderBundle {
       ..sort((a, b) => a.key.compareTo(b.key));
     return entries;
   }
+}
+
+class LiveStandingOrderBundle {
+  const LiveStandingOrderBundle({
+    required this.order,
+    required this.items,
+    required this.payments,
+  });
+
+  final PosOrder order;
+  final List<OrderItem> items;
+  final List<Payment> payments;
 }
 
 class PaymentResult {
@@ -3635,6 +3649,93 @@ class TacoPosRepository {
           });
       return orders;
     });
+  }
+
+  Stream<List<LiveStandingOrderBundle>>
+  watchOperationalStandingOrderBundles() async* {
+    final businessDate = await currentKitchenBusinessDate();
+    final selectedBranchId = AppSession.instance.currentBranchId;
+    await for (final orders in _watchOrdersForOperationalDate(businessDate)) {
+      final candidates = orders.where((order) {
+        return isStandingOrder(order) &&
+            _matchesBranch(order.branchId, selectedBranchId) &&
+            _businessDateForOrder(order) == businessDate;
+      }).toList();
+      final bundles = <LiveStandingOrderBundle>[];
+      for (final order in candidates) {
+        final items = await getOrderItemsOnce(order.id);
+        final payments = await getOrderPaymentsOnce(order.id);
+        if (!isStandingOrderVisibleInLiveViewer(
+          order: order,
+          items: items,
+          payments: payments,
+          belongsToSelectedBranchAndDate: true,
+        )) {
+          continue;
+        }
+        bundles.add(
+          LiveStandingOrderBundle(
+            order: order,
+            items: items,
+            payments: payments,
+          ),
+        );
+      }
+      bundles.sort((a, b) {
+        final aDate =
+            a.order.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        final bDate =
+            b.order.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+        return bDate.compareTo(aDate);
+      });
+      yield bundles;
+    }
+  }
+
+  Stream<List<PosOrder>> _watchOrdersForOperationalDate(String businessDate) {
+    late StreamController<List<PosOrder>> controller;
+    final subscriptions =
+        <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
+    final documentsBySource =
+        <String, Map<String, QueryDocumentSnapshot<Map<String, dynamic>>>>{};
+
+    void emit() {
+      final merged = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+      for (final documents in documentsBySource.values) {
+        merged.addAll(documents);
+      }
+      controller.add(merged.values.map(PosOrder.fromDoc).toList());
+    }
+
+    void listenTo(String source, Query<Map<String, dynamic>> query) {
+      subscriptions.add(
+        query.snapshots().listen((snapshot) {
+          documentsBySource[source] = {
+            for (final document in snapshot.docs) document.id: document,
+          };
+          emit();
+        }, onError: controller.addError),
+      );
+    }
+
+    controller = StreamController<List<PosOrder>>(
+      onListen: () {
+        listenTo(
+          'businessDate',
+          _ordersRef.where('businessDate', isEqualTo: businessDate),
+        );
+        listenTo(
+          'operationalDate',
+          _ordersRef.where('operationalDate', isEqualTo: businessDate),
+        );
+      },
+      onCancel: () async {
+        for (final subscription in subscriptions) {
+          await subscription.cancel();
+        }
+      },
+    );
+    return controller.stream;
   }
 
   Stream<List<PosOrder>> watchAllOrders() {
@@ -10331,7 +10432,7 @@ class TacoPosRepository {
       final payment = Payment.fromDoc(freshPaymentDoc);
       if (isTerminalCancellationStatus(payment.status) ||
           payment.cancelledAt != null) {
-        throw StateError('Este registro ya fue cancelado.');
+        throw StateError('Este pago ya fue cancelado.');
       }
       final cancelledAmount = canonicalPaymentAppliedAmount(payment);
       if (cancelledAmount <= backofficeCancellationTolerance) {
@@ -10529,7 +10630,7 @@ class TacoPosRepository {
       );
       if (activePaymentsTotal > backofficeCancellationTolerance) {
         throw StateError(
-          'No se puede cancelar esta orden porque todavía tiene pagos activos por \$${activePaymentsTotal.toStringAsFixed(2)}. Cancela primero los pagos desde esta misma ventana.',
+          'No puedes cancelar esta venta porque todavía tiene pagos activos por \$${activePaymentsTotal.toStringAsFixed(2)}. Cancela primero los pagos desde la sección Pagos.',
         );
       }
 

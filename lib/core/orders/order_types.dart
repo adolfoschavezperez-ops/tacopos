@@ -42,6 +42,10 @@ bool isDineInOrder(PosOrder order) {
   return const {dineInOrderType, 'table'}.contains(order.orderType);
 }
 
+bool isTakeoutEntryTableType(String type) {
+  return const {'takeout', 'takeout_entry'}.contains(type.trim());
+}
+
 bool orderUsesPhysicalTables(PosOrder order) {
   return isDineInOrder(order) && order.linkedTableIds.isNotEmpty;
 }

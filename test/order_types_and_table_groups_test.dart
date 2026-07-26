@@ -1,4 +1,6 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tacopos/core/orders/order_activity.dart';
 import 'package:tacopos/core/orders/order_types.dart';
 import 'package:tacopos/core/reports/canonical_sales_summary.dart';
 import 'package:tacopos/core/reports/operational_blockers.dart';
@@ -6,6 +8,7 @@ import 'package:tacopos/models/order.dart';
 import 'package:tacopos/models/order_item.dart';
 import 'package:tacopos/models/order_platform.dart';
 import 'package:tacopos/models/pos_table.dart';
+import 'package:tacopos/screens/waiter/tables_screen.dart';
 
 void main() {
   group('unseated order rules', () {
@@ -54,6 +57,105 @@ void main() {
       expect(isDineInOrder(order), isFalse);
       expect(order.orderTypeLabel, 'Parados sin mesa');
       expect(order.displayName, 'Sin mesa · Juan');
+    });
+
+    test('active standing is visible in the live operations viewer', () {
+      final order = _order(
+        id: 'standing-active',
+        orderType: standingOrderType,
+        status: 'sent',
+        paymentStatus: 'pending',
+        pendingTotal: 100,
+        customerName: 'Juan',
+      );
+
+      expect(
+        isStandingOrderVisibleInLiveViewer(
+          order: order,
+          items: [_item()],
+          payments: const [],
+          belongsToSelectedBranchAndDate: true,
+        ),
+        isTrue,
+      );
+    });
+
+    test('paid, cancelled and empty standing orders are not live', () {
+      final paid = _order(
+        id: 'standing-paid',
+        orderType: standingOrderType,
+        customerName: 'Ana',
+      );
+      final cancelled = _order(
+        id: 'standing-cancelled',
+        orderType: standingOrderType,
+        status: 'cancelled',
+        paymentStatus: 'cancelled',
+        customerName: 'Luis',
+      );
+      final empty = _order(
+        id: 'standing-empty',
+        orderType: standingOrderType,
+        status: 'open',
+        paymentStatus: 'pending',
+        customerName: 'Eva',
+      );
+
+      for (final order in [paid, cancelled, empty]) {
+        expect(
+          isStandingOrderVisibleInLiveViewer(
+            order: order,
+            items: const [],
+            payments: const [],
+            belongsToSelectedBranchAndDate: true,
+          ),
+          isFalse,
+        );
+      }
+    });
+
+    test('standing viewer rejects takeout and another branch or date', () {
+      final standing = _order(
+        id: 'standing',
+        orderType: standingOrderType,
+        status: 'open',
+        paymentStatus: 'pending',
+        pendingTotal: 100,
+        customerName: 'Juan',
+      );
+      final takeout = _order(
+        id: 'takeout',
+        orderType: takeoutOrderType,
+        status: 'open',
+        paymentStatus: 'pending',
+        pendingTotal: 100,
+      );
+
+      expect(
+        isStandingOrderVisibleInLiveViewer(
+          order: standing,
+          items: [_item()],
+          payments: const [],
+          belongsToSelectedBranchAndDate: false,
+        ),
+        isFalse,
+      );
+      expect(
+        isStandingOrderVisibleInLiveViewer(
+          order: takeout,
+          items: [_item()],
+          payments: const [],
+          belongsToSelectedBranchAndDate: true,
+        ),
+        isFalse,
+      );
+    });
+
+    test('takeout entry keeps its route decision and motorcycle icon', () {
+      expect(isTakeoutEntryTableType('takeout'), isTrue);
+      expect(isTakeoutEntryTableType('takeout_entry'), isTrue);
+      expect(isTakeoutEntryTableType('table'), isFalse);
+      expect(takeoutEntryIcon, Icons.two_wheeler);
     });
 
     test('paid order counts split into takeout, dine-in and standing', () {

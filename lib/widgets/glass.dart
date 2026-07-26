@@ -111,6 +111,8 @@ class GlassCard extends StatelessWidget {
     this.onTap,
     this.accent,
     this.selected = false,
+    this.selectedAccent,
+    this.borderAccent,
   });
 
   final Widget child;
@@ -118,21 +120,27 @@ class GlassCard extends StatelessWidget {
   final VoidCallback? onTap;
   final Color? accent;
   final bool selected;
+  final Color? selectedAccent;
+  final Color? borderAccent;
 
   @override
   Widget build(BuildContext context) {
     final accentColor = accent ?? BrandColors.glassBorder;
+    final selectionColor = selectedAccent ?? BrandColors.accentYellow;
 
     return GlassPanel(
       padding: padding,
       onTap: onTap,
       fill: selected
-          ? BrandColors.accentGlow.withValues(alpha: 0.16)
+          ? selectedAccent?.withValues(alpha: 0.08) ??
+                BrandColors.accentGlow.withValues(alpha: 0.16)
           : BrandColors.glassFill,
       borderColor: selected
-          ? BrandColors.accentYellow
-          : BrandColors.glassBorder,
-      glowColor: selected ? BrandColors.accentGlow : null,
+          ? selectionColor
+          : borderAccent ?? BrandColors.glassBorder,
+      glowColor: selected
+          ? selectedAccent?.withValues(alpha: 0.18) ?? BrandColors.accentGlow
+          : null,
       child: DecoratedBox(
         decoration: BoxDecoration(
           border: Border(

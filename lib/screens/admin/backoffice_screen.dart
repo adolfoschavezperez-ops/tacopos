@@ -6141,9 +6141,8 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
     _reload();
     showAppSnackBar(
       context,
-      'Pago cancelado. La orden volvió a quedar pendiente. Si también es una orden de prueba, cancela ahora la orden completa.',
+      'Pago cancelado correctamente.',
       type: AppSnackBarType.success,
-      duration: const Duration(seconds: 6),
     );
   }
 
@@ -6206,7 +6205,7 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
                         OutlinedButton.icon(
                           onPressed: () => _cancelOrder(detail),
                           icon: const Icon(Icons.cancel_outlined),
-                          label: const Text('Cancelar orden'),
+                          label: const Text('Cancelar venta'),
                         ),
                       ],
                       IconButton(
@@ -6279,13 +6278,15 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
                       _InfoText(
                         'Total cobrado',
                         _money(
-                          payments.fold<double>(
+                          _activeBackofficePayments(payments).fold<double>(
                             0,
                             (sum, payment) =>
                                 sum + canonicalPaymentAppliedAmount(payment),
                           ),
                         ),
                       ),
+                      _InfoText('Total pagado', _money(order.paidTotal)),
+                      _InfoText('Pendiente', _money(order.pendingTotal)),
                       _InfoText(
                         'Aplico',
                         order.discountAppliedByEmployeeName ?? '-',
@@ -6446,7 +6447,7 @@ Future<bool> _showPaymentCancellationDialog(
   required Payment payment,
 }) async {
   final warnings = <String>[
-    'Este pago dejará de contar en ventas, métodos de pago y corte. El registro se conservará como cancelado.',
+    'Este pago dejará de contar en ventas y métodos de pago. El registro se conservará como cancelado.',
     if (detail.hasClosedCashSession)
       'Esta venta pertenece a un corte cerrado. La cancelación modificará ventas y reportes históricos. Revisa posteriormente el corte desde Caja Admin.',
   ];
@@ -6495,8 +6496,8 @@ Future<bool> _showOrderCancellationDialog(
           .clamp(0, double.infinity)
           .toDouble();
   final activePaymentsTotal = _activeBackofficePaymentsTotal(detail.payments);
-  final blockingMessage = activePaymentsTotal > backofficeCancellationTolerance
-      ? 'No se puede cancelar esta orden porque todavía tiene pagos activos por ${_money(activePaymentsTotal)}. Cancela primero los pagos desde esta misma ventana.'
+  final blockingMessage = !canCancelBackofficeSale(activePaymentsTotal)
+      ? 'No puedes cancelar esta venta porque todavía tiene pagos activos por ${_money(activePaymentsTotal)}. Cancela primero los pagos desde la sección Pagos.'
       : null;
   final warnings = <String>[
     'La orden dejará de contar en ventas y reportes. Sus artículos y pagos cancelados se conservarán para auditoría.',
@@ -6509,7 +6510,7 @@ Future<bool> _showOrderCancellationDialog(
         context: context,
         barrierDismissible: false,
         builder: (context) => _BackofficeCancellationDialog(
-          title: 'Cancelar orden',
+          title: 'Cancelar venta',
           details: [
             _InfoText('Folio', _shortId(order.id)),
             _InfoText(
@@ -6704,88 +6705,201 @@ class _SalePaymentsTable extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Pagos', style: TextStyle(fontWeight: FontWeight.w900)),
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Pagos',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+              Text(
+                payments.length == 1
+                    ? '1 registro'
+                    : '${payments.length} registros',
+                style: const TextStyle(color: BrandColors.textMuted),
+              ),
+            ],
+          ),
           const SizedBox(height: 10),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: DataTable(
-              columns: const [
-                DataColumn(label: Text('Método')),
-                DataColumn(label: Text('Aplicado')),
-                DataColumn(label: Text('Cobrado')),
-                DataColumn(label: Text('Usuario')),
-                DataColumn(label: Text('Hora')),
-                DataColumn(label: Text('Estado')),
-                DataColumn(label: Text('Cancelación')),
-                DataColumn(label: Text('Acciones')),
-              ],
-              rows: payments.map((payment) {
-                final active = isBackofficeActivePayment(
-                  status: payment.status,
-                  hasCancelledAt: payment.cancelledAt != null,
-                  appliedAmount: canonicalPaymentAppliedAmount(payment),
-                );
-                final cancelled =
-                    !active &&
-                    (isTerminalCancellationStatus(payment.status) ||
-                        payment.cancelledAt != null);
-                return DataRow(
-                  cells: [
-                    DataCell(Text(_paymentMethodLabel(payment.method))),
-                    DataCell(
-                      Text(_money(canonicalPaymentAppliedAmount(payment))),
-                    ),
-                    DataCell(Text(_money(payment.chargedAmount))),
-                    DataCell(
-                      Text(payment.employeeName ?? payment.createdBy ?? '-'),
-                    ),
-                    DataCell(Text(_dateTimeText(payment.createdAt))),
-                    DataCell(
-                      Chip(
-                        visualDensity: VisualDensity.compact,
-                        label: Text(cancelled ? 'Pago cancelado' : 'Activo'),
-                        backgroundColor: cancelled
-                            ? BrandColors.danger.withValues(alpha: 0.16)
-                            : BrandColors.success.withValues(alpha: 0.16),
-                      ),
-                    ),
-                    DataCell(
-                      cancelled
-                          ? Text(
-                              [
-                                payment.cancelReason ?? 'Sin motivo',
-                                payment.cancelledByEmployeeName ?? '-',
-                                _dateTimeText(payment.cancelledAt),
-                              ].join(' | '),
-                            )
-                          : const Text('-'),
-                    ),
-                    DataCell(
-                      canCancelPayments && active
-                          ? PopupMenuButton<String>(
-                              tooltip: 'Acciones del pago',
-                              icon: const Icon(Icons.more_vert),
-                              onSelected: (_) => onCancelPayment(payment),
-                              itemBuilder: (context) => const [
-                                PopupMenuItem(
-                                  value: 'cancel',
-                                  child: ListTile(
-                                    dense: true,
-                                    contentPadding: EdgeInsets.zero,
-                                    leading: Icon(Icons.money_off_outlined),
-                                    title: Text('Cancelar pago'),
-                                  ),
-                                ),
-                              ],
-                            )
-                          : const SizedBox.shrink(),
-                    ),
-                  ],
-                );
-              }).toList(),
+          if (payments.isEmpty)
+            const Text(
+              'No hay pagos registrados.',
+              style: TextStyle(color: BrandColors.textMuted),
             ),
+          for (var index = 0; index < payments.length; index++) ...[
+            if (index > 0) const Divider(height: 22),
+            _SalePaymentRow(
+              payment: payments[index],
+              canCancelPayments: canCancelPayments,
+              onCancelPayment: onCancelPayment,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _SalePaymentRow extends StatelessWidget {
+  const _SalePaymentRow({
+    required this.payment,
+    required this.canCancelPayments,
+    required this.onCancelPayment,
+  });
+
+  final Payment payment;
+  final bool canCancelPayments;
+  final ValueChanged<Payment> onCancelPayment;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = isBackofficeActivePayment(
+      status: payment.status,
+      hasCancelledAt: payment.cancelledAt != null,
+      appliedAmount: canonicalPaymentAppliedAmount(payment),
+    );
+    final cancelled =
+        !active &&
+        (isTerminalCancellationStatus(payment.status) ||
+            payment.cancelledAt != null);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    _paymentMethodLabel(payment.method),
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  Chip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text(
+                      cancelled
+                          ? 'Pago cancelado'
+                          : active
+                          ? 'Activo'
+                          : formatPaymentStatus(payment.status),
+                    ),
+                    backgroundColor: cancelled
+                        ? BrandColors.danger.withValues(alpha: 0.16)
+                        : BrandColors.success.withValues(alpha: 0.16),
+                  ),
+                ],
+              ),
+            ),
+            if (canCancelPayments && active)
+              PopupMenuButton<String>(
+                tooltip: 'Acciones del pago',
+                icon: const Icon(Icons.more_vert),
+                onSelected: (_) => onCancelPayment(payment),
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'cancel',
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.money_off_outlined),
+                      title: Text('Cancelar pago'),
+                    ),
+                  ),
+                ],
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 18,
+          runSpacing: 8,
+          children: [
+            _PaymentDetailText(
+              label: 'Aplicado',
+              value: _money(canonicalPaymentAppliedAmount(payment)),
+            ),
+            _PaymentDetailText(
+              label: 'Cobrado',
+              value: _money(payment.chargedAmount),
+            ),
+            _PaymentDetailText(
+              label: 'Recibido',
+              value: payment.cashReceivedAmount == null
+                  ? '-'
+                  : _money(payment.cashReceivedAmount!),
+            ),
+            _PaymentDetailText(
+              label: 'Cambio',
+              value: payment.cashChangeAmount == null
+                  ? '-'
+                  : _money(payment.cashChangeAmount!),
+            ),
+            _PaymentDetailText(
+              label: 'Fecha',
+              value: _dateTimeText(payment.createdAt),
+            ),
+            _PaymentDetailText(
+              label: 'Usuario',
+              value: payment.employeeName ?? payment.createdBy ?? '-',
+            ),
+          ],
+        ),
+        if (cancelled) ...[
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 18,
+            runSpacing: 8,
+            children: [
+              _PaymentDetailText(
+                label: 'Motivo',
+                value: payment.cancelReason ?? 'Sin motivo',
+              ),
+              _PaymentDetailText(
+                label: 'Canceló',
+                value: payment.cancelledByEmployeeName ?? '-',
+              ),
+              _PaymentDetailText(
+                label: 'Fecha de cancelación',
+                value: _dateTimeText(payment.cancelledAt),
+              ),
+            ],
           ),
         ],
+      ],
+    );
+  }
+}
+
+class _PaymentDetailText extends StatelessWidget {
+  const _PaymentDetailText({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 120, maxWidth: 240),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            TextSpan(text: value),
+          ],
+        ),
       ),
     );
   }

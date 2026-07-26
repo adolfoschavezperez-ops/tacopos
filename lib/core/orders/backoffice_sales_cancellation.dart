@@ -62,6 +62,10 @@ bool isBackofficeActivePayment({
       appliedAmount > backofficeCancellationTolerance;
 }
 
+bool canCancelBackofficeSale(double activePaymentsTotal) {
+  return activePaymentsTotal <= backofficeCancellationTolerance;
+}
+
 CustomerPaymentCancellationTotals deriveCustomerPaymentCancellationTotals({
   required double orderNetTotal,
   required Iterable<double> activePaymentAmounts,

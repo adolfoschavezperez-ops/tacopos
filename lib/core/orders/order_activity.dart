@@ -188,6 +188,17 @@ bool isOperationalOrderActive({
       _activePaymentStatuses.contains(paymentStatus);
 }
 
+bool isStandingOrderVisibleInLiveViewer({
+  required PosOrder order,
+  required Iterable<OrderItem> items,
+  required Iterable<Payment> payments,
+  required bool belongsToSelectedBranchAndDate,
+}) {
+  return isStandingOrder(order) &&
+      belongsToSelectedBranchAndDate &&
+      isOperationalOrderActive(order: order, items: items, payments: payments);
+}
+
 bool shouldReleaseTableForGhostOrder({
   required PosOrder order,
   required PosTable? table,

@@ -57,7 +57,7 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
     }
 
     return DefaultTabController(
-      length: 5,
+      length: 6,
       child: Column(
         children: [
           Padding(
@@ -154,6 +154,7 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
               Tab(text: 'Mesas en vivo'),
               Tab(text: 'Cocina en vivo'),
               Tab(text: 'Para llevar'),
+              Tab(text: 'Parados sin mesa'),
               Tab(text: 'Intervenciones recientes'),
             ],
           ),
@@ -179,6 +180,11 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                   onOpenOrder: _openOrderDetail,
                 ),
                 _TakeoutLiveTab(
+                  repository: _repository,
+                  canControl: _canControl,
+                  onOpenOrder: _openOrderDetail,
+                ),
+                _StandingLiveTab(
                   repository: _repository,
                   canControl: _canControl,
                   onOpenOrder: _openOrderDetail,
@@ -826,6 +832,175 @@ class _TakeoutLiveTab extends StatelessWidget {
   }
 }
 
+class _StandingLiveTab extends StatelessWidget {
+  const _StandingLiveTab({
+    required this.repository,
+    required this.canControl,
+    required this.onOpenOrder,
+  });
+
+  final TacoPosRepository repository;
+  final bool canControl;
+  final ValueChanged<String> onOpenOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<List<LiveStandingOrderBundle>>(
+      stream: repository.watchOperationalStandingOrderBundles(),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return EmptyState(
+            icon: Icons.error_outline,
+            title: 'No se pudieron cargar las órdenes sin mesa',
+            message: '${snapshot.error}',
+          );
+        }
+        if (!snapshot.hasData) {
+          return const LoadingPanel(message: 'Cargando parados sin mesa...');
+        }
+        final bundles = snapshot.data!;
+        if (bundles.isEmpty) {
+          return const EmptyState(
+            icon: Icons.accessibility_new,
+            title: 'Sin órdenes de parados',
+            message: 'No hay órdenes de parados sin mesa activas.',
+          );
+        }
+        return ListView(
+          padding: const EdgeInsets.all(18),
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: SectionHeader(
+                    title: 'Parados sin mesa',
+                    subtitle: 'Órdenes activas de la fecha operativa vigente.',
+                  ),
+                ),
+                _Pill(
+                  label: bundles.length == 1
+                      ? '1 orden activa'
+                      : '${bundles.length} órdenes activas',
+                  color: BrandColors.info,
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            for (final bundle in bundles) ...[
+              _StandingLiveCard(
+                bundle: bundle,
+                canControl: canControl,
+                onOpenOrder: () => onOpenOrder(bundle.order.id),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _StandingLiveCard extends StatelessWidget {
+  const _StandingLiveCard({
+    required this.bundle,
+    required this.canControl,
+    required this.onOpenOrder,
+  });
+
+  final LiveStandingOrderBundle bundle;
+  final bool canControl;
+  final VoidCallback onOpenOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    final order = bundle.order;
+    final peopleCount = order.personNames.isEmpty
+        ? 1
+        : order.personNames.length;
+    final netTotal = order.netTotal ?? order.total;
+    return GlassCard(
+      accent: _statusColor(order.kitchenStatus),
+      onTap: onOpenOrder,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 700;
+          final details = Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              _Pill(
+                label: formatOrderStatus(order.status),
+                color: _statusColor(order.status),
+              ),
+              _Pill(
+                label: formatKitchenStatus(order.kitchenStatus),
+                color: _statusColor(order.kitchenStatus),
+              ),
+              Text('Folio ${_shortId(order.id)}'),
+              Text(_dateTime(order.createdAt)),
+              Text('Total ${_money(netTotal)}'),
+              Text('Pendiente ${_money(order.pendingTotal)}'),
+              Text(peopleCount == 1 ? '1 persona' : '$peopleCount personas'),
+            ],
+          );
+          final heading = Row(
+            children: [
+              const Icon(Icons.accessibility_new, color: BrandColors.info),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  order.customerDisplayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          );
+          if (compact) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                heading,
+                const SizedBox(height: 10),
+                details,
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    canControl ? 'Intervenir' : 'Ver detalle',
+                    style: const TextStyle(
+                      color: BrandColors.textMuted,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+          return Row(
+            children: [
+              SizedBox(width: 230, child: heading),
+              const SizedBox(width: 18),
+              Expanded(child: details),
+              const SizedBox(width: 12),
+              IconButton(
+                tooltip: canControl ? 'Intervenir' : 'Ver detalle',
+                onPressed: onOpenOrder,
+                icon: const Icon(Icons.open_in_new),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
 // ignore: unused_element
 class _ActivityTab extends StatelessWidget {
   const _ActivityTab({required this.repository});
@@ -1143,7 +1318,7 @@ class _LiveOrderDetail extends StatelessWidget {
           children: [
             Expanded(
               child: SectionHeader(
-                title: order.displayName,
+                title: _liveOrderTitle(order),
                 subtitle:
                     'Orden ${_shortId(order.id)} · ${formatKitchenStatus(order.kitchenStatus)} · ${formatPaymentStatus(order.paymentStatus)}',
               ),
@@ -1716,6 +1891,13 @@ String _timeAgo(DateTime? date) {
 String _dateTime(DateTime? date) {
   if (date == null) return '-';
   return DateFormat('dd/MM HH:mm').format(date);
+}
+
+String _liveOrderTitle(PosOrder order) {
+  if (isStandingOrder(order)) {
+    return 'Parados sin mesa · ${order.customerDisplayName}';
+  }
+  return order.displayName;
 }
 
 String _shortId(String value) {
