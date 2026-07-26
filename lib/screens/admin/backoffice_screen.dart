@@ -977,11 +977,13 @@ class _DashboardSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final paidOrders = orders.where((order) => order.status == 'paid').toList();
-    final openOrders = orders
-        .where(
-          (order) => !['paid', 'cancelled', 'voided'].contains(order.status),
-        )
-        .toList();
+    final openOrders = orders.where((order) {
+      return isOperationalOrderActive(
+        order: order,
+        items: reportData.itemsByOrder[order.id] ?? const [],
+        payments: reportData.paymentsByOrder[order.id] ?? const [],
+      );
+    }).toList();
     final partialOrders = orders
         .where((order) => order.paymentStatus == 'partial')
         .toList();
@@ -1344,6 +1346,13 @@ class _AlertStrip extends StatelessWidget {
                     reconcileTables: true,
                   ),
                   builder: (context, blockersSnapshot) {
+                    if (!blockersSnapshot.hasData &&
+                        blockersSnapshot.connectionState ==
+                            ConnectionState.waiting) {
+                      return const LoadingPanel(
+                        message: 'Revisando estado operativo...',
+                      );
+                    }
                     final pendingWithdrawals =
                         withdrawalsSnapshot.data?.length ?? 0;
                     final summary = blockersSnapshot.data;

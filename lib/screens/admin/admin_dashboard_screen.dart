@@ -34,9 +34,12 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
+  final _repository = TacoPosRepository();
   late DateTime _startDate;
   late DateTime _endDate;
   late DateTime _hourlyBaseDate;
+  late Future<GhostOrderReconciliationResult> _reconciliation;
+  late Stream<List<PosOrder>> _orders;
   _HourlyReportMode _hourlyReportMode = _HourlyReportMode.yesterdayVsLastSales;
 
   @override
@@ -46,6 +49,16 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     _startDate = DateTime(now.year, now.month, now.day);
     _endDate = _startDate;
     _hourlyBaseDate = _startDate.subtract(const Duration(days: 1));
+    _reconciliation = _repository.reconcileGhostOrdersAndTableLinks(
+      branchId: AppSession.instance.currentBranchId,
+      triggeredBy: 'admin_dashboard',
+    );
+    _orders = _watchOrdersAfterReconciliation();
+  }
+
+  Stream<List<PosOrder>> _watchOrdersAfterReconciliation() async* {
+    await _reconciliation;
+    yield* _repository.watchAllOrders();
   }
 
   String get _startBusinessDate => DateFormat('yyyy-MM-dd').format(_startDate);
@@ -103,7 +116,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final repository = TacoPosRepository();
+    final repository = _repository;
     final employee = AppSession.instance.employee;
 
     final canAccessBackoffice =
@@ -214,7 +227,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           ),
       ],
       body: StreamBuilder<List<PosOrder>>(
-        stream: repository.watchAllOrders(),
+        stream: _orders,
         builder: (context, ordersSnapshot) {
           if (ordersSnapshot.hasError) {
             return EmptyState(
@@ -289,7 +302,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   .where((order) => order.status == 'paid')
                   .length;
               final openOrders = ordersInRange
-                  .where((order) => order.status != 'paid')
+                  .where(isActiveOrderForLiveTables)
                   .length;
               final partialOrders = ordersInRange
                   .where((order) => order.paymentStatus == 'partial')

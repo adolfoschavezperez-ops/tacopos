@@ -1,6 +1,7 @@
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
+import '../orders/order_activity.dart';
 
 class OperationalOrderBlocker {
   const OperationalOrderBlocker({
@@ -41,8 +42,13 @@ class OperationalOpenOrdersSummary {
       blockers.where((row) => row.order.orderType != 'takeout').length;
   int get openTakeoutCount =>
       blockers.where((row) => row.order.orderType == 'takeout').length;
-  int get pendingPaymentCount =>
-      blockers.where((row) => row.order.pendingTotal > 0.02).length;
+  int get pendingPaymentCount => blockers
+      .where(
+        (row) =>
+            row.order.pendingTotal > ghostOrderTolerance ||
+            row.activePaymentCount > 0,
+      )
+      .length;
   bool get hasBlockers => blockers.isNotEmpty;
 }
 
@@ -52,54 +58,29 @@ OperationalOrderBlocker? evaluateOperationalOrderBlocker({
   required List<Payment> payments,
   required bool belongsToBranchAndDate,
 }) {
-  if (!belongsToBranchAndDate) return null;
-  final status = _normalizeStatus(order.status);
-  final paymentStatus = _normalizeStatus(order.paymentStatus);
-  final kitchenStatus = _normalizeStatus(order.kitchenStatus);
-  if (_inactiveOrderStatuses.contains(status) ||
-      _inactiveOrderStatuses.contains(kitchenStatus) ||
-      _inactivePaymentStatuses.contains(paymentStatus) ||
-      order.cancelledAt != null ||
-      order.canceledAt != null ||
-      order.closedAt != null) {
+  if (!belongsToBranchAndDate || !isActiveOrderState(order)) return null;
+  final evaluation = evaluateGhostOrder(order, items, payments);
+  if (evaluation.isGhost) return null;
+  if (!isOperationalOrderActive(
+    order: order,
+    items: items,
+    payments: payments,
+  )) {
     return null;
   }
 
-  final activeItems = items.where(_isActiveOrderItem).toList();
-  final activePayments = payments.where(_isActivePayment).toList();
-  final hasPendingItems = activeItems.any((item) {
-    final itemPaymentStatus = _normalizeStatus(item.paymentStatus);
-    return !_inactivePaymentStatuses.contains(itemPaymentStatus);
-  });
-  final pendingBalance = order.pendingTotal > 0.02;
-  final emptyOrder =
-      activeItems.isEmpty &&
-      activePayments.isEmpty &&
-      order.sentToKitchenAt == null &&
-      order.total.abs() <= 0.02 &&
-      order.pendingTotal.abs() <= 0.02;
-  if (emptyOrder) return null;
-
-  final activeStatus =
-      _activeOrderStatuses.contains(status) ||
-      _activePaymentStatuses.contains(paymentStatus) ||
-      pendingBalance ||
-      hasPendingItems;
-  if (!activeStatus) return null;
-  if (!pendingBalance && !hasPendingItems) return null;
-
   final reasonParts = <String>[
-    if (pendingBalance) 'saldo pendiente',
-    if (hasPendingItems) 'items activos pendientes',
-    if (_activeOrderStatuses.contains(status)) 'estado ${order.status}',
-    if (_activePaymentStatuses.contains(paymentStatus))
-      'pago ${order.paymentStatus}',
+    if (order.pendingTotal > ghostOrderTolerance) 'saldo pendiente',
+    if (evaluation.activeItemsCount > 0) 'items activos pendientes',
+    if (evaluation.activePaymentsCount > 0) 'pagos activos',
+    'estado ${order.status}',
+    'pago ${order.paymentStatus}',
   ];
   return OperationalOrderBlocker(
     order: order,
-    reason: reasonParts.isEmpty ? 'orden activa' : reasonParts.join(', '),
-    activeItemCount: activeItems.length,
-    activePaymentCount: activePayments.length,
+    reason: reasonParts.join(', '),
+    activeItemCount: evaluation.activeItemsCount,
+    activePaymentCount: evaluation.activePaymentsCount,
   );
 }
 
@@ -110,108 +91,7 @@ String operationalDiscardReason({
   required bool belongsToBranchAndDate,
 }) {
   if (!belongsToBranchAndDate) return 'otra sucursal o fecha operativa';
-  final status = _normalizeStatus(order.status);
-  final paymentStatus = _normalizeStatus(order.paymentStatus);
-  final kitchenStatus = _normalizeStatus(order.kitchenStatus);
-  if (_inactiveOrderStatuses.contains(status) ||
-      _inactiveOrderStatuses.contains(kitchenStatus) ||
-      _inactivePaymentStatuses.contains(paymentStatus) ||
-      order.cancelledAt != null ||
-      order.canceledAt != null ||
-      order.closedAt != null) {
-    return 'pagada/cancelada/cerrada';
-  }
-  final activeItems = items.where(_isActiveOrderItem).toList();
-  final activePayments = payments.where(_isActivePayment).toList();
-  if (activeItems.isEmpty &&
-      activePayments.isEmpty &&
-      order.sentToKitchenAt == null &&
-      order.total.abs() <= 0.02 &&
-      order.pendingTotal.abs() <= 0.02) {
-    return 'orden vacia';
-  }
+  if (!isActiveOrderState(order)) return 'pagada/cancelada/cerrada';
+  if (isGhostOrder(order, items, payments)) return 'orden fantasma';
   return 'sin saldo ni items pendientes';
-}
-
-const _activeOrderStatuses = {
-  'open',
-  'abierta',
-  'sent',
-  'enviada',
-  'cooking',
-  'en_preparacion',
-  'ready',
-  'lista',
-  'partial',
-  'parcial',
-};
-
-const _activePaymentStatuses = {'pending', 'pendiente', 'partial', 'parcial'};
-
-const _inactiveOrderStatuses = {
-  'paid',
-  'pagada',
-  'pagado',
-  'closed',
-  'cerrada',
-  'cerrado',
-  'cancelled',
-  'canceled',
-  'cancelada',
-  'cancelado',
-  'voided',
-  'anulado',
-  'anulada',
-};
-
-const _inactivePaymentStatuses = {
-  'paid',
-  'pagada',
-  'pagado',
-  'closed',
-  'cerrada',
-  'cerrado',
-  'cancelled',
-  'canceled',
-  'cancelada',
-  'cancelado',
-};
-
-String _normalizeStatus(Object? value) {
-  return value
-      .toString()
-      .toLowerCase()
-      .trim()
-      .replaceAll('á', 'a')
-      .replaceAll('é', 'e')
-      .replaceAll('í', 'i')
-      .replaceAll('ó', 'o')
-      .replaceAll('ú', 'u')
-      .replaceAll('ñ', 'n')
-      .replaceAll('Ã¡', 'a')
-      .replaceAll('Ã©', 'e')
-      .replaceAll('Ã­', 'i')
-      .replaceAll('Ã³', 'o')
-      .replaceAll('Ãº', 'u')
-      .replaceAll('Ã±', 'n');
-}
-
-bool _isActivePayment(Payment payment) {
-  final status = _normalizeStatus(payment.status);
-  return !_inactivePaymentStatuses.contains(status) &&
-      payment.cancelledAt == null;
-}
-
-bool _isActiveOrderItem(OrderItem item) {
-  final status = _normalizeStatus(item.status);
-  final kitchenStatus = _normalizeStatus(item.kitchenStatus);
-  final paymentStatus = _normalizeStatus(item.paymentStatus);
-  final cancelStatus = _normalizeStatus(item.cancelStatus);
-  return !_inactiveOrderStatuses.contains(status) &&
-      !_inactiveOrderStatuses.contains(kitchenStatus) &&
-      !_inactivePaymentStatuses.contains(paymentStatus) &&
-      !_inactiveOrderStatuses.contains(cancelStatus) &&
-      cancelStatus != 'accepted' &&
-      item.cancelAcceptedAt == null &&
-      item.cancelledAt == null;
 }

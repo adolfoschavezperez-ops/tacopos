@@ -26,13 +26,25 @@ class TablesScreen extends StatefulWidget {
 class _TablesScreenState extends State<TablesScreen> {
   final _repository = TacoPosRepository();
   final _scrollController = ScrollController(keepScrollOffset: false);
+  late Future<GhostOrderReconciliationResult> _reconciliation;
+  late Stream<List<PosTable>> _tables;
   bool _opening = false;
 
   @override
   void initState() {
     super.initState();
+    _reconciliation = _repository.reconcileGhostOrdersAndTableLinks(
+      branchId: AppSession.instance.currentBranchId,
+      triggeredBy: 'waiter_tables',
+    );
+    _tables = _watchTablesAfterReconciliation();
     _markViewingTables();
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
+  }
+
+  Stream<List<PosTable>> _watchTablesAfterReconciliation() async* {
+    await _reconciliation;
+    yield* _repository.watchTables();
   }
 
   @override
@@ -167,7 +179,7 @@ class _TablesScreenState extends State<TablesScreen> {
           ),
       ],
       body: StreamBuilder<List<PosTable>>(
-        stream: _repository.watchTables(),
+        stream: _tables,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return EmptyState(

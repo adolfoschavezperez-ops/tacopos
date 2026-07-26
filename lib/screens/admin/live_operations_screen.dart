@@ -11,6 +11,7 @@ import '../../models/order_item.dart';
 import '../../models/payment.dart';
 import '../../models/pos_table.dart';
 import '../../models/product.dart';
+import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../../utils/formatters.dart';
@@ -387,7 +388,7 @@ class _SessionCard extends StatelessWidget {
   }
 }
 
-class _TablesLiveTab extends StatelessWidget {
+class _TablesLiveTab extends StatefulWidget {
   const _TablesLiveTab({
     required this.repository,
     required this.canControl,
@@ -399,15 +400,56 @@ class _TablesLiveTab extends StatelessWidget {
   final ValueChanged<String> onOpenOrder;
 
   @override
+  State<_TablesLiveTab> createState() => _TablesLiveTabState();
+}
+
+class _TablesLiveTabState extends State<_TablesLiveTab> {
+  late String _branchId;
+  late Future<GhostOrderReconciliationResult> _reconciliation;
+  late Stream<List<PosTable>> _tables;
+
+  @override
+  void initState() {
+    super.initState();
+    _branchId = AppSession.instance.currentBranchId;
+    _setBranchStreams();
+  }
+
+  void _setBranchStreams() {
+    _reconciliation = widget.repository.reconcileGhostOrdersAndTableLinks(
+      branchId: _branchId,
+      triggeredBy: 'live_operations_tables',
+    );
+    _tables = _watchTablesAfterReconciliation();
+  }
+
+  Stream<List<PosTable>> _watchTablesAfterReconciliation() async* {
+    await _reconciliation;
+    yield* widget.repository.watchTables();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final currentBranchId = AppSession.instance.currentBranchId;
+    if (_branchId != currentBranchId) {
+      _branchId = currentBranchId;
+      _setBranchStreams();
+    }
     return StreamBuilder<List<PosTable>>(
-      stream: repository.watchTables(),
+      stream: _tables,
       builder: (context, tablesSnapshot) {
+        if (tablesSnapshot.hasError) {
+          return EmptyState(
+            icon: Icons.error_outline,
+            title: 'No se pudieron revisar las mesas',
+            message: '${tablesSnapshot.error}',
+          );
+        }
         if (!tablesSnapshot.hasData) {
-          return const LoadingPanel(message: 'Cargando mesas...');
+          return const LoadingPanel(message: 'Revisando mesas en vivo...');
         }
         return StreamBuilder<List<PosOrder>>(
-          stream: repository.watchAllOrders(),
+          stream: widget.repository.watchAllOrders(),
           builder: (context, ordersSnapshot) {
             final orders = ordersSnapshot.data ?? const <PosOrder>[];
             final tables = tablesSnapshot.data!;
@@ -427,10 +469,10 @@ class _TablesLiveTab extends StatelessWidget {
                 return _LiveTableCard(
                   table: table,
                   order: order,
-                  canControl: canControl,
+                  canControl: widget.canControl,
                   onOpenOrder: order == null
                       ? null
-                      : () => onOpenOrder(order.id),
+                      : () => widget.onOpenOrder(order.id),
                 );
               },
             );

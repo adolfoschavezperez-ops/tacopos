@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/orders/order_activity.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
@@ -32,6 +33,14 @@ import '../models/purchase_models.dart';
 import '../models/restaurant.dart';
 import '../utils/category_utils.dart';
 import 'app_session.dart';
+
+export '../core/orders/order_activity.dart'
+    show
+        isActiveCustomerPayment,
+        isActiveOrderItem,
+        isActivePayment,
+        isGhostOrder,
+        isOperationalOrderActive;
 
 double _numberToDouble(Object? value) {
   return value is num ? value.toDouble() : 0.0;
@@ -576,7 +585,11 @@ class CashCloseBlockers {
             final folio = row.order.id.length <= 6
                 ? row.order.id
                 : row.order.id.substring(0, 6);
-            return '$origin - Folio $folio - ${row.reason}';
+            return '$origin - Folio $folio - '
+                'Pendiente \$${row.order.pendingTotal.toStringAsFixed(2)} - '
+                '${row.activeItemCount} items activos - '
+                '${row.order.status}/${row.order.paymentStatus} - '
+                '${row.reason}';
           })
           .join('\n');
     }
@@ -594,6 +607,33 @@ class _TableLinkCleanupResult {
 
   final int stale;
   final int released;
+}
+
+class GhostOrderReconciliationResult {
+  const GhostOrderReconciliationResult({
+    required this.businessDate,
+    required this.branchId,
+    required this.candidatesChecked,
+    required this.cancelledOrderIds,
+    required this.staleTableLinks,
+    required this.releasedTableLinks,
+  });
+
+  final String businessDate;
+  final String branchId;
+  final int candidatesChecked;
+  final List<String> cancelledOrderIds;
+  final int staleTableLinks;
+  final int releasedTableLinks;
+
+  int get cancelledOrders => cancelledOrderIds.length;
+}
+
+class _GhostOrderRepair {
+  const _GhostOrderRepair({required this.orderId, required this.tableReleased});
+
+  final String orderId;
+  final bool tableReleased;
 }
 
 class KitchenYieldReportRow {
@@ -5206,6 +5246,316 @@ class TacoPosRepository {
     return _cashCloseBlockersForSession(session);
   }
 
+  Future<GhostOrderReconciliationResult> reconcileGhostOrdersAndTableLinks({
+    String restaurantId = AppConstants.restaurantId,
+    required String branchId,
+    String? businessDate,
+    String triggeredBy = 'operational_reconciliation',
+  }) async {
+    if (restaurantId.trim() != AppConstants.restaurantId) {
+      throw ArgumentError('El restaurante no corresponde a esta sesion.');
+    }
+    final effectiveBusinessDate = businessDate?.trim().isNotEmpty == true
+        ? businessDate!.trim()
+        : (await getOpenCashSession())?.businessDate ?? _currentBusinessDate();
+    final candidates = await _ghostOrderCandidates(
+      branchId: branchId,
+      businessDate: effectiveBusinessDate,
+    );
+    final itemEntriesFuture = runInBatches<PosOrder, (String, List<OrderItem>)>(
+      candidates,
+      batchSize: 15,
+      action: (order) async => (order.id, await getOrderItemsOnce(order.id)),
+    );
+    final paymentEntriesFuture =
+        runInBatches<PosOrder, (String, List<Payment>)>(
+          candidates,
+          batchSize: 15,
+          action: (order) async =>
+              (order.id, await getOrderPaymentsOnce(order.id)),
+        );
+    final itemsByOrder = {
+      for (final entry in await itemEntriesFuture) entry.$1: entry.$2,
+    };
+    final paymentsByOrder = {
+      for (final entry in await paymentEntriesFuture) entry.$1: entry.$2,
+    };
+    final ghostCandidates = candidates.where(
+      (order) => isGhostOrder(
+        order,
+        itemsByOrder[order.id] ?? const [],
+        paymentsByOrder[order.id] ?? const [],
+      ),
+    );
+    final repairs = await runInBatches<PosOrder, _GhostOrderRepair?>(
+      ghostCandidates,
+      batchSize: 10,
+      action: (order) =>
+          _autoCancelGhostOrderIfNeeded(order.id, triggeredBy: triggeredBy),
+    );
+    final cancelledOrderIds = repairs
+        .whereType<_GhostOrderRepair>()
+        .map((repair) => repair.orderId)
+        .toList();
+    final tablesReleasedWithGhostOrders = repairs
+        .whereType<_GhostOrderRepair>()
+        .where((repair) => repair.tableReleased)
+        .length;
+    final blockers = <OperationalOrderBlocker>[];
+    for (final order in candidates) {
+      final items = itemsByOrder[order.id] ?? const <OrderItem>[];
+      final payments = paymentsByOrder[order.id] ?? const <Payment>[];
+      final evaluation = evaluateGhostOrder(order, items, payments);
+      if (evaluation.isGhost && !cancelledOrderIds.contains(order.id)) {
+        blockers.add(
+          OperationalOrderBlocker(
+            order: order,
+            reason: 'orden ambigua; requiere revision',
+            activeItemCount: evaluation.activeItemsCount,
+            activePaymentCount: evaluation.activePaymentsCount,
+          ),
+        );
+        continue;
+      }
+      final blocker = evaluateOperationalOrderBlocker(
+        order: order,
+        items: items,
+        payments: payments,
+        belongsToBranchAndDate: true,
+      );
+      if (blocker != null) blockers.add(blocker);
+    }
+    final cleanup = await _reconcileStaleTableOrderLinks(
+      businessDate: effectiveBusinessDate,
+      blockers: blockers,
+      triggeredBy: triggeredBy,
+    );
+    if (cancelledOrderIds.isNotEmpty || cleanup.released > 0) {
+      invalidateReportDataCache(
+        branchId: branchId,
+        startBusinessDate: effectiveBusinessDate,
+        endBusinessDate: effectiveBusinessDate,
+      );
+    }
+    return GhostOrderReconciliationResult(
+      businessDate: effectiveBusinessDate,
+      branchId: branchId,
+      candidatesChecked: candidates.length,
+      cancelledOrderIds: cancelledOrderIds,
+      staleTableLinks: cleanup.stale,
+      releasedTableLinks: tablesReleasedWithGhostOrders + cleanup.released,
+    );
+  }
+
+  Future<List<PosOrder>> _ghostOrderCandidates({
+    required String branchId,
+    required String businessDate,
+  }) async {
+    final startDate = DateTime.parse(businessDate);
+    final endExclusive = startDate.add(const Duration(days: 1));
+    final snapshots = await Future.wait([
+      _ordersRef.where('businessDate', isEqualTo: businessDate).get(),
+      _ordersRef.where('operationalDate', isEqualTo: businessDate).get(),
+      _ordersRef
+          .where('createdAt', isGreaterThanOrEqualTo: startDate)
+          .where('createdAt', isLessThan: endExclusive)
+          .get(),
+      _ordersRef
+          .where('updatedAt', isGreaterThanOrEqualTo: startDate)
+          .where('updatedAt', isLessThan: endExclusive)
+          .get(),
+      _ordersRef
+          .where('paidAt', isGreaterThanOrEqualTo: startDate)
+          .where('paidAt', isLessThan: endExclusive)
+          .get(),
+    ]);
+    final docsByPath = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    for (final snapshot in snapshots) {
+      for (final doc in snapshot.docs) {
+        docsByPath[doc.reference.path] = doc;
+      }
+    }
+    return docsByPath.values
+        .map(PosOrder.fromDoc)
+        .where((order) => _matchesBranch(order.branchId, branchId))
+        .where((order) => _orderBelongsToBusinessDate(order, businessDate))
+        .where(isActiveOrderState)
+        .toList();
+  }
+
+  Future<_GhostOrderRepair?> _autoCancelGhostOrderIfNeeded(
+    String orderId, {
+    required String triggeredBy,
+  }) async {
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) return null;
+    final order = PosOrder.fromDoc(orderDoc);
+    final detail = await Future.wait([
+      orderRef.collection('items').get(),
+      orderRef.collection('payments').get(),
+    ]);
+    final items = detail[0].docs.map(OrderItem.fromDoc).toList();
+    final payments = detail[1].docs
+        .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
+        .toList();
+    final evaluation = evaluateGhostOrder(order, items, payments);
+    if (!evaluation.isGhost) return null;
+    final employee = AppSession.instance.employee;
+    final cancellationItem = items
+        .where((item) {
+          return !isActiveOrderItem(item) &&
+              ((item.cancelAcceptedByEmployeeId?.trim().isNotEmpty ?? false) ||
+                  (item.cancelledByEmployeeId?.trim().isNotEmpty ?? false));
+        })
+        .fold<OrderItem?>(null, (latest, item) {
+          if (latest == null) return item;
+          final latestAt =
+              latest.cancelAcceptedAt ??
+              latest.cancelledAt ??
+              latest.updatedAt ??
+              DateTime(1970);
+          final itemAt =
+              item.cancelAcceptedAt ??
+              item.cancelledAt ??
+              item.updatedAt ??
+              DateTime(1970);
+          return itemAt.isAfter(latestAt) ? item : latest;
+        });
+    final cancellationEmployeeId =
+        cancellationItem?.cancelAcceptedByEmployeeId?.trim().isNotEmpty == true
+        ? cancellationItem!.cancelAcceptedByEmployeeId!.trim()
+        : cancellationItem?.cancelledByEmployeeId?.trim().isNotEmpty == true
+        ? cancellationItem!.cancelledByEmployeeId!.trim()
+        : employee?.id ?? '';
+    final cancellationEmployeeName =
+        cancellationItem?.cancelAcceptedByEmployeeName?.trim().isNotEmpty ==
+            true
+        ? cancellationItem!.cancelAcceptedByEmployeeName!.trim()
+        : cancellationItem?.cancelledByEmployeeName?.trim().isNotEmpty == true
+        ? cancellationItem!.cancelledByEmployeeName!.trim()
+        : employee?.name ?? '';
+    final tableRef =
+        order.orderType == 'takeout' || order.tableId.trim().isEmpty
+        ? null
+        : _tablesRef.doc(order.tableId);
+
+    final repair = await _db.runTransaction<_GhostOrderRepair?>((
+      transaction,
+    ) async {
+      final freshOrderDoc = await transaction.get(orderRef);
+      if (!freshOrderDoc.exists) return null;
+      final freshOrder = PosOrder.fromDoc(freshOrderDoc);
+      if (!isActiveOrderState(freshOrder) ||
+          !_sameInstant(freshOrder.updatedAt, order.updatedAt)) {
+        return null;
+      }
+      DocumentSnapshot<Map<String, dynamic>>? tableDoc;
+      if (tableRef != null) {
+        tableDoc = await transaction.get(tableRef);
+      }
+      final table = tableDoc?.exists == true
+          ? PosTable.fromDoc(tableDoc!)
+          : null;
+      final releaseTable = shouldReleaseTableForGhostOrder(
+        order: freshOrder,
+        table: table,
+      );
+      final now = FieldValue.serverTimestamp();
+      transaction.update(orderRef, {
+        'status': 'cancelled',
+        'paymentStatus': 'cancelled',
+        'cancelStatus': 'accepted',
+        'cancelReason': 'Todos los productos de la orden fueron cancelados',
+        'cancelledAt': now,
+        'cancelledByEmployeeId': cancellationEmployeeId,
+        'cancelledByEmployeeName': cancellationEmployeeName,
+        'total': 0.0,
+        'grossSubtotal': 0.0,
+        'netTotal': 0.0,
+        'paidTotal': 0.0,
+        'pendingTotal': 0.0,
+        'updatedAt': now,
+      });
+      if (releaseTable && tableRef != null) {
+        transaction.set(tableRef, {
+          'status': 'available',
+          'currentOrderId': null,
+          'currentOrderStatus': null,
+          'occupiedAt': null,
+          'updatedAt': now,
+        }, SetOptions(merge: true));
+      }
+      final folio = _shortLogFolio(freshOrder.id);
+      transaction.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': 'ghost_order_auto_cancelled',
+        'actionType': 'ghost_order_auto_cancelled',
+        'message':
+            'Se canceló automáticamente la orden $folio porque todos sus productos estaban cancelados.',
+        'orderId': freshOrder.id,
+        'folio': folio,
+        'tableId': freshOrder.tableId,
+        'tableName': freshOrder.tableName,
+        'restaurantId': freshOrder.restaurantId,
+        'restaurantName': freshOrder.restaurantName,
+        'branchId': freshOrder.branchId,
+        'branchName': freshOrder.branchName,
+        'businessDate':
+            _businessDateForOrder(freshOrder) ?? _currentBusinessDate(),
+        'previousStatus': freshOrder.status,
+        'previousPaymentStatus': freshOrder.paymentStatus,
+        'activeItemsCount': evaluation.activeItemsCount,
+        'activePaymentsCount': evaluation.activePaymentsCount,
+        'cancelledItemsCount': evaluation.cancelledItemsCount,
+        'triggeredBy': triggeredBy,
+        'employeeId': cancellationEmployeeId,
+        'employeeName': cancellationEmployeeName,
+        'timestamp': now,
+        'createdAt': now,
+        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      });
+      if (releaseTable && tableRef != null) {
+        transaction.set(_restaurantRef.collection('activityLog').doc(), {
+          'type': 'stale_table_link_cleared',
+          'actionType': 'stale_table_link_cleared',
+          'message':
+              'Se liberó ${freshOrder.tableName} al cancelar automáticamente la orden $folio.',
+          'orderId': freshOrder.id,
+          'folio': folio,
+          'tableId': freshOrder.tableId,
+          'tableName': freshOrder.tableName,
+          'branchId': freshOrder.branchId,
+          'branchName': freshOrder.branchName,
+          'businessDate':
+              _businessDateForOrder(freshOrder) ?? _currentBusinessDate(),
+          'triggeredBy': triggeredBy,
+          'employeeId': cancellationEmployeeId,
+          'employeeName': cancellationEmployeeName,
+          'timestamp': now,
+          'createdAt': now,
+          'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+        });
+      }
+      return _GhostOrderRepair(
+        orderId: freshOrder.id,
+        tableReleased: releaseTable,
+      );
+    });
+    if (repair != null) {
+      invalidateReportDataCache(
+        branchId: order.branchId,
+        startBusinessDate: _businessDateForOrder(order),
+        endBusinessDate: _businessDateForOrder(order),
+      );
+    }
+    return repair;
+  }
+
+  bool _sameInstant(DateTime? a, DateTime? b) {
+    if (a == null || b == null) return a == b;
+    return a.microsecondsSinceEpoch == b.microsecondsSinceEpoch;
+  }
+
   Future<CashCloseBlockers> _cashCloseBlockersForSession(
     CashSession session,
   ) async {
@@ -5267,6 +5617,13 @@ class TacoPosRepository {
     final effectiveBusinessDate = businessDate?.trim().isNotEmpty == true
         ? businessDate!.trim()
         : (await getOpenCashSession())?.businessDate ?? _currentBusinessDate();
+    final reconciliation = reconcileTables
+        ? await reconcileGhostOrdersAndTableLinks(
+            branchId: branchId,
+            businessDate: effectiveBusinessDate,
+            triggeredBy: 'operational_summary',
+          )
+        : null;
     final reportData = await getReportDataBundle(
       branchId: branchId,
       startBusinessDate: effectiveBusinessDate,
@@ -5367,12 +5724,6 @@ class TacoPosRepository {
       }
     }
 
-    final cleanup = reconcileTables
-        ? await _reconcileStaleTableOrderLinks(
-            businessDate: effectiveBusinessDate,
-            blockers: blockers,
-          )
-        : const _TableLinkCleanupResult(stale: 0, released: 0);
     blockers.sort((a, b) {
       final aDate = a.order.createdAt ?? DateTime(1970);
       final bDate = b.order.createdAt ?? DateTime(1970);
@@ -5385,8 +5736,8 @@ class TacoPosRepository {
       cashSessionId: cashSessionId?.trim() ?? '',
       ordersChecked: ordersChecked,
       discardedReasons: discardedReasons,
-      staleTableLinks: cleanup.stale,
-      releasedTableLinks: cleanup.released,
+      staleTableLinks: reconciliation?.staleTableLinks ?? 0,
+      releasedTableLinks: reconciliation?.releasedTableLinks ?? 0,
       blockers: blockers,
     );
     _debugOperationalBlockers(summary);
@@ -6685,46 +7036,82 @@ class TacoPosRepository {
   Future<_TableLinkCleanupResult> _reconcileStaleTableOrderLinks({
     required String businessDate,
     required List<OperationalOrderBlocker> blockers,
+    String triggeredBy = 'operational_reconciliation',
   }) async {
     final activeOrderIds = blockers.map((row) => row.order.id).toSet();
     final tablesSnapshot = await _tablesRef.get();
     final staleTables = <PosTable>[];
     for (final table in tablesSnapshot.docs.map(PosTable.fromDoc)) {
       if (!_matchesCurrentBranch(table.branchId)) continue;
-      final currentOrderId = table.currentOrderId?.trim();
-      if (currentOrderId == null || currentOrderId.isEmpty) continue;
-      if (activeOrderIds.contains(currentOrderId)) continue;
+      if (!isStaleTableLink(table, activeOrderIds: activeOrderIds)) continue;
       staleTables.add(table);
     }
     if (staleTables.isEmpty) {
       return const _TableLinkCleanupResult(stale: 0, released: 0);
     }
 
-    final batch = _db.batch();
-    for (final table in staleTables) {
-      batch.set(_tablesRef.doc(table.id), {
-        'status': 'available',
-        'currentOrderId': FieldValue.delete(),
-        'currentOrderStatus': FieldValue.delete(),
-        'occupiedAt': null,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-      batch.set(_restaurantRef.collection('activityLog').doc(), {
-        'type': 'stale_table_order_link_released',
-        ..._currentBranchFields,
-        'tableId': table.id,
-        'tableName': table.name,
-        'staleOrderId': table.currentOrderId,
-        'businessDate': businessDate,
-        ..._employeeAuditFields(prefix: 'createdBy'),
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    }
-    await batch.commit();
+    final releases = await runInBatches<PosTable, bool>(
+      staleTables,
+      batchSize: 10,
+      action: (table) => _clearStaleTableLinkIfUnchanged(
+        table: table,
+        activeOrderIds: activeOrderIds,
+        businessDate: businessDate,
+        triggeredBy: triggeredBy,
+      ),
+    );
     return _TableLinkCleanupResult(
       stale: staleTables.length,
-      released: staleTables.length,
+      released: releases.where((released) => released).length,
     );
+  }
+
+  Future<bool> _clearStaleTableLinkIfUnchanged({
+    required PosTable table,
+    required Set<String> activeOrderIds,
+    required String businessDate,
+    required String triggeredBy,
+  }) {
+    final expectedOrderId = table.currentOrderId?.trim() ?? '';
+    if (expectedOrderId.isEmpty) return Future.value(false);
+    final tableRef = _tablesRef.doc(table.id);
+    return _db.runTransaction<bool>((transaction) async {
+      final freshDoc = await transaction.get(tableRef);
+      if (!freshDoc.exists) return false;
+      final freshTable = PosTable.fromDoc(freshDoc);
+      if (!_matchesCurrentBranch(freshTable.branchId) ||
+          freshTable.currentOrderId?.trim() != expectedOrderId ||
+          !isStaleTableLink(freshTable, activeOrderIds: activeOrderIds)) {
+        return false;
+      }
+
+      final now = FieldValue.serverTimestamp();
+      transaction.set(tableRef, {
+        'status': 'available',
+        'currentOrderId': null,
+        'currentOrderStatus': null,
+        'occupiedAt': null,
+        'updatedAt': now,
+      }, SetOptions(merge: true));
+      transaction.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': 'stale_table_link_cleared',
+        'actionType': 'stale_table_link_cleared',
+        'message':
+            'Se limpió el vínculo obsoleto de ${freshTable.name} con la orden $expectedOrderId.',
+        ..._currentBranchFields,
+        'tableId': freshTable.id,
+        'tableName': freshTable.name,
+        'staleOrderId': expectedOrderId,
+        'businessDate': businessDate,
+        'triggeredBy': triggeredBy,
+        'employeeId': AppSession.instance.employee?.id ?? '',
+        'employeeName': AppSession.instance.employee?.name ?? '',
+        ..._employeeAuditFields(prefix: 'createdBy'),
+        'timestamp': now,
+        'createdAt': now,
+      });
+      return true;
+    });
   }
 
   void _debugOperationalBlockers(OperationalOpenOrdersSummary summary) {
@@ -7258,7 +7645,13 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
     await recalculateOrderTotal(orderId);
-    await _syncOrderKitchenStateAfterItemChange(orderId);
+    final ghostRepair = await _autoCancelGhostOrderIfNeeded(
+      orderId,
+      triggeredBy: 'last_item_cancelled',
+    );
+    if (ghostRepair == null) {
+      await _syncOrderKitchenStateAfterItemChange(orderId);
+    }
     await _restaurantRef.collection('activityLog').add({
       'type': 'order_item_cancelled',
       ..._currentBranchFields,
@@ -7345,7 +7738,13 @@ class TacoPosRepository {
         'updatedAt': now,
       });
       await recalculateOrderTotal(orderId);
-      await _syncOrderKitchenStateAfterItemChange(orderId);
+      final ghostRepair = await _autoCancelGhostOrderIfNeeded(
+        orderId,
+        triggeredBy: 'kitchen_cancellation_accepted',
+      );
+      if (ghostRepair == null) {
+        await _syncOrderKitchenStateAfterItemChange(orderId);
+      }
       return;
     }
 
@@ -9770,63 +10169,11 @@ String _activeSessionGroupKey(ActiveSession session) {
 }
 
 String normalizeStatus(Object? value) {
-  return value
-      .toString()
-      .toLowerCase()
-      .trim()
-      .replaceAll('á', 'a')
-      .replaceAll('é', 'e')
-      .replaceAll('í', 'i')
-      .replaceAll('ó', 'o')
-      .replaceAll('ú', 'u')
-      .replaceAll('ñ', 'n')
-      .replaceAll('Ã¡', 'a')
-      .replaceAll('Ã©', 'e')
-      .replaceAll('Ã­', 'i')
-      .replaceAll('Ã³', 'o')
-      .replaceAll('Ãº', 'u')
-      .replaceAll('Ã±', 'n');
+  return normalizeOperationalStatus(value);
 }
 
 bool isActiveOrderForLiveTables(PosOrder order) {
-  final status = normalizeStatus(order.status);
-  final kitchenStatus = normalizeStatus(order.kitchenStatus);
-  final paymentStatus = normalizeStatus(order.paymentStatus);
-  const inactiveStatuses = {
-    'cancelled',
-    'canceled',
-    'cancelada',
-    'cancelado',
-    'paid',
-    'pagada',
-    'pagado',
-    'closed',
-    'cerrada',
-    'cerrado',
-    'voided',
-  };
-  const inactivePaymentStatuses = {
-    'paid',
-    'pagado',
-    'cancelled',
-    'canceled',
-    'cancelado',
-    'cancelada',
-  };
-  if (inactiveStatuses.contains(status) ||
-      inactiveStatuses.contains(kitchenStatus) ||
-      inactivePaymentStatuses.contains(paymentStatus)) {
-    return false;
-  }
-  if (order.cancelledAt != null ||
-      order.canceledAt != null ||
-      order.closedAt != null) {
-    return false;
-  }
-  if (order.paidAt != null && order.pendingTotal <= 0.01) {
-    return false;
-  }
-  return true;
+  return isActiveOrderState(order);
 }
 
 bool isActiveOrder(PosOrder order) => isActiveOrderForLiveTables(order);
@@ -9836,43 +10183,6 @@ bool _isPaidStatus(String status) {
   return normalized == 'paid' ||
       normalized == 'pagado' ||
       normalized == 'pagada';
-}
-
-bool isActivePayment(Payment payment) {
-  final status = normalizeStatus(payment.status);
-  const inactiveStatuses = {
-    'cancelled',
-    'canceled',
-    'cancelado',
-    'cancelada',
-    'voided',
-    'anulado',
-    'anulada',
-  };
-  return !inactiveStatuses.contains(status) && payment.cancelledAt == null;
-}
-
-bool isActiveOrderItem(OrderItem item) {
-  final status = normalizeStatus(item.status);
-  final kitchenStatus = normalizeStatus(item.kitchenStatus);
-  final paymentStatus = normalizeStatus(item.paymentStatus);
-  final cancelStatus = normalizeStatus(item.cancelStatus);
-  const inactiveStatuses = {
-    'cancelled',
-    'canceled',
-    'cancelado',
-    'cancelada',
-    'voided',
-    'anulado',
-    'anulada',
-  };
-  return !inactiveStatuses.contains(status) &&
-      !inactiveStatuses.contains(kitchenStatus) &&
-      !inactiveStatuses.contains(paymentStatus) &&
-      !inactiveStatuses.contains(cancelStatus) &&
-      cancelStatus != 'accepted' &&
-      item.cancelAcceptedAt == null &&
-      item.cancelledAt == null;
 }
 
 PosOrder? getActiveOrderForTable(String tableId, List<PosOrder> orders) {
