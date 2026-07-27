@@ -47,40 +47,16 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final canOpenDashboard =
+        kIsWeb && canViewFinanceDashboard(AppSession.instance.employee);
     return DefaultTabController(
-      length: 5,
+      length: canOpenDashboard ? 6 : 5,
+      initialIndex: canOpenDashboard ? 1 : 0,
       child: Column(
         children: [
-          if (kIsWeb && canViewFinanceDashboard(AppSession.instance.employee))
-            Padding(
-              padding: const EdgeInsets.fromLTRB(0, 0, 0, 12),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: FilledButton.icon(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        settings: const RouteSettings(
-                          name: '/backoffice/finance-dashboard',
-                        ),
-                        builder: (_) => const FinanceMainDashboardScreen(),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.insights_outlined),
-                  label: const Text('Ver dashboard principal'),
-                ),
-              ),
-            ),
-          const TabBar(
-            isScrollable: true,
-            tabs: [
-              Tab(text: 'Estado financiero'),
-              Tab(text: 'Flujo de efectivo'),
-              Tab(text: 'Aportaciones de socios'),
-              Tab(text: 'Pagos a proveedores'),
-              Tab(text: 'Reportes'),
-            ],
+          FinanceNavigationTabs(
+            canOpenDashboard: canOpenDashboard,
+            onOpenDashboard: () => _openDashboard(context),
           ),
           Expanded(
             child: StreamBuilder<List<Supplier>>(
@@ -253,7 +229,11 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                                     ),
                                                     Expanded(
                                                       child: TabBarView(
+                                                        physics:
+                                                            const NeverScrollableScrollPhysics(),
                                                         children: [
+                                                          if (canOpenDashboard)
+                                                            const SizedBox.shrink(),
                                                           _FinancialStateTab(
                                                             summary: summary,
                                                           ),
@@ -304,6 +284,15 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
     );
   }
 
+  void _openDashboard(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        settings: const RouteSettings(name: '/backoffice/finance-dashboard'),
+        builder: (_) => const FinanceMainDashboardScreen(),
+      ),
+    );
+  }
+
   Future<void> _pickDate({required bool isStart}) async {
     final picked = await showDatePicker(
       context: context,
@@ -346,6 +335,53 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
       _startDate = DateTime(now.year, now.month);
       _endDate = DateTime(now.year, now.month, now.day);
     });
+  }
+}
+
+class FinanceNavigationTabs extends StatelessWidget {
+  const FinanceNavigationTabs({
+    super.key,
+    required this.canOpenDashboard,
+    required this.onOpenDashboard,
+  });
+
+  final bool canOpenDashboard;
+  final VoidCallback onOpenDashboard;
+
+  @override
+  Widget build(BuildContext context) {
+    return TabBar(
+      isScrollable: true,
+      onTap: canOpenDashboard
+          ? (index) {
+              if (index != 0) return;
+              final controller = DefaultTabController.of(context);
+              final returnIndex = controller.previousIndex > 0
+                  ? controller.previousIndex
+                  : 1;
+              controller.index = returnIndex;
+              onOpenDashboard();
+            }
+          : null,
+      tabs: [
+        if (canOpenDashboard)
+          const Tab(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.dashboard_outlined, size: 16),
+                SizedBox(width: 7),
+                Text('Dashboard principal'),
+              ],
+            ),
+          ),
+        const Tab(text: 'Estado financiero'),
+        const Tab(text: 'Flujo de efectivo'),
+        const Tab(text: 'Aportaciones de socios'),
+        const Tab(text: 'Pagos a proveedores'),
+        const Tab(text: 'Reportes'),
+      ],
+    );
   }
 }
 
