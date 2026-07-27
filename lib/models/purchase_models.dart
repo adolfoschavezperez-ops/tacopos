@@ -691,7 +691,7 @@ class PurchaseLineInput {
   final double unitCost;
   final String notes;
 
-  double get total => quantity * unitCost;
+  double get total => (quantity * unitCost * 100).roundToDouble() / 100;
 }
 
 DateTime? _toDate(Object? value) {

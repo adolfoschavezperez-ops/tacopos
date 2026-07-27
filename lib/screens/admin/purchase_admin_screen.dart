@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/purchases/purchase_capture_discount.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/kitchen_stock_item.dart';
 import '../../models/purchase_models.dart';
@@ -467,7 +469,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
   @override
   Widget build(BuildContext context) {
     final supplier = _supplier();
-    final total = _lines.fold<double>(0, (sum, line) => sum + line.total);
+    final total = purchaseLinesTotal(_lines);
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
@@ -590,6 +592,11 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
                       children: [
                         MoneyText(value: entry.value.total),
                         IconButton(
+                          tooltip: 'Aplicar descuento',
+                          onPressed: () => _applyLineDiscount(entry.key),
+                          icon: const Icon(Icons.percent, size: 19),
+                        ),
+                        IconButton(
                           tooltip: 'Quitar',
                           onPressed: () =>
                               setState(() => _lines.removeAt(entry.key)),
@@ -602,13 +609,25 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
               const Divider(),
               Align(
                 alignment: Alignment.centerRight,
-                child: MoneyText(
-                  value: total,
-                  style: const TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w900,
-                    color: BrandColors.accentYellow,
-                  ),
+                child: Wrap(
+                  spacing: 14,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _lines.isEmpty ? null : _applyGeneralDiscount,
+                      icon: const Icon(Icons.percent, size: 18),
+                      label: const Text('Aplicar descuento general'),
+                    ),
+                    MoneyText(
+                      value: total,
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                        color: BrandColors.accentYellow,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -678,11 +697,44 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
     }
   }
 
+  Future<void> _applyLineDiscount(int index) async {
+    final percent = await showDialog<double>(
+      context: context,
+      builder: (_) => PurchaseDiscountDialog.line(line: _lines[index]),
+    );
+    if (percent == null || !mounted) return;
+    setState(() {
+      _lines[index] = applyPurchaseLineDiscount(_lines[index], percent);
+    });
+  }
+
+  Future<void> _applyGeneralDiscount() async {
+    final percent = await showDialog<double>(
+      context: context,
+      builder: (_) => PurchaseDiscountDialog.general(lines: _lines),
+    );
+    if (percent == null || !mounted) return;
+    final discounted = applyPurchaseGeneralDiscount(_lines, percent);
+    setState(() {
+      _lines
+        ..clear()
+        ..addAll(discounted);
+    });
+  }
+
   Future<void> _save() async {
     final supplier = _supplier();
     if (supplier == null) return;
     if (_lines.isEmpty) {
       showAppSnackBar(context, 'Agrega al menos un renglon.');
+      return;
+    }
+    if (purchaseLinesTotal(_lines) <= 0) {
+      showAppSnackBar(
+        context,
+        'El total final de la compra debe ser mayor a \$0.00.',
+        type: AppSnackBarType.warning,
+      );
       return;
     }
     setState(() => _saving = true);
@@ -2222,6 +2274,249 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
   }
 }
 
+class PurchaseDiscountDialog extends StatefulWidget {
+  const PurchaseDiscountDialog.line({
+    super.key,
+    required PurchaseLineInput line,
+  }) : _line = line,
+       _lines = const [];
+
+  const PurchaseDiscountDialog.general({
+    super.key,
+    required List<PurchaseLineInput> lines,
+  }) : _line = null,
+       _lines = lines;
+
+  final PurchaseLineInput? _line;
+  final List<PurchaseLineInput> _lines;
+
+  bool get isGeneral => _line == null;
+
+  @override
+  State<PurchaseDiscountDialog> createState() => _PurchaseDiscountDialogState();
+}
+
+class _PurchaseDiscountDialogState extends State<PurchaseDiscountDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _percentController = TextEditingController();
+
+  @override
+  void dispose() {
+    _percentController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = _discountPercent;
+    final validPercent =
+        percent != null && isValidPurchaseDiscountPercent(percent);
+    final line = widget._line;
+    final currentTotal = line?.total ?? purchaseLinesTotal(widget._lines);
+    final finalLine = line == null || !validPercent
+        ? line
+        : applyPurchaseLineDiscount(line, percent);
+    final finalTotal = validPercent
+        ? line == null
+              ? purchaseLinesTotal(
+                  applyPurchaseGeneralDiscount(widget._lines, percent),
+                )
+              : finalLine!.total
+        : currentTotal;
+    final discountAmount = validPercent
+        ? purchaseDiscountAmount(currentTotal, percent)
+        : 0.0;
+
+    return AlertDialog(
+      title: Text(
+        widget.isGeneral
+            ? 'Descuento general de la compra'
+            : 'Descuento del artículo',
+      ),
+      content: SizedBox(
+        width: 500,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (line != null) ...[
+                  _DiscountPreviewRow(
+                    label: 'Artículo',
+                    textValue: line.purchaseItemName,
+                  ),
+                  _DiscountPreviewRow(
+                    label: 'Cantidad',
+                    textValue: '${_formatQty(line.quantity)} ${line.unit}',
+                  ),
+                  _DiscountPreviewRow(
+                    label: 'Costo unitario capturado',
+                    value: line.unitCost,
+                  ),
+                  _DiscountPreviewRow(
+                    label: 'Subtotal actual',
+                    value: line.total,
+                  ),
+                ] else ...[
+                  _DiscountPreviewRow(
+                    label: 'Subtotal actual de artículos',
+                    value: currentTotal,
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'El descuento se aplicará sobre los costos actuales de todos los artículos.',
+                    style: TextStyle(
+                      color: BrandColors.accentYellow,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                TextFormField(
+                  key: const ValueKey('purchase-discount-percent'),
+                  controller: _percentController,
+                  autofocus: true,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(
+                      RegExp(r'^\d{0,3}([.,]\d{0,4})?$'),
+                    ),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Descuento (%)',
+                    suffixText: '%',
+                  ),
+                  autovalidateMode: AutovalidateMode.onUserInteraction,
+                  validator: (value) {
+                    final parsed = _tryParseDiscount(value);
+                    if (parsed == null) {
+                      return 'Captura un porcentaje válido.';
+                    }
+                    if (!isValidPurchaseDiscountPercent(parsed)) {
+                      return 'El descuento debe estar entre 0 y 100.';
+                    }
+                    return null;
+                  },
+                  onChanged: (_) => setState(() {}),
+                ),
+                const SizedBox(height: 16),
+                const Divider(),
+                if (line != null) ...[
+                  _DiscountPreviewRow(
+                    label: 'Costo anterior',
+                    value: line.unitCost,
+                  ),
+                  _DiscountPreviewRow(
+                    label: 'Descuento',
+                    textValue: validPercent
+                        ? '${_formatPercent(percent)}%'
+                        : '0%',
+                  ),
+                  _DiscountPreviewRow(
+                    label: 'Costo final',
+                    value: finalLine?.unitCost ?? line.unitCost,
+                    emphasized: true,
+                  ),
+                  _DiscountPreviewRow(
+                    label: 'Subtotal final',
+                    value: finalTotal,
+                    emphasized: true,
+                  ),
+                ] else ...[
+                  _DiscountPreviewRow(
+                    label: 'Descuento porcentual',
+                    textValue: validPercent
+                        ? '${_formatPercent(percent)}%'
+                        : '0%',
+                  ),
+                  _DiscountPreviewRow(
+                    label: 'Importe aproximado descontado',
+                    value: discountAmount,
+                  ),
+                  _DiscountPreviewRow(
+                    label: 'Total final',
+                    value: finalTotal,
+                    emphasized: true,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: _apply,
+          child: Text(
+            widget.isGeneral ? 'Aplicar a todos los artículos' : 'Aplicar',
+          ),
+        ),
+      ],
+    );
+  }
+
+  double? get _discountPercent => _tryParseDiscount(_percentController.text);
+
+  void _apply() {
+    if (_formKey.currentState?.validate() != true) return;
+    Navigator.pop(context, _discountPercent);
+  }
+}
+
+class _DiscountPreviewRow extends StatelessWidget {
+  const _DiscountPreviewRow({
+    required this.label,
+    this.value,
+    this.textValue,
+    this.emphasized = false,
+  });
+
+  final String label;
+  final double? value;
+  final String? textValue;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: emphasized ? null : BrandColors.textMuted,
+                fontWeight: emphasized ? FontWeight.w800 : FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Flexible(
+            child: Text(
+              textValue ?? _money(value ?? 0),
+              textAlign: TextAlign.right,
+              style: TextStyle(
+                fontWeight: emphasized ? FontWeight.w900 : FontWeight.w700,
+                color: emphasized ? BrandColors.accentYellow : null,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _EditSupplierPurchaseDialog extends StatefulWidget {
   const _EditSupplierPurchaseDialog({
     required this.repository,
@@ -2284,7 +2579,7 @@ class _EditSupplierPurchaseDialogState
       0,
       (sum, payment) => sum + payment.amount,
     );
-    final total = _lines.fold<double>(0, (sum, line) => sum + line.total);
+    final total = purchaseLinesTotal(_lines);
     return AlertDialog(
       title: const Text('Editar compra a proveedor'),
       content: SizedBox(
@@ -2432,6 +2727,13 @@ class _EditSupplierPurchaseDialogState
                           children: [
                             MoneyText(value: line.total),
                             IconButton(
+                              tooltip: 'Aplicar descuento',
+                              onPressed: _saving
+                                  ? null
+                                  : () => _applyLineDiscount(entry.key),
+                              icon: const Icon(Icons.percent, size: 19),
+                            ),
+                            IconButton(
                               tooltip: 'Editar renglon',
                               onPressed: _saving
                                   ? null
@@ -2456,8 +2758,16 @@ class _EditSupplierPurchaseDialogState
                     alignment: Alignment.centerRight,
                     child: Wrap(
                       spacing: 14,
+                      runSpacing: 8,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
+                        OutlinedButton.icon(
+                          onPressed: _saving || _lines.isEmpty
+                              ? null
+                              : _applyGeneralDiscount,
+                          icon: const Icon(Icons.percent, size: 18),
+                          label: const Text('Aplicar descuento general'),
+                        ),
                         _Metric(label: 'Pagado', value: paidTotal),
                         _Metric(label: 'Nuevo total', value: total),
                         _Metric(
@@ -2542,6 +2852,31 @@ class _EditSupplierPurchaseDialogState
     }
   }
 
+  Future<void> _applyLineDiscount(int index) async {
+    final percent = await showDialog<double>(
+      context: context,
+      builder: (_) => PurchaseDiscountDialog.line(line: _lines[index]),
+    );
+    if (percent == null || !mounted) return;
+    setState(() {
+      _lines[index] = applyPurchaseLineDiscount(_lines[index], percent);
+    });
+  }
+
+  Future<void> _applyGeneralDiscount() async {
+    final percent = await showDialog<double>(
+      context: context,
+      builder: (_) => PurchaseDiscountDialog.general(lines: _lines),
+    );
+    if (percent == null || !mounted) return;
+    final discounted = applyPurchaseGeneralDiscount(_lines, percent);
+    setState(() {
+      _lines
+        ..clear()
+        ..addAll(discounted);
+    });
+  }
+
   Future<void> _save(double paidTotal) async {
     final supplier = widget.data.suppliers
         .where((supplier) => supplier.id == _supplierId)
@@ -2554,7 +2889,15 @@ class _EditSupplierPurchaseDialogState
       showAppSnackBar(context, 'La compra debe tener al menos un articulo.');
       return;
     }
-    final total = _lines.fold<double>(0, (sum, line) => sum + line.total);
+    final total = purchaseLinesTotal(_lines);
+    if (total <= 0) {
+      showAppSnackBar(
+        context,
+        'El total final de la compra debe ser mayor a \$0.00.',
+        type: AppSnackBarType.warning,
+      );
+      return;
+    }
     if (total + 0.01 < paidTotal) {
       showAppSnackBar(
         context,
@@ -3955,6 +4298,18 @@ PurchaseLineInput _lineFromPurchaseItem(SupplierPurchaseItem item) {
 
 double _parse(String value) {
   return double.tryParse(value.trim().replaceAll(',', '.')) ?? 0;
+}
+
+double? _tryParseDiscount(String? value) {
+  final clean = value?.trim().replaceAll(',', '.');
+  if (clean == null || clean.isEmpty) return null;
+  return double.tryParse(clean);
+}
+
+String _formatPercent(double value) {
+  return value == value.roundToDouble()
+      ? value.toStringAsFixed(0)
+      : value.toStringAsFixed(2);
 }
 
 String _money(double value) {

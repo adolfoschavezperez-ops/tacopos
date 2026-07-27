@@ -13,6 +13,7 @@ import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_types.dart';
+import '../core/purchases/purchase_capture_discount.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/finance_dashboard.dart';
 import '../core/reports/hourly_sales_comparison.dart';
@@ -2475,10 +2476,12 @@ class TacoPosRepository {
       throw ArgumentError('Revisa cantidad y costo de los renglones.');
     }
     final employee = AppSession.instance.employee;
-    final total = items.fold<double>(
-      0,
-      (runningTotal, item) => runningTotal + item.total,
-    );
+    final total = purchaseLinesTotal(items);
+    if (total <= 0) {
+      throw ArgumentError(
+        'El total final de la compra debe ser mayor a \$0.00.',
+      );
+    }
     final purchaseRef = _supplierPurchasesRef.doc();
     final batch = _db.batch();
     final branchFields = _currentBranchFields;
@@ -2589,10 +2592,12 @@ class TacoPosRepository {
     if (currentPurchase.isCancelled) {
       throw StateError('No puedes editar una compra cancelada.');
     }
-    final total = items.fold<double>(
-      0,
-      (runningTotal, item) => runningTotal + item.total,
-    );
+    final total = purchaseLinesTotal(items);
+    if (total <= 0) {
+      throw ArgumentError(
+        'El total final de la compra debe ser mayor a \$0.00.',
+      );
+    }
     if (total + 0.01 < currentPurchase.paidTotal) {
       throw ArgumentError(
         'No puedes dejar el total por debajo de lo ya pagado.',
