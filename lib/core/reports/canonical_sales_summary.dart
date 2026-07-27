@@ -1,6 +1,10 @@
+import '../cash/operational_business_date.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
+
+export '../cash/operational_business_date.dart'
+    show resolveOperationalBusinessDate;
 
 const double salesReconciliationTolerance = 0.02;
 
@@ -187,7 +191,11 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
     final activePayments = bundle.payments
         .where(isCanonicalActivePayment)
         .toList();
-    final businessDate = resolveOperationalBusinessDate(order: order);
+    final businessDate = resolveOperationalBusinessDate(
+      order: order,
+      payment: activePayments.isEmpty ? null : activePayments.first,
+      historicalFallback: order.createdAt ?? order.paidAt ?? order.updatedAt,
+    );
     final discount = _roundMoney(
       _explicitOrderDiscount(order, gross) ??
           _explicitPaymentsDiscount(activePayments, gross) ??
@@ -294,27 +302,6 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
     orderRows: orderRows,
     integrityIssues: issues,
   );
-}
-
-String resolveOperationalBusinessDate({
-  required PosOrder order,
-  Payment? payment,
-}) {
-  final businessDate = order.businessDate?.trim();
-  if (businessDate != null && businessDate.isNotEmpty) return businessDate;
-  final operationalDate = order.operationalDate?.trim();
-  if (operationalDate != null && operationalDate.isNotEmpty) {
-    return operationalDate;
-  }
-  final createdAt = order.createdAt;
-  if (createdAt != null) return businessDateFor(createdAt);
-  final paymentBusinessDate = payment?.businessDate?.trim();
-  if (paymentBusinessDate != null && paymentBusinessDate.isNotEmpty) {
-    return paymentBusinessDate;
-  }
-  final paymentCreatedAt = payment?.createdAt;
-  if (paymentCreatedAt != null) return businessDateFor(paymentCreatedAt);
-  return '';
 }
 
 bool isCanonicalCancelledOrder(PosOrder order) {

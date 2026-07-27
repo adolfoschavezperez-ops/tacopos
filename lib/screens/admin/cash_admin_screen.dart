@@ -403,6 +403,8 @@ class _HistoricalCashCorrectionDialogState
 
   String get _businessDateText =>
       DateFormat('yyyy-MM-dd').format(_businessDate);
+  String get _businessDateDisplay =>
+      DateFormat('dd/MM/yyyy').format(_businessDate);
 
   Future<void> _pickDate() async {
     final picked = await showDatePicker(
@@ -620,6 +622,14 @@ class _HistoricalCashCorrectionDialogState
                             text:
                                 'Esta accion recalculara el corte con las ventas y pagos registrados para la fecha seleccionada. Usala solo para corregir cortes mal capturados.',
                           ),
+                          const SizedBox(height: 10),
+                          Text(
+                            'Día operativo seleccionado: $_businessDateDisplay',
+                            style: const TextStyle(
+                              color: BrandColors.textPrimary,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
                           const SizedBox(height: 12),
                           Wrap(
                             spacing: 12,
@@ -751,7 +761,9 @@ class _HistoricalCashCorrectionDialogState
                                   )
                                 : const Icon(Icons.calculate_outlined),
                             label: Text(
-                              _loading ? 'Recalculando...' : 'Recalcular corte',
+                              _loading
+                                  ? 'Recalculando documentos del día operativo $_businessDateDisplay...'
+                                  : 'Recalcular corte',
                             ),
                           ),
                           if (_preview != null) ...[
@@ -1877,6 +1889,11 @@ class _HistoricalCorrectionPreviewPanel extends StatelessWidget {
                 accent: BrandColors.accentYellow,
                 lines: [
                   _CorrectionLineData('Fecha operativa', preview.businessDate),
+                  if (preview.hasExistingSession)
+                    _CorrectionLineData(
+                      'Sesión de caja',
+                      _shortCashSessionId(preview.cashSessionId),
+                    ),
                   _CorrectionLineData('Sucursal', preview.branch.name),
                   _CorrectionLineData.money(
                     'Venta total',
@@ -2002,6 +2019,12 @@ class _HistoricalCorrectionPreviewPanel extends StatelessWidget {
       ),
     );
   }
+}
+
+String _shortCashSessionId(String value) {
+  final clean = value.trim();
+  if (clean.length <= 10) return clean;
+  return clean.substring(0, 10);
 }
 
 class _CorrectionSummaryBox extends StatelessWidget {

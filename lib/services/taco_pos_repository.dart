@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/cash/cash_close_execution.dart';
+import '../core/cash/operational_business_date.dart';
 import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/order_activity.dart';
@@ -3999,10 +4000,16 @@ class TacoPosRepository {
     required Branch branch,
     required String businessDate,
     bool activeOnly = true,
-  }) {
+  }) async {
+    final session = await _cashSessionForBranchAndDate(
+      branch: branch,
+      businessDate: businessDate,
+    );
     return _paymentsForBranchAndBusinessDate(
       branch: branch,
       businessDate: businessDate,
+      selectedCashSessionId: session?.id ?? '',
+      selectedCashSession: session,
       activeOnly: activeOnly,
     );
   }
@@ -4176,6 +4183,35 @@ class TacoPosRepository {
   }
 
   Future<(List<PosOrder>, int)> _ordersForReportRange(ReportDataKey key) async {
+    if (key.startBusinessDate == key.endBusinessDate) {
+      final branch = Branch(
+        id: key.branchId,
+        name: key.branchId,
+        normalizedName: normalizeBranchName(key.branchId),
+        active: true,
+        sortOrder: 0,
+        restaurantId: key.restaurantId,
+      );
+      final session = await _cashSessionForBranchAndDate(
+        branch: branch,
+        businessDate: key.startBusinessDate,
+      );
+      final docs = await _orderDocsForHistoricalCashCorrection(
+        branch: branch,
+        businessDate: key.startBusinessDate,
+        selectedCashSessionId: session?.id ?? '',
+        selectedCashSession: session,
+        excludeCancelled: false,
+      );
+      final orders = docs.map(PosOrder.fromDoc).toList()
+        ..sort((a, b) {
+          final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return bDate.compareTo(aDate);
+        });
+      return (orders, docs.length);
+    }
+
     final startDate = DateTime.parse(key.startBusinessDate);
     final endExclusive = DateTime.parse(
       key.endBusinessDate,
@@ -4281,15 +4317,29 @@ class TacoPosRepository {
     final previousBusinessDate = _businessDateFor(
       baseDate.subtract(const Duration(days: 7)),
     );
+    final currentSession =
+        openCash ??
+        await _cashSessionForBranchAndDate(
+          branch: branch,
+          businessDate: businessDate,
+        );
+    final previousSession = await _cashSessionForBranchAndDate(
+      branch: branch,
+      businessDate: previousBusinessDate,
+    );
 
     final orderDocs = [
       ...await _orderDocsForHistoricalCashCorrection(
         branch: branch,
         businessDate: businessDate,
+        selectedCashSessionId: currentSession?.id ?? '',
+        selectedCashSession: currentSession,
       ),
       ...await _orderDocsForHistoricalCashCorrection(
         branch: branch,
         businessDate: previousBusinessDate,
+        selectedCashSessionId: previousSession?.id ?? '',
+        selectedCashSession: previousSession,
       ),
     ];
     final ordersById = <String, PosOrder>{};
@@ -4302,10 +4352,14 @@ class TacoPosRepository {
       ...await _paymentsForBranchAndBusinessDate(
         branch: branch,
         businessDate: businessDate,
+        selectedCashSessionId: currentSession?.id ?? '',
+        selectedCashSession: currentSession,
       ),
       ...await _paymentsForBranchAndBusinessDate(
         branch: branch,
         businessDate: previousBusinessDate,
+        selectedCashSessionId: previousSession?.id ?? '',
+        selectedCashSession: previousSession,
       ),
     ];
 
@@ -5890,20 +5944,13 @@ class TacoPosRepository {
     var ordersChecked = 0;
 
     for (final order in ordersById.values) {
-      final orderCashSessionId = order.cashSessionId?.trim() ?? '';
-      final hasCurrentCashSession = cashSessionId?.trim().isNotEmpty == true;
-      final linkedToCashSession =
-          hasCurrentCashSession && orderCashSessionId == cashSessionId!.trim();
-      final fallbackByDate =
-          orderCashSessionId.isEmpty &&
-          _matchesCurrentBranch(order.branchId) &&
-          _orderBelongsToBusinessDate(order, effectiveBusinessDate);
-      final belongsToScope =
-          linkedToCashSession ||
-          (!hasCurrentCashSession &&
-              _matchesCurrentBranch(order.branchId) &&
-              _orderBelongsToBusinessDate(order, effectiveBusinessDate)) ||
-          (hasCurrentCashSession && fallbackByDate);
+      final membership = belongsToOperationalSession(
+        order: order,
+        selectedCashSessionId: cashSessionId?.trim() ?? '',
+        selectedBusinessDate: effectiveBusinessDate,
+        branchId: branchId,
+      );
+      final belongsToScope = membership.included;
       if (!belongsToScope) continue;
 
       ordersChecked++;
@@ -5913,18 +5960,14 @@ class TacoPosRepository {
         order: order,
         items: items,
         payments: payments,
-        belongsToBranchAndDate:
-            _matchesCurrentBranch(order.branchId) &&
-            _orderBelongsToBusinessDate(order, effectiveBusinessDate),
+        belongsToBranchAndDate: belongsToScope,
       );
       if (blocker == null) {
         final reason = operationalDiscardReason(
           order: order,
           items: items,
           payments: payments,
-          belongsToBranchAndDate:
-              _matchesCurrentBranch(order.branchId) &&
-              _orderBelongsToBusinessDate(order, effectiveBusinessDate),
+          belongsToBranchAndDate: belongsToScope,
         );
         discardedReasons[reason] = (discardedReasons[reason] ?? 0) + 1;
       } else {
@@ -6452,25 +6495,34 @@ class TacoPosRepository {
     double? openingCashAmount,
     double extraWithdrawalAmount = 0,
   }) async {
-    debugPrint('REHACER CORTE HISTORICO SIN COLLECTION GROUP');
-    debugPrint(
-      'Recalculando corte historico fecha=$businessDate branchId=${branch.id}',
-    );
-    developer.log(
-      'Recalculando corte historico fecha=$businessDate branchId=${branch.id}',
-      name: 'TacoPOS.cashCorrection',
-    );
     final existingSession = await _cashSessionForBranchAndDate(
       branch: branch,
       businessDate: businessDate,
     );
+    final selectedCashSessionId = existingSession?.id ?? '';
+    if (kDebugMode) {
+      debugPrint(
+        'CUT_RECALC_SCOPE selectedBusinessDate=$businessDate '
+        'selectedCashSessionId=${selectedCashSessionId.isEmpty ? 'not_found' : selectedCashSessionId} '
+        'branchId=${branch.id}',
+      );
+    }
+    developer.log(
+      'CUT_RECALC_SCOPE selectedBusinessDate=$businessDate '
+      'selectedCashSessionId=${selectedCashSessionId.isEmpty ? 'not_found' : selectedCashSessionId} '
+      'branchId=${branch.id}',
+      name: 'TacoPOS.cashCorrection',
+    );
     final payments = await _paymentsForBranchAndBusinessDate(
       branch: branch,
       businessDate: businessDate,
+      selectedCashSessionId: selectedCashSessionId,
+      selectedCashSession: existingSession,
     );
     final withdrawals = await _withdrawalsForBranchAndBusinessDate(
       branch: branch,
       businessDate: businessDate,
+      selectedCashSessionId: selectedCashSessionId,
     );
     final resolvedOpeningCashAmount =
         openingCashAmount ?? existingSession?.openingCashAmount ?? 0.0;
@@ -6572,27 +6624,43 @@ class TacoPosRepository {
   Future<List<Payment>> _paymentsForBranchAndBusinessDate({
     required Branch branch,
     required String businessDate,
+    String selectedCashSessionId = '',
+    CashSession? selectedCashSession,
     bool activeOnly = true,
   }) async {
     final orderDocs = await _orderDocsForHistoricalCashCorrection(
       branch: branch,
       businessDate: businessDate,
+      selectedCashSessionId: selectedCashSessionId,
+      selectedCashSession: selectedCashSession,
     );
     final payments = <Payment>[];
     for (final orderDoc in orderDocs) {
       final order = PosOrder.fromDoc(orderDoc);
       final snapshot = await orderDoc.reference.collection('payments').get();
-      payments.addAll(
-        snapshot.docs
-            .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
-            .where((payment) {
-              if (activeOnly &&
-                  !_isHistoricalCorrectionPaymentActive(payment)) {
-                return false;
-              }
-              return _matchesBranch(payment.branchId, branch.id);
-            }),
-      );
+      for (final doc in snapshot.docs) {
+        final payment = _paymentFromOrderPaymentDoc(doc, order);
+        final active =
+            !activeOnly || _isHistoricalCorrectionPaymentActive(payment);
+        final branchMatches = _matchesBranch(payment.branchId, branch.id);
+        final included = active && branchMatches;
+        if (kDebugMode) {
+          debugPrint(
+            'CUT_RECALC_PAYMENT paymentId=${payment.id} '
+            'orderId=${order.id} '
+            'paidAt=${payment.createdAt?.toIso8601String()} '
+            'paymentBusinessDate=${payment.businessDate ?? ''} '
+            'orderBusinessDate=${resolveOperationalBusinessDate(order: order)} '
+            'included=$included '
+            'reason=${!active
+                ? 'inactive_payment'
+                : !branchMatches
+                ? 'branch_mismatch'
+                : 'parent_order_in_scope'}',
+          );
+        }
+        if (included) payments.add(payment);
+      }
     }
     developer.log(
       'Recalculo historico ordenes=${orderDocs.length} pagos=${payments.length} '
@@ -6610,7 +6678,12 @@ class TacoPosRepository {
   ) {
     final payment = Payment.fromDoc(doc);
     final data = doc.data() ?? const <String, dynamic>{};
-    final orderBusinessDate = _businessDateForOrder(order);
+    final resolvedOrderBusinessDate = resolveOperationalBusinessDate(
+      order: order,
+    );
+    final orderBusinessDate = resolvedOrderBusinessDate.isEmpty
+        ? null
+        : resolvedOrderBusinessDate;
     final rawRestaurantId = data['restaurantId'] as String?;
     final rawRestaurantName = data['restaurantName'] as String?;
     final rawBranchId = data['branchId'] as String?;
@@ -6621,7 +6694,12 @@ class TacoPosRepository {
       tableName: payment.tableName.trim().isEmpty
           ? order.tableName
           : payment.tableName,
-      businessDate: orderBusinessDate ?? payment.businessDate,
+      cashSessionId: (payment.cashSessionId?.trim().isNotEmpty ?? false)
+          ? payment.cashSessionId
+          : order.cashSessionId,
+      businessDate: orderBusinessDate != null && orderBusinessDate.isNotEmpty
+          ? orderBusinessDate
+          : payment.businessDate,
       restaurantId: rawRestaurantId == null || rawRestaurantId.trim().isEmpty
           ? order.restaurantId
           : payment.restaurantId,
@@ -6673,81 +6751,132 @@ class TacoPosRepository {
   _orderDocsForHistoricalCashCorrection({
     required Branch branch,
     required String businessDate,
+    String selectedCashSessionId = '',
+    CashSession? selectedCashSession,
+    bool excludeCancelled = true,
   }) async {
-    try {
-      final snapshot = await _ordersRef
-          .where('businessDate', isEqualTo: businessDate)
-          .where('branchId', isEqualTo: branch.id)
-          .get();
-      final filtered = snapshot.docs
-          .where(
-            (doc) => _orderDocMatchesHistoricalCashCorrection(
-              doc,
-              branch: branch,
-              businessDate: businessDate,
-            ),
-          )
-          .toList();
-      if (filtered.isNotEmpty) return filtered;
-    } catch (error, stackTrace) {
-      developer.log(
-        'Historical cash correction orders businessDate+branch query failed; trying businessDate only.',
-        name: 'TacoPOS.cashCorrection',
-        error: error,
-        stackTrace: stackTrace,
-      );
+    final cleanSessionId = selectedCashSessionId.trim();
+    final sessionOpenedAt = selectedCashSession?.openedAt;
+    final sessionCandidateEnd = await _historicalSessionCandidateEnd(
+      selectedCashSession,
+      branchId: branch.id,
+    );
+    final snapshots = await Future.wait([
+      if (cleanSessionId.isNotEmpty)
+        _ordersRef.where('cashSessionId', isEqualTo: cleanSessionId).get(),
+      _ordersRef.where('businessDate', isEqualTo: businessDate).get(),
+      _ordersRef.where('operationalDate', isEqualTo: businessDate).get(),
+      if (cleanSessionId.isNotEmpty &&
+          sessionOpenedAt != null &&
+          sessionCandidateEnd != null)
+        _ordersRef
+            .where('createdAt', isGreaterThanOrEqualTo: sessionOpenedAt)
+            .where('createdAt', isLessThan: sessionCandidateEnd)
+            .get(),
+    ]);
+    final candidates = <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    for (final snapshot in snapshots) {
+      for (final doc in snapshot.docs) {
+        candidates[doc.reference.path] = doc;
+      }
     }
 
-    try {
-      final snapshot = await _ordersRef
-          .where('businessDate', isEqualTo: businessDate)
-          .get();
-      final filtered = snapshot.docs
-          .where(
-            (doc) => _orderDocMatchesHistoricalCashCorrection(
-              doc,
-              branch: branch,
-              businessDate: businessDate,
-            ),
-          )
-          .toList();
-      if (filtered.isNotEmpty) return filtered;
-    } catch (error, stackTrace) {
-      developer.log(
-        'Historical cash correction orders query failed; using in-memory fallback.',
-        name: 'TacoPOS.cashCorrection',
-        error: error,
-        stackTrace: stackTrace,
+    final included = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    for (final doc in candidates.values) {
+      final membership = await _orderDocHistoricalCashMembership(
+        doc,
+        branch: branch,
+        businessDate: businessDate,
+        selectedCashSessionId: cleanSessionId,
+        excludeCancelled: excludeCancelled,
       );
+      final order = PosOrder.fromDoc(doc);
+      if (kDebugMode) {
+        debugPrint(
+          'CUT_RECALC_ORDER orderId=${order.id} '
+          'folio=${_shortLogFolio(order.id)} '
+          'createdAt=${order.createdAt?.toIso8601String()} '
+          'businessDate=${order.businessDate ?? ''} '
+          'cashSessionId=${order.cashSessionId ?? ''} '
+          'included=${membership.included} '
+          'inclusionReason=${membership.included ? membership.reason : ''} '
+          'exclusionReason=${membership.included ? '' : membership.reason} '
+          'inconsistency=${membership.inconsistency ?? ''}',
+        );
+      }
+      if (membership.included) included.add(doc);
     }
-
-    final snapshot = await _ordersRef.get();
-    return snapshot.docs
-        .where(
-          (doc) => _orderDocMatchesHistoricalCashCorrection(
-            doc,
-            branch: branch,
-            businessDate: businessDate,
-          ),
-        )
-        .toList();
+    return included;
   }
 
-  bool _orderDocMatchesHistoricalCashCorrection(
+  Future<OperationalSessionMembership> _orderDocHistoricalCashMembership(
     QueryDocumentSnapshot<Map<String, dynamic>> doc, {
     required Branch branch,
     required String businessDate,
-  }) {
+    required String selectedCashSessionId,
+    required bool excludeCancelled,
+  }) async {
     final order = PosOrder.fromDoc(doc);
-    if (!_matchesBranch(order.branchId, branch.id)) return false;
-    if (_isHistoricalCorrectionOrderCancelled(order.status)) return false;
-
-    final data = doc.data();
-    final docBusinessDate = data['businessDate']?.toString().trim();
-    if (docBusinessDate != null && docBusinessDate.isNotEmpty) {
-      return docBusinessDate == businessDate;
+    if (excludeCancelled &&
+        _isHistoricalCorrectionOrderCancelled(order.status)) {
+      return Future.value(
+        const OperationalSessionMembership(
+          included: false,
+          reason: 'cancelled_order',
+        ),
+      );
     }
-    return _orderBelongsToBusinessDate(order, businessDate);
+    final directMembership = belongsToOperationalSession(
+      order: order,
+      selectedCashSessionId: selectedCashSessionId,
+      selectedBusinessDate: businessDate,
+      branchId: branch.id,
+    );
+    if (directMembership.included ||
+        directMembership.reason != 'missing_operational_scope' ||
+        selectedCashSessionId.isEmpty) {
+      return Future.value(directMembership);
+    }
+
+    final paymentsSnapshot = await doc.reference.collection('payments').get();
+    return belongsToOperationalSession(
+      order: order,
+      selectedCashSessionId: selectedCashSessionId,
+      selectedBusinessDate: businessDate,
+      branchId: branch.id,
+      paymentCashSessionIds: paymentsSnapshot.docs.map(
+        (paymentDoc) =>
+            paymentDoc.data()['cashSessionId']?.toString().trim() ?? '',
+      ),
+    );
+  }
+
+  Future<DateTime?> _historicalSessionCandidateEnd(
+    CashSession? session, {
+    required String branchId,
+  }) async {
+    final openedAt = session?.openedAt;
+    if (openedAt == null) return null;
+    final sessionsSnapshot = await _cashSessionsRef.get();
+    final laterOpenings =
+        sessionsSnapshot.docs
+            .map(CashSession.fromDoc)
+            .where(
+              (candidate) =>
+                  _matchesBranch(candidate.branchId, branchId) &&
+                  candidate.openedAt != null &&
+                  candidate.openedAt!.isAfter(openedAt),
+            )
+            .map((candidate) => candidate.openedAt!)
+            .toList()
+          ..sort();
+    if (laterOpenings.isNotEmpty) return laterOpenings.first;
+
+    final closedAt = session?.closedAt;
+    if (closedAt == null) {
+      return DateTime.now().add(const Duration(minutes: 5));
+    }
+    return closedAt.add(const Duration(minutes: 1));
   }
 
   bool _isHistoricalCorrectionOrderCancelled(String status) {
@@ -6775,33 +6904,33 @@ class TacoPosRepository {
   Future<List<CashWithdrawalRequest>> _withdrawalsForBranchAndBusinessDate({
     required Branch branch,
     required String businessDate,
+    String selectedCashSessionId = '',
   }) async {
-    try {
-      final snapshot = await _cashWithdrawalRequestsRef
+    final cleanSessionId = selectedCashSessionId.trim();
+    final snapshots = await Future.wait([
+      if (cleanSessionId.isNotEmpty)
+        _cashWithdrawalRequestsRef
+            .where('cashSessionId', isEqualTo: cleanSessionId)
+            .get(),
+      _cashWithdrawalRequestsRef
           .where('businessDate', isEqualTo: businessDate)
-          .get();
-      return snapshot.docs
-          .map(CashWithdrawalRequest.fromDoc)
-          .where((request) => _matchesBranch(request.branchId, branch.id))
-          .toList();
-    } catch (error, stackTrace) {
-      developer.log(
-        'Historical cash correction withdrawals query failed; using in-memory fallback.',
-        name: 'TacoPOS.cashCorrection',
-        error: error,
-        stackTrace: stackTrace,
-      );
+          .get(),
+    ]);
+    final requestsById = <String, CashWithdrawalRequest>{};
+    for (final snapshot in snapshots) {
+      for (final doc in snapshot.docs) {
+        final request = CashWithdrawalRequest.fromDoc(doc);
+        if (!_matchesBranch(request.branchId, branch.id)) continue;
+        final requestSessionId = request.cashSessionId.trim();
+        final included = cleanSessionId.isNotEmpty
+            ? requestSessionId == cleanSessionId ||
+                  (requestSessionId.isEmpty &&
+                      request.businessDate == businessDate)
+            : request.businessDate == businessDate;
+        if (included) requestsById[doc.id] = request;
+      }
     }
-
-    final snapshot = await _cashWithdrawalRequestsRef.get();
-    return snapshot.docs
-        .map(CashWithdrawalRequest.fromDoc)
-        .where(
-          (request) =>
-              request.businessDate == businessDate &&
-              _matchesBranch(request.branchId, branch.id),
-        )
-        .toList();
+    return requestsById.values.toList();
   }
 
   String _predominantCashSessionId(List<Payment> payments) {
@@ -7243,18 +7372,18 @@ class TacoPosRepository {
   }
 
   String? _businessDateForOrder(PosOrder order) {
-    final businessDate = order.businessDate?.trim();
-    if (businessDate != null && businessDate.isNotEmpty) return businessDate;
-    final operationalDate = order.operationalDate?.trim();
-    if (operationalDate != null && operationalDate.isNotEmpty) {
-      return operationalDate;
-    }
-    developer.log(
-      'Orden sin businessDate; usando fallback de fecha. orderId=${order.id}',
-      name: 'TacoPOS.canonicalSales',
+    final resolution = resolveOperationalBusinessDateDetails(
+      order: order,
+      historicalFallback: order.createdAt ?? order.paidAt ?? order.updatedAt,
     );
-    final date = order.createdAt ?? order.paidAt ?? order.updatedAt;
-    return date == null ? null : _businessDateFor(date);
+    if (resolution.usedHistoricalFallback) {
+      developer.log(
+        'Orden sin businessDate; usando fallback historico diagnosticado. '
+        'orderId=${order.id} resolved=${resolution.businessDate}',
+        name: 'TacoPOS.canonicalSales',
+      );
+    }
+    return resolution.businessDate.isEmpty ? null : resolution.businessDate;
   }
 
   String _currentBusinessDate() {
@@ -7400,18 +7529,12 @@ class TacoPosRepository {
   }
 
   bool _orderBelongsToBusinessDate(PosOrder order, String businessDate) {
-    final orderBusinessDate = order.businessDate?.trim();
-    if (orderBusinessDate != null && orderBusinessDate.isNotEmpty) {
-      return orderBusinessDate == businessDate;
-    }
-    final operationalDate = order.operationalDate?.trim();
-    if (operationalDate != null && operationalDate.isNotEmpty) {
-      return operationalDate == businessDate;
-    }
-    final candidates = [order.paidAt, order.createdAt, order.updatedAt];
-    return candidates.whereType<DateTime>().any(
-      (date) => _businessDateFor(date) == businessDate,
-    );
+    final fallback = order.createdAt ?? order.paidAt ?? order.updatedAt;
+    return resolveOperationalBusinessDate(
+          order: order,
+          historicalFallback: fallback,
+        ) ==
+        businessDate;
   }
 
   bool _isFinalOrderStatus(String status) {
@@ -7515,6 +7638,7 @@ class TacoPosRepository {
     }
 
     _requireTakeOrders();
+    final cashSession = await _requireOpenCashSessionForOrder();
     final orderRef = _ordersRef.doc();
     final data = {
       'tableId': table.id,
@@ -7532,6 +7656,8 @@ class TacoPosRepository {
       'paidTotal': 0.0,
       'pendingTotal': 0.0,
       'personNames': {'1': 'Persona 1'},
+      'businessDate': businessDateForOpenCashSession(cashSession),
+      'cashSessionId': cashSession.id,
       ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
@@ -7610,6 +7736,7 @@ class TacoPosRepository {
     String? customerName,
   }) async {
     _requireTakeOrders();
+    final cashSession = await _requireOpenCashSessionForOrder();
     final cleanCustomer = requireCustomerName(
       customerName,
       message: 'Captura el nombre del cliente.',
@@ -7631,6 +7758,8 @@ class TacoPosRepository {
       'paidTotal': 0.0,
       'pendingTotal': 0.0,
       'personNames': {'1': 'Persona 1'},
+      'businessDate': businessDateForOpenCashSession(cashSession),
+      'cashSessionId': cashSession.id,
       ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
@@ -7658,7 +7787,7 @@ class TacoPosRepository {
         'No se encontró la plataforma En persona en la configuración.',
       );
     }
-    final cashSession = await getOpenCashSession();
+    final cashSession = await _requireOpenCashSessionForOrder();
     final orderRef = _ordersRef.doc();
     await orderRef.set({
       'tableId': '',
@@ -7674,8 +7803,8 @@ class TacoPosRepository {
       'paidTotal': 0.0,
       'pendingTotal': 0.0,
       'personNames': {'1': cleanCustomer},
-      'businessDate': cashSession?.businessDate ?? _currentBusinessDate(),
-      'cashSessionId': cashSession?.id ?? '',
+      'businessDate': businessDateForOpenCashSession(cashSession),
+      'cashSessionId': cashSession.id,
       ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
@@ -7750,7 +7879,7 @@ class TacoPosRepository {
         ? _ordersRef.doc()
         : _ordersRef.doc(existingOrder.id);
     final cashSession = existingOrder == null
-        ? await getOpenCashSession()
+        ? await _requireOpenCashSessionForOrder()
         : null;
     final employee = AppSession.instance.employee;
 
@@ -7811,8 +7940,8 @@ class TacoPosRepository {
           'paidTotal': 0.0,
           'pendingTotal': 0.0,
           'personNames': {'1': 'Persona 1'},
-          'businessDate': cashSession?.businessDate ?? _currentBusinessDate(),
-          'cashSessionId': cashSession?.id ?? '',
+          'businessDate': businessDateForOpenCashSession(cashSession!),
+          'cashSessionId': cashSession.id,
           ..._currentBranchFields,
           'createdBy': _auth.currentUser?.uid ?? 'anonymous',
           ..._employeeAuditFields(prefix: 'createdBy'),
@@ -7850,8 +7979,9 @@ class TacoPosRepository {
         ..._currentBranchFields,
         'businessDate':
             existingOrder?.businessDate ??
-            cashSession?.businessDate ??
-            _currentBusinessDate(),
+            (cashSession == null
+                ? ''
+                : businessDateForOpenCashSession(cashSession)),
         'employeeId': employee?.id ?? '',
         'employeeName': employee?.name ?? '',
         'timestamp': FieldValue.serverTimestamp(),
@@ -9972,6 +10102,10 @@ class TacoPosRepository {
         (employeeId == null || employeeName == null)) {
       throw ArgumentError('Selecciona un empleado.');
     }
+    final operationalScope = _paymentOperationalScope(
+      order: order,
+      openCashSession: cashSession,
+    );
 
     final cardFeeRate = method == 'card' ? cardSurchargeRate : 0.0;
     final discountAmount = (discount?.discountAmount ?? 0).clamp(0, baseAmount);
@@ -10068,8 +10202,8 @@ class TacoPosRepository {
         'cashReceivedAmount': cashDetails.receivedAmount,
         'cashChangeAmount': cashDetails.changeAmount,
       },
-      'cashSessionId': cashSession.id,
-      'businessDate': cashSession.businessDate,
+      'cashSessionId': operationalScope.cashSessionId,
+      'businessDate': operationalScope.businessDate,
       'createdAt': FieldValue.serverTimestamp(),
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
@@ -11012,6 +11146,46 @@ class TacoPosRepository {
       throw StateError('Debes abrir caja antes de cobrar.');
     }
     return session;
+  }
+
+  Future<CashSession> _requireOpenCashSessionForOrder() async {
+    final session = await getOpenCashSession();
+    if (session == null) {
+      throw StateError('Debes abrir caja antes de levantar pedidos.');
+    }
+    businessDateForOpenCashSession(session);
+    return session;
+  }
+
+  ({String businessDate, String cashSessionId}) _paymentOperationalScope({
+    required PosOrder order,
+    required CashSession openCashSession,
+  }) {
+    final sessionBusinessDate = businessDateForOpenCashSession(openCashSession);
+    final orderBusinessDate = resolveOperationalBusinessDate(order: order);
+    final orderCashSessionId = order.cashSessionId?.trim() ?? '';
+
+    if (orderCashSessionId.isNotEmpty &&
+        orderCashSessionId != openCashSession.id) {
+      throw StateError(
+        'La orden pertenece a otra sesion de caja y no puede cobrarse en la caja actual.',
+      );
+    }
+    if (orderBusinessDate.isNotEmpty &&
+        orderBusinessDate != sessionBusinessDate) {
+      throw StateError(
+        'La orden pertenece a otro dia operativo y no puede cobrarse en la caja actual.',
+      );
+    }
+
+    return (
+      businessDate: orderBusinessDate.isNotEmpty
+          ? orderBusinessDate
+          : sessionBusinessDate,
+      cashSessionId: orderCashSessionId.isNotEmpty
+          ? orderCashSessionId
+          : openCashSession.id,
+    );
   }
 
   void _logActivityInBatch(
