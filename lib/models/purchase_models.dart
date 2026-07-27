@@ -118,6 +118,7 @@ class SupplierPurchase {
     required this.supplierId,
     required this.supplierName,
     required this.purchaseDate,
+    this.businessDate,
     this.dueDate,
     required this.folio,
     required this.documentType,
@@ -151,6 +152,7 @@ class SupplierPurchase {
   final String supplierId;
   final String supplierName;
   final DateTime purchaseDate;
+  final String? businessDate;
   final DateTime? dueDate;
   final String paymentWeekdaySnapshot;
   final String paymentWeekdayNameSnapshot;
@@ -189,6 +191,7 @@ class SupplierPurchase {
       supplierId: data['supplierId'] as String? ?? '',
       supplierName: data['supplierName'] as String? ?? 'Proveedor',
       purchaseDate: _toDate(data['purchaseDate']) ?? now,
+      businessDate: _optionalString(data['businessDate']),
       dueDate: _toDate(data['dueDate']),
       paymentWeekdaySnapshot:
           data['paymentWeekdaySnapshot'] as String? ?? 'none',
@@ -284,6 +287,7 @@ class SupplierPayment {
     required this.purchaseId,
     required this.purchaseFolio,
     required this.paymentDate,
+    this.businessDate,
     required this.amount,
     required this.method,
     required this.status,
@@ -322,6 +326,7 @@ class SupplierPayment {
   final String purchaseId;
   final String purchaseFolio;
   final DateTime paymentDate;
+  final String? businessDate;
   final double amount;
   final String method;
   final String reference;
@@ -363,6 +368,7 @@ class SupplierPayment {
       purchaseId: data['purchaseId'] as String? ?? '',
       purchaseFolio: data['purchaseFolio'] as String? ?? '',
       paymentDate: paymentDate ?? DateTime.now(),
+      businessDate: _optionalString(data['businessDate']),
       amount: _toDouble(data['amount']),
       method: method,
       reference: data['reference'] as String? ?? '',
@@ -704,4 +710,9 @@ double _toDouble(Object? value) {
     return double.tryParse(value.trim().replaceAll(',', '')) ?? 0;
   }
   return value is num ? value.toDouble() : 0;
+}
+
+String? _optionalString(Object? value) {
+  final text = value?.toString().trim();
+  return text == null || text.isEmpty ? null : text;
 }

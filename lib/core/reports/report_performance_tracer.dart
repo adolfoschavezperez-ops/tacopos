@@ -98,6 +98,7 @@ class ReportPerformanceTracer {
     int? cachedPayments,
     int? cachedItems,
     int? cachedQueries,
+    Map<String, Object?> extra = const {},
   }) {
     _total.stop();
     if (!kDebugMode) return;
@@ -119,6 +120,7 @@ class ReportPerformanceTracer {
         'itemsMs=${_items.elapsedMilliseconds}',
         'processingMs=${_processing.elapsedMilliseconds}',
         'totalMs=${_total.elapsedMilliseconds}',
+        ...extra.entries.map((entry) => '${entry.key}=${entry.value}'),
       ].join('\n'),
     );
   }

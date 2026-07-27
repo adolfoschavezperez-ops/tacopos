@@ -1,7 +1,9 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/reports/canonical_sales_summary.dart';
+import '../../core/reports/finance_dashboard.dart';
 import '../../core/reports/report_data_bundle.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
@@ -15,6 +17,8 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
+import '../../services/app_session.dart';
+import 'finance_main_dashboard_screen.dart';
 
 class FinanceAdminScreen extends StatefulWidget {
   const FinanceAdminScreen({super.key});
@@ -47,6 +51,27 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
       length: 5,
       child: Column(
         children: [
+          if (kIsWeb && canViewFinanceDashboard(AppSession.instance.employee))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(0, 0, 0, 12),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        settings: const RouteSettings(
+                          name: '/backoffice/finance-dashboard',
+                        ),
+                        builder: (_) => const FinanceMainDashboardScreen(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.insights_outlined),
+                  label: const Text('Ver dashboard principal'),
+                ),
+              ),
+            ),
           const TabBar(
             isScrollable: true,
             tabs: [

@@ -1,0 +1,716 @@
+import 'dart:async';
+
+import '../../models/cash_session.dart';
+import '../../models/cash_withdrawal_request.dart';
+import '../../models/employee.dart';
+import '../../models/order.dart';
+import '../../models/payment.dart';
+import '../../models/purchase_models.dart';
+import 'canonical_sales_summary.dart';
+
+const double financeMoneyTolerance = 0.02;
+
+bool canViewFinanceDashboard(Employee? employee) {
+  return employee?.hasAdminAccess == true ||
+      employee?.canViewAdmin == true ||
+      employee?.canViewPurchases == true ||
+      employee?.canPaySuppliers == true ||
+      employee?.canViewAccountsPayable == true ||
+      employee?.canViewPurchaseReports == true;
+}
+
+class FinanceDashboardKey {
+  const FinanceDashboardKey({
+    required this.restaurantId,
+    required this.branchId,
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+  });
+
+  final String restaurantId;
+  final String branchId;
+  final String startBusinessDate;
+  final String endBusinessDate;
+
+  String get value =>
+      [restaurantId, branchId, startBusinessDate, endBusinessDate].join('|');
+
+  @override
+  bool operator ==(Object other) {
+    return other is FinanceDashboardKey &&
+        restaurantId == other.restaurantId &&
+        branchId == other.branchId &&
+        startBusinessDate == other.startBusinessDate &&
+        endBusinessDate == other.endBusinessDate;
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(restaurantId, branchId, startBusinessDate, endBusinessDate);
+}
+
+class FinanceDashboardInput {
+  const FinanceDashboardInput({
+    required this.key,
+    required this.salesSummary,
+    required this.paymentsByOrder,
+    required this.cashSessions,
+    required this.withdrawals,
+    required this.purchases,
+    required this.supplierPayments,
+    required this.suppliers,
+  });
+
+  final FinanceDashboardKey key;
+  final CanonicalSalesSummary salesSummary;
+  final Map<String, List<Payment>> paymentsByOrder;
+  final List<CashSession> cashSessions;
+  final List<CashWithdrawalRequest> withdrawals;
+  final List<SupplierPurchase> purchases;
+  final List<SupplierPayment> supplierPayments;
+  final List<Supplier> suppliers;
+}
+
+class FinanceDashboardBundle {
+  const FinanceDashboardBundle({
+    required this.key,
+    required this.salesSummary,
+    required this.salesOrders,
+    required this.customerPayments,
+    required this.cashSessions,
+    required this.expenses,
+    required this.purchases,
+    required this.supplierPayments,
+    required this.suppliers,
+    required this.salesByDay,
+    required this.collectionsByDay,
+    required this.supplierRows,
+    required this.firestoreQueries,
+    required this.loadedAt,
+    this.fromCache = false,
+    this.loadMilliseconds = 0,
+  });
+
+  final FinanceDashboardKey key;
+  final CanonicalSalesSummary salesSummary;
+  final List<CanonicalOrderSalesRow> salesOrders;
+  final List<FinanceCustomerPayment> customerPayments;
+  final List<CashSession> cashSessions;
+  final List<CashWithdrawalRequest> expenses;
+  final List<SupplierPurchase> purchases;
+  final List<SupplierPayment> supplierPayments;
+  final List<Supplier> suppliers;
+  final List<FinanceSalesDayRow> salesByDay;
+  final List<FinanceCollectionsDayRow> collectionsByDay;
+  final List<FinanceSupplierRow> supplierRows;
+  final int firestoreQueries;
+  final DateTime loadedAt;
+  final bool fromCache;
+  final int loadMilliseconds;
+
+  double get grossSales =>
+      _money(salesOrders.fold<double>(0, (sum, row) => sum + row.grossSales));
+  double get salesWithoutDiscount => _money(
+    salesOrders
+        .where((row) => !row.hasExplicitDiscount)
+        .fold<double>(0, (sum, row) => sum + row.netSales),
+  );
+  double get salesWithDiscount => _money(
+    salesOrders
+        .where((row) => row.hasExplicitDiscount)
+        .fold<double>(0, (sum, row) => sum + row.netSales),
+  );
+  double get discounts => _money(
+    salesOrders.fold<double>(0, (sum, row) => sum + row.discountTotal),
+  );
+  double get netSales => _money(grossSales - discounts);
+
+  double get cashCollected => _paymentTotal('cash');
+  double get cardCollected => _paymentTotal('card');
+  double get platformCollected => _paymentTotal('platform_paid');
+  double get otherCollected => _money(
+    customerPayments
+        .where(
+          (row) => !const {
+            'cash',
+            'card',
+            'platform_paid',
+            'employee_consumption',
+          }.contains(row.payment.method.trim().toLowerCase()),
+        )
+        .fold<double>(0, (sum, row) => sum + row.amount),
+  );
+  double get realCollected => _money(
+    cashCollected + cardCollected + platformCollected + otherCollected,
+  );
+  double get employeeConsumption => _paymentTotal('employee_consumption');
+  double get cardFees => _money(
+    customerPayments
+        .where((row) => row.payment.method.trim().toLowerCase() == 'card')
+        .fold<double>(0, (sum, row) => sum + row.payment.cardFeeAbsorbedAmount),
+  );
+  double get cashShortages => _money(
+    cashSessions.fold<double>(0, (sum, row) => sum + row.shortageAmount),
+  );
+  double get cashOverages =>
+      _money(cashSessions.fold<double>(0, (sum, row) => sum + row.overAmount));
+
+  List<CashWithdrawalRequest> get approvedExpenses => expenses
+      .where((row) => financeExpenseStatus(row) == FinanceExpenseStatus.paid)
+      .toList(growable: false);
+  List<CashWithdrawalRequest> get pendingExpenses => expenses
+      .where((row) => financeExpenseStatus(row) == FinanceExpenseStatus.pending)
+      .toList(growable: false);
+  double get paidExpenses =>
+      _money(approvedExpenses.fold<double>(0, (sum, row) => sum + row.amount));
+  double get pendingExpensesTotal =>
+      _money(pendingExpenses.fold<double>(0, (sum, row) => sum + row.amount));
+
+  double get supplierInvoicesTotal =>
+      _money(purchases.fold<double>(0, (sum, row) => sum + row.total));
+  double get supplierPaidTotal =>
+      _money(supplierPayments.fold<double>(0, (sum, row) => sum + row.amount));
+  double get pendingSupplierInvoices => _money(
+    purchases.fold<double>(0, (sum, row) => sum + financePurchaseBalance(row)),
+  );
+
+  double get generalResult =>
+      _money(netSales - paidExpenses - supplierInvoicesTotal);
+  double get collectionsResult =>
+      _money(realCollected - paidExpenses - supplierPaidTotal);
+  double get finalResult => _money(
+    realCollected - paidExpenses - supplierPaidTotal - pendingSupplierInvoices,
+  );
+
+  Map<String, double> get customerPaymentsByMethod {
+    final result = <String, double>{};
+    for (final row in customerPayments) {
+      final method = row.payment.method.trim().toLowerCase();
+      if (method == 'employee_consumption') continue;
+      result.update(
+        method,
+        (value) => _money(value + row.amount),
+        ifAbsent: () => row.amount,
+      );
+    }
+    return result;
+  }
+
+  Map<String, double> get supplierPaymentsByMethod {
+    final result = <String, double>{};
+    for (final row in supplierPayments) {
+      final method = row.method.trim().toLowerCase();
+      result.update(
+        method,
+        (value) => _money(value + row.amount),
+        ifAbsent: () => row.amount,
+      );
+    }
+    return result;
+  }
+
+  FinanceDashboardBundle withLoadMetadata({
+    required bool fromCache,
+    required int loadMilliseconds,
+  }) {
+    return FinanceDashboardBundle(
+      key: key,
+      salesSummary: salesSummary,
+      salesOrders: salesOrders,
+      customerPayments: customerPayments,
+      cashSessions: cashSessions,
+      expenses: expenses,
+      purchases: purchases,
+      supplierPayments: supplierPayments,
+      suppliers: suppliers,
+      salesByDay: salesByDay,
+      collectionsByDay: collectionsByDay,
+      supplierRows: supplierRows,
+      firestoreQueries: firestoreQueries,
+      loadedAt: loadedAt,
+      fromCache: fromCache,
+      loadMilliseconds: loadMilliseconds,
+    );
+  }
+
+  double _paymentTotal(String method) => _money(
+    customerPayments
+        .where((row) => row.payment.method.trim().toLowerCase() == method)
+        .fold<double>(0, (sum, row) => sum + row.amount),
+  );
+}
+
+class FinanceCustomerPayment {
+  const FinanceCustomerPayment({
+    required this.payment,
+    required this.order,
+    required this.businessDate,
+    required this.amount,
+  });
+
+  final Payment payment;
+  final PosOrder order;
+  final String businessDate;
+  final double amount;
+}
+
+class FinanceSalesDayRow {
+  const FinanceSalesDayRow({
+    required this.businessDate,
+    required this.grossSales,
+    required this.salesWithoutDiscount,
+    required this.salesWithDiscount,
+    required this.discounts,
+    required this.netSales,
+    required this.documents,
+  });
+
+  final String businessDate;
+  final double grossSales;
+  final double salesWithoutDiscount;
+  final double salesWithDiscount;
+  final double discounts;
+  final double netSales;
+  final int documents;
+}
+
+class FinanceCollectionsDayRow {
+  const FinanceCollectionsDayRow({
+    required this.businessDate,
+    required this.cash,
+    required this.card,
+    required this.other,
+    required this.cardFees,
+    required this.shortage,
+    required this.overage,
+    required this.realCollected,
+  });
+
+  final String businessDate;
+  final double cash;
+  final double card;
+  final double other;
+  final double cardFees;
+  final double shortage;
+  final double overage;
+  final double realCollected;
+}
+
+class FinanceSupplierRow {
+  const FinanceSupplierRow({
+    required this.supplierId,
+    required this.supplierName,
+    required this.invoiced,
+    required this.paidOnInvoices,
+    required this.paidInPeriod,
+    required this.balance,
+    required this.documents,
+    required this.purchases,
+    required this.payments,
+  });
+
+  final String supplierId;
+  final String supplierName;
+  final double invoiced;
+  final double paidOnInvoices;
+  final double paidInPeriod;
+  final double balance;
+  final int documents;
+  final List<SupplierPurchase> purchases;
+  final List<SupplierPayment> payments;
+}
+
+enum FinanceExpenseStatus { paid, pending, cancelled }
+
+FinanceExpenseStatus financeExpenseStatus(CashWithdrawalRequest request) {
+  return switch (_token(request.status)) {
+    'approved' ||
+    'aprobado' ||
+    'aprobada' ||
+    'paid' ||
+    'pagado' ||
+    'pagada' => FinanceExpenseStatus.paid,
+    'pending' || 'pendiente' => FinanceExpenseStatus.pending,
+    _ => FinanceExpenseStatus.cancelled,
+  };
+}
+
+bool isFinanceOperatingExpense(CashWithdrawalRequest request) {
+  final source = _token(request.source);
+  if (source.isEmpty || source == 'historical_admin') return true;
+  return !const {
+    'supplier_payment',
+    'supplier payment',
+    'pago_proveedor',
+    'pago proveedor',
+    'partner_contribution',
+    'partner contribution',
+    'aportacion_socio',
+    'aportacion socio',
+    'cash_transfer',
+    'cash transfer',
+    'transferencia_interna',
+    'transferencia interna',
+  }.contains(source);
+}
+
+String financePurchaseBusinessDate(SupplierPurchase purchase) {
+  return _validBusinessDate(purchase.businessDate) ??
+      _dateKey(purchase.purchaseDate);
+}
+
+String financeSupplierPaymentBusinessDate(SupplierPayment payment) {
+  return _validBusinessDate(payment.businessDate) ??
+      _dateKey(payment.paymentDate);
+}
+
+double financePurchaseBalance(SupplierPurchase purchase) {
+  if (purchase.isCancelled) return 0;
+  if (purchase.balance >= 0) return _money(purchase.balance);
+  return _money(
+    (purchase.total - purchase.paidTotal).clamp(0, double.infinity),
+  );
+}
+
+FinanceDashboardBundle buildFinanceDashboard(
+  FinanceDashboardInput input, {
+  int firestoreQueries = 0,
+  DateTime? loadedAt,
+}) {
+  final key = input.key;
+  final salesOrders = input.salesSummary.orderRows
+      .where(
+        (row) =>
+            _inRange(row.businessDate, key) &&
+            (row.grossSales > financeMoneyTolerance ||
+                row.totalCollected > financeMoneyTolerance),
+      )
+      .toList(growable: false);
+  final ordersById = {for (final row in salesOrders) row.order.id: row.order};
+  final customerPayments = <FinanceCustomerPayment>[];
+  for (final entry in input.paymentsByOrder.entries) {
+    final order = ordersById[entry.key];
+    if (order == null) continue;
+    for (final payment in entry.value) {
+      if (!isCanonicalActivePayment(payment)) continue;
+      final businessDate = resolveOperationalBusinessDate(
+        order: order,
+        payment: payment,
+        historicalFallback:
+            order.createdAt ?? payment.createdAt ?? order.updatedAt,
+      );
+      if (!_inRange(businessDate, key)) continue;
+      customerPayments.add(
+        FinanceCustomerPayment(
+          payment: payment,
+          order: order,
+          businessDate: businessDate,
+          amount: canonicalPaymentAppliedAmount(payment),
+        ),
+      );
+    }
+  }
+  customerPayments.sort(
+    (a, b) => (b.payment.createdAt ?? DateTime(1970)).compareTo(
+      a.payment.createdAt ?? DateTime(1970),
+    ),
+  );
+
+  final cashSessions = input.cashSessions
+      .where(
+        (row) =>
+            _inRange(row.businessDate, key) && !_cancelledToken(row.status),
+      )
+      .toList(growable: false);
+  final expenses =
+      input.withdrawals
+          .where(
+            (row) =>
+                _inRange(row.businessDate, key) &&
+                isFinanceOperatingExpense(row),
+          )
+          .toList()
+        ..sort(
+          (a, b) => (b.requestedAt ?? DateTime(1970)).compareTo(
+            a.requestedAt ?? DateTime(1970),
+          ),
+        );
+  final purchases =
+      input.purchases
+          .where(
+            (row) =>
+                !row.isCancelled &&
+                row.total >= 0 &&
+                _inRange(financePurchaseBusinessDate(row), key),
+          )
+          .toList()
+        ..sort((a, b) => b.purchaseDate.compareTo(a.purchaseDate));
+  final supplierPayments =
+      input.supplierPayments
+          .where(
+            (row) =>
+                row.isActive &&
+                row.amount > 0 &&
+                _inRange(financeSupplierPaymentBusinessDate(row), key),
+          )
+          .toList()
+        ..sort((a, b) => b.paymentDate.compareTo(a.paymentDate));
+
+  return FinanceDashboardBundle(
+    key: key,
+    salesSummary: input.salesSummary,
+    salesOrders: salesOrders,
+    customerPayments: customerPayments,
+    cashSessions: cashSessions,
+    expenses: expenses,
+    purchases: purchases,
+    supplierPayments: supplierPayments,
+    suppliers: input.suppliers,
+    salesByDay: _salesByDay(salesOrders),
+    collectionsByDay: _collectionsByDay(customerPayments, cashSessions),
+    supplierRows: _supplierRows(purchases, supplierPayments),
+    firestoreQueries: firestoreQueries,
+    loadedAt: loadedAt ?? DateTime.now(),
+  );
+}
+
+List<FinanceSalesDayRow> _salesByDay(List<CanonicalOrderSalesRow> orders) {
+  final groups = <String, List<CanonicalOrderSalesRow>>{};
+  for (final row in orders) {
+    groups.putIfAbsent(row.businessDate, () => []).add(row);
+  }
+  final result = groups.entries.map((entry) {
+    final rows = entry.value;
+    return FinanceSalesDayRow(
+      businessDate: entry.key,
+      grossSales: _money(
+        rows.fold<double>(0, (sum, row) => sum + row.grossSales),
+      ),
+      salesWithoutDiscount: _money(
+        rows
+            .where((row) => !row.hasExplicitDiscount)
+            .fold<double>(0, (sum, row) => sum + row.netSales),
+      ),
+      salesWithDiscount: _money(
+        rows
+            .where((row) => row.hasExplicitDiscount)
+            .fold<double>(0, (sum, row) => sum + row.netSales),
+      ),
+      discounts: _money(
+        rows.fold<double>(0, (sum, row) => sum + row.discountTotal),
+      ),
+      netSales: _money(rows.fold<double>(0, (sum, row) => sum + row.netSales)),
+      documents: rows.length,
+    );
+  }).toList()..sort((a, b) => b.businessDate.compareTo(a.businessDate));
+  return result;
+}
+
+List<FinanceCollectionsDayRow> _collectionsByDay(
+  List<FinanceCustomerPayment> payments,
+  List<CashSession> sessions,
+) {
+  final dates = {
+    ...payments.map((row) => row.businessDate),
+    ...sessions.map((row) => row.businessDate),
+  };
+  final result = <FinanceCollectionsDayRow>[];
+  for (final date in dates) {
+    final dailyPayments = payments
+        .where((row) => row.businessDate == date)
+        .toList(growable: false);
+    final dailySessions = sessions.where((row) => row.businessDate == date);
+    double byMethod(String method) => _money(
+      dailyPayments
+          .where((row) => row.payment.method.trim().toLowerCase() == method)
+          .fold<double>(0, (sum, row) => sum + row.amount),
+    );
+    final cash = byMethod('cash');
+    final card = byMethod('card');
+    final other = _money(
+      dailyPayments
+          .where(
+            (row) => !const {
+              'cash',
+              'card',
+              'employee_consumption',
+            }.contains(row.payment.method.trim().toLowerCase()),
+          )
+          .fold<double>(0, (sum, row) => sum + row.amount),
+    );
+    result.add(
+      FinanceCollectionsDayRow(
+        businessDate: date,
+        cash: cash,
+        card: card,
+        other: other,
+        cardFees: _money(
+          dailyPayments
+              .where((row) => row.payment.method.trim().toLowerCase() == 'card')
+              .fold<double>(
+                0,
+                (sum, row) => sum + row.payment.cardFeeAbsorbedAmount,
+              ),
+        ),
+        shortage: _money(
+          dailySessions.fold<double>(0, (sum, row) => sum + row.shortageAmount),
+        ),
+        overage: _money(
+          dailySessions.fold<double>(0, (sum, row) => sum + row.overAmount),
+        ),
+        realCollected: _money(cash + card + other),
+      ),
+    );
+  }
+  result.sort((a, b) => b.businessDate.compareTo(a.businessDate));
+  return result;
+}
+
+List<FinanceSupplierRow> _supplierRows(
+  List<SupplierPurchase> purchases,
+  List<SupplierPayment> payments,
+) {
+  final supplierIds = {
+    ...purchases.map((row) => row.supplierId),
+    ...payments.map((row) => row.supplierId),
+  };
+  final rows = supplierIds.map((supplierId) {
+    final supplierPurchases = purchases
+        .where((row) => row.supplierId == supplierId)
+        .toList(growable: false);
+    final supplierPayments = payments
+        .where((row) => row.supplierId == supplierId)
+        .toList(growable: false);
+    final fallbackName = supplierPurchases.isNotEmpty
+        ? supplierPurchases.first.supplierName
+        : supplierPayments.isNotEmpty
+        ? supplierPayments.first.supplierName
+        : 'Proveedor';
+    return FinanceSupplierRow(
+      supplierId: supplierId,
+      supplierName: fallbackName,
+      invoiced: _money(
+        supplierPurchases.fold<double>(0, (sum, row) => sum + row.total),
+      ),
+      paidOnInvoices: _money(
+        supplierPurchases.fold<double>(0, (sum, row) => sum + row.paidTotal),
+      ),
+      paidInPeriod: _money(
+        supplierPayments.fold<double>(0, (sum, row) => sum + row.amount),
+      ),
+      balance: _money(
+        supplierPurchases.fold<double>(
+          0,
+          (sum, row) => sum + financePurchaseBalance(row),
+        ),
+      ),
+      documents: supplierPurchases.length,
+      purchases: supplierPurchases,
+      payments: supplierPayments,
+    );
+  }).toList()..sort((a, b) => b.invoiced.compareTo(a.invoiced));
+  return rows;
+}
+
+class FinanceDashboardCache {
+  FinanceDashboardCache({this.ttl = const Duration(seconds: 60)});
+
+  final Duration ttl;
+  final Map<FinanceDashboardKey, _FinanceCacheEntry> _cache = {};
+  final Map<FinanceDashboardKey, Future<FinanceDashboardBundle>> _inFlight = {};
+
+  Future<FinanceDashboardLoadResult> load({
+    required FinanceDashboardKey key,
+    required Future<FinanceDashboardBundle> Function() loader,
+    bool forceRefresh = false,
+  }) async {
+    final cached = _cache[key];
+    if (!forceRefresh &&
+        cached != null &&
+        DateTime.now().difference(cached.createdAt) < ttl) {
+      return FinanceDashboardLoadResult(
+        bundle: cached.bundle,
+        fromCache: true,
+        sharedInFlight: false,
+      );
+    }
+    final pending = _inFlight[key];
+    if (!forceRefresh && pending != null) {
+      return FinanceDashboardLoadResult(
+        bundle: await pending,
+        fromCache: false,
+        sharedInFlight: true,
+      );
+    }
+    final future = loader();
+    _inFlight[key] = future;
+    try {
+      final bundle = await future;
+      _cache[key] = _FinanceCacheEntry(DateTime.now(), bundle);
+      return FinanceDashboardLoadResult(
+        bundle: bundle,
+        fromCache: false,
+        sharedInFlight: false,
+      );
+    } finally {
+      if (identical(_inFlight[key], future)) _inFlight.remove(key);
+    }
+  }
+
+  void invalidate(FinanceDashboardKey key) => _cache.remove(key);
+}
+
+class FinanceDashboardLoadResult {
+  const FinanceDashboardLoadResult({
+    required this.bundle,
+    required this.fromCache,
+    required this.sharedInFlight,
+  });
+
+  final FinanceDashboardBundle bundle;
+  final bool fromCache;
+  final bool sharedInFlight;
+}
+
+class _FinanceCacheEntry {
+  const _FinanceCacheEntry(this.createdAt, this.bundle);
+
+  final DateTime createdAt;
+  final FinanceDashboardBundle bundle;
+}
+
+bool _inRange(String value, FinanceDashboardKey key) {
+  return value.compareTo(key.startBusinessDate) >= 0 &&
+      value.compareTo(key.endBusinessDate) <= 0;
+}
+
+bool _cancelledToken(String value) {
+  return const {
+    'cancelled',
+    'canceled',
+    'cancelado',
+    'cancelada',
+    'replaced',
+    'voided',
+    'anulado',
+    'anulada',
+  }.contains(_token(value));
+}
+
+String _token(String value) => value.trim().toLowerCase();
+
+String? _validBusinessDate(String? value) {
+  final clean = value?.trim();
+  if (clean == null || !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(clean)) {
+    return null;
+  }
+  return clean;
+}
+
+String _dateKey(DateTime date) {
+  final month = date.month.toString().padLeft(2, '0');
+  final day = date.day.toString().padLeft(2, '0');
+  return '${date.year}-$month-$day';
+}
+
+double _money(num value) => (value * 100).roundToDouble() / 100;

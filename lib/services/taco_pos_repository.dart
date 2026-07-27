@@ -14,6 +14,7 @@ import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_types.dart';
 import '../core/reports/canonical_sales_summary.dart';
+import '../core/reports/finance_dashboard.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
 import '../core/reports/report_data_bundle.dart';
@@ -750,6 +751,8 @@ class TacoPosRepository {
   static const operationResetPin = '072026';
   static final ReportDataRepository _reportDataRepository =
       ReportDataRepository();
+  static final FinanceDashboardCache _financeDashboardCache =
+      FinanceDashboardCache();
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
@@ -1734,6 +1737,19 @@ class TacoPosRepository {
     return activeOnly
         ? partners.where((partner) => partner.active).toList()
         : partners;
+  }
+
+  Future<List<SupplierPurchaseItem>> getSupplierPurchaseItemsOnce(
+    String purchaseId,
+  ) async {
+    final snapshot = await _supplierPurchasesRef
+        .doc(purchaseId)
+        .collection('items')
+        .get();
+    return snapshot.docs
+        .map(SupplierPurchaseItem.fromDoc)
+        .where((item) => item.isActive)
+        .toList(growable: false);
   }
 
   Stream<List<DiscountAuthorizationRequest>>
@@ -4028,6 +4044,171 @@ class TacoPosRepository {
       branchId: branchId,
       startBusinessDate: startBusinessDate,
       endBusinessDate: endBusinessDate,
+    );
+  }
+
+  void invalidateFinanceDashboardCache({
+    required String branchId,
+    required String startBusinessDate,
+    required String endBusinessDate,
+  }) {
+    _financeDashboardCache.invalidate(
+      FinanceDashboardKey(
+        restaurantId: AppSession.instance.currentRestaurantId,
+        branchId: branchId,
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+      ),
+    );
+  }
+
+  Future<FinanceDashboardBundle> getFinanceDashboardBundle({
+    required String startBusinessDate,
+    required String endBusinessDate,
+    bool forceRefresh = false,
+  }) async {
+    final employee = AppSession.instance.employee;
+    if (!kIsWeb || !canViewFinanceDashboard(employee)) {
+      throw StateError('No tienes permiso para consultar finanzas.');
+    }
+    final session = AppSession.instance;
+    final key = FinanceDashboardKey(
+      restaurantId: session.currentRestaurantId,
+      branchId: session.currentBranchId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+    );
+    final stopwatch = Stopwatch()..start();
+    final tracer = ReportPerformanceTracer(
+      reportName: 'FINANCE_DASHBOARD_PERF',
+      branchId: key.branchId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      cacheKey: key.value,
+    );
+    final result = await _financeDashboardCache.load(
+      key: key,
+      forceRefresh: forceRefresh,
+      loader: () =>
+          _loadFinanceDashboardBundle(key, forceRefresh: forceRefresh),
+    );
+    stopwatch.stop();
+    final bundle = result.bundle.withLoadMetadata(
+      fromCache: result.fromCache,
+      loadMilliseconds: stopwatch.elapsedMilliseconds,
+    );
+    tracer.finish(
+      cacheUsed: result.fromCache,
+      sharedInFlight: result.sharedInFlight,
+      cachedOrders: bundle.salesOrders.length,
+      cachedPayments: bundle.customerPayments.length,
+      cachedItems: 0,
+      cachedQueries: result.fromCache ? 0 : bundle.firestoreQueries,
+      extra: {
+        'gastos': bundle.expenses.length,
+        'compras': bundle.purchases.length,
+        'pagosProveedor': bundle.supplierPayments.length,
+      },
+    );
+    return bundle;
+  }
+
+  Future<FinanceDashboardBundle> _loadFinanceDashboardBundle(
+    FinanceDashboardKey key, {
+    required bool forceRefresh,
+  }) async {
+    final start = DateTime.parse(key.startBusinessDate);
+    final endExclusive = DateTime.parse(
+      key.endBusinessDate,
+    ).add(const Duration(days: 1));
+
+    final reportFuture = getReportDataBundle(
+      restaurantId: key.restaurantId,
+      branchId: key.branchId,
+      startBusinessDate: key.startBusinessDate,
+      endBusinessDate: key.endBusinessDate,
+      includeItems: true,
+      forceRefresh: forceRefresh,
+      reportName: 'FinanceDashboardSales',
+    );
+    final cashSessionsFuture = _cashSessionsRef
+        .where('businessDate', isGreaterThanOrEqualTo: key.startBusinessDate)
+        .where('businessDate', isLessThanOrEqualTo: key.endBusinessDate)
+        .get();
+    final expensesFuture = _cashWithdrawalRequestsRef
+        .where('businessDate', isGreaterThanOrEqualTo: key.startBusinessDate)
+        .where('businessDate', isLessThanOrEqualTo: key.endBusinessDate)
+        .get();
+    final purchasesFuture = Future.wait([
+      _supplierPurchasesRef
+          .where('purchaseDate', isGreaterThanOrEqualTo: start)
+          .where('purchaseDate', isLessThan: endExclusive)
+          .get(),
+      _supplierPurchasesRef
+          .where('businessDate', isGreaterThanOrEqualTo: key.startBusinessDate)
+          .where('businessDate', isLessThanOrEqualTo: key.endBusinessDate)
+          .get(),
+    ]);
+    final supplierPaymentsFuture = Future.wait([
+      _supplierPaymentsRef
+          .where('paymentDate', isGreaterThanOrEqualTo: start)
+          .where('paymentDate', isLessThan: endExclusive)
+          .get(),
+      _supplierPaymentsRef
+          .where('businessDate', isGreaterThanOrEqualTo: key.startBusinessDate)
+          .where('businessDate', isLessThanOrEqualTo: key.endBusinessDate)
+          .get(),
+    ]);
+    final suppliersFuture = _suppliersRef.get();
+
+    final report = await reportFuture;
+    final cashSnapshot = await cashSessionsFuture;
+    final expenseSnapshot = await expensesFuture;
+    final purchaseSnapshots = await purchasesFuture;
+    final supplierPaymentSnapshots = await supplierPaymentsFuture;
+    final supplierSnapshot = await suppliersFuture;
+
+    final purchaseDocs =
+        <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    for (final snapshot in purchaseSnapshots) {
+      for (final doc in snapshot.docs) {
+        purchaseDocs[doc.reference.path] = doc;
+      }
+    }
+    final supplierPaymentDocs =
+        <String, QueryDocumentSnapshot<Map<String, dynamic>>>{};
+    for (final snapshot in supplierPaymentSnapshots) {
+      for (final doc in snapshot.docs) {
+        supplierPaymentDocs[doc.reference.path] = doc;
+      }
+    }
+
+    return buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: report.canonicalSummary!,
+        paymentsByOrder: report.paymentsByOrder,
+        cashSessions: cashSnapshot.docs
+            .map(CashSession.fromDoc)
+            .where((row) => _matchesBranch(row.branchId, key.branchId))
+            .toList(growable: false),
+        withdrawals: expenseSnapshot.docs
+            .map(CashWithdrawalRequest.fromDoc)
+            .where((row) => _matchesBranch(row.branchId, key.branchId))
+            .toList(growable: false),
+        purchases: purchaseDocs.values
+            .map(SupplierPurchase.fromDoc)
+            .where((row) => _matchesBranch(row.branchId, key.branchId))
+            .toList(growable: false),
+        supplierPayments: supplierPaymentDocs.values
+            .map(SupplierPayment.fromDoc)
+            .where((row) => _matchesBranch(row.branchId, key.branchId))
+            .toList(growable: false),
+        suppliers: supplierSnapshot.docs
+            .map(Supplier.fromDoc)
+            .toList(growable: false),
+      ),
+      firestoreQueries: report.firestoreQueries + 7,
     );
   }
 
