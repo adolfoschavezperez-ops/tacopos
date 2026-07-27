@@ -177,6 +177,147 @@ void main() {
     expect(dashboard.finalResult, 4000);
   });
 
+  test('concilia gastos visibles, otros y total del KPI', () {
+    final entries = <FinanceBreakdownEntry<String>>[
+      const FinanceBreakdownEntry(
+        label: 'Refresco',
+        amount: 315,
+        source: 'refresco',
+      ),
+      const FinanceBreakdownEntry(label: 'Uber', amount: 198, source: 'uber'),
+      const FinanceBreakdownEntry(
+        label: 'Tortillas para gringas',
+        amount: 124,
+        source: 'tortillas',
+      ),
+      const FinanceBreakdownEntry(
+        label: 'Propina',
+        amount: 123,
+        source: 'propina',
+      ),
+      for (var index = 0; index < 60; index++)
+        FinanceBreakdownEntry(
+          label: 'Gasto menor $index',
+          amount: 100,
+          source: 'menor-$index',
+        ),
+      const FinanceBreakdownEntry(
+        label: 'Gasto menor final',
+        amount: 27.20,
+        source: 'menor-final',
+      ),
+    ];
+
+    final breakdown = buildReconciledBreakdown(
+      entries: entries,
+      expectedTotal: 6787.20,
+    );
+
+    expect(breakdown.visibleTotal, 760);
+    expect(breakdown.otherTotal, 6027.20);
+    expect(breakdown.reconciledTotal, 6787.20);
+    expect(breakdown.hiddenEntries, hasLength(61));
+    expect(breakdown.isValid, isTrue);
+  });
+
+  test('concilia proveedores por monto descendente', () {
+    final breakdown = buildReconciledBreakdown<String>(
+      entries: const [
+        FinanceBreakdownEntry(
+          label: 'Proveedor A',
+          amount: 15283.50,
+          source: 'a',
+        ),
+        FinanceBreakdownEntry(label: 'Proveedor B', amount: 9000, source: 'b'),
+        FinanceBreakdownEntry(label: 'Proveedor C', amount: 3996, source: 'c'),
+        FinanceBreakdownEntry(label: 'Proveedor D', amount: 3000, source: 'd'),
+        FinanceBreakdownEntry(label: 'Proveedor E', amount: 2500, source: 'e'),
+        FinanceBreakdownEntry(label: 'Proveedor F', amount: 2000, source: 'f'),
+        FinanceBreakdownEntry(
+          label: 'Proveedor G',
+          amount: 1773.90,
+          source: 'g',
+        ),
+      ],
+      expectedTotal: 37553.40,
+    );
+
+    expect(breakdown.visibleEntries.map((entry) => entry.source), [
+      'a',
+      'b',
+      'c',
+      'd',
+    ]);
+    expect(breakdown.visibleTotal, 31279.50);
+    expect(breakdown.otherTotal, 6273.90);
+    expect(breakdown.reconciledTotal, 37553.40);
+    expect(breakdown.isValid, isTrue);
+  });
+
+  test('pagos a proveedores concilian sin Otros con tres metodos', () {
+    final breakdown = buildReconciledBreakdown<String>(
+      entries: const [
+        FinanceBreakdownEntry(
+          label: 'Efectivo',
+          amount: 12820.90,
+          source: 'cash',
+        ),
+        FinanceBreakdownEntry(
+          label: 'Transferencia',
+          amount: 11641.77,
+          source: 'transfer',
+        ),
+        FinanceBreakdownEntry(
+          label: 'Aportacion de socios',
+          amount: 5483.04,
+          source: 'partner_contribution',
+        ),
+      ],
+      expectedTotal: 29945.71,
+      visibleLimit: 3,
+    );
+
+    expect(breakdown.hasOther, isFalse);
+    expect(breakdown.reconciledTotal, 29945.71);
+    expect(breakdown.isValid, isTrue);
+  });
+
+  test('cobrado concilia metodos sin incluir ajustes de caja', () {
+    final breakdown = buildReconciledBreakdown<String>(
+      entries: const [
+        FinanceBreakdownEntry(
+          label: 'Efectivo',
+          amount: 32811.80,
+          source: 'cash',
+        ),
+        FinanceBreakdownEntry(
+          label: 'Tarjeta',
+          amount: 9113.50,
+          source: 'card',
+        ),
+      ],
+      expectedTotal: 41925.30,
+      sortDescending: false,
+    );
+
+    expect(breakdown.reconciledTotal, 41925.30);
+    expect(breakdown.isValid, isTrue);
+    expect(359.46 + 116.88 + 1007.44, isNot(breakdown.expectedTotal));
+  });
+
+  test('diferencia negativa real se marca como error y no como Otros', () {
+    final breakdown = buildReconciledBreakdown<String>(
+      entries: const [
+        FinanceBreakdownEntry(label: 'Duplicado', amount: 101, source: 'a'),
+      ],
+      expectedTotal: 100,
+    );
+
+    expect(breakdown.otherTotal, 0);
+    expect(breakdown.difference, -1);
+    expect(breakdown.isValid, isFalse);
+  });
+
   test(
     'cancelados no cuentan y pago nocturno hereda businessDate de orden',
     () {

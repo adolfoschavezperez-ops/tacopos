@@ -637,39 +637,119 @@ class _DetailGrid extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final methodRows = bundle.customerPaymentsByMethod.entries
-        .map(
-          (entry) => _MetricLineData(
-            financePaymentMethodLabel(entry.key),
-            entry.value,
-          ),
-        )
-        .toList();
-    final expenseRows = bundle.expenses
-        .take(4)
-        .map((row) => _MetricLineData(row.reason, row.amount))
-        .toList();
-    final supplierRows = bundle.supplierRows
-        .take(4)
-        .map((row) => _MetricLineData(row.supplierName, row.invoiced))
-        .toList();
-    final supplierPaymentMethods = bundle.supplierPaymentsByMethod.entries
-        .map(
-          (entry) => _MetricLineData(
-            financeSupplierPaymentMethodLabel(entry.key),
-            entry.value,
-          ),
-        )
-        .toList();
+    final salesBreakdown = buildReconciledBreakdown<String>(
+      entries: [
+        FinanceBreakdownEntry(
+          label: 'Venta neta sin descuento',
+          amount: bundle.salesWithoutDiscount,
+          source: 'without_discount',
+        ),
+        FinanceBreakdownEntry(
+          label: 'Venta neta de documentos con descuento',
+          amount: bundle.salesWithDiscount,
+          source: 'with_discount',
+        ),
+      ],
+      expectedTotal: bundle.netSales,
+      visibleLimit: 2,
+      sortDescending: false,
+    );
+    final collectionsBreakdown = buildReconciledBreakdown<String>(
+      entries: [
+        FinanceBreakdownEntry(
+          label: 'Efectivo',
+          amount: bundle.cashCollected,
+          source: 'cash',
+        ),
+        FinanceBreakdownEntry(
+          label: 'Tarjeta',
+          amount: bundle.cardCollected,
+          source: 'card',
+        ),
+        FinanceBreakdownEntry(
+          label: 'Otros métodos',
+          amount: bundle.platformCollected + bundle.otherCollected,
+          source: 'other',
+        ),
+      ],
+      expectedTotal: bundle.realCollected,
+      visibleLimit: 3,
+      sortDescending: false,
+    );
+    final expensesBreakdown = buildReconciledBreakdown<CashWithdrawalRequest>(
+      entries: bundle.approvedExpenses
+          .map(
+            (row) => FinanceBreakdownEntry(
+              label: row.reason,
+              amount: row.amount,
+              source: row,
+            ),
+          )
+          .toList(),
+      expectedTotal: bundle.paidExpenses,
+    );
+    final supplierInvoicesBreakdown =
+        buildReconciledBreakdown<FinanceSupplierRow>(
+          entries: bundle.supplierRows
+              .where((row) => row.invoiced > 0.005)
+              .map(
+                (row) => FinanceBreakdownEntry(
+                  label: row.supplierName,
+                  amount: row.invoiced,
+                  source: row,
+                ),
+              )
+              .toList(),
+          expectedTotal: bundle.supplierInvoicesTotal,
+        );
+    final supplierPaymentsBreakdown = buildReconciledBreakdown<String>(
+      entries: bundle.supplierPaymentsByMethod.entries
+          .map(
+            (entry) => FinanceBreakdownEntry(
+              label: financeSupplierPaymentMethodLabel(entry.key),
+              amount: entry.value,
+              source: entry.key,
+            ),
+          )
+          .toList(),
+      expectedTotal: bundle.supplierPaidTotal,
+      visibleLimit: 3,
+    );
+    final salesValid =
+        salesBreakdown.isValid &&
+        (bundle.grossSales - bundle.discounts - bundle.netSales).abs() <=
+            financeMoneyTolerance;
+    logFinanceDashboardReconciliation('sales', salesBreakdown);
+    logFinanceDashboardReconciliation('collected', collectionsBreakdown);
+    logFinanceDashboardReconciliation('expenses', expensesBreakdown);
+    logFinanceDashboardReconciliation(
+      'supplierInvoices',
+      supplierInvoicesBreakdown,
+    );
+    logFinanceDashboardReconciliation(
+      'supplierPayments',
+      supplierPaymentsBreakdown,
+    );
     final cards = [
       _DetailCard(
         title: 'DETALLE DE VENTA',
         accent: _FinanceColors.green,
         lines: [
-          _MetricLineData('Venta si no hubiera descuento', bundle.grossSales),
-          _MetricLineData('Venta sin descuento', bundle.salesWithoutDiscount),
-          _MetricLineData('Venta con descuento', bundle.salesWithDiscount),
-          _MetricLineData('Descuentos aplicados', bundle.discounts),
+          const _DetailLineData.section('VENTA BRUTA MENOS DESCUENTOS'),
+          _DetailLineData.value('Venta bruta', bundle.grossSales),
+          _DetailLineData.value('Descuentos aplicados', -bundle.discounts),
+          _DetailLineData.total('Total venta neta', bundle.netSales),
+          const _DetailLineData.section('COMPOSICION DE VENTA NETA'),
+          _DetailLineData.value(
+            'Venta neta sin descuento',
+            bundle.salesWithoutDiscount,
+          ),
+          _DetailLineData.value(
+            'Venta neta de documentos con descuento',
+            bundle.salesWithDiscount,
+          ),
+          _DetailLineData.total('Total venta neta', bundle.netSales),
+          if (!salesValid) const _DetailLineData.warning(),
         ],
         note: 'Selecciona una cifra para ver las ventas relacionadas.',
         onTap: () => _showSalesDialog(context, bundle),
@@ -678,28 +758,75 @@ class _DetailGrid extends StatelessWidget {
         title: 'DETALLE DE COBROS (CAJA)',
         accent: _FinanceColors.lightGreen,
         lines: [
-          ...methodRows,
-          _MetricLineData('Comisiones de tarjeta', bundle.cardFees),
-          _MetricLineData('Faltantes en cortes', bundle.cashShortages),
-          _MetricLineData('Sobrantes en cortes', bundle.cashOverages),
+          const _DetailLineData.section('COBROS APLICADOS'),
+          ...collectionsBreakdown.visibleEntries.map(
+            (entry) => _DetailLineData.value(
+              entry.label,
+              entry.amount,
+              onTap: entry.source == 'other'
+                  ? () => _showOtherCustomerPaymentMethods(
+                      context,
+                      bundle,
+                      entry.amount,
+                    )
+                  : null,
+            ),
+          ),
+          _DetailLineData.total('Total cobrado', bundle.realCollected),
+          const _DetailLineData.section('AJUSTES DE CAJA'),
+          _DetailLineData.value('Comisiones de tarjeta', bundle.cardFees),
+          _DetailLineData.value('Faltantes en cortes', bundle.cashShortages),
+          _DetailLineData.value('Sobrantes en cortes', bundle.cashOverages),
+          if (!collectionsBreakdown.isValid) const _DetailLineData.warning(),
         ],
-        note: 'Selecciona una cifra para consultar pagos y cortes.',
+        note: 'Los ajustes de caja no forman parte del total cobrado.',
         onTap: () => _showPaymentsDialog(context, bundle),
       ),
       _DetailCard(
         title: 'DETALLE DE GASTOS',
         accent: _FinanceColors.amber,
         lines: [
-          ...expenseRows,
-          _MetricLineData('Pendientes', bundle.pendingExpensesTotal),
+          ...expensesBreakdown.visibleEntries.map(
+            (entry) => _DetailLineData.value(entry.label, entry.amount),
+          ),
+          if (expensesBreakdown.hasOther)
+            _DetailLineData.value(
+              'Otros gastos',
+              expensesBreakdown.otherTotal,
+              onTap: () =>
+                  _showOtherExpensesDialog(context, bundle, expensesBreakdown),
+            ),
+          _DetailLineData.total('Total gastos', bundle.paidExpenses),
+          if (!expensesBreakdown.isValid) const _DetailLineData.warning(),
         ],
-        note: 'Selecciona un gasto para consultar su detalle.',
+        note: 'Solo incluye gastos pagados del periodo.',
         onTap: () => _showExpensesDialog(context, bundle),
       ),
       _DetailCard(
         title: 'DETALLE DE FACTURAS DE PROVEEDOR',
         accent: _FinanceColors.blue,
-        lines: supplierRows,
+        lines: [
+          ...supplierInvoicesBreakdown.visibleEntries.map(
+            (entry) => _DetailLineData.value(entry.label, entry.amount),
+          ),
+          if (supplierInvoicesBreakdown.hasOther)
+            _DetailLineData.value(
+              'Otros proveedores',
+              supplierInvoicesBreakdown.otherTotal,
+              onTap: () => _showOtherSuppliersDialog(
+                context,
+                bundle,
+                supplierInvoicesBreakdown,
+                repository,
+              ),
+            ),
+          _DetailLineData.total(
+            'Total facturado',
+            bundle.supplierInvoicesTotal,
+          ),
+          if (!supplierInvoicesBreakdown.isValid)
+            const _DetailLineData.warning(),
+        ],
         note: 'Selecciona un proveedor para consultar sus documentos.',
         onTap: () =>
             _showSupplierDialog(context, bundle, repository: repository),
@@ -707,7 +834,24 @@ class _DetailGrid extends StatelessWidget {
       _DetailCard(
         title: 'DETALLE DE PAGOS A PROVEEDORES',
         accent: _FinanceColors.violet,
-        lines: supplierPaymentMethods,
+        lines: [
+          ...supplierPaymentsBreakdown.visibleEntries.map(
+            (entry) => _DetailLineData.value(entry.label, entry.amount),
+          ),
+          if (supplierPaymentsBreakdown.hasOther)
+            _DetailLineData.value(
+              'Otros métodos',
+              supplierPaymentsBreakdown.otherTotal,
+              onTap: () => _showOtherSupplierPaymentMethods(
+                context,
+                bundle,
+                supplierPaymentsBreakdown,
+              ),
+            ),
+          _DetailLineData.total('Total pagado', bundle.supplierPaidTotal),
+          if (!supplierPaymentsBreakdown.isValid)
+            const _DetailLineData.warning(),
+        ],
         note: 'Selecciona una cifra para consultar los pagos relacionados.',
         onTap: () => _showSupplierPaymentsDialog(context, bundle),
       ),
@@ -727,7 +871,7 @@ class _DetailGrid extends StatelessWidget {
             crossAxisCount: columns,
             crossAxisSpacing: 10,
             mainAxisSpacing: 10,
-            mainAxisExtent: 250,
+            mainAxisExtent: 340,
           ),
           itemBuilder: (context, index) => cards[index],
         );
@@ -743,6 +887,33 @@ class _MetricLineData {
   final double value;
 }
 
+enum _DetailLineKind { value, section, total, warning }
+
+class _DetailLineData {
+  const _DetailLineData.value(this.label, this.value, {this.onTap})
+    : kind = _DetailLineKind.value;
+
+  const _DetailLineData.section(this.label)
+    : value = null,
+      onTap = null,
+      kind = _DetailLineKind.section;
+
+  const _DetailLineData.total(this.label, this.value)
+    : onTap = null,
+      kind = _DetailLineKind.total;
+
+  const _DetailLineData.warning()
+    : label = 'No fue posible conciliar este bloque.',
+      value = null,
+      onTap = null,
+      kind = _DetailLineKind.warning;
+
+  final String label;
+  final double? value;
+  final VoidCallback? onTap;
+  final _DetailLineKind kind;
+}
+
 class _DetailCard extends StatelessWidget {
   const _DetailCard({
     required this.title,
@@ -754,78 +925,142 @@ class _DetailCard extends StatelessWidget {
 
   final String title;
   final Color accent;
-  final List<_MetricLineData> lines;
+  final List<_DetailLineData> lines;
   final String note;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          padding: const EdgeInsets.all(13),
-          decoration: _panelDecoration(),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _PanelTitle(title: title, color: accent),
-              const Divider(height: 14, color: _FinanceColors.border),
-              Expanded(
-                child: lines.isEmpty
-                    ? const Center(
-                        child: Text(
-                          'Sin movimientos en este periodo.',
-                          style: TextStyle(color: _FinanceColors.muted),
-                        ),
-                      )
-                    : ListView.separated(
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: lines.length.clamp(0, 7),
-                        separatorBuilder: (_, _) => const SizedBox(height: 5),
-                        itemBuilder: (context, index) {
-                          final line = lines[index];
-                          return Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  line.label,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 12),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                _money(line.value),
-                                style: const TextStyle(
-                                  color: _FinanceColors.text,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-              ),
-              const Divider(height: 12, color: _FinanceColors.border),
-              Text(
-                note,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: _FinanceColors.muted,
-                  fontSize: 10,
-                ),
-              ),
-            ],
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: _panelDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _PanelTitle(title: title, color: accent),
+          const Divider(height: 14, color: _FinanceColors.border),
+          Expanded(
+            child: lines.isEmpty
+                ? const Center(
+                    child: Text(
+                      'Sin movimientos en este periodo.',
+                      style: TextStyle(color: _FinanceColors.muted),
+                    ),
+                  )
+                : ListView.separated(
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: lines.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 4),
+                    itemBuilder: (context, index) =>
+                        _DetailLine(line: lines[index], accent: accent),
+                  ),
           ),
-        ),
+          const Divider(height: 8, color: _FinanceColors.border),
+          InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 3),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      note,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: _FinanceColors.muted,
+                        fontSize: 10,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(Icons.open_in_new, size: 14, color: accent),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
+  }
+}
+
+class _DetailLine extends StatelessWidget {
+  const _DetailLine({required this.line, required this.accent});
+
+  final _DetailLineData line;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    if (line.kind == _DetailLineKind.section) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(
+          line.label,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: accent.withValues(alpha: 0.9),
+            fontSize: 9,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      );
+    }
+    if (line.kind == _DetailLineKind.warning) {
+      return Text(
+        line.label,
+        maxLines: 2,
+        style: const TextStyle(
+          color: _FinanceColors.red,
+          fontSize: 9,
+          fontWeight: FontWeight.w600,
+        ),
+      );
+    }
+    final isTotal = line.kind == _DetailLineKind.total;
+    final content = Container(
+      padding: isTotal
+          ? const EdgeInsets.only(top: 6)
+          : const EdgeInsets.symmetric(vertical: 1),
+      decoration: isTotal
+          ? const BoxDecoration(
+              border: Border(top: BorderSide(color: _FinanceColors.border)),
+            )
+          : null,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              line.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: line.onTap == null ? null : accent,
+                fontSize: 11,
+                fontWeight: isTotal ? FontWeight.w700 : FontWeight.w400,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            _money(line.value ?? 0),
+            style: TextStyle(
+              color: isTotal ? accent : _FinanceColors.text,
+              fontSize: 11,
+              fontWeight: isTotal ? FontWeight.w800 : FontWeight.w700,
+            ),
+          ),
+          if (line.onTap != null) ...[
+            const SizedBox(width: 3),
+            Icon(Icons.chevron_right, color: accent, size: 14),
+          ],
+        ],
+      ),
+    );
+    if (line.onTap == null) return content;
+    return InkWell(onTap: line.onTap, child: content);
   }
 }
 
@@ -1463,8 +1698,15 @@ class _FinanceTable extends StatefulWidget {
 }
 
 class _FinanceTableState extends State<_FinanceTable> {
+  final ScrollController _horizontalController = ScrollController();
   int _sortColumn = 0;
   bool _ascending = false;
+
+  @override
+  void dispose() {
+    _horizontalController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1495,8 +1737,10 @@ class _FinanceTableState extends State<_FinanceTable> {
                     ),
                   )
                 : Scrollbar(
+                    controller: _horizontalController,
                     thumbVisibility: true,
                     child: SingleChildScrollView(
+                      controller: _horizontalController,
                       scrollDirection: Axis.horizontal,
                       child: SingleChildScrollView(
                         child: DataTable(
@@ -1714,6 +1958,35 @@ Future<void> _showPaymentsDialog(
   return _showRowsDialog(context, 'Detalle de cobros', rows);
 }
 
+Future<void> _showOtherCustomerPaymentMethods(
+  BuildContext context,
+  FinanceDashboardBundle bundle,
+  double subtotal,
+) {
+  final rows = bundle.customerPayments
+      .where(
+        (row) => !const {
+          'cash',
+          'card',
+          'employee_consumption',
+        }.contains(row.payment.method.trim().toLowerCase()),
+      )
+      .map(
+        (row) => _DialogRow(
+          '${_displayDate(row.businessDate)} · ${financePaymentMethodLabel(row.payment.method)}',
+          'Orden ${row.order.id} · ${_money(row.amount)}',
+        ),
+      )
+      .toList();
+  return _showReconciledRowsDialog(
+    context,
+    title: 'Otros métodos de cobro',
+    bundle: bundle,
+    rows: rows,
+    subtotal: subtotal,
+  );
+}
+
 Future<void> _showExpensesDialog(
   BuildContext context,
   FinanceDashboardBundle bundle,
@@ -1721,7 +1994,7 @@ Future<void> _showExpensesDialog(
   return _showRowsDialog(
     context,
     'Detalle de gastos',
-    bundle.expenses
+    bundle.approvedExpenses
         .map(
           (row) => _DialogRow(
             '${_displayDate(row.businessDate)} · ${row.reason}',
@@ -1729,6 +2002,27 @@ Future<void> _showExpensesDialog(
           ),
         )
         .toList(),
+  );
+}
+
+Future<void> _showOtherExpensesDialog(
+  BuildContext context,
+  FinanceDashboardBundle bundle,
+  FinanceReconciledBreakdown<CashWithdrawalRequest> breakdown,
+) {
+  return _showReconciledRowsDialog(
+    context,
+    title: 'Otros gastos',
+    bundle: bundle,
+    rows: breakdown.hiddenEntries
+        .map(
+          (entry) => _DialogRow(
+            '${_displayDate(entry.source.businessDate)} · ${entry.source.reason}',
+            '${_money(entry.amount)} · ${entry.source.requestedByEmployeeName}',
+          ),
+        )
+        .toList(),
+    subtotal: breakdown.otherTotal,
   );
 }
 
@@ -1767,6 +2061,34 @@ Future<void> _showSupplierDialog(
           ),
         )
         .toList(),
+  );
+}
+
+Future<void> _showOtherSuppliersDialog(
+  BuildContext context,
+  FinanceDashboardBundle bundle,
+  FinanceReconciledBreakdown<FinanceSupplierRow> breakdown,
+  TacoPosRepository? repository,
+) {
+  return _showReconciledRowsDialog(
+    context,
+    title: 'Otros proveedores',
+    bundle: bundle,
+    rows: breakdown.hiddenEntries
+        .map(
+          (entry) => _DialogRow(
+            entry.source.supplierName,
+            '${entry.source.documents} documentos · Facturado ${_money(entry.amount)}',
+            onTap: repository == null
+                ? null
+                : () {
+                    Navigator.of(context).pop();
+                    _showSupplierRowDetail(context, entry.source, repository);
+                  },
+          ),
+        )
+        .toList(),
+    subtotal: breakdown.otherTotal,
   );
 }
 
@@ -1884,6 +2206,31 @@ Future<void> _showSupplierPaymentsDialog(
   );
 }
 
+Future<void> _showOtherSupplierPaymentMethods(
+  BuildContext context,
+  FinanceDashboardBundle bundle,
+  FinanceReconciledBreakdown<String> breakdown,
+) {
+  final hiddenMethods = breakdown.hiddenEntries
+      .map((entry) => entry.source)
+      .toSet();
+  return _showReconciledRowsDialog(
+    context,
+    title: 'Otros métodos de pago',
+    bundle: bundle,
+    rows: bundle.supplierPayments
+        .where((row) => hiddenMethods.contains(row.method.trim().toLowerCase()))
+        .map(
+          (row) => _DialogRow(
+            '${_displayDate(financeSupplierPaymentBusinessDate(row))} · ${row.supplierName}',
+            '${financeSupplierPaymentMethodLabel(row.method)} · ${_money(row.amount)} · ${row.purchaseFolio}',
+          ),
+        )
+        .toList(),
+    subtotal: breakdown.otherTotal,
+  );
+}
+
 Future<void> _showSupplierPaymentDetail(
   BuildContext context,
   SupplierPayment row,
@@ -1900,11 +2247,32 @@ Future<void> _showSupplierPaymentDetail(
   ]);
 }
 
+Future<void> _showReconciledRowsDialog(
+  BuildContext context, {
+  required String title,
+  required FinanceDashboardBundle bundle,
+  required List<_DialogRow> rows,
+  required double subtotal,
+}) {
+  final branchName = AppSession.instance.currentBranchName.trim();
+  return _showRowsDialog(
+    context,
+    title,
+    rows,
+    contextLabel:
+        'Periodo ${_displayDate(bundle.key.startBusinessDate)} al ${_displayDate(bundle.key.endBusinessDate)} · '
+        'Sucursal ${branchName.isEmpty ? bundle.key.branchId : branchName}',
+    subtotal: subtotal,
+  );
+}
+
 Future<void> _showRowsDialog(
   BuildContext context,
   String title,
-  List<_DialogRow> rows,
-) {
+  List<_DialogRow> rows, {
+  String? contextLabel,
+  double? subtotal,
+}) {
   return showDialog<void>(
     context: context,
     builder: (context) => Dialog(
@@ -1931,6 +2299,16 @@ Future<void> _showRowsDialog(
                 ],
               ),
               const Divider(),
+              if (contextLabel != null) ...[
+                Text(
+                  contextLabel,
+                  style: const TextStyle(
+                    color: _FinanceColors.muted,
+                    fontSize: 11,
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
               Expanded(
                 child: rows.isEmpty
                     ? const Center(
@@ -1952,6 +2330,26 @@ Future<void> _showRowsDialog(
                         },
                       ),
               ),
+              if (subtotal != null) ...[
+                const Divider(),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Subtotal',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    Text(
+                      _money(subtotal),
+                      style: const TextStyle(
+                        color: _FinanceColors.text,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),

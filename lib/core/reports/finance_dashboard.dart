@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
 import '../../models/employee.dart';
@@ -9,6 +11,135 @@ import '../../models/purchase_models.dart';
 import 'canonical_sales_summary.dart';
 
 const double financeMoneyTolerance = 0.02;
+const double financeRoundingTolerance = 0.01;
+
+class FinanceBreakdownEntry<T> {
+  const FinanceBreakdownEntry({
+    required this.label,
+    required this.amount,
+    required this.source,
+  });
+
+  final String label;
+  final double amount;
+  final T source;
+}
+
+class FinanceReconciledBreakdown<T> {
+  const FinanceReconciledBreakdown({
+    required this.entries,
+    required this.visibleEntries,
+    required this.hiddenEntries,
+    required this.expectedTotal,
+    required this.sourceTotal,
+    required this.visibleTotal,
+    required this.otherTotal,
+    required this.reconciledTotal,
+    required this.difference,
+    required this.isValid,
+  });
+
+  final List<FinanceBreakdownEntry<T>> entries;
+  final List<FinanceBreakdownEntry<T>> visibleEntries;
+  final List<FinanceBreakdownEntry<T>> hiddenEntries;
+  final double expectedTotal;
+  final double sourceTotal;
+  final double visibleTotal;
+  final double otherTotal;
+  final double reconciledTotal;
+  final double difference;
+  final bool isValid;
+
+  bool get hasOther => hiddenEntries.isNotEmpty && otherTotal > 0.005;
+}
+
+FinanceReconciledBreakdown<T> buildReconciledBreakdown<T>({
+  required List<FinanceBreakdownEntry<T>> entries,
+  required double expectedTotal,
+  int visibleLimit = 4,
+  bool sortDescending = true,
+}) {
+  assert(visibleLimit >= 0);
+  final ordered = entries
+      .where((entry) => entry.amount.abs() > 0.005)
+      .toList(growable: false);
+  if (sortDescending) {
+    ordered.sort((a, b) => b.amount.compareTo(a.amount));
+  }
+  final safeLimit = visibleLimit.clamp(0, ordered.length);
+  final visible = ordered.take(safeLimit).toList();
+  final hidden = ordered.skip(safeLimit).toList(growable: false);
+  final normalizedExpected = _money(expectedTotal);
+  final sourceTotal = _money(
+    ordered.fold<double>(0, (sum, entry) => sum + entry.amount),
+  );
+  final difference = _money(normalizedExpected - sourceTotal);
+  var isValid = difference.abs() <= financeMoneyTolerance;
+  if (difference < -financeRoundingTolerance) isValid = false;
+  final canAdjustRounding = difference.abs() <= financeRoundingTolerance;
+  if (hidden.isEmpty &&
+      visible.isNotEmpty &&
+      difference.abs() <= financeRoundingTolerance) {
+    final last = visible.last;
+    visible[visible.length - 1] = FinanceBreakdownEntry<T>(
+      label: last.label,
+      amount: _money(last.amount + difference),
+      source: last.source,
+    );
+  }
+  final visibleTotal = _money(
+    visible.fold<double>(0, (sum, entry) => sum + entry.amount),
+  );
+  final hiddenTotal = _money(
+    hidden.fold<double>(0, (sum, entry) => sum + entry.amount),
+  );
+  final expectedOther = _money(normalizedExpected - visibleTotal);
+  final otherTotal = hidden.isEmpty
+      ? 0.0
+      : canAdjustRounding
+      ? expectedOther
+      : hiddenTotal;
+  final reconciledTotal = _money(visibleTotal + otherTotal);
+
+  return FinanceReconciledBreakdown<T>(
+    entries: List.unmodifiable(ordered),
+    visibleEntries: List.unmodifiable(visible),
+    hiddenEntries: List.unmodifiable(hidden),
+    expectedTotal: normalizedExpected,
+    sourceTotal: sourceTotal,
+    visibleTotal: visibleTotal,
+    otherTotal: otherTotal,
+    reconciledTotal: reconciledTotal,
+    difference: difference,
+    isValid:
+        isValid &&
+        otherTotal >= -financeRoundingTolerance &&
+        (normalizedExpected - reconciledTotal).abs() <= financeMoneyTolerance,
+  );
+}
+
+void logFinanceDashboardReconciliation<T>(
+  String section,
+  FinanceReconciledBreakdown<T> breakdown,
+) {
+  if (!kDebugMode) return;
+  debugPrint(
+    'FINANCE_DASHBOARD_RECONCILIATION '
+    'section=$section '
+    'kpiTotal=${breakdown.expectedTotal.toStringAsFixed(2)} '
+    'visibleTotal=${breakdown.visibleTotal.toStringAsFixed(2)} '
+    'otherTotal=${breakdown.otherTotal.toStringAsFixed(2)} '
+    'reconciledTotal=${breakdown.reconciledTotal.toStringAsFixed(2)} '
+    'difference=${breakdown.difference.toStringAsFixed(2)} '
+    'valid=${breakdown.isValid}',
+  );
+  if (!breakdown.isValid) {
+    debugPrint(
+      'FINANCE_DASHBOARD_RECONCILIATION WARNING '
+      'section=$section difference=${breakdown.difference.toStringAsFixed(2)}',
+    );
+  }
+}
 
 bool canViewFinanceDashboard(Employee? employee) {
   return employee?.hasAdminAccess == true ||
