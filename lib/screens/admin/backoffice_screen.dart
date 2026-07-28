@@ -42,7 +42,9 @@ import 'operation_reset_screen.dart';
 import 'product_category_catalog_screen.dart';
 import 'product_catalog_screen.dart';
 import 'purchase_admin_screen.dart';
+import 'recipe_yield_config_screen.dart';
 import 'table_catalog_screen.dart';
+import 'yield_profit_report_view.dart';
 
 enum _BackofficeSection {
   dashboard,
@@ -77,6 +79,7 @@ enum _ReportKind {
   salesDiscrepancyAudit,
   discountsByDay,
   cashSchedule,
+  yieldProfit,
 }
 
 bool _reportNeedsCanonicalItems(_ReportKind kind) {
@@ -862,6 +865,53 @@ class _BackofficeBody extends StatelessWidget {
             key: ValueKey('cash-schedule-$branchId'),
             repository: repository,
             branchId: branchId,
+          ),
+        ],
+      );
+    }
+    if (section == _BackofficeSection.reports &&
+        reportKind == _ReportKind.yieldProfit) {
+      final branchId = AppSession.instance.currentBranchId;
+      return Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(22, 16, 22, 0),
+            child: _BackofficeBranchSelector(repository: repository),
+          ),
+          const SizedBox(height: 14),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 22),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const _HeaderRow(
+                  title: 'Rendimiento y utilidad',
+                  subtitle:
+                      'Consumo y costo teorico de ingredientes segun ventas.',
+                ),
+                const SizedBox(height: 12),
+                _GlobalFilters(
+                  startBusinessDate: startBusinessDate,
+                  endBusinessDate: endBusinessDate,
+                  onPickStart: onPickStart,
+                  onPickEnd: onPickEnd,
+                  onToday: onToday,
+                  onWeek: onWeek,
+                  onMonth: onMonth,
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          Expanded(
+            child: YieldProfitReportView(
+              key: ValueKey(
+                'yield-profit-$branchId-$startBusinessDate-$endBusinessDate',
+              ),
+              repository: repository,
+              startBusinessDate: startBusinessDate,
+              endBusinessDate: endBusinessDate,
+            ),
           ),
         ],
       );
@@ -2703,6 +2753,16 @@ class _SettingsSection extends StatelessWidget {
           () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const DiscountAdminScreen()),
+          ),
+        ),
+      if (kIsWeb && employee?.hasAdminAccess == true)
+        _SettingsLink(
+          'Recetas y rendimientos',
+          'Porciones, etapas y rendimientos teoricos para costos.',
+          Icons.science_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const RecipeYieldConfigScreen()),
           ),
         ),
       if (employee?.canManageKitchenStock == true)
@@ -4884,6 +4944,13 @@ List<_NavItem> _reportNavItems(Employee? employee) {
       'Descuentos por dia',
       reportKind: _ReportKind.discountsByDay,
     ),
+    if (kIsWeb && employee?.hasAdminAccess == true)
+      const _NavItem(
+        _BackofficeSection.reports,
+        Icons.calculate_outlined,
+        'Rendimiento y utilidad',
+        reportKind: _ReportKind.yieldProfit,
+      ),
     if (canKitchen) ...const [
       _NavItem(
         _BackofficeSection.reports,
@@ -4967,6 +5034,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.salesDiscrepancyAudit => 'Auditoria de discrepancias de ventas',
     _ReportKind.discountsByDay => 'Descuentos por dia',
     _ReportKind.cashSchedule => 'Horarios de apertura y cierre',
+    _ReportKind.yieldProfit => 'Rendimiento y utilidad',
   };
 }
 
@@ -5111,6 +5179,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     _ReportKind.salesDiscrepancyAudit => _salesAuditHeaders,
     _ReportKind.discountsByDay => _discountsByDayCsvHeaders,
     _ReportKind.cashSchedule => const [],
+    _ReportKind.yieldProfit => const [],
   };
 }
 
@@ -5472,6 +5541,7 @@ Future<List<List<String>>> _reportRows(
       return const [];
     case _ReportKind.discountsByDay:
     case _ReportKind.cashSchedule:
+    case _ReportKind.yieldProfit:
       return const [];
   }
 }

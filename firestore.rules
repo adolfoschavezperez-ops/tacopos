@@ -85,6 +85,20 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      match /ingredientYieldProfiles/{profileId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /productRecipes/{productId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
       match /orderPlatforms/{platformId} {
         allow read: if signedIn();
         allow create: if validCreate(restaurantId);

@@ -22,6 +22,7 @@ import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
 import '../core/reports/report_data_bundle.dart';
 import '../core/reports/report_performance_tracer.dart';
+import '../core/reports/yield_profit_report.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../models/active_session.dart';
@@ -41,6 +42,7 @@ import '../models/product_category.dart';
 import '../models/product_recipe_item.dart';
 import '../models/purchase_models.dart';
 import '../models/restaurant.dart';
+import '../models/yield_profit_models.dart';
 import '../utils/category_utils.dart';
 import 'app_session.dart';
 
@@ -766,6 +768,8 @@ class TacoPosRepository {
       ReportDataRepository();
   static final FinanceDashboardCache _financeDashboardCache =
       FinanceDashboardCache();
+  static final YieldProfitBundleCache _yieldProfitBundleCache =
+      YieldProfitBundleCache();
   static final Map<String, _CashScheduleCacheEntry> _cashScheduleCache = {};
 
   final FirebaseFirestore _db;
@@ -823,6 +827,12 @@ class TacoPosRepository {
 
   CollectionReference<Map<String, dynamic>> get _supplierPaymentsRef =>
       _restaurantRef.collection('supplierPayments');
+
+  CollectionReference<Map<String, dynamic>> get _ingredientYieldProfilesRef =>
+      _restaurantRef.collection('ingredientYieldProfiles');
+
+  CollectionReference<Map<String, dynamic>> get _productRecipesRef =>
+      _restaurantRef.collection('productRecipes');
 
   CollectionReference<Map<String, dynamic>> get _partnersRef =>
       _restaurantRef.collection('partners');
@@ -1456,6 +1466,214 @@ class TacoPosRepository {
           ? products.where((product) => product.active).toList()
           : products;
     });
+  }
+
+  Future<
+    (
+      List<Product>,
+      List<KitchenStockItem>,
+      List<IngredientYieldProfile>,
+      List<TheoreticalProductRecipe>,
+    )
+  >
+  getYieldConfiguration() async {
+    _requireYieldProfitAdmin();
+    final productFuture = _productsRef.get();
+    final stockFuture = _kitchenStockItemsRef.get();
+    final profileFuture = _ingredientYieldProfilesRef.get();
+    final recipeFuture = _productRecipesRef.get();
+    final productSnapshot = await productFuture;
+    final stockSnapshot = await stockFuture;
+    final profileSnapshot = await profileFuture;
+    final recipeSnapshot = await recipeFuture;
+    final products = productSnapshot.docs.map(Product.fromDoc).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    final stockItems = stockSnapshot.docs.map(KitchenStockItem.fromDoc).toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    final profiles =
+        profileSnapshot.docs.map(IngredientYieldProfile.fromDoc).toList()
+          ..sort((a, b) => a.stockItemName.compareTo(b.stockItemName));
+    final recipes =
+        recipeSnapshot.docs.map(TheoreticalProductRecipe.fromDoc).toList()
+          ..sort((a, b) => a.productName.compareTo(b.productName));
+    return (products, stockItems, profiles, recipes);
+  }
+
+  Future<InitialYieldSeedPlan> ensureInitialYieldProfiles() async {
+    _requireYieldProfitAdmin();
+    final stockFuture = _kitchenStockItemsRef.get();
+    final profileFuture = _ingredientYieldProfilesRef.get();
+    final stockSnapshot = await stockFuture;
+    final profileSnapshot = await profileFuture;
+    final plan = planInitialYieldSeed(
+      restaurantId: AppSession.instance.currentRestaurantId,
+      stockItems: stockSnapshot.docs.map(KitchenStockItem.fromDoc),
+      existingProfiles: profileSnapshot.docs.map(
+        IngredientYieldProfile.fromDoc,
+      ),
+    );
+    if (plan.toCreate.isNotEmpty) {
+      final employee = AppSession.instance.employee;
+      final batch = _db.batch();
+      for (final profile in plan.toCreate) {
+        batch.set(_ingredientYieldProfilesRef.doc(profile.stockItemId), {
+          'restaurantId': AppSession.instance.currentRestaurantId,
+          'stockItemId': profile.stockItemId,
+          'stockItemName': profile.stockItemName,
+          'rawBaseUnit': 'g',
+          'cookedBaseUnit': 'g',
+          'cookingYieldPercent': profile.cookingYieldPercent,
+          'cookingYieldRate': profile.cookingYieldRate,
+          'estimatedReductionPercent': profile.estimatedReductionPercent,
+          'isEstimated': true,
+          'needsInternalValidation': true,
+          'sourceLabel': initialYieldSourceLabel,
+          'notes': '',
+          'active': true,
+          'createdAt': FieldValue.serverTimestamp(),
+          'createdByEmployeeId': employee?.id ?? '',
+          'createdByEmployeeName': employee?.name ?? '',
+          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedByEmployeeId': employee?.id ?? '',
+          'updatedByEmployeeName': employee?.name ?? '',
+        });
+      }
+      await batch.commit();
+      _yieldProfitBundleCache.clear();
+    }
+    return plan;
+  }
+
+  Future<void> saveIngredientYieldProfile(
+    IngredientYieldProfile profile,
+  ) async {
+    _requireYieldProfitAdmin();
+    final percent = profile.cookingYieldPercent;
+    if (percent <= 0 || percent > 100) {
+      throw ArgumentError('El rendimiento debe estar entre 0.01% y 100%.');
+    }
+    final employee = AppSession.instance.employee;
+    final validating = !profile.needsInternalValidation;
+    await _ingredientYieldProfilesRef.doc(profile.stockItemId).set({
+      'restaurantId': AppSession.instance.currentRestaurantId,
+      'stockItemId': profile.stockItemId,
+      'stockItemName': profile.stockItemName,
+      'rawBaseUnit': 'g',
+      'cookedBaseUnit': 'g',
+      'cookingYieldPercent': percent,
+      'cookingYieldRate': percent / 100,
+      'estimatedReductionPercent': 100 - percent,
+      'isEstimated': profile.isEstimated,
+      'needsInternalValidation': profile.needsInternalValidation,
+      'sourceLabel': profile.sourceLabel,
+      'notes': profile.notes.trim(),
+      'active': profile.active,
+      if (profile.createdAt == null) 'createdAt': FieldValue.serverTimestamp(),
+      if (profile.createdAt == null) 'createdByEmployeeId': employee?.id ?? '',
+      if (profile.createdAt == null)
+        'createdByEmployeeName': employee?.name ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedByEmployeeId': employee?.id ?? '',
+      'updatedByEmployeeName': employee?.name ?? '',
+      if (validating) 'validatedAt': FieldValue.serverTimestamp(),
+      if (validating) 'validatedByEmployeeId': employee?.id ?? '',
+      if (validating) 'validatedByEmployeeName': employee?.name ?? '',
+    }, SetOptions(merge: true));
+    _yieldProfitBundleCache.clear();
+  }
+
+  Future<void> saveTheoreticalProductRecipe(
+    TheoreticalProductRecipe recipe,
+  ) async {
+    _requireYieldProfitAdmin();
+    if (recipe.productId.trim().isEmpty) {
+      throw ArgumentError('Selecciona un producto.');
+    }
+    if (recipe.ingredients.any(
+      (ingredient) =>
+          ingredient.stockItemId.trim().isEmpty ||
+          ingredient.baseQuantity <= 0 ||
+          !const {
+            'raw',
+            'cooked',
+            'ready_to_serve',
+          }.contains(ingredient.inputStage),
+    )) {
+      throw ArgumentError('Revisa ingredientes, cantidades y etapas.');
+    }
+    final employee = AppSession.instance.employee;
+    final ref = _productRecipesRef.doc(recipe.productId);
+    final current = await ref.get();
+    final validating = !recipe.needsInternalValidation;
+    await ref.set({
+      'restaurantId': AppSession.instance.currentRestaurantId,
+      'productId': recipe.productId,
+      'productName': recipe.productName,
+      'ingredients': recipe.ingredients
+          .map((ingredient) => ingredient.toMap())
+          .toList(),
+      'active': recipe.active,
+      'isEstimated': recipe.isEstimated,
+      'needsInternalValidation': recipe.needsInternalValidation,
+      'notes': recipe.notes.trim(),
+      'version': recipe.version < 1 ? 1 : recipe.version,
+      'effectiveFrom':
+          recipe.effectiveFrom ??
+          current.data()?['effectiveFrom'] ??
+          FieldValue.serverTimestamp(),
+      'effectiveTo': recipe.effectiveTo,
+      if (!current.exists) 'createdAt': FieldValue.serverTimestamp(),
+      if (!current.exists) 'createdByEmployeeId': employee?.id ?? '',
+      if (!current.exists) 'createdByEmployeeName': employee?.name ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedByEmployeeId': employee?.id ?? '',
+      'updatedByEmployeeName': employee?.name ?? '',
+      if (validating) 'validatedAt': FieldValue.serverTimestamp(),
+      if (validating) 'validatedByEmployeeId': employee?.id ?? '',
+      if (validating) 'validatedByEmployeeName': employee?.name ?? '',
+    }, SetOptions(merge: true));
+    _yieldProfitBundleCache.clear();
+  }
+
+  Future<int> createSuggestedYieldRecipes(
+    Iterable<TheoreticalProductRecipe> suggestions,
+  ) async {
+    _requireYieldProfitAdmin();
+    final selected = suggestions.toList(growable: false);
+    if (selected.isEmpty) return 0;
+    final existing = await _productRecipesRef.get();
+    final existingIds = existing.docs.map((doc) => doc.id).toSet();
+    final employee = AppSession.instance.employee;
+    final batch = _db.batch();
+    var created = 0;
+    for (final recipe in selected) {
+      if (existingIds.contains(recipe.productId)) continue;
+      batch.set(_productRecipesRef.doc(recipe.productId), {
+        'restaurantId': AppSession.instance.currentRestaurantId,
+        'productId': recipe.productId,
+        'productName': recipe.productName,
+        'ingredients': recipe.ingredients
+            .map((ingredient) => ingredient.toMap())
+            .toList(),
+        'active': true,
+        'isEstimated': true,
+        'needsInternalValidation': true,
+        'notes': 'Sugerencia inicial por nombre; requiere validacion interna.',
+        'version': 1,
+        'effectiveFrom': FieldValue.serverTimestamp(),
+        'effectiveTo': null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdByEmployeeId': employee?.id ?? '',
+        'createdByEmployeeName': employee?.name ?? '',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedByEmployeeId': employee?.id ?? '',
+        'updatedByEmployeeName': employee?.name ?? '',
+      });
+      created++;
+    }
+    if (created > 0) await batch.commit();
+    _yieldProfitBundleCache.clear();
+    return created;
   }
 
   Stream<Map<String, ProductStockOutRow>> watchActiveProductStockOuts() {
@@ -4277,6 +4495,203 @@ class TacoPosRepository {
       );
     }
     return bundle;
+  }
+
+  Future<YieldProfitReportBundle> getYieldProfitReportBundle({
+    required String startBusinessDate,
+    required String endBusinessDate,
+    bool forceRefresh = false,
+  }) async {
+    _requireYieldProfitAdmin();
+    final session = AppSession.instance;
+    final key = YieldProfitReportKey(
+      restaurantId: session.currentRestaurantId,
+      branchId: session.currentBranchId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+    );
+    final stopwatch = Stopwatch()..start();
+    final tracer = ReportPerformanceTracer(
+      reportName: 'YIELD_PROFIT_REPORT_PERF',
+      branchId: key.branchId,
+      startBusinessDate: key.startBusinessDate,
+      endBusinessDate: key.endBusinessDate,
+      cacheKey: key.value,
+    );
+    final result = await _yieldProfitBundleCache.load(
+      key: key,
+      forceRefresh: forceRefresh,
+      loader: () =>
+          _loadYieldProfitReportBundle(key, forceRefresh: forceRefresh),
+    );
+    stopwatch.stop();
+    final bundle = result.$1.withMetadata(
+      fromCache: result.$2,
+      loadMilliseconds: stopwatch.elapsedMilliseconds,
+    );
+    tracer.finish(
+      cacheUsed: result.$2,
+      sharedInFlight: result.$3,
+      cachedOrders: bundle.reportData.orderDocuments,
+      cachedPayments: bundle.reportData.paymentDocuments,
+      cachedItems: bundle.reportData.itemDocuments,
+      cachedQueries: result.$2 ? 0 : bundle.firestoreQueries,
+      extra: {
+        'products': bundle.products.length,
+        'recipes': bundle.recipes.length,
+        'ingredients': bundle.stockItems.length,
+        'purchases': bundle.purchaseLines.length,
+        'totalMs': bundle.loadMilliseconds,
+      },
+    );
+    return bundle;
+  }
+
+  Future<YieldProfitReportBundle> _loadYieldProfitReportBundle(
+    YieldProfitReportKey key, {
+    required bool forceRefresh,
+  }) async {
+    final start = DateTime.parse(key.startBusinessDate);
+    final endInclusive = DateTime.parse(
+      key.endBusinessDate,
+    ).add(const Duration(days: 1)).subtract(const Duration(microseconds: 1));
+    final endExclusive = endInclusive.add(const Duration(microseconds: 1));
+    final reportFuture = getReportDataBundle(
+      restaurantId: key.restaurantId,
+      branchId: key.branchId,
+      startBusinessDate: key.startBusinessDate,
+      endBusinessDate: key.endBusinessDate,
+      includeItems: true,
+      forceRefresh: forceRefresh,
+      reportName: 'YieldProfitSales',
+    );
+    final productFuture = _productsRef.get();
+    final categoryFuture = _productCategoriesRef.get();
+    final recipeFuture = _productRecipesRef.get();
+    final profileFuture = _ingredientYieldProfilesRef.get();
+    final stockFuture = _kitchenStockItemsRef.get();
+    final purchaseFuture = _supplierPurchasesRef
+        .where('purchaseDate', isLessThan: endExclusive)
+        .get();
+
+    final reportData = await reportFuture;
+    final productSnapshot = await productFuture;
+    final categorySnapshot = await categoryFuture;
+    final recipeSnapshot = await recipeFuture;
+    final profileSnapshot = await profileFuture;
+    final stockSnapshot = await stockFuture;
+    final purchaseSnapshot = await purchaseFuture;
+    final purchases = purchaseSnapshot.docs
+        .map(SupplierPurchase.fromDoc)
+        .where(
+          (purchase) =>
+              !purchase.isCancelled &&
+              _matchesBranch(purchase.branchId, key.branchId),
+        )
+        .toList(growable: false);
+    final purchaseItemEntries =
+        await runInBatches<
+          SupplierPurchase,
+          (SupplierPurchase, List<SupplierPurchaseItem>)
+        >(
+          purchases,
+          batchSize: 15,
+          action: (purchase) async {
+            final snapshot = await _supplierPurchasesRef
+                .doc(purchase.id)
+                .collection('items')
+                .get();
+            return (
+              purchase,
+              snapshot.docs
+                  .map(SupplierPurchaseItem.fromDoc)
+                  .where(
+                    (item) =>
+                        item.isActive && item.quantity > 0 && item.unitCost > 0,
+                  )
+                  .toList(growable: false),
+            );
+          },
+        );
+    final stockItems = stockSnapshot.docs
+        .map(KitchenStockItem.fromDoc)
+        .toList(growable: false);
+    final stockByName = {
+      for (final item in stockItems) normalizeYieldName(item.name): item.id,
+    };
+    final purchaseLines = <YieldPurchaseLine>[];
+    for (final entry in purchaseItemEntries) {
+      for (final item in entry.$2) {
+        final stockItemId = item.kitchenStockItemId?.trim().isNotEmpty == true
+            ? item.kitchenStockItemId!.trim()
+            : stockByName[normalizeYieldName(
+                item.kitchenStockItemName ?? item.purchaseItemName,
+              )];
+        if (stockItemId == null || stockItemId.isEmpty) continue;
+        purchaseLines.add(
+          YieldPurchaseLine(
+            purchaseId: entry.$1.id,
+            purchaseDate: entry.$1.purchaseDate,
+            supplierName: entry.$1.supplierName,
+            stockItemId: stockItemId,
+            stockItemName: item.kitchenStockItemName ?? item.purchaseItemName,
+            quantity: item.quantity,
+            unit: item.unit,
+            unitCost: item.unitCost,
+          ),
+        );
+      }
+    }
+    final products = productSnapshot.docs
+        .map(Product.fromDoc)
+        .toList(growable: false);
+    final categories = categorySnapshot.docs
+        .map(ProductCategory.fromDoc)
+        .toList(growable: false);
+    final recipes = recipeSnapshot.docs
+        .map(TheoreticalProductRecipe.fromDoc)
+        .toList(growable: false);
+    final profiles = profileSnapshot.docs
+        .map(IngredientYieldProfile.fromDoc)
+        .toList(growable: false);
+    final paidSalesSummary = buildCanonicalSalesSummary(
+      reportData.orders
+          .where(
+            (order) =>
+                order.status.trim().toLowerCase() == 'paid' ||
+                order.paymentStatus.trim().toLowerCase() == 'paid',
+          )
+          .map(
+            (order) => SalesOrderBundleInput(
+              order: order,
+              items: reportData.itemsByOrder[order.id] ?? const [],
+              payments: reportData.paymentsByOrder[order.id] ?? const [],
+            ),
+          ),
+    );
+    final report = buildYieldProfitReport(
+      sales: paidSalesSummary,
+      recipes: recipes,
+      profiles: profiles,
+      stockItems: stockItems,
+      purchaseLines: purchaseLines,
+      start: start,
+      endInclusive: endInclusive,
+    );
+    return YieldProfitReportBundle(
+      key: key,
+      reportData: reportData,
+      products: products,
+      categories: categories,
+      recipes: recipes,
+      profiles: profiles,
+      stockItems: stockItems,
+      purchaseLines: purchaseLines,
+      report: report,
+      firestoreQueries: reportData.firestoreQueries + 6 + purchases.length,
+      fromCache: false,
+      loadMilliseconds: 0,
+    );
   }
 
   Future<ReportDataBundle> _loadReportDataBundle(
@@ -11915,6 +12330,15 @@ class TacoPosRepository {
       return;
     }
     throw StateError(message);
+  }
+
+  void _requireYieldProfitAdmin() {
+    final employee = AppSession.instance.employee;
+    _requireAdminPermission(
+      kIsWeb &&
+          (employee?.hasAdminAccess == true || employee?.canViewAdmin == true),
+      'No tienes permiso para administrar recetas y rendimientos.',
+    );
   }
 
   bool _canManageBranches() {
