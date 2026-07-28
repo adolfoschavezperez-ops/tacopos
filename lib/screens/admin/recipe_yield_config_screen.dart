@@ -22,17 +22,25 @@ class RecipeYieldConfigScreen extends StatefulWidget {
 
 class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
   final _repository = TacoPosRepository();
+  final _scrollController = ScrollController();
   late Future<void> _future;
   List<Product> _products = const [];
   List<KitchenStockItem> _stockItems = const [];
   List<IngredientYieldProfile> _profiles = const [];
   List<TheoreticalProductRecipe> _recipes = const [];
   InitialYieldSeedPlan? _seedPlan;
+  bool _showOnlyIncomplete = false;
 
   @override
   void initState() {
     super.initState();
     _future = _initialize();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _initialize() async {
@@ -122,7 +130,7 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
           FilledButton.icon(
             onPressed: _showRecipeAssistant,
             icon: const Icon(Icons.auto_fix_high_outlined),
-            label: const Text('Configurar recetas iniciales'),
+            label: const Text('Generar recetas iniciales'),
           ),
         ],
       ),
@@ -131,6 +139,7 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
 
   Widget _content() {
     return ListView(
+      controller: _scrollController,
       padding: const EdgeInsets.fromLTRB(22, 8, 22, 28),
       children: [
         _notice(),
@@ -147,9 +156,20 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
         const SizedBox(height: 22),
         _sectionHeader(
           'Recetas vigentes',
-          '${_recipes.length} de ${_products.where((item) => item.active).length} productos activos',
+          _showOnlyIncomplete
+              ? 'Mostrando solo recetas incompletas'
+              : '${_recipes.length} de ${_products.where((item) => item.active).length} productos activos',
           () => _editRecipe(),
         ),
+        if (_showOnlyIncomplete)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => setState(() => _showOnlyIncomplete = false),
+              icon: const Icon(Icons.filter_alt_off_outlined),
+              label: const Text('Mostrar todas'),
+            ),
+          ),
         const SizedBox(height: 8),
         _recipeTable(),
       ],
@@ -304,6 +324,13 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
     };
     final products = [..._products.where((item) => item.active)]
       ..sort((a, b) => a.name.compareTo(b.name));
+    final visibleProducts = _showOnlyIncomplete
+        ? products
+              .where(
+                (product) => recipesByProduct[product.id]?.isIncomplete == true,
+              )
+              .toList()
+        : products;
     return _table(
       columns: const [
         'Producto',
@@ -313,7 +340,7 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
         'Estado',
         'Editar',
       ],
-      rows: products.map((product) {
+      rows: visibleProducts.map((product) {
         final recipe = recipesByProduct[product.id];
         return [
           Text(product.name),
@@ -332,6 +359,8 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
           Text(
             recipe == null
                 ? 'Sin receta'
+                : recipe.isIncomplete
+                ? 'Incompleta: ${recipe.missingIngredientNotes}'
                 : recipe.needsInternalValidation
                 ? 'Pendiente de validacion'
                 : 'Validada',
@@ -485,11 +514,12 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
   }
 
   Future<void> _showRecipeAssistant() async {
-    final suggestions = suggestInitialRecipes(
+    final plan = planInitialRecipes(
       products: _products,
       stockItems: _stockItems,
       existingRecipes: _recipes,
     );
+    final suggestions = plan.suggestions;
     if (suggestions.isEmpty) {
       showAppSnackBar(
         context,
@@ -515,7 +545,9 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
                   title: Text(suggestion.recipe.productName),
                   subtitle: Text(
                     '${suggestion.recipe.ingredients.map((item) => '${item.stockItemName} ${item.quantity.toStringAsFixed(0)} ${item.unit} (${item.inputStage})').join(', ')}\n'
-                    '${suggestion.reason}. No sobrescribe recetas existentes.',
+                    '${suggestion.reason}. '
+                    '${suggestion.recipe.isIncomplete ? 'INCOMPLETA: ${suggestion.recipe.missingIngredientNotes}. ' : ''}'
+                    'No sobrescribe recetas existentes.',
                   ),
                   onChanged: (value) => setDialogState(() {
                     if (value == true) {
@@ -545,13 +577,115 @@ class _RecipeYieldConfigScreenState extends State<RecipeYieldConfigScreen> {
       ),
     );
     if (confirmed != true) return;
-    final count = await _repository.createSuggestedYieldRecipes(
+    final result = await _repository.createSuggestedYieldRecipes(
       suggestions
           .where((item) => selected.contains(item.recipe.productId))
           .map((item) => item.recipe),
     );
     await _reload();
-    if (mounted) showAppSnackBar(context, 'Se crearon $count recetas.');
+    if (!mounted) return;
+    await _showCreationSummary(plan, result);
+  }
+
+  Future<void> _showCreationSummary(
+    InitialRecipeSuggestionPlan plan,
+    RecipeCreationResult result,
+  ) async {
+    final pendingIngredients = {
+      ...plan.pendingIngredients,
+      ...?_seedPlan?.pendingNames,
+    };
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Configuracion inicial terminada'),
+        content: SizedBox(
+          width: 520,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _summaryRow('Recetas creadas', '${result.created}'),
+              _summaryRow('Recetas incompletas', '${result.incompleteCreated}'),
+              _summaryRow(
+                'Productos sin coincidencia',
+                '${plan.unmatchedProducts.length}',
+              ),
+              _summaryRow('Perfiles vinculados', '${_profiles.length}'),
+              _summaryRow(
+                'Ingredientes pendientes',
+                '${pendingIngredients.length}',
+              ),
+              if (result.skippedExisting > 0)
+                _summaryRow(
+                  'Recetas existentes respetadas',
+                  '${result.skippedExisting}',
+                ),
+              if (plan.unmatchedProducts.isNotEmpty) ...[
+                const Divider(),
+                Text(
+                  'Pendientes de configuracion manual: '
+                  '${plan.unmatchedProducts.map((item) => item.name).join(', ')}',
+                  style: const TextStyle(color: BrandColors.textMuted),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (_scrollController.hasClients) {
+                  _scrollController.animateTo(
+                    _scrollController.position.maxScrollExtent,
+                    duration: const Duration(milliseconds: 300),
+                    curve: Curves.easeOut,
+                  );
+                }
+              });
+            },
+            child: const Text('Ver recetas creadas'),
+          ),
+          TextButton(
+            onPressed: result.incompleteCreated == 0
+                ? null
+                : () {
+                    Navigator.pop(dialogContext);
+                    setState(() => _showOnlyIncomplete = true);
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (_scrollController.hasClients) {
+                        _scrollController.jumpTo(
+                          _scrollController.position.maxScrollExtent,
+                        );
+                      }
+                    });
+                  },
+            child: const Text('Revisar incompletas'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(dialogContext);
+              Navigator.pop(context, true);
+            },
+            child: const Text('Abrir reporte'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _summaryRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(
+        children: [
+          Expanded(child: Text(label)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
+        ],
+      ),
+    );
   }
 }
 
@@ -576,8 +710,10 @@ class _RecipeEditorDialogState extends State<_RecipeEditorDialog> {
   Product? _product;
   late List<TheoreticalRecipeIngredient> _ingredients;
   late TextEditingController _notesController;
+  late TextEditingController _missingNotesController;
   late bool _estimated;
   late bool _pending;
+  late String _recipeStatus;
 
   @override
   void initState() {
@@ -587,13 +723,18 @@ class _RecipeEditorDialogState extends State<_RecipeEditorDialog> {
     _notesController = TextEditingController(
       text: widget.initialRecipe?.notes ?? '',
     );
+    _missingNotesController = TextEditingController(
+      text: widget.initialRecipe?.missingIngredientNotes ?? '',
+    );
     _estimated = widget.initialRecipe?.isEstimated ?? true;
     _pending = widget.initialRecipe?.needsInternalValidation ?? true;
+    _recipeStatus = widget.initialRecipe?.recipeStatus ?? 'complete';
   }
 
   @override
   void dispose() {
     _notesController.dispose();
+    _missingNotesController.dispose();
     super.dispose();
   }
 
@@ -678,6 +819,43 @@ class _RecipeEditorDialogState extends State<_RecipeEditorDialog> {
               maxLines: 2,
               decoration: const InputDecoration(labelText: 'Notas'),
             ),
+            const SizedBox(height: 10),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 210,
+                  child: DropdownButtonFormField<String>(
+                    initialValue: _recipeStatus,
+                    decoration: const InputDecoration(
+                      labelText: 'Estado de receta',
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'complete',
+                        child: Text('Completa'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'incomplete',
+                        child: Text('Incompleta'),
+                      ),
+                    ],
+                    onChanged: (value) =>
+                        setState(() => _recipeStatus = value ?? 'complete'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _missingNotesController,
+                    maxLines: 2,
+                    decoration: const InputDecoration(
+                      labelText: 'Ingredientes o conversiones pendientes',
+                    ),
+                  ),
+                ),
+              ],
+            ),
             Row(
               children: [
                 Expanded(
@@ -748,6 +926,10 @@ class _RecipeEditorDialogState extends State<_RecipeEditorDialog> {
         isEstimated: _estimated,
         needsInternalValidation: _pending,
         notes: _notesController.text,
+        recipeStatus: _recipeStatus,
+        missingIngredientNotes: _recipeStatus == 'incomplete'
+            ? _missingNotesController.text
+            : '',
         version: current?.version ?? 1,
         effectiveFrom: current?.effectiveFrom,
         effectiveTo: current?.effectiveTo,

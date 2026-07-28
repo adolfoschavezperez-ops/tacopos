@@ -238,6 +238,11 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                   _reportKind = _ReportKind.discountsByDay;
                   _reportsExpanded = true;
                 }),
+                onOpenYieldReport: () => setState(() {
+                  _section = _BackofficeSection.reports;
+                  _reportKind = _ReportKind.yieldProfit;
+                  _reportsExpanded = true;
+                }),
                 onSalesDataChanged: () => setState(() {}),
               );
 
@@ -788,6 +793,7 @@ class _BackofficeBody extends StatelessWidget {
     required this.onWeek,
     required this.onMonth,
     required this.onOpenDiscountsReport,
+    required this.onOpenYieldReport,
     required this.onSalesDataChanged,
   });
 
@@ -802,6 +808,7 @@ class _BackofficeBody extends StatelessWidget {
   final VoidCallback onWeek;
   final VoidCallback onMonth;
   final VoidCallback onOpenDiscountsReport;
+  final VoidCallback onOpenYieldReport;
   final VoidCallback onSalesDataChanged;
 
   @override
@@ -845,7 +852,12 @@ class _BackofficeBody extends StatelessWidget {
       return withBranchHeader(const FinanceAdminScreen());
     }
     if (section == _BackofficeSection.settings) {
-      return withBranchHeader(_SettingsSection(repository: repository));
+      return withBranchHeader(
+        _SettingsSection(
+          repository: repository,
+          onOpenYieldReport: onOpenYieldReport,
+        ),
+      );
     }
     if (section == _BackofficeSection.reports &&
         reportKind == _ReportKind.cashSchedule) {
@@ -2656,9 +2668,13 @@ class _ReportsSectionState extends State<_ReportsSection> {
 }
 
 class _SettingsSection extends StatelessWidget {
-  const _SettingsSection({required this.repository});
+  const _SettingsSection({
+    required this.repository,
+    required this.onOpenYieldReport,
+  });
 
   final TacoPosRepository repository;
+  final VoidCallback onOpenYieldReport;
 
   @override
   Widget build(BuildContext context) {
@@ -2760,10 +2776,15 @@ class _SettingsSection extends StatelessWidget {
           'Recetas y rendimientos',
           'Porciones, etapas y rendimientos teoricos para costos.',
           Icons.science_outlined,
-          () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const RecipeYieldConfigScreen()),
-          ),
+          () async {
+            final openReport = await Navigator.push<bool>(
+              context,
+              MaterialPageRoute(
+                builder: (_) => const RecipeYieldConfigScreen(),
+              ),
+            );
+            if (openReport == true) onOpenYieldReport();
+          },
         ),
       if (employee?.canManageKitchenStock == true)
         _SettingsLink(

@@ -36,6 +36,9 @@ void _summary(
   String branch,
   DateTime generated,
 ) {
+  final hasCompleteCostCoverage = hasCompleteYieldCostCoverage(
+    bundle.report.products,
+  );
   _header(sheet, ['RENDIMIENTO TEORICO Y UTILIDAD', 'Valor']);
   _rows(sheet, [
     ['Restaurante', restaurant],
@@ -50,9 +53,24 @@ void _summary(
       'Resultados estimados; no representan inventario, consumo o merma real.',
     ],
     ['Venta neta', bundle.report.netSales],
-    ['Costo teorico de ingredientes', bundle.report.theoreticalIngredientCost],
-    ['Utilidad bruta teorica', bundle.report.theoreticalGrossProfit],
-    ['Margen bruto teorico %', bundle.report.theoreticalGrossMarginPercent],
+    [
+      'Costo teorico de ingredientes',
+      hasCompleteCostCoverage
+          ? bundle.report.theoreticalIngredientCost
+          : 'No disponible',
+    ],
+    [
+      'Utilidad bruta teorica',
+      hasCompleteCostCoverage
+          ? bundle.report.theoreticalGrossProfit
+          : 'No disponible',
+    ],
+    [
+      'Margen bruto teorico %',
+      hasCompleteCostCoverage
+          ? bundle.report.theoreticalGrossMarginPercent
+          : 'No disponible',
+    ],
     ['Kg crudos estimados', bundle.report.rawEstimatedKilograms],
     ['Productos sin receta', bundle.report.productsWithoutRecipe],
     ['Ingredientes sin costo', bundle.report.ingredientsWithoutCost],

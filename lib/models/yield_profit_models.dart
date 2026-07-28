@@ -181,6 +181,8 @@ class TheoreticalProductRecipe {
     this.isEstimated = true,
     this.needsInternalValidation = true,
     this.notes = '',
+    this.recipeStatus = 'complete',
+    this.missingIngredientNotes = '',
     this.version = 1,
     this.effectiveFrom,
     this.effectiveTo,
@@ -202,6 +204,8 @@ class TheoreticalProductRecipe {
   final bool isEstimated;
   final bool needsInternalValidation;
   final String notes;
+  final String recipeStatus;
+  final String missingIngredientNotes;
   final int version;
   final DateTime? effectiveFrom;
   final DateTime? effectiveTo;
@@ -237,6 +241,8 @@ class TheoreticalProductRecipe {
       isEstimated: data['isEstimated'] as bool? ?? true,
       needsInternalValidation: data['needsInternalValidation'] as bool? ?? true,
       notes: _string(data['notes']),
+      recipeStatus: _string(data['recipeStatus'], 'complete'),
+      missingIngredientNotes: _string(data['missingIngredientNotes']),
       version: (data['version'] as num?)?.toInt() ?? 1,
       effectiveFrom: _date(data['effectiveFrom']),
       effectiveTo: _date(data['effectiveTo']),
@@ -258,6 +264,8 @@ class TheoreticalProductRecipe {
     bool? isEstimated,
     bool? needsInternalValidation,
     String? notes,
+    String? recipeStatus,
+    String? missingIngredientNotes,
   }) {
     return TheoreticalProductRecipe(
       productId: productId,
@@ -268,6 +276,9 @@ class TheoreticalProductRecipe {
       needsInternalValidation:
           needsInternalValidation ?? this.needsInternalValidation,
       notes: notes ?? this.notes,
+      recipeStatus: recipeStatus ?? this.recipeStatus,
+      missingIngredientNotes:
+          missingIngredientNotes ?? this.missingIngredientNotes,
       version: version,
       effectiveFrom: effectiveFrom,
       effectiveTo: effectiveTo,
@@ -282,6 +293,9 @@ class TheoreticalProductRecipe {
       validatedByEmployeeName: validatedByEmployeeName,
     );
   }
+
+  bool get isIncomplete =>
+      recipeStatus == 'incomplete' || missingIngredientNotes.trim().isNotEmpty;
 }
 
 String _string(Object? value, [String fallback = '']) {

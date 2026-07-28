@@ -17,7 +17,7 @@ class InitialYieldDefinition {
 }
 
 const initialYieldDefinitions = <InitialYieldDefinition>[
-  InitialYieldDefinition('Bistec', ['bistec'], 69),
+  InitialYieldDefinition('Bistec', ['bistec', 'bistek', 'bisteck'], 69),
   InitialYieldDefinition('Adobada', ['adobada', 'adobado'], 60),
   InitialYieldDefinition('Arrachera', ['arrachera'], 68),
   InitialYieldDefinition('Higado', ['higado'], 70),
@@ -29,7 +29,7 @@ const initialYieldDefinitions = <InitialYieldDefinition>[
 ];
 
 String normalizeYieldName(String value) {
-  return value
+  final normalized = value
       .toLowerCase()
       .trim()
       .replaceAll(RegExp('[áàäâ]'), 'a')
@@ -39,6 +39,27 @@ String normalizeYieldName(String value) {
       .replaceAll(RegExp('[úùüû]'), 'u')
       .replaceAll('ñ', 'n')
       .replaceAll(RegExp(r'\s+'), ' ');
+  return normalized
+      .replaceAll(RegExp(r'\badobado\b'), 'adobada')
+      .replaceAll(RegExp(r'\bbistek\b|\bbisteck\b'), 'bistec')
+      .replaceAll(RegExp(r'\btripa dorada\b'), 'tripa')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+String _singularYieldName(String value) {
+  return normalizeYieldName(value)
+      .split(' ')
+      .map((token) {
+        if (token.length > 4 && token.endsWith('es')) {
+          return token.substring(0, token.length - 2);
+        }
+        if (token.length > 3 && token.endsWith('s')) {
+          return token.substring(0, token.length - 1);
+        }
+        return token;
+      })
+      .join(' ');
 }
 
 class InitialYieldSeedPlan {
@@ -137,7 +158,44 @@ class RecipeSuggestion {
   final String reason;
 }
 
-List<RecipeSuggestion> suggestInitialRecipes({
+class InitialRecipeSuggestionPlan {
+  const InitialRecipeSuggestionPlan({
+    required this.suggestions,
+    required this.unmatchedProducts,
+  });
+
+  final List<RecipeSuggestion> suggestions;
+  final List<Product> unmatchedProducts;
+
+  int get incompleteSuggestions =>
+      suggestions.where((item) => item.recipe.isIncomplete).length;
+
+  Set<String> get pendingIngredients => suggestions
+      .where((item) => item.recipe.isIncomplete)
+      .expand(
+        (item) => item.recipe.missingIngredientNotes
+            .split('. ')
+            .map((value) => value.trim()),
+      )
+      .where((value) => value.isNotEmpty)
+      .toSet();
+}
+
+class RecipeCreationResult {
+  const RecipeCreationResult({
+    required this.createdProductIds,
+    required this.incompleteCreated,
+    required this.skippedExisting,
+  });
+
+  final List<String> createdProductIds;
+  final int incompleteCreated;
+  final int skippedExisting;
+
+  int get created => createdProductIds.length;
+}
+
+InitialRecipeSuggestionPlan planInitialRecipes({
   required Iterable<Product> products,
   required Iterable<KitchenStockItem> stockItems,
   required Iterable<TheoreticalProductRecipe> existingRecipes,
@@ -147,8 +205,12 @@ List<RecipeSuggestion> suggestInitialRecipes({
   KitchenStockItem? exact(Iterable<String> aliases) {
     for (final alias in aliases) {
       final normalizedAlias = normalizeYieldName(alias);
+      final singularAlias = _singularYieldName(alias);
       for (final item in stock) {
-        if (normalizeYieldName(item.name) == normalizedAlias) return item;
+        if (normalizeYieldName(item.name) == normalizedAlias ||
+            _singularYieldName(item.name) == singularAlias) {
+          return item;
+        }
       }
     }
     return null;
@@ -158,20 +220,66 @@ List<RecipeSuggestion> suggestInitialRecipes({
   final tortillaHarina = exact(['tortilla de harina', 'tortilla harina']);
   final queso = exact(['queso', 'queso para gringa']);
   final result = <RecipeSuggestion>[];
+  final unmatched = <Product>[];
   for (final product in products.where((item) => item.active)) {
     if (existing.contains(product.id)) continue;
     final name = normalizeYieldName(product.name);
-    final isGringa = name.contains('gringa');
-    final isTaco = name.contains('taco');
-    if (!isGringa && !isTaco) continue;
+    final category = normalizeYieldName(product.categoryName);
+    final isGringa = category.contains('gringa') || name.contains('gringa');
+    final isTaco =
+        category == 'taco' ||
+        category == 'tacos' ||
+        category.startsWith('taco ') ||
+        name.contains('taco');
+    final isDrink =
+        category == 'bebida' ||
+        category == 'bebidas' ||
+        category.contains('refresco');
+    if (isDrink) {
+      final drink = _highConfidenceDrinkMatch(product.name, stock);
+      if (drink == null) {
+        unmatched.add(product);
+        continue;
+      }
+      result.add(
+        RecipeSuggestion(
+          recipe: TheoreticalProductRecipe(
+            productId: product.id,
+            productName: product.name,
+            ingredients: [
+              TheoreticalRecipeIngredient(
+                stockItemId: drink.id,
+                stockItemName: drink.name,
+                quantity: 1,
+                quantityType: 'portion',
+                inputStage: 'ready_to_serve',
+                unit: 'piece',
+                baseQuantity: 1,
+              ),
+            ],
+          ),
+          reason: 'Bebida e insumo empacado identificados con alta confianza',
+        ),
+      );
+      continue;
+    }
+    if (!isGringa && !isTaco) {
+      unmatched.add(product);
+      continue;
+    }
     KitchenStockItem? meat;
     for (final definition in initialYieldDefinitions) {
-      if (definition.aliases.any((alias) => name.contains(alias))) {
+      if (definition.aliases.any(
+        (alias) => name.contains(normalizeYieldName(alias)),
+      )) {
         meat = exact(definition.aliases);
         break;
       }
     }
-    if (meat == null) continue;
+    if (meat == null) {
+      unmatched.add(product);
+      continue;
+    }
     final ingredients = <TheoreticalRecipeIngredient>[
       TheoreticalRecipeIngredient(
         stockItemId: meat.id,
@@ -183,6 +291,7 @@ List<RecipeSuggestion> suggestInitialRecipes({
         baseQuantity: isGringa ? 60 : 30,
       ),
     ];
+    final missing = <String>[];
     if (isGringa && queso != null) {
       ingredients.add(
         TheoreticalRecipeIngredient(
@@ -195,6 +304,8 @@ List<RecipeSuggestion> suggestInitialRecipes({
           baseQuantity: 45,
         ),
       );
+    } else if (isGringa) {
+      missing.add('Falta vincular Queso');
     }
     final tortilla = isGringa ? tortillaHarina : tortillaMaiz;
     if (tortilla != null) {
@@ -209,13 +320,30 @@ List<RecipeSuggestion> suggestInitialRecipes({
           baseQuantity: isGringa ? 1 : 2,
         ),
       );
+      if (!_recipeAndStockUnitsCompatible('piece', tortilla.unit)) {
+        missing.add(
+          'Falta definir la equivalencia de ${tortilla.name} de kg a piezas',
+        );
+      }
+    } else {
+      missing.add(
+        isGringa
+            ? 'Falta vincular Tortilla de harina'
+            : 'Falta vincular Tortilla de maiz',
+      );
     }
+    if (name.contains('papa')) {
+      missing.add('Falta definir la porcion de papa');
+    }
+    final missingNotes = missing.join('. ');
     result.add(
       RecipeSuggestion(
         recipe: TheoreticalProductRecipe(
           productId: product.id,
           productName: product.name,
           ingredients: ingredients,
+          recipeStatus: missing.isEmpty ? 'complete' : 'incomplete',
+          missingIngredientNotes: missingNotes,
         ),
         reason: isGringa
             ? 'Gringa y carne identificadas por nombre'
@@ -223,7 +351,60 @@ List<RecipeSuggestion> suggestInitialRecipes({
       ),
     );
   }
-  return result;
+  return InitialRecipeSuggestionPlan(
+    suggestions: result,
+    unmatchedProducts: unmatched,
+  );
+}
+
+List<RecipeSuggestion> suggestInitialRecipes({
+  required Iterable<Product> products,
+  required Iterable<KitchenStockItem> stockItems,
+  required Iterable<TheoreticalProductRecipe> existingRecipes,
+}) {
+  return planInitialRecipes(
+    products: products,
+    stockItems: stockItems,
+    existingRecipes: existingRecipes,
+  ).suggestions;
+}
+
+KitchenStockItem? _highConfidenceDrinkMatch(
+  String productName,
+  List<KitchenStockItem> stockItems,
+) {
+  final name = normalizeYieldName(productName);
+  final singular = _singularYieldName(productName);
+  final exact = stockItems
+      .where(
+        (item) =>
+            normalizeYieldName(item.name) == name ||
+            _singularYieldName(item.name) == singular,
+      )
+      .toList();
+  if (exact.length == 1) return exact.single;
+  if (name == 'coca regular') {
+    final coca = stockItems
+        .where(
+          (item) => const {
+            'coca cola',
+            'coca cola regular',
+          }.contains(normalizeYieldName(item.name)),
+        )
+        .toList();
+    if (coca.length == 1) return coca.single;
+  }
+  return null;
+}
+
+bool _recipeAndStockUnitsCompatible(String recipeUnit, String stockUnit) {
+  final recipe = normalizeYieldName(recipeUnit);
+  final stock = normalizeYieldName(stockUnit);
+  const weight = {'kg', 'g', 'gr', 'gramo', 'gramos'};
+  const pieces = {'piece', 'pieza', 'piezas'};
+  if (weight.contains(recipe) && weight.contains(stock)) return true;
+  if (pieces.contains(recipe) && pieces.contains(stock)) return true;
+  return recipe == stock;
 }
 
 class YieldPurchaseLine {
@@ -357,6 +538,11 @@ class YieldProductRow {
   bool get hasCompleteCost => hasRecipe && missingCostIngredients.isEmpty;
 }
 
+bool hasCompleteYieldCostCoverage(Iterable<YieldProductRow> products) {
+  final rows = products.toList(growable: false);
+  return rows.isNotEmpty && rows.every((row) => row.hasCompleteCost);
+}
+
 class IngredientProductUsage {
   const IngredientProductUsage({
     required this.productId,
@@ -476,21 +662,36 @@ YieldProfitReport buildYieldProfitReport({
     double unitCost = 0;
     final missing = <String>[];
     if (recipe != null) {
+      if (recipe.isIncomplete &&
+          recipe.missingIngredientNotes.trim().isNotEmpty) {
+        missing.add(recipe.missingIngredientNotes.trim());
+      }
       for (final ingredient in recipe.ingredients) {
         final profile = profileByStock[ingredient.stockItemId];
+        final stockItem = stockById[ingredient.stockItemId];
+        final compatibleUnits =
+            stockItem == null ||
+            _recipeAndStockUnitsCompatible(ingredient.unit, stockItem.unit);
         final rawPerUnit = rawEquivalent(
           quantity: ingredient.baseQuantity,
           inputStage: ingredient.inputStage,
           cookingYieldRate: profile?.cookingYieldRate,
         );
         final cost = costFor(ingredient.stockItemId);
-        if (rawPerUnit.isNaN || cost == null) {
+        if (!compatibleUnits) {
+          missing.add(
+            '${ingredient.stockItemName}: falta equivalencia '
+            '${ingredient.unit}/${stockItem.unit}',
+          );
+        } else if (rawPerUnit.isNaN || cost == null) {
           missing.add(ingredient.stockItemName);
         } else {
           unitCost += rawPerUnit * cost.costPerBaseUnit;
         }
         final inputTotal = ingredient.baseQuantity * sale.qty;
-        final rawTotal = rawPerUnit.isNaN ? 0.0 : rawPerUnit * sale.qty;
+        final rawTotal = rawPerUnit.isNaN || !compatibleUnits
+            ? 0.0
+            : rawPerUnit * sale.qty;
         final accumulator = ingredientAccumulators.putIfAbsent(
           ingredient.stockItemId,
           () => _IngredientAccumulator(
@@ -515,7 +716,9 @@ YieldProfitReport buildYieldProfitReport({
         );
       }
     }
-    final complete = recipe != null && missing.isEmpty;
+    final uniqueMissing = missing.toSet().toList(growable: false);
+    final complete =
+        recipe != null && !recipe.isIncomplete && uniqueMissing.isEmpty;
     final totalCost = complete ? unitCost * sale.qty : null;
     final profit = totalCost == null ? null : sale.netSales - totalCost;
     productRows.add(
@@ -534,7 +737,7 @@ YieldProfitReport buildYieldProfitReport({
         grossMarginPercent: profit == null || sale.netSales == 0
             ? null
             : profit / sale.netSales * 100,
-        missingCostIngredients: missing,
+        missingCostIngredients: uniqueMissing,
       ),
     );
   }

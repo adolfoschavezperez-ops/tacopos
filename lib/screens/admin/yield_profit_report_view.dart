@@ -88,6 +88,7 @@ class _YieldProfitReportViewState extends State<YieldProfitReportView> {
         final productIds = products.map((row) => row.productId).toSet();
         final ingredients = _filteredIngredients(bundle, productIds);
         final completeProducts = products.where((row) => row.hasCompleteCost);
+        final hasCompleteCostCoverage = hasCompleteYieldCostCoverage(products);
         final includedNet = completeProducts.fold<double>(
           0,
           (sum, row) => sum + row.netSales,
@@ -129,7 +130,17 @@ class _YieldProfitReportViewState extends State<YieldProfitReportView> {
               profit: profit,
               includedNet: includedNet,
               rawGrams: rawGrams,
+              hasCompleteCostCoverage: hasCompleteCostCoverage,
             ),
+            if (products.isNotEmpty &&
+                products.every((row) => !row.hasRecipe)) ...[
+              const SizedBox(height: 12),
+              _notice(
+                Icons.warning_amber_outlined,
+                'No es posible calcular costos hasta configurar las recetas '
+                'de los productos.',
+              ),
+            ],
             const SizedBox(height: 18),
             const _SectionTitle('RENDIMIENTO Y UTILIDAD POR PRODUCTO'),
             const SizedBox(height: 8),
@@ -304,17 +315,24 @@ class _YieldProfitReportViewState extends State<YieldProfitReportView> {
     required double profit,
     required double includedNet,
     required double rawGrams,
+    required bool hasCompleteCostCoverage,
   }) {
     final cards = [
       (
         'Venta neta',
         _money(products.fold(0, (sum, row) => sum + row.netSales)),
       ),
-      ('Costo teorico de ingredientes', _money(cost)),
-      ('Utilidad bruta teorica', _money(profit)),
+      (
+        'Costo teorico de ingredientes',
+        hasCompleteCostCoverage ? _money(cost) : 'No disponible',
+      ),
+      (
+        'Utilidad bruta teorica',
+        hasCompleteCostCoverage ? _money(profit) : 'No disponible',
+      ),
       (
         'Margen bruto teorico',
-        includedNet == 0
+        !hasCompleteCostCoverage || includedNet == 0
             ? 'No disponible'
             : _percent(profit / includedNet * 100),
       ),
@@ -704,11 +722,12 @@ class _YieldProfitReportViewState extends State<YieldProfitReportView> {
     );
   }
 
-  void _openConfiguration() {
-    Navigator.push(
+  Future<void> _openConfiguration() async {
+    await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => const RecipeYieldConfigScreen()),
     );
+    if (mounted) setState(() => _load(force: true));
   }
 
   Future<void> _export(YieldProfitReportBundle bundle) async {

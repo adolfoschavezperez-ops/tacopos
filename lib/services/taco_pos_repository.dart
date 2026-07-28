@@ -1616,6 +1616,8 @@ class TacoPosRepository {
       'isEstimated': recipe.isEstimated,
       'needsInternalValidation': recipe.needsInternalValidation,
       'notes': recipe.notes.trim(),
+      'recipeStatus': recipe.recipeStatus,
+      'missingIngredientNotes': recipe.missingIngredientNotes.trim(),
       'version': recipe.version < 1 ? 1 : recipe.version,
       'effectiveFrom':
           recipe.effectiveFrom ??
@@ -1635,19 +1637,30 @@ class TacoPosRepository {
     _yieldProfitBundleCache.clear();
   }
 
-  Future<int> createSuggestedYieldRecipes(
+  Future<RecipeCreationResult> createSuggestedYieldRecipes(
     Iterable<TheoreticalProductRecipe> suggestions,
   ) async {
     _requireYieldProfitAdmin();
     final selected = suggestions.toList(growable: false);
-    if (selected.isEmpty) return 0;
+    if (selected.isEmpty) {
+      return const RecipeCreationResult(
+        createdProductIds: [],
+        incompleteCreated: 0,
+        skippedExisting: 0,
+      );
+    }
     final existing = await _productRecipesRef.get();
     final existingIds = existing.docs.map((doc) => doc.id).toSet();
     final employee = AppSession.instance.employee;
     final batch = _db.batch();
-    var created = 0;
+    final createdIds = <String>[];
+    var incompleteCreated = 0;
+    var skippedExisting = 0;
     for (final recipe in selected) {
-      if (existingIds.contains(recipe.productId)) continue;
+      if (existingIds.contains(recipe.productId)) {
+        skippedExisting++;
+        continue;
+      }
       batch.set(_productRecipesRef.doc(recipe.productId), {
         'restaurantId': AppSession.instance.currentRestaurantId,
         'productId': recipe.productId,
@@ -1659,6 +1672,8 @@ class TacoPosRepository {
         'isEstimated': true,
         'needsInternalValidation': true,
         'notes': 'Sugerencia inicial por nombre; requiere validacion interna.',
+        'recipeStatus': recipe.recipeStatus,
+        'missingIngredientNotes': recipe.missingIngredientNotes,
         'version': 1,
         'effectiveFrom': FieldValue.serverTimestamp(),
         'effectiveTo': null,
@@ -1669,11 +1684,16 @@ class TacoPosRepository {
         'updatedByEmployeeId': employee?.id ?? '',
         'updatedByEmployeeName': employee?.name ?? '',
       });
-      created++;
+      createdIds.add(recipe.productId);
+      if (recipe.isIncomplete) incompleteCreated++;
     }
-    if (created > 0) await batch.commit();
+    if (createdIds.isNotEmpty) await batch.commit();
     _yieldProfitBundleCache.clear();
-    return created;
+    return RecipeCreationResult(
+      createdProductIds: createdIds,
+      incompleteCreated: incompleteCreated,
+      skippedExisting: skippedExisting,
+    );
   }
 
   Stream<Map<String, ProductStockOutRow>> watchActiveProductStockOuts() {

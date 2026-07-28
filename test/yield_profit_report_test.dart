@@ -7,6 +7,7 @@ import 'package:tacopos/core/reports/report_data_bundle.dart';
 import 'package:tacopos/core/reports/yield_profit_report.dart';
 import 'package:tacopos/core/reports/yield_profit_report_excel.dart';
 import 'package:tacopos/models/kitchen_stock_item.dart';
+import 'package:tacopos/models/product.dart';
 import 'package:tacopos/models/yield_profit_models.dart';
 
 void main() {
@@ -130,6 +131,7 @@ void main() {
       expect(report.products.single.unitCost, isNull);
       expect(report.products.single.grossMarginPercent, isNull);
       expect(report.productsWithoutRecipe, 1);
+      expect(hasCompleteYieldCostCoverage(report.products), isFalse);
     });
 
     test('ingrediente sin costo marca costo y margen incompletos', () {
@@ -227,6 +229,128 @@ void main() {
     });
   });
 
+  group('asistente de recetas iniciales', () {
+    test('Carnaza Taco crea 30 g cocidos y dos tortillas', () {
+      final plan = planInitialRecipes(
+        products: [_product('carnaza-taco', 'Carnaza', 'Taco')],
+        stockItems: [
+          _stock('carnaza', 'Carnaza'),
+          _stock('tortilla', 'Tortilla de maiz', unit: 'piece'),
+        ],
+        existingRecipes: const [],
+      );
+      final recipe = plan.suggestions.single.recipe;
+      expect(recipe.productId, 'carnaza-taco');
+      expect(recipe.ingredients, hasLength(2));
+      expect(recipe.ingredients.first.stockItemId, 'carnaza');
+      expect(recipe.ingredients.first.quantity, 30);
+      expect(recipe.ingredients.first.inputStage, 'cooked');
+      expect(recipe.ingredients.last.stockItemId, 'tortilla');
+      expect(recipe.ingredients.last.quantity, 2);
+    });
+
+    test('Tripa conserva el perfil inicial de 65%', () {
+      final plan = _plan([_stock('tripa', 'Tripa')]);
+      expect(plan.toCreate.single.cookingYieldPercent, 65);
+    });
+
+    test('Adobada de producto acepta insumo llamado Adobado', () {
+      final plan = planInitialRecipes(
+        products: [_product('adobada-taco', 'Adobada', 'Taco')],
+        stockItems: [
+          _stock('adobado', 'Adobado'),
+          _stock('tortilla', 'Tortilla de maiz', unit: 'piece'),
+        ],
+        existingRecipes: const [],
+      );
+      expect(
+        plan.suggestions.single.recipe.ingredients.first.stockItemId,
+        'adobado',
+      );
+    });
+
+    test('Bistec con Papa queda incompleto sin inventar porcion de papa', () {
+      final plan = planInitialRecipes(
+        products: [_product('bistec-papa', 'Bistec con Papa', 'Taco')],
+        stockItems: [
+          _stock('bistec', 'Bistec'),
+          _stock('tortilla', 'Tortilla de maiz', unit: 'piece'),
+        ],
+        existingRecipes: const [],
+      );
+      final recipe = plan.suggestions.single.recipe;
+      expect(recipe.recipeStatus, 'incomplete');
+      expect(
+        recipe.missingIngredientNotes,
+        contains('Falta definir la porcion de papa'),
+      );
+      expect(
+        recipe.ingredients.any(
+          (ingredient) =>
+              normalizeYieldName(ingredient.stockItemName).contains('papa'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('Coca Regular enlaza una pieza solo con Coca Cola inequivoca', () {
+      final plan = planInitialRecipes(
+        products: [_product('coca', 'Coca Regular', 'Bebidas')],
+        stockItems: [
+          _stock('coca-cola', 'Coca Cola', unit: 'piece'),
+          _stock('agua', 'Agua fresca', unit: 'liter'),
+        ],
+        existingRecipes: const [],
+      );
+      final ingredient = plan.suggestions.single.recipe.ingredients.single;
+      expect(ingredient.stockItemId, 'coca-cola');
+      expect(ingredient.quantity, 1);
+      expect(ingredient.inputStage, 'ready_to_serve');
+    });
+
+    test('segunda ejecucion y receta manual no generan duplicados', () {
+      final product = _product('tripa-taco', 'Tripa', 'Taco');
+      final stock = [
+        _stock('tripa', 'Tripa'),
+        _stock('tortilla', 'Tortilla de maiz', unit: 'piece'),
+      ];
+      final first = planInitialRecipes(
+        products: [product],
+        stockItems: stock,
+        existingRecipes: const [],
+      );
+      final existing = first.suggestions.single.recipe.copyWith(
+        notes: 'Editada manualmente',
+        isEstimated: false,
+        needsInternalValidation: false,
+      );
+      final second = planInitialRecipes(
+        products: [product],
+        stockItems: stock,
+        existingRecipes: [existing],
+      );
+      expect(first.suggestions, hasLength(1));
+      expect(second.suggestions, isEmpty);
+      expect(existing.notes, 'Editada manualmente');
+    });
+
+    test('tortilla comprada por kg marca receta incompleta', () {
+      final plan = planInitialRecipes(
+        products: [_product('tripa-taco', 'Tripa', 'Taco')],
+        stockItems: [
+          _stock('tripa', 'Tripa'),
+          _stock('tortilla', 'Tortilla de maiz'),
+        ],
+        existingRecipes: const [],
+      );
+      expect(plan.suggestions.single.recipe.isIncomplete, isTrue);
+      expect(
+        plan.suggestions.single.recipe.missingIngredientNotes,
+        contains('kg a piezas'),
+      );
+    });
+  });
+
   test('Excel contiene ocho hojas con filtros y encabezados congelados', () {
     final report = _singleProductReport(
       purchaseLines: [_purchase('bistec', DateTime(2026, 7, 2), 1, 'kg', 120)],
@@ -310,16 +434,32 @@ YieldPurchaseLine _purchase(
   );
 }
 
-KitchenStockItem _stock(String id, String name) {
+KitchenStockItem _stock(String id, String name, {String unit = 'kg'}) {
   return KitchenStockItem(
     id: id,
     name: name,
     category: 'carne',
-    unit: 'kg',
+    unit: unit,
     active: true,
     sortOrder: 0,
     optimalConsumptionPerSaleQty: 0,
     optimalConsumptionUnit: 'g_per_item',
+  );
+}
+
+Product _product(String id, String name, String category) {
+  return Product(
+    id: id,
+    name: name,
+    categoryId: category.toLowerCase(),
+    categoryName: category,
+    category: category,
+    price: 30,
+    active: true,
+    sendToKitchen: true,
+    sortOrder: 0,
+    platformPrices: const {},
+    affectsKitchenStock: false,
   );
 }
 
