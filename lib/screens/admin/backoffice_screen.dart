@@ -29,6 +29,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import 'cash_admin_screen.dart';
+import 'cash_schedule_report_view.dart';
 import 'authorization_admin_screen.dart';
 import 'branch_catalog_screen.dart';
 import 'discount_admin_screen.dart';
@@ -75,6 +76,7 @@ enum _ReportKind {
   productStockOuts,
   salesDiscrepancyAudit,
   discountsByDay,
+  cashSchedule,
 }
 
 bool _reportNeedsCanonicalItems(_ReportKind kind) {
@@ -842,6 +844,28 @@ class _BackofficeBody extends StatelessWidget {
     if (section == _BackofficeSection.settings) {
       return withBranchHeader(_SettingsSection(repository: repository));
     }
+    if (section == _BackofficeSection.reports &&
+        reportKind == _ReportKind.cashSchedule) {
+      final branchId = AppSession.instance.currentBranchId;
+      return ListView(
+        padding: const EdgeInsets.all(22),
+        children: [
+          _BackofficeBranchSelector(repository: repository),
+          const SizedBox(height: 14),
+          const _HeaderRow(
+            title: 'Horarios de apertura y cierre',
+            subtitle:
+                'Seguimiento semanal de las sesiones de caja por día operativo.',
+          ),
+          const SizedBox(height: 14),
+          CashScheduleReportView(
+            key: ValueKey('cash-schedule-$branchId'),
+            repository: repository,
+            branchId: branchId,
+          ),
+        ],
+      );
+    }
 
     final includeItems =
         section == _BackofficeSection.dashboard ||
@@ -1065,6 +1089,12 @@ class _DashboardSection extends StatelessWidget {
           onToday: onToday,
           onWeek: onWeek,
           onMonth: onMonth,
+        ),
+        const SizedBox(height: 18),
+        CashStatusDashboardPanel(
+          key: ValueKey('cash-status-${AppSession.instance.currentBranchId}'),
+          repository: repository,
+          branchId: AppSession.instance.currentBranchId,
         ),
         const SizedBox(height: 18),
         FutureBuilder<CanonicalSalesSummary>(
@@ -4675,7 +4705,8 @@ List<_NavItem> _navItems(Employee? employee) {
         employee?.canCancelPayments == true)
       const _NavItem(_BackofficeSection.sales, Icons.receipt_long, 'Ventas'),
     if (employee?.hasAdminAccess == true ||
-        employee?.canViewKitchenReports == true)
+        employee?.canViewKitchenReports == true ||
+        employee?.canManageCash == true)
       _NavItem(
         _BackofficeSection.reports,
         Icons.analytics_outlined,
@@ -4741,6 +4772,23 @@ List<_NavItem> _navItems(Employee? employee) {
 }
 
 List<_NavItem> _reportNavItems(Employee? employee) {
+  final canGeneralReports =
+      employee?.hasAdminAccess == true ||
+      employee?.canViewKitchenReports == true;
+  final canCashSchedule =
+      kIsWeb &&
+      (employee?.hasAdminAccess == true || employee?.canManageCash == true);
+  if (!canGeneralReports) {
+    return [
+      if (canCashSchedule)
+        const _NavItem(
+          _BackofficeSection.reports,
+          Icons.access_time_outlined,
+          'Horarios de apertura y cierre',
+          reportKind: _ReportKind.cashSchedule,
+        ),
+    ];
+  }
   final canKitchen =
       employee?.hasAdminAccess == true ||
       employee?.canViewKitchenReports == true;
@@ -4799,6 +4847,13 @@ List<_NavItem> _reportNavItems(Employee? employee) {
       'Cortes de caja',
       reportKind: _ReportKind.cashHistory,
     ),
+    if (canCashSchedule)
+      const _NavItem(
+        _BackofficeSection.reports,
+        Icons.access_time_outlined,
+        'Horarios de apertura y cierre',
+        reportKind: _ReportKind.cashSchedule,
+      ),
     const _NavItem(
       _BackofficeSection.reports,
       Icons.request_quote_outlined,
@@ -4911,6 +4966,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.productStockOuts => 'Productos agotados',
     _ReportKind.salesDiscrepancyAudit => 'Auditoria de discrepancias de ventas',
     _ReportKind.discountsByDay => 'Descuentos por dia',
+    _ReportKind.cashSchedule => 'Horarios de apertura y cierre',
   };
 }
 
@@ -5054,6 +5110,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     ],
     _ReportKind.salesDiscrepancyAudit => _salesAuditHeaders,
     _ReportKind.discountsByDay => _discountsByDayCsvHeaders,
+    _ReportKind.cashSchedule => const [],
   };
 }
 
@@ -5414,6 +5471,7 @@ Future<List<List<String>>> _reportRows(
     case _ReportKind.salesDiscrepancyAudit:
       return const [];
     case _ReportKind.discountsByDay:
+    case _ReportKind.cashSchedule:
       return const [];
   }
 }

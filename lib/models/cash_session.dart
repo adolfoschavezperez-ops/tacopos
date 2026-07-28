@@ -32,6 +32,10 @@ class CashSession {
     required this.notes,
     this.openedAt,
     this.closedAt,
+    this.createdAt,
+    this.updatedAt,
+    this.correctedAt,
+    this.correctionMode = false,
     this.closedByEmployeeId,
     this.closedByEmployeeName,
     this.restaurantId = AppConstants.restaurantId,
@@ -48,6 +52,10 @@ class CashSession {
   final String openedByEmployeeId;
   final String openedByEmployeeName;
   final DateTime? closedAt;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+  final DateTime? correctedAt;
+  final bool correctionMode;
   final String? closedByEmployeeId;
   final String? closedByEmployeeName;
   final String restaurantId;
@@ -95,6 +103,10 @@ class CashSession {
       openedByEmployeeId: data['openedByEmployeeId'] as String? ?? '',
       openedByEmployeeName: data['openedByEmployeeName'] as String? ?? '',
       closedAt: _toDate(data['closedAt']),
+      createdAt: _toDate(data['createdAt']),
+      updatedAt: _toDate(data['updatedAt']),
+      correctedAt: _toDate(data['correctedAt']),
+      correctionMode: data['correctionMode'] as bool? ?? false,
       closedByEmployeeId: data['closedByEmployeeId'] as String?,
       closedByEmployeeName: data['closedByEmployeeName'] as String?,
       restaurantId:

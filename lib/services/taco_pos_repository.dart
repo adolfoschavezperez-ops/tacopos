@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/cash/cash_close_execution.dart';
+import '../core/cash/cash_session_timing.dart';
 import '../core/cash/operational_business_date.dart';
 import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
@@ -15,6 +16,7 @@ import '../core/orders/order_activity.dart';
 import '../core/orders/order_types.dart';
 import '../core/purchases/purchase_capture_discount.dart';
 import '../core/reports/canonical_sales_summary.dart';
+import '../core/reports/cash_schedule_report.dart';
 import '../core/reports/finance_dashboard.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
@@ -743,6 +745,16 @@ class KitchenYieldReportRow {
   bool get hasConsumption => usefulConsumedQty > 0;
 }
 
+class _CashScheduleCacheEntry {
+  const _CashScheduleCacheEntry({
+    required this.sessions,
+    required this.loadedAt,
+  });
+
+  final List<CashSession> sessions;
+  final DateTime loadedAt;
+}
+
 class TacoPosRepository {
   TacoPosRepository({FirebaseFirestore? firestore, FirebaseAuth? auth})
     : _db = firestore ?? FirebaseFirestore.instance,
@@ -754,6 +766,7 @@ class TacoPosRepository {
       ReportDataRepository();
   static final FinanceDashboardCache _financeDashboardCache =
       FinanceDashboardCache();
+  static final Map<String, _CashScheduleCacheEntry> _cashScheduleCache = {};
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
@@ -4586,6 +4599,116 @@ class TacoPosRepository {
     });
   }
 
+  Future<CashScheduleLoadResult> getCashScheduleSessions({
+    required String startBusinessDate,
+    required String endBusinessDate,
+    bool forceRefresh = false,
+  }) async {
+    final session = AppSession.instance;
+    final branchId = session.currentBranchId;
+    final cacheKey = [
+      session.currentRestaurantId,
+      branchId,
+      startBusinessDate,
+      endBusinessDate,
+    ].join('|');
+    final stopwatch = Stopwatch()..start();
+    final cached = _cashScheduleCache[cacheKey];
+    final cacheIsFresh =
+        cached != null &&
+        DateTime.now().difference(cached.loadedAt) < const Duration(minutes: 2);
+
+    if (!forceRefresh && cacheIsFresh) {
+      stopwatch.stop();
+      _debugCashSchedulePerformance(
+        branchId: branchId,
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+        sessions: cached.sessions.length,
+        queries: 0,
+        totalMilliseconds: stopwatch.elapsedMilliseconds,
+        cache: true,
+      );
+      return CashScheduleLoadResult(
+        sessions: List.unmodifiable(cached.sessions),
+        fromCache: true,
+        queries: 0,
+        totalMilliseconds: stopwatch.elapsedMilliseconds,
+      );
+    }
+
+    final snapshot = await _cashSessionsRef
+        .where('businessDate', isGreaterThanOrEqualTo: startBusinessDate)
+        .where('businessDate', isLessThanOrEqualTo: endBusinessDate)
+        .get();
+    final sessions =
+        snapshot.docs
+            .map(CashSession.fromDoc)
+            .where((row) => _matchesBranch(row.branchId, branchId))
+            .toList()
+          ..sort((a, b) {
+            final dateCompare = a.businessDate.compareTo(b.businessDate);
+            if (dateCompare != 0) return dateCompare;
+            final aDate = a.openedAt ?? a.createdAt ?? DateTime(0);
+            final bDate = b.openedAt ?? b.createdAt ?? DateTime(0);
+            return aDate.compareTo(bDate);
+          });
+    _cashScheduleCache[cacheKey] = _CashScheduleCacheEntry(
+      sessions: List.unmodifiable(sessions),
+      loadedAt: DateTime.now(),
+    );
+    stopwatch.stop();
+    _debugCashSchedulePerformance(
+      branchId: branchId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      sessions: sessions.length,
+      queries: 1,
+      totalMilliseconds: stopwatch.elapsedMilliseconds,
+      cache: false,
+    );
+    return CashScheduleLoadResult(
+      sessions: sessions,
+      fromCache: false,
+      queries: 1,
+      totalMilliseconds: stopwatch.elapsedMilliseconds,
+    );
+  }
+
+  void invalidateCashScheduleCache({String? branchId}) {
+    final cleanBranchId = branchId?.trim();
+    if (cleanBranchId == null || cleanBranchId.isEmpty) {
+      _cashScheduleCache.clear();
+      return;
+    }
+    _cashScheduleCache.removeWhere((key, _) {
+      final parts = key.split('|');
+      return parts.length > 1 && parts[1] == cleanBranchId;
+    });
+  }
+
+  void _debugCashSchedulePerformance({
+    required String branchId,
+    required String startBusinessDate,
+    required String endBusinessDate,
+    required int sessions,
+    required int queries,
+    required int totalMilliseconds,
+    required bool cache,
+  }) {
+    if (!kDebugMode) return;
+    debugPrint(
+      'CASH_SCHEDULE_REPORT_PERF '
+      'branchId=$branchId '
+      'startBusinessDate=$startBusinessDate '
+      'endBusinessDate=$endBusinessDate '
+      'sessions=$sessions '
+      'queries=$queries '
+      'totalMs=$totalMilliseconds '
+      'cache=$cache',
+    );
+  }
+
   Stream<CashSession?> watchOpenCashSession() {
     return watchCashSessions().map((sessions) {
       final openSessions = sessions
@@ -5536,15 +5659,18 @@ class TacoPosRepository {
 
     final employee = AppSession.instance.employee;
     final docRef = _cashSessionsRef.doc();
+    final timestamp = FieldValue.serverTimestamp();
     await docRef.set({
       'id': docRef.id,
       'businessDate': cleanBusinessDate,
       ..._currentBranchFields,
       'status': 'open',
       'openingCashAmount': openingCashAmount,
-      'openedAt': FieldValue.serverTimestamp(),
-      'openedByEmployeeId': employee?.id ?? '',
-      'openedByEmployeeName': employee?.name ?? '',
+      ...cashSessionOpenTimestampFields(
+        serverTimestamp: timestamp,
+        employeeId: employee?.id ?? '',
+        employeeName: employee?.name ?? '',
+      ),
       'countedCashAmount': 0.0,
       'terminalReportedAmount': 0.0,
       'expectedCashAmount': 0.0,
@@ -5565,9 +5691,10 @@ class TacoPosRepository {
       'pendingWithdrawalsTotal': 0.0,
       'withdrawalRequestCount': 0,
       'notes': '',
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': timestamp,
+      'updatedAt': timestamp,
     });
+    invalidateCashScheduleCache(branchId: AppSession.instance.currentBranchId);
   }
 
   Future<void> requestCashWithdrawal({
@@ -6242,11 +6369,15 @@ class TacoPosRepository {
     );
     final employee = AppSession.instance.employee;
 
+    final closeTimestamp = FieldValue.serverTimestamp();
     final closeData = <String, Object?>{
-      'status': 'closed',
-      'closedAt': FieldValue.serverTimestamp(),
-      'closedByEmployeeId': employee?.id ?? '',
-      'closedByEmployeeName': employee?.name ?? '',
+      ...cashSessionCloseTimestampFields(
+        currentStatus: session.status,
+        currentClosedAt: session.closedAt,
+        serverTimestamp: closeTimestamp,
+        employeeId: employee?.id ?? '',
+        employeeName: employee?.name ?? '',
+      ),
       'countedCashAmount': countedCashAmount,
       'terminalReportedAmount': terminalReportedAmount,
       'expectedCashAmount': totals.expectedCashAmount,
@@ -6268,7 +6399,6 @@ class TacoPosRepository {
       'shortageAmount': shortageAmount,
       'overAmount': overAmount,
       'notes': notes.trim(),
-      'updatedAt': FieldValue.serverTimestamp(),
     };
     final shortageActivityRef = netDifference < 0
         ? _restaurantRef.collection('activityLog').doc()
@@ -6307,6 +6437,7 @@ class TacoPosRepository {
       startBusinessDate: session.businessDate,
       endBusinessDate: session.businessDate,
     );
+    invalidateCashScheduleCache(branchId: session.branchId);
     return CashSession.fromDoc(updatedDoc);
   }
 
@@ -6387,7 +6518,6 @@ class TacoPosRepository {
     final correctionNotes = notes.trim();
     final branchFields = _branchFields(branch);
     final now = FieldValue.serverTimestamp();
-    final historicalDate = _dateFromBusinessDate(preview.businessDate);
 
     await docRef.set({
       'id': docRef.id,
@@ -6395,18 +6525,7 @@ class TacoPosRepository {
       ...branchFields,
       'status': 'closed',
       'openingCashAmount': preview.openingCashAmount,
-      'openedAt': existing?.openedAt != null
-          ? Timestamp.fromDate(existing!.openedAt!)
-          : (historicalDate == null
-                ? FieldValue.serverTimestamp()
-                : Timestamp.fromDate(historicalDate)),
-      'openedByEmployeeId': existing?.openedByEmployeeId ?? '',
-      'openedByEmployeeName': existing?.openedByEmployeeName.isNotEmpty == true
-          ? existing!.openedByEmployeeName
-          : 'Correccion admin',
-      'closedAt': now,
-      'closedByEmployeeId': employee?.id ?? '',
-      'closedByEmployeeName': employee?.name ?? '',
+      ...preservedHistoricalCashTimestampFields(existing),
       'countedCashAmount': preview.countedCashAmount,
       'terminalReportedAmount': preview.terminalReportedAmount,
       'expectedCashAmount': preview.expectedCashAmount,
@@ -6461,6 +6580,7 @@ class TacoPosRepository {
       startBusinessDate: preview.businessDate,
       endBusinessDate: preview.businessDate,
     );
+    invalidateCashScheduleCache(branchId: branch.id);
     return CashSession.fromDoc(updatedDoc);
   }
 
