@@ -4,7 +4,14 @@ const {
   assertSucceeds,
   initializeTestEnvironment,
 } = require('@firebase/rules-unit-testing');
-const { doc, getDoc, setDoc, updateDoc } = require('firebase/firestore');
+const {
+  collectionGroup,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+} = require('firebase/firestore');
 
 const PROJECT_ID = 'tacopos-renovadev-rules-test';
 const RESTAURANT_ID = 'tacopos';
@@ -111,6 +118,24 @@ describe('TacoPOS Firestore production guard rails', () => {
         },
       ),
     );
+  });
+
+  it('permite leer pagos mediante collectionGroup para calcular cierre', async () => {
+    const db = authedDb('anon-manager');
+    await seed(
+      `restaurants/${RESTAURANT_ID}/orders/order-1/payments/payment-1`,
+      {
+        restaurantId: RESTAURANT_ID,
+        branchId: BRANCH_ID,
+        orderId: 'order-1',
+        cashSessionId: 'cash-1',
+        method: 'cash',
+        status: 'active',
+        baseAmount: 4136,
+      },
+    );
+
+    await assertSucceeds(getDocs(collectionGroup(db, 'payments')));
   });
 
   it('permite caja y cocina validas', async () => {
