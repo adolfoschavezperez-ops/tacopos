@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/reports/operational_blockers.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/active_session.dart';
 import '../../models/activity_event.dart';
@@ -9,7 +9,6 @@ import '../../models/employee.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
-import '../../models/pos_table.dart';
 import '../../models/product.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
@@ -35,10 +34,20 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
   final _searchController = TextEditingController();
   String _screenFilter = 'Todos';
   String _statusFilter = 'Todos';
+  late String _branchId;
+  late Stream<OperationalOpenOrdersSummary> _operationalSummary;
+  bool _refreshing = false;
 
   bool get _canControl => widget.employee.canControlLiveOperations;
   bool get _canView =>
       widget.employee.canViewLiveOperations || widget.employee.canViewAdmin;
+
+  @override
+  void initState() {
+    super.initState();
+    _branchId = AppSession.instance.currentBranchId;
+    _operationalSummary = _repository.watchOperationalOpenOrdersSummary();
+  }
 
   @override
   void dispose() {
@@ -54,6 +63,12 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
         title: 'Sin permiso',
         message: 'No tienes permiso para ver el visor operativo.',
       );
+    }
+
+    final currentBranchId = AppSession.instance.currentBranchId;
+    if (_branchId != currentBranchId) {
+      _branchId = currentBranchId;
+      _operationalSummary = _repository.watchOperationalOpenOrdersSummary();
     }
 
     return DefaultTabController(
@@ -77,9 +92,16 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                         ),
                       ),
                       IconButton.filledTonal(
-                        tooltip: 'Refrescar',
-                        onPressed: () => setState(() {}),
-                        icon: const Icon(Icons.refresh),
+                        tooltip: 'Actualizar',
+                        onPressed: _refreshing ? null : _refresh,
+                        icon: _refreshing
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.refresh),
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton.icon(
@@ -147,53 +169,142 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
               ),
             ),
           ),
-          const TabBar(
-            isScrollable: true,
-            tabs: [
-              Tab(text: 'Usuarios activos'),
-              Tab(text: 'Mesas en vivo'),
-              Tab(text: 'Cocina en vivo'),
-              Tab(text: 'Para llevar'),
-              Tab(text: 'Parados sin mesa'),
-              Tab(text: 'Intervenciones recientes'),
-            ],
-          ),
           Expanded(
-            child: TabBarView(
-              children: [
-                _UsersLiveTab(
-                  repository: _repository,
-                  search: _searchController.text,
-                  screenFilter: _screenFilter,
-                  statusFilter: _statusFilter,
-                  canControl: _canControl,
-                  onOpenOrder: _openOrderDetail,
-                ),
-                _TablesLiveTab(
-                  repository: _repository,
-                  canControl: _canControl,
-                  onOpenOrder: _openOrderDetail,
-                ),
-                _KitchenLiveTab(
-                  repository: _repository,
-                  canControl: _canControl,
-                  onOpenOrder: _openOrderDetail,
-                ),
-                _TakeoutLiveTab(
-                  repository: _repository,
-                  canControl: _canControl,
-                  onOpenOrder: _openOrderDetail,
-                ),
-                _StandingLiveTab(
-                  repository: _repository,
-                  canControl: _canControl,
-                  onOpenOrder: _openOrderDetail,
-                ),
-                _ActivityLiveTab(
-                  repository: _repository,
-                  onOpenOrder: _openOrderDetail,
-                ),
-              ],
+            child: StreamBuilder<OperationalOpenOrdersSummary>(
+              stream: _operationalSummary,
+              builder: (context, snapshot) {
+                if (snapshot.hasError) {
+                  return Center(
+                    child: GlassPanel(
+                      padding: const EdgeInsets.all(24),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.error_outline,
+                            size: 46,
+                            color: BrandColors.accentOrange,
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'No se pudo cargar el Visor operativo.',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '${snapshot.error}',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: BrandColors.textMuted,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          OutlinedButton.icon(
+                            onPressed: _refresh,
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('Reintentar'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+                if (!snapshot.hasData) {
+                  return const LoadingPanel(
+                    message: 'Cargando operación actual…',
+                  );
+                }
+                _finishRefresh();
+                final summary = snapshot.data!;
+                final reconciliation = reconcileOperationalViewer(summary);
+                return Column(
+                  children: [
+                    if (!reconciliation.valid)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 0, 18, 8),
+                        child: GlassPanel(
+                          padding: const EdgeInsets.all(12),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.warning_amber_outlined,
+                                color: BrandColors.accentOrange,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'El conteo operativo no coincide. '
+                                  'Dashboard: ${reconciliation.dashboardOpen}; '
+                                  'Visor: ${reconciliation.viewerTotal}.',
+                                ),
+                              ),
+                              TextButton.icon(
+                                onPressed: _refresh,
+                                icon: const Icon(Icons.refresh),
+                                label: const Text('Actualizar'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    TabBar(
+                      isScrollable: true,
+                      tabs: [
+                        const Tab(text: 'Usuarios activos'),
+                        Tab(text: 'Mesas (${summary.openTableCount})'),
+                        const Tab(text: 'Cocina en vivo'),
+                        Tab(text: 'Para llevar (${summary.openTakeoutCount})'),
+                        Tab(
+                          text:
+                              'Parados sin mesa (${summary.openStandingCount})',
+                        ),
+                        const Tab(text: 'Intervenciones recientes'),
+                      ],
+                    ),
+                    Expanded(
+                      child: TabBarView(
+                        children: [
+                          _UsersLiveTab(
+                            repository: _repository,
+                            search: _searchController.text,
+                            screenFilter: _screenFilter,
+                            statusFilter: _statusFilter,
+                            canControl: _canControl,
+                            onOpenOrder: _openOrderDetail,
+                          ),
+                          _TablesLiveTab(
+                            summary: summary,
+                            canControl: _canControl,
+                            onOpenOrder: _openOrderDetail,
+                          ),
+                          _KitchenLiveTab(
+                            repository: _repository,
+                            canControl: _canControl,
+                            onOpenOrder: _openOrderDetail,
+                          ),
+                          _TakeoutLiveTab(
+                            summary: summary,
+                            canControl: _canControl,
+                            onOpenOrder: _openOrderDetail,
+                          ),
+                          _StandingLiveTab(
+                            summary: summary,
+                            canControl: _canControl,
+                            onOpenOrder: _openOrderDetail,
+                          ),
+                          _ActivityLiveTab(
+                            repository: _repository,
+                            onOpenOrder: _openOrderDetail,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
         ],
@@ -210,6 +321,22 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
         canControl: _canControl,
       ),
     );
+    if (mounted) _refresh();
+  }
+
+  void _refresh() {
+    _repository.invalidateReportDataCache(branchId: _branchId);
+    setState(() {
+      _refreshing = true;
+      _operationalSummary = _repository.watchOperationalOpenOrdersSummary();
+    });
+  }
+
+  void _finishRefresh() {
+    if (!_refreshing) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _refreshing) setState(() => _refreshing = false);
+    });
   }
 
   Future<void> _cleanupInactiveSessions() async {
@@ -394,210 +521,29 @@ class _SessionCard extends StatelessWidget {
   }
 }
 
-class _TablesLiveTab extends StatefulWidget {
+class _TablesLiveTab extends StatelessWidget {
   const _TablesLiveTab({
-    required this.repository,
+    required this.summary,
     required this.canControl,
     required this.onOpenOrder,
   });
 
-  final TacoPosRepository repository;
+  final OperationalOpenOrdersSummary summary;
   final bool canControl;
   final ValueChanged<String> onOpenOrder;
 
   @override
-  State<_TablesLiveTab> createState() => _TablesLiveTabState();
-}
-
-class _TablesLiveTabState extends State<_TablesLiveTab> {
-  late String _branchId;
-  late Future<GhostOrderReconciliationResult> _reconciliation;
-  late Stream<List<PosTable>> _tables;
-
-  @override
-  void initState() {
-    super.initState();
-    _branchId = AppSession.instance.currentBranchId;
-    _setBranchStreams();
-  }
-
-  void _setBranchStreams() {
-    _reconciliation = widget.repository.reconcileGhostOrdersAndTableLinks(
-      branchId: _branchId,
-      triggeredBy: 'live_operations_tables',
-    );
-    _tables = _watchTablesAfterReconciliation();
-  }
-
-  Stream<List<PosTable>> _watchTablesAfterReconciliation() async* {
-    await _reconciliation;
-    yield* widget.repository.watchTables();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final currentBranchId = AppSession.instance.currentBranchId;
-    if (_branchId != currentBranchId) {
-      _branchId = currentBranchId;
-      _setBranchStreams();
-    }
-    return StreamBuilder<List<PosTable>>(
-      stream: _tables,
-      builder: (context, tablesSnapshot) {
-        if (tablesSnapshot.hasError) {
-          return EmptyState(
-            icon: Icons.error_outline,
-            title: 'No se pudieron revisar las mesas',
-            message: '${tablesSnapshot.error}',
-          );
-        }
-        if (!tablesSnapshot.hasData) {
-          return const LoadingPanel(message: 'Revisando mesas en vivo...');
-        }
-        return StreamBuilder<List<PosOrder>>(
-          stream: widget.repository.watchAllOrders(),
-          builder: (context, ordersSnapshot) {
-            final orders = ordersSnapshot.data ?? const <PosOrder>[];
-            final tables = tablesSnapshot.data!;
-            final visibleTables = <PosTable>[];
-            final seenOrders = <String>{};
-            for (final table in tables) {
-              final orderId = table.currentOrderId?.trim() ?? '';
-              final grouped =
-                  table.isPhysicalTable &&
-                  orderId.isNotEmpty &&
-                  tables
-                          .where(
-                            (candidate) =>
-                                candidate.currentOrderId?.trim() == orderId,
-                          )
-                          .length >
-                      1;
-              if (grouped && !seenOrders.add(orderId)) continue;
-              visibleTables.add(table);
-            }
-            return GridView.builder(
-              padding: const EdgeInsets.all(18),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 280,
-                childAspectRatio: 1.55,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-              ),
-              itemCount: visibleTables.length,
-              itemBuilder: (context, index) {
-                final table = visibleTables[index];
-                final order = getActiveOrderForTable(table.id, orders);
-                _debugLiveTableOrders(table, orders, order);
-                return _LiveTableCard(
-                  table: table,
-                  order: order,
-                  canControl: widget.canControl,
-                  onOpenOrder: order == null
-                      ? null
-                      : () => widget.onOpenOrder(order.id),
-                );
-              },
-            );
-          },
-        );
-      },
-    );
-  }
-}
-
-class _LiveTableCard extends StatelessWidget {
-  const _LiveTableCard({
-    required this.table,
-    required this.order,
-    required this.canControl,
-    required this.onOpenOrder,
-  });
-
-  final PosTable table;
-  final PosOrder? order;
-  final bool canControl;
-  final VoidCallback? onOpenOrder;
-
-  @override
-  Widget build(BuildContext context) {
-    final currentOrder = order != null && isActiveOrderForLiveTables(order!)
-        ? order
-        : null;
-    final color = currentOrder == null
-        ? BrandColors.success
-        : _statusColor(currentOrder.kitchenStatus);
-    return GlassCard(
-      accent: color,
-      onTap: onOpenOrder,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            currentOrder?.displayName ?? table.name,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 8),
-          _Pill(
-            label: currentOrder == null
-                ? 'Disponible'
-                : '${formatKitchenStatus(currentOrder.kitchenStatus)} · ${formatPaymentStatus(currentOrder.paymentStatus)}',
-            color: color,
-          ),
-          const Spacer(),
-          if (currentOrder == null)
-            const Text(
-              'Sin orden activa',
-              style: TextStyle(color: BrandColors.textMuted),
-            )
-          else ...[
-            MoneyText(
-              value: currentOrder.total,
-              style: const TextStyle(
-                color: BrandColors.accentYellow,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              canControl ? 'Click para intervenir' : 'Click para ver detalle',
-              style: const TextStyle(color: BrandColors.textMuted),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-void _debugLiveTableOrders(
-  PosTable table,
-  List<PosOrder> orders,
-  PosOrder? activeOrder,
-) {
-  if (!kDebugMode) return;
-
-  final tableOrders =
-      orders.where((order) => order.linkedTableIds.contains(table.id)).toList()
-        ..sort((a, b) {
-          final aDate =
-              a.updatedAt ??
-              a.createdAt ??
-              DateTime.fromMillisecondsSinceEpoch(0);
-          final bDate =
-              b.updatedAt ??
-              b.createdAt ??
-              DateTime.fromMillisecondsSinceEpoch(0);
-          return bDate.compareTo(aDate);
-        });
-  debugPrint(
-    "[LIVE_TABLE] mesa=${table.name} activeOrder=${activeOrder?.id ?? 'null'}",
-  );
-  for (final order in tableOrders) {
-    debugPrint(
-      '[LIVE_TABLE] mesa=${table.name} order=${order.id} '
-      'status=${order.status} paymentStatus=${order.paymentStatus} '
-      'active=${isActiveOrderForLiveTables(order)}',
+    final blockers = summary.tableBlockers;
+    return _OperationalOrdersSection(
+      title: 'Mesas',
+      counterLabel: blockers.length == 1
+          ? '1 mesa ocupada'
+          : '${blockers.length} mesas ocupadas',
+      icon: Icons.table_restaurant_outlined,
+      blockers: blockers,
+      canControl: canControl,
+      onOpenOrder: onOpenOrder,
     );
   }
 }
@@ -762,196 +708,194 @@ class _KitchenLiveCard extends StatelessWidget {
 
 class _TakeoutLiveTab extends StatelessWidget {
   const _TakeoutLiveTab({
-    required this.repository,
+    required this.summary,
     required this.canControl,
     required this.onOpenOrder,
   });
 
-  final TacoPosRepository repository;
+  final OperationalOpenOrdersSummary summary;
   final bool canControl;
   final ValueChanged<String> onOpenOrder;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<PosOrder>>(
-      stream: repository.watchOpenTakeoutOrders(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const LoadingPanel(message: 'Cargando para llevar...');
-        }
-        final orders = snapshot.data!;
-        if (orders.isEmpty) {
-          return const EmptyState(
-            icon: Icons.shopping_bag_outlined,
-            title: 'Sin pedidos para llevar',
-            message: 'No hay pedidos para llevar activos.',
-          );
-        }
-        return ListView.builder(
-          padding: const EdgeInsets.all(18),
-          itemCount: orders.length,
-          itemBuilder: (context, index) {
-            final order = orders[index];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: GlassCard(
-                accent: _statusColor(order.kitchenStatus),
-                onTap: () => onOpenOrder(order.id),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            order.displayName,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${formatKitchenStatus(order.kitchenStatus)} · ${formatPaymentStatus(order.paymentStatus)}',
-                            style: const TextStyle(
-                              color: BrandColors.textMuted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    MoneyText(value: order.total),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
+    final blockers = summary.takeoutBlockers;
+    return _OperationalOrdersSection(
+      title: 'Para llevar',
+      counterLabel: blockers.length == 1
+          ? '1 pedido activo'
+          : '${blockers.length} pedidos activos',
+      icon: Icons.shopping_bag_outlined,
+      blockers: blockers,
+      canControl: canControl,
+      onOpenOrder: onOpenOrder,
     );
   }
 }
 
 class _StandingLiveTab extends StatelessWidget {
   const _StandingLiveTab({
-    required this.repository,
+    required this.summary,
     required this.canControl,
     required this.onOpenOrder,
   });
 
-  final TacoPosRepository repository;
+  final OperationalOpenOrdersSummary summary;
   final bool canControl;
   final ValueChanged<String> onOpenOrder;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<LiveStandingOrderBundle>>(
-      stream: repository.watchOperationalStandingOrderBundles(),
-      builder: (context, snapshot) {
-        if (snapshot.hasError) {
-          return EmptyState(
-            icon: Icons.error_outline,
-            title: 'No se pudieron cargar las órdenes sin mesa',
-            message: '${snapshot.error}',
-          );
-        }
-        if (!snapshot.hasData) {
-          return const LoadingPanel(message: 'Cargando parados sin mesa...');
-        }
-        final bundles = snapshot.data!;
-        if (bundles.isEmpty) {
-          return const EmptyState(
-            icon: Icons.accessibility_new,
-            title: 'Sin órdenes de parados',
-            message: 'No hay órdenes de parados sin mesa activas.',
-          );
-        }
-        return ListView(
-          padding: const EdgeInsets.all(18),
-          children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: SectionHeader(
-                    title: 'Parados sin mesa',
-                    subtitle: 'Órdenes activas de la fecha operativa vigente.',
-                  ),
-                ),
-                _Pill(
-                  label: bundles.length == 1
-                      ? '1 orden activa'
-                      : '${bundles.length} órdenes activas',
-                  color: BrandColors.info,
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            for (final bundle in bundles) ...[
-              _StandingLiveCard(
-                bundle: bundle,
-                canControl: canControl,
-                onOpenOrder: () => onOpenOrder(bundle.order.id),
-              ),
-              const SizedBox(height: 10),
-            ],
-          ],
-        );
-      },
+    final blockers = summary.standingBlockers;
+    return _OperationalOrdersSection(
+      title: 'Parados sin mesa',
+      counterLabel: blockers.length == 1
+          ? '1 orden activa'
+          : '${blockers.length} órdenes activas',
+      icon: Icons.accessibility_new,
+      blockers: blockers,
+      canControl: canControl,
+      onOpenOrder: onOpenOrder,
     );
   }
 }
 
-class _StandingLiveCard extends StatelessWidget {
-  const _StandingLiveCard({
-    required this.bundle,
+class _OperationalOrdersSection extends StatelessWidget {
+  const _OperationalOrdersSection({
+    required this.title,
+    required this.counterLabel,
+    required this.icon,
+    required this.blockers,
     required this.canControl,
     required this.onOpenOrder,
   });
 
-  final LiveStandingOrderBundle bundle;
+  final String title;
+  final String counterLabel;
+  final IconData icon;
+  final List<OperationalOrderBlocker> blockers;
+  final bool canControl;
+  final ValueChanged<String> onOpenOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: SectionHeader(
+                title: title,
+                subtitle:
+                    'Órdenes activas de la sucursal y fecha operativa vigentes.',
+              ),
+            ),
+            _Pill(label: counterLabel, color: BrandColors.info),
+          ],
+        ),
+        const SizedBox(height: 14),
+        if (blockers.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 42),
+            child: Column(
+              children: [
+                Icon(icon, size: 40, color: BrandColors.textMuted),
+                const SizedBox(height: 10),
+                const Text(
+                  'Sin pedidos activos',
+                  style: TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          for (final blocker in blockers) ...[
+            _OperationalOrderCard(
+              blocker: blocker,
+              canControl: canControl,
+              onOpenOrder: () => onOpenOrder(blocker.order.id),
+            ),
+            const SizedBox(height: 10),
+          ],
+      ],
+    );
+  }
+}
+
+class _OperationalOrderCard extends StatelessWidget {
+  const _OperationalOrderCard({
+    required this.blocker,
+    required this.canControl,
+    required this.onOpenOrder,
+  });
+
+  final OperationalOrderBlocker blocker;
   final bool canControl;
   final VoidCallback onOpenOrder;
 
   @override
   Widget build(BuildContext context) {
-    final order = bundle.order;
-    final peopleCount = order.personNames.isEmpty
-        ? 1
-        : order.personNames.length;
+    final order = blocker.order;
+    final type = normalizeOrderType(order.orderType);
     final netTotal = order.netTotal ?? order.total;
+    final title = switch (type) {
+      'takeout' => 'Para llevar · ${order.customerDisplayName}',
+      'standing' => 'Parados sin mesa · ${order.customerDisplayName}',
+      _ => order.displayName,
+    };
+    final platform = type == 'standing'
+        ? 'En persona'
+        : (order.platformName?.trim().isNotEmpty == true
+              ? order.platformName!.trim()
+              : type == 'takeout'
+              ? 'Sin plataforma'
+              : '');
+    final icon = switch (type) {
+      'takeout' => Icons.shopping_bag_outlined,
+      'standing' => Icons.accessibility_new,
+      _ => Icons.table_restaurant_outlined,
+    };
+    final details = Wrap(
+      spacing: 14,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (platform.isNotEmpty)
+          _Pill(label: platform, color: BrandColors.info),
+        Text('Folio ${order.takeoutNumber ?? _shortId(order.id)}'),
+        Text(_dateTime(order.createdAt)),
+        Text('Total neto ${_money(netTotal)}'),
+        Text('Pagado ${_money(order.paidTotal)}'),
+        Text('Pendiente ${_money(order.pendingTotal)}'),
+        Text('${blocker.activeItemCount} items activos'),
+        _Pill(
+          label: formatKitchenStatus(order.kitchenStatus),
+          color: _statusColor(order.kitchenStatus),
+        ),
+        _Pill(
+          label: formatPaymentStatus(order.paymentStatus),
+          color: _statusColor(order.paymentStatus),
+        ),
+      ],
+    );
     return GlassCard(
       accent: _statusColor(order.kitchenStatus),
       onTap: onOpenOrder,
       child: LayoutBuilder(
         builder: (context, constraints) {
-          final compact = constraints.maxWidth < 700;
-          final details = Wrap(
-            spacing: 16,
-            runSpacing: 8,
-            children: [
-              _Pill(
-                label: formatOrderStatus(order.status),
-                color: _statusColor(order.status),
-              ),
-              _Pill(
-                label: formatKitchenStatus(order.kitchenStatus),
-                color: _statusColor(order.kitchenStatus),
-              ),
-              Text('Folio ${_shortId(order.id)}'),
-              Text(_dateTime(order.createdAt)),
-              Text('Total ${_money(netTotal)}'),
-              Text('Pendiente ${_money(order.pendingTotal)}'),
-              Text(peopleCount == 1 ? '1 persona' : '$peopleCount personas'),
-            ],
-          );
+          final compact = constraints.maxWidth < 760;
           final heading = Row(
             children: [
-              const Icon(Icons.accessibility_new, color: BrandColors.info),
+              Icon(icon, color: BrandColors.info),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  order.customerDisplayName,
-                  maxLines: 1,
+                  title,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontSize: 18,
@@ -961,38 +905,30 @@ class _StandingLiveCard extends StatelessWidget {
               ),
             ],
           );
+          final action = OutlinedButton.icon(
+            onPressed: onOpenOrder,
+            icon: const Icon(Icons.open_in_new),
+            label: Text(canControl ? 'Intervenir' : 'Ver detalle'),
+          );
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 heading,
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 details,
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    canControl ? 'Intervenir' : 'Ver detalle',
-                    style: const TextStyle(
-                      color: BrandColors.textMuted,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerRight, child: action),
               ],
             );
           }
           return Row(
             children: [
-              SizedBox(width: 230, child: heading),
+              SizedBox(width: 250, child: heading),
               const SizedBox(width: 18),
               Expanded(child: details),
               const SizedBox(width: 12),
-              IconButton(
-                tooltip: canControl ? 'Intervenir' : 'Ver detalle',
-                onPressed: onOpenOrder,
-                icon: const Icon(Icons.open_in_new),
-              ),
+              action,
             ],
           );
         },
@@ -1311,6 +1247,9 @@ class _LiveOrderDetail extends StatelessWidget {
     final activePayments = payments
         .where((payment) => payment.isActive)
         .toList();
+    final peopleCount = order.personNames.isEmpty
+        ? 1
+        : order.personNames.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1351,6 +1290,24 @@ class _LiveOrderDetail extends StatelessWidget {
               _Pill(
                 label: 'Creada ${_dateTime(order.createdAt!)}',
                 color: BrandColors.info,
+              ),
+            _Pill(
+              label: peopleCount == 1 ? '1 persona' : '$peopleCount personas',
+              color: BrandColors.info,
+            ),
+            if (isStandingOrder(order) || isTakeoutOrder(order))
+              _Pill(
+                label: isStandingOrder(order)
+                    ? 'En persona'
+                    : (order.platformName?.trim().isNotEmpty == true
+                          ? order.platformName!.trim()
+                          : 'Sin plataforma'),
+                color: BrandColors.info,
+              ),
+            if (order.explicitDiscount > 0.01)
+              _Pill(
+                label: 'Descuento ${_money(order.explicitDiscount)}',
+                color: BrandColors.accentOrange,
               ),
           ],
         ),
@@ -1896,6 +1853,9 @@ String _dateTime(DateTime? date) {
 String _liveOrderTitle(PosOrder order) {
   if (isStandingOrder(order)) {
     return 'Parados sin mesa · ${order.customerDisplayName}';
+  }
+  if (isTakeoutOrder(order)) {
+    return 'Para llevar · ${order.customerDisplayName}';
   }
   return order.displayName;
 }

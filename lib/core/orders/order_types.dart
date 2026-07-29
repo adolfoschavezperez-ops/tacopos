@@ -25,6 +25,22 @@ String normalizeOrderTypeName(Object? value) {
       .replaceAll('\u00f1', 'n');
 }
 
+String normalizeOrderType(Object? value) {
+  final normalized = normalizeOrderTypeName(
+    value,
+  ).replaceAll(RegExp(r'[\s-]+'), '_');
+  return switch (normalized) {
+    'dine_in' || 'dinein' || 'table' || 'mesa' => 'table',
+    'takeout' || 'take_out' || 'takeaway' || 'para_llevar' => takeoutOrderType,
+    'standing' ||
+    'standing_no_table' ||
+    'walk_in_standing' ||
+    'parado' ||
+    'parados_sin_mesa' => standingOrderType,
+    _ => normalized,
+  };
+}
+
 OrderPlatform? findInPersonPlatform(Iterable<OrderPlatform> platforms) {
   for (final platform in platforms) {
     if (normalizeOrderTypeName(platform.name) == 'en persona') {
@@ -34,12 +50,14 @@ OrderPlatform? findInPersonPlatform(Iterable<OrderPlatform> platforms) {
   return null;
 }
 
-bool isStandingOrder(PosOrder order) => order.orderType == standingOrderType;
+bool isStandingOrder(PosOrder order) =>
+    normalizeOrderType(order.orderType) == standingOrderType;
 
-bool isTakeoutOrder(PosOrder order) => order.orderType == takeoutOrderType;
+bool isTakeoutOrder(PosOrder order) =>
+    normalizeOrderType(order.orderType) == takeoutOrderType;
 
 bool isDineInOrder(PosOrder order) {
-  return const {dineInOrderType, 'table'}.contains(order.orderType);
+  return normalizeOrderType(order.orderType) == 'table';
 }
 
 bool isTakeoutEntryTableType(String type) {
@@ -66,8 +84,10 @@ List<PosTable> tablesStillLinkedToOrder(
 
 List<String> linkedTableIdsForOrderData(Map<String, dynamic>? data) {
   if (data == null) return const [];
-  final orderType = data['orderType']?.toString() ?? dineInOrderType;
-  if (!const {dineInOrderType, 'table'}.contains(orderType)) return const [];
+  final orderType = normalizeOrderType(
+    data['orderType']?.toString() ?? dineInOrderType,
+  );
+  if (orderType != 'table') return const [];
   final tableIds = (data['tableIds'] as List?)
       ?.map((value) => value.toString().trim())
       .where((value) => value.isNotEmpty)

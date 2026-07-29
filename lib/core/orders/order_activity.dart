@@ -27,7 +27,12 @@ const _paidStatuses = {
 
 const _activeOrderStatuses = {
   'open',
+  'opened',
+  'pending',
+  'active',
   'abierta',
+  'abierto',
+  'pendiente',
   'sent',
   'enviada',
   'cooking',

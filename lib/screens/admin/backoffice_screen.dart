@@ -1069,11 +1069,13 @@ class _DashboardSection extends StatelessWidget {
   Widget build(BuildContext context) {
     final paidOrders = orders.where((order) => order.status == 'paid').toList();
     final openOrders = orders.where((order) {
-      return isOperationalOrderActive(
-        order: order,
-        items: reportData.itemsByOrder[order.id] ?? const [],
-        payments: reportData.paymentsByOrder[order.id] ?? const [],
-      );
+      return evaluateOperationalOrderBlocker(
+            order: order,
+            items: reportData.itemsByOrder[order.id] ?? const [],
+            payments: reportData.paymentsByOrder[order.id] ?? const [],
+            belongsToBranchAndDate: true,
+          ) !=
+          null;
     }).toList();
     final partialOrders = orders
         .where((order) => order.paymentStatus == 'partial')

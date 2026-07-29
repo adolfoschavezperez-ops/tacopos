@@ -3965,7 +3965,33 @@ class TacoPosRepository {
     }
   }
 
-  Stream<List<PosOrder>> _watchOrdersForOperationalDate(String businessDate) {
+  Stream<OperationalOpenOrdersSummary>
+  watchOperationalOpenOrdersSummary() async* {
+    final branchId = AppSession.instance.currentBranchId;
+    final cashSession = await getOpenCashSession();
+    final businessDate =
+        cashSession?.businessDate ?? await currentKitchenBusinessDate();
+    await reconcileGhostOrdersAndTableLinks(
+      branchId: branchId,
+      businessDate: businessDate,
+      triggeredBy: 'live_operations_viewer',
+    );
+    await for (final _ in _watchOrdersForOperationalDate(
+      businessDate,
+      cashSessionId: cashSession?.id,
+    )) {
+      yield await getOperationalOpenOrdersSummary(
+        businessDate: businessDate,
+        cashSessionId: cashSession?.id,
+        forceRefresh: true,
+      );
+    }
+  }
+
+  Stream<List<PosOrder>> _watchOrdersForOperationalDate(
+    String businessDate, {
+    String? cashSessionId,
+  }) {
     late StreamController<List<PosOrder>> controller;
     final subscriptions =
         <StreamSubscription<QuerySnapshot<Map<String, dynamic>>>>[];
@@ -4001,6 +4027,12 @@ class TacoPosRepository {
           'operationalDate',
           _ordersRef.where('operationalDate', isEqualTo: businessDate),
         );
+        if (cashSessionId?.trim().isNotEmpty == true) {
+          listenTo(
+            'cashSessionId',
+            _ordersRef.where('cashSessionId', isEqualTo: cashSessionId!.trim()),
+          );
+        }
       },
       onCancel: () async {
         for (final subscription in subscriptions) {
@@ -6622,6 +6654,7 @@ class TacoPosRepository {
     String? businessDate,
     String? cashSessionId,
     bool reconcileTables = false,
+    bool forceRefresh = false,
   }) async {
     final branchId = AppSession.instance.currentBranchId;
     final effectiveBusinessDate = businessDate?.trim().isNotEmpty == true
@@ -6639,6 +6672,7 @@ class TacoPosRepository {
       startBusinessDate: effectiveBusinessDate,
       endBusinessDate: effectiveBusinessDate,
       includeItems: true,
+      forceRefresh: forceRefresh,
       reportName: 'OperationalOpenOrders',
     );
     final linkedSnapshot = cashSessionId?.trim().isNotEmpty == true
@@ -6740,6 +6774,7 @@ class TacoPosRepository {
       blockers: blockers,
     );
     _debugOperationalBlockers(summary);
+    _debugOperationalViewer(summary);
     return summary;
   }
 
@@ -8230,6 +8265,45 @@ class TacoPosRepository {
     );
   }
 
+  void _debugOperationalViewer(OperationalOpenOrdersSummary summary) {
+    if (!kDebugMode) return;
+    for (final blocker in summary.blockers) {
+      final order = blocker.order;
+      developer.log(
+        'OPERATIONAL_ORDER_DIAGNOSTIC '
+        'orderId=${order.id} '
+        'folio=${order.takeoutNumber ?? order.id} '
+        'orderType=${order.orderType} '
+        'canonicalType=${normalizeOrderType(order.orderType)} '
+        'dashboardActive=true '
+        'operationalViewerIncluded=true '
+        'exclusionReason=none '
+        'businessDate=${order.businessDate ?? order.operationalDate ?? ''} '
+        'cashSessionId=${order.cashSessionId ?? ''} '
+        'branchId=${order.branchId} '
+        'status=${order.status} '
+        'paymentStatus=${order.paymentStatus} '
+        'pendingTotal=${order.pendingTotal} '
+        'activeItems=${blocker.activeItemCount} '
+        'reason=${blocker.reason}',
+        name: 'TacoPOS.operationalViewer',
+      );
+    }
+    final reconciliation = reconcileOperationalViewer(summary);
+    developer.log(
+      'OPERATIONAL_VIEWER_RECONCILIATION '
+      'dashboardOpen=${reconciliation.dashboardOpen} '
+      'viewerTables=${reconciliation.viewerTables} '
+      'viewerTakeout=${reconciliation.viewerTakeout} '
+      'viewerStanding=${reconciliation.viewerStanding} '
+      'viewerTotal=${reconciliation.viewerTotal} '
+      'difference=${reconciliation.difference} '
+      'valid=${reconciliation.valid}',
+      name: 'TacoPOS.operationalViewer',
+      level: reconciliation.valid ? 0 : 900,
+    );
+  }
+
   String _productStockOutId(
     String branchId,
     String businessDate,
@@ -8423,6 +8497,11 @@ class TacoPosRepository {
 
     final doc = await orderRef.get();
     final order = PosOrder.fromDoc(doc);
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
     developer.log(
       '[TacoPOS][openTable] created new orderId=${order.id} '
       'tableId=${order.tableId} path=restaurants/${AppConstants.restaurantId}/orders/${order.id}',
@@ -8510,7 +8589,13 @@ class TacoPosRepository {
 
     await orderRef.set(data);
     final doc = await orderRef.get();
-    return PosOrder.fromDoc(doc);
+    final order = PosOrder.fromDoc(doc);
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
+    return order;
   }
 
   Future<PosOrder> createStandingOrder({required String customerName}) async {
@@ -8552,7 +8637,13 @@ class TacoPosRepository {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
-    return PosOrder.fromDoc(await orderRef.get());
+    final order = PosOrder.fromDoc(await orderRef.get());
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
+    return order;
   }
 
   Future<PosOrder> joinTables(List<PosTable> selectedTables) async {
@@ -9403,6 +9494,11 @@ class TacoPosRepository {
       data: {'reason': cleanReason, 'total': order.total},
     );
     await batch.commit();
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
   }
 
   Future<void> cancelEmptyOrder(String orderId) async {
@@ -9445,6 +9541,11 @@ class TacoPosRepository {
     _setLinkedTablesStateInBatch(batch, order, release: true);
 
     await batch.commit();
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
   }
 
   Future<int> sendOrderToKitchen(String orderId) async {
@@ -9536,6 +9637,11 @@ class TacoPosRepository {
     }
 
     await batch.commit();
+    invalidateReportDataCache(
+      branchId: order?.branchId,
+      startBusinessDate: order?.businessDate,
+      endBusinessDate: order?.businessDate,
+    );
     return sentCount;
   }
 

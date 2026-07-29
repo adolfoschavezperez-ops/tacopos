@@ -2,6 +2,7 @@ import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
 import '../orders/order_activity.dart';
+import '../orders/order_types.dart';
 
 class OperationalOrderBlocker {
   const OperationalOrderBlocker({
@@ -38,12 +39,21 @@ class OperationalOpenOrdersSummary {
   final int releasedTableLinks;
   final List<OperationalOrderBlocker> blockers;
 
-  int get openTableCount =>
-      blockers.where((row) => row.order.orderType == 'dine_in').length;
-  int get openTakeoutCount =>
-      blockers.where((row) => row.order.orderType == 'takeout').length;
-  int get openStandingCount =>
-      blockers.where((row) => row.order.orderType == 'standing').length;
+  List<OperationalOrderBlocker> get tableBlockers => blockers
+      .where((row) => normalizeOrderType(row.order.orderType) == 'table')
+      .toList(growable: false);
+  List<OperationalOrderBlocker> get takeoutBlockers => blockers
+      .where((row) => normalizeOrderType(row.order.orderType) == 'takeout')
+      .toList(growable: false);
+  List<OperationalOrderBlocker> get standingBlockers => blockers
+      .where((row) => normalizeOrderType(row.order.orderType) == 'standing')
+      .toList(growable: false);
+
+  int get openTableCount => tableBlockers.length;
+  int get openTakeoutCount => takeoutBlockers.length;
+  int get openStandingCount => standingBlockers.length;
+  int get viewerOrderCount =>
+      openTableCount + openTakeoutCount + openStandingCount;
   int get pendingPaymentCount => blockers
       .where(
         (row) =>
@@ -52,6 +62,35 @@ class OperationalOpenOrdersSummary {
       )
       .length;
   bool get hasBlockers => blockers.isNotEmpty;
+}
+
+class OperationalViewerReconciliation {
+  const OperationalViewerReconciliation({
+    required this.dashboardOpen,
+    required this.viewerTables,
+    required this.viewerTakeout,
+    required this.viewerStanding,
+  });
+
+  final int dashboardOpen;
+  final int viewerTables;
+  final int viewerTakeout;
+  final int viewerStanding;
+
+  int get viewerTotal => viewerTables + viewerTakeout + viewerStanding;
+  int get difference => dashboardOpen - viewerTotal;
+  bool get valid => difference == 0;
+}
+
+OperationalViewerReconciliation reconcileOperationalViewer(
+  OperationalOpenOrdersSummary summary,
+) {
+  return OperationalViewerReconciliation(
+    dashboardOpen: summary.blockers.length,
+    viewerTables: summary.openTableCount,
+    viewerTakeout: summary.openTakeoutCount,
+    viewerStanding: summary.openStandingCount,
+  );
 }
 
 OperationalOrderBlocker? evaluateOperationalOrderBlocker({
