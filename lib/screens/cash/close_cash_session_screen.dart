@@ -27,7 +27,7 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
   final _terminalFocusNode = FocusNode();
   final _notesFocusNode = FocusNode();
   final _closeGuard = CashCloseExecutionGuard();
-  final _progressStage = ValueNotifier(CashCloseProgressStage.validating);
+  final _progressStage = ValueNotifier(CashCloseProgressStage.validatingOrders);
   BuildContext? _progressDialogContext;
   Future<void>? _progressDialogFuture;
 
@@ -45,8 +45,8 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
     super.dispose();
   }
 
-  double _amount(TextEditingController controller) {
-    return double.tryParse(controller.text.trim().replaceAll(',', '.')) ?? 0;
+  double? _amount(TextEditingController controller) {
+    return double.tryParse(controller.text.trim().replaceAll(',', '.'));
   }
 
   Future<void> _confirmClose() async {
@@ -59,9 +59,26 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
     try {
       final countedCash = _amount(_countedCashController);
       final terminalReported = _amount(_terminalController);
-      await _showProgressDialog(CashCloseProgressStage.validating);
+      if (countedCash == null || !isValidCashCloseAmount(countedCash)) {
+        throw ArgumentError('Captura un efectivo contado valido.');
+      }
+      if (terminalReported == null ||
+          !isValidCashCloseAmount(terminalReported)) {
+        throw ArgumentError('Captura una terminal bancaria valida.');
+      }
 
-      final blockers = await _repository.cashCloseBlockers(widget.session.id);
+      await _showProgressDialog(CashCloseProgressStage.validatingOrders);
+
+      final blockers = await _repository.cashCloseBlockers(
+        widget.session.id,
+        onStageChanged: (stage) {
+          _closeGuard.markStage(stage);
+          _progressStage.value = stage;
+          if (mounted) {
+            setState(() {});
+          }
+        },
+      );
       await _dismissProgressDialog();
       if (!mounted) {
         return;
@@ -109,12 +126,19 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
 
       _closeGuard.markSaving();
       setState(() {});
-      await _showProgressDialog(CashCloseProgressStage.saving);
+      await _showProgressDialog(CashCloseProgressStage.updatingCashSession);
       final result = await _repository.closeCashSession(
         cashSessionId: widget.session.id,
         countedCashAmount: countedCash,
         terminalReportedAmount: terminalReported,
         notes: _notesController.text,
+        onStageChanged: (stage) {
+          _closeGuard.markStage(stage);
+          _progressStage.value = stage;
+          if (mounted) {
+            setState(() {});
+          }
+        },
       );
       await _dismissProgressDialog();
       if (!mounted) {
@@ -123,15 +147,20 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
       Navigator.pop(context, result);
     } catch (error, stackTrace) {
       await _dismissProgressDialog();
-      debugPrint(
-        'Error al cerrar caja ${widget.session.id}: $error\n$stackTrace',
+      debugPrintCashCloseFailure(
+        error: error,
+        stackTrace: stackTrace,
+        businessDate: widget.session.businessDate,
+        cashSessionId: widget.session.id,
+        countedCashAmount: _amount(_countedCashController),
+        terminalReportedAmount: _amount(_terminalController),
       );
       if (!mounted) {
         return;
       }
       showAppSnackBar(
         context,
-        _closeErrorText(error),
+        cashCloseErrorMessage(error),
         type: AppSnackBarType.error,
       );
     } finally {
@@ -144,10 +173,13 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
   }
 
   Future<void> _showProgressDialog(CashCloseProgressStage stage) async {
-    if (!mounted || _progressDialogFuture != null) {
+    if (!mounted) {
       return;
     }
     _progressStage.value = stage;
+    if (_progressDialogFuture != null) {
+      return;
+    }
     final dialogFuture = showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -169,20 +201,6 @@ class _CloseCashSessionScreenState extends State<CloseCashSessionScreen> {
       Navigator.of(dialogContext).pop();
     }
     await dialogFuture;
-  }
-
-  String _closeErrorText(Object error) {
-    if (error is StateError || error is ArgumentError) {
-      return _errorText(error);
-    }
-    return 'No se pudo grabar el corte. Revisa tu conexión e inténtalo nuevamente.';
-  }
-
-  String _errorText(Object error) {
-    return error
-        .toString()
-        .replaceFirst('Bad state: ', '')
-        .replaceFirst('Invalid argument(s): ', '');
   }
 
   @override

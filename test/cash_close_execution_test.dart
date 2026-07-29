@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/cash/cash_close_execution.dart';
@@ -73,10 +74,13 @@ void main() {
       final guard = CashCloseExecutionGuard();
 
       expect(guard.tryStart(), isTrue);
-      expect(guard.stage, CashCloseProgressStage.validating);
+      expect(guard.stage, CashCloseProgressStage.validatingOrders);
 
       guard.markSaving();
-      expect(guard.stage, CashCloseProgressStage.saving);
+      expect(guard.stage, CashCloseProgressStage.updatingCashSession);
+
+      guard.markStage(CashCloseProgressStage.registeringActivityLog);
+      expect(guard.stage, CashCloseProgressStage.registeringActivityLog);
 
       guard.release();
       expect(guard.stage, isNull);
@@ -104,10 +108,84 @@ void main() {
     });
   });
 
+  group('cash close error messages', () {
+    test('maps permission denied without calling it a connection issue', () {
+      final message = cashCloseErrorMessage(
+        FirebaseException(
+          plugin: 'cloud_firestore',
+          code: 'permission-denied',
+          message: 'Missing or insufficient permissions.',
+        ),
+      );
+
+      expect(message, contains('No tienes permiso para grabar el corte'));
+      expect(message, isNot(contains('conexion')));
+    });
+
+    test('maps unavailable to the connection message', () {
+      final message = cashCloseErrorMessage(
+        FirebaseException(
+          plugin: 'cloud_firestore',
+          code: 'unavailable',
+          message: 'Service unavailable.',
+        ),
+      );
+
+      expect(message, contains('No hay conexion con Firebase'));
+    });
+
+    test('maps not-found to the session-specific message', () {
+      final message = cashCloseErrorMessage(
+        FirebaseException(
+          plugin: 'cloud_firestore',
+          code: 'not-found',
+          message: 'Document not found.',
+        ),
+      );
+
+      expect(
+        message,
+        'No se encontro la sesion de caja que se intento cerrar.',
+      );
+    });
+
+    test('unwraps cash close diagnostics before presenting the message', () {
+      final message = cashCloseErrorMessage(
+        CashCloseException(
+          stage: CashCloseProgressStage.updatingCashSession,
+          operation: 'update_cash_session',
+          documentPath: 'restaurants/tacopos/cashSessions/cash-1',
+          cause: FirebaseException(
+            plugin: 'cloud_firestore',
+            code: 'failed-precondition',
+            message: 'Index missing.',
+          ),
+          stackTrace: StackTrace.empty,
+        ),
+      );
+
+      expect(message, contains('configuracion o indice requerido'));
+    });
+  });
+
+  group('cash close amount serialization guard', () {
+    test('accepts real case finite amounts', () {
+      expect(isValidCashCloseAmount(4136), isTrue);
+      expect(isValidCashCloseAmount(557), isTrue);
+    });
+
+    test('rejects non serializable monetary values', () {
+      expect(isValidCashCloseAmount(double.nan), isFalse);
+      expect(isValidCashCloseAmount(double.infinity), isFalse);
+      expect(isValidCashCloseAmount(double.negativeInfinity), isFalse);
+      expect(isValidCashCloseAmount(-1), isFalse);
+    });
+  });
+
   testWidgets('progress modal updates stage and blocks dismiss actions', (
     tester,
   ) async {
-    final stage = ValueNotifier(CashCloseProgressStage.validating);
+    final stage = ValueNotifier(CashCloseProgressStage.validatingOrders);
     late BuildContext hostContext;
 
     await tester.pumpWidget(
@@ -136,23 +214,20 @@ void main() {
     await tester.tap(find.text('Close cash'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('Validando cierre de caja'), findsOneWidget);
+    expect(find.text('Validando ordenes abiertas'), findsOneWidget);
 
     await tester.tapAt(const Offset(4, 4));
     await tester.pump();
-    expect(find.text('Validando cierre de caja'), findsOneWidget);
+    expect(find.text('Validando ordenes abiertas'), findsOneWidget);
 
     await tester.binding.handlePopRoute();
     await tester.pump();
-    expect(find.text('Validando cierre de caja'), findsOneWidget);
+    expect(find.text('Validando ordenes abiertas'), findsOneWidget);
 
-    stage.value = CashCloseProgressStage.saving;
+    stage.value = CashCloseProgressStage.updatingCashSession;
     await tester.pump();
-    expect(find.text('Grabando corte'), findsOneWidget);
-    expect(
-      find.text('Espera un momento. Estamos guardando el cierre de caja.'),
-      findsOneWidget,
-    );
+    expect(find.text('Grabando sesion de caja'), findsOneWidget);
+    expect(find.text('Grabando sesion de caja...'), findsOneWidget);
 
     Navigator.of(hostContext, rootNavigator: true).pop();
     await tester.pumpAndSettle();

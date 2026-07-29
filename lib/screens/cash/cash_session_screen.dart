@@ -30,7 +30,7 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
   late DateTime _selectedDate;
   bool _opening = false;
   final _closeGuard = CashCloseExecutionGuard();
-  final _progressStage = ValueNotifier(CashCloseProgressStage.validating);
+  final _progressStage = ValueNotifier(CashCloseProgressStage.validatingOrders);
   BuildContext? _progressDialogContext;
   Future<void>? _progressDialogFuture;
 
@@ -221,7 +221,13 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
       if (!mounted) {
         return;
       }
-      _showMessage(_closeErrorText(error), type: AppSnackBarType.error);
+      debugPrintCashCloseFailure(
+        error: error,
+        stackTrace: stackTrace,
+        businessDate: session.businessDate,
+        cashSessionId: session.id,
+      );
+      _showMessage(cashCloseErrorMessage(error), type: AppSnackBarType.error);
     } finally {
       await _dismissProgressDialog();
       _closeGuard.release();
@@ -235,7 +241,7 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
     if (!mounted || _progressDialogFuture != null) {
       return;
     }
-    _progressStage.value = CashCloseProgressStage.validating;
+    _progressStage.value = CashCloseProgressStage.validatingOrders;
     final dialogFuture = showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -278,13 +284,6 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
     AppSnackBarType type = AppSnackBarType.success,
   }) {
     showAppSnackBar(context, message, type: type);
-  }
-
-  String _closeErrorText(Object error) {
-    if (error is StateError || error is ArgumentError) {
-      return _errorText(error);
-    }
-    return 'No se pudo grabar el corte. Revisa tu conexión e inténtalo nuevamente.';
   }
 
   String _errorText(Object error) {

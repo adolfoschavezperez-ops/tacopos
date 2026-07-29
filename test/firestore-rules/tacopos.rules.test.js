@@ -133,6 +133,65 @@ describe('TacoPOS Firestore production guard rails', () => {
     );
   });
 
+  it('permite cerrar cashSession con campos de cierre y registrar activityLog', async () => {
+    const db = authedDb('anon-manager');
+    await seed(`restaurants/${RESTAURANT_ID}/cashSessions/cash-close`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      businessDate: '2026-07-28',
+      status: 'open',
+      openingCashAmount: 0,
+      countedCashAmount: 0,
+      terminalReportedAmount: 0,
+    });
+
+    await assertSucceeds(
+      updateDoc(doc(db, `restaurants/${RESTAURANT_ID}/cashSessions/cash-close`), {
+        status: 'closed',
+        countedCashAmount: 4136,
+        terminalReportedAmount: 557,
+        expectedCashAmount: 4100,
+        expectedCardChargedAmount: 557,
+        expectedCardBaseAmount: 557,
+        expectedCardSurchargeAmount: 0,
+        expectedCardFeeAbsorbedAmount: 0,
+        expectedPlatformAmount: 0,
+        expectedEmployeeConsumptionAmount: 0,
+        approvedWithdrawalsTotal: 0,
+        pendingWithdrawalsTotal: 0,
+        withdrawalRequestCount: 0,
+        totalExpectedRealMoney: 4657,
+        totalCountedRealMoney: 4693,
+        cashDifference: 36,
+        cardDifference: 0,
+        netDifference: 36,
+        shortageAmount: 0,
+        overAmount: 36,
+        notes: '',
+        closedAt: new Date('2026-07-29T06:12:00.000Z'),
+        closedByEmployeeId: 'cashier-1',
+        closedByEmployeeName: 'Caja',
+        updatedAt: new Date('2026-07-29T06:12:00.000Z'),
+      }),
+    );
+
+    await assertSucceeds(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/activityLog/log-close`), {
+        type: 'cash_close_shortage',
+        restaurantId: RESTAURANT_ID,
+        branchId: BRANCH_ID,
+        cashSessionId: 'cash-close',
+        businessDate: '2026-07-28',
+        shortageAmount: 12,
+        netDifference: -12,
+        createdByEmployeeId: 'cashier-1',
+        createdByEmployeeName: 'Caja',
+        createdAt: new Date('2026-07-29T06:12:00.000Z'),
+        createdBy: 'anon-manager',
+      }),
+    );
+  });
+
   it('documenta que permisos por empleado requieren uid vinculado', async () => {
     await seed(`restaurants/${RESTAURANT_ID}/employees/waiter`, {
       active: true,

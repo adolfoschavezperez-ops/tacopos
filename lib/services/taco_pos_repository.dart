@@ -6256,13 +6256,19 @@ class TacoPosRepository {
     });
   }
 
-  Future<CashCloseBlockers> cashCloseBlockers(String cashSessionId) async {
+  Future<CashCloseBlockers> cashCloseBlockers(
+    String cashSessionId, {
+    void Function(CashCloseProgressStage stage)? onStageChanged,
+  }) async {
     final sessionDoc = await _cashSessionsRef.doc(cashSessionId).get();
     if (!sessionDoc.exists) {
       throw StateError('La caja ya no existe.');
     }
     final session = CashSession.fromDoc(sessionDoc);
-    return _cashCloseBlockersForSession(session);
+    return _cashCloseBlockersForSession(
+      session,
+      onStageChanged: onStageChanged,
+    );
   }
 
   Future<GhostOrderReconciliationResult> reconcileGhostOrdersAndTableLinks({
@@ -6598,13 +6604,16 @@ class TacoPosRepository {
   }
 
   Future<CashCloseBlockers> _cashCloseBlockersForSession(
-    CashSession session,
-  ) async {
+    CashSession session, {
+    void Function(CashCloseProgressStage stage)? onStageChanged,
+  }) async {
+    onStageChanged?.call(CashCloseProgressStage.validatingOrders);
     final operationalSummary = await getOperationalOpenOrdersSummary(
       businessDate: session.businessDate,
       cashSessionId: session.id,
       reconcileTables: true,
     );
+    onStageChanged?.call(CashCloseProgressStage.validatingKitchen);
     var pendingKitchenItemCount = 0;
     for (final blocker in operationalSummary.blockers) {
       final itemsSnapshot = await _ordersRef
@@ -6778,19 +6787,48 @@ class TacoPosRepository {
     return summary;
   }
 
+  Future<T> _cashCloseStage<T>({
+    required CashCloseProgressStage stage,
+    required String operation,
+    required String documentPath,
+    required Future<T> Function() action,
+    void Function(CashCloseProgressStage stage)? onStageChanged,
+  }) async {
+    onStageChanged?.call(stage);
+    try {
+      return await action();
+    } catch (error, stackTrace) {
+      throw CashCloseException(
+        stage: stage,
+        operation: operation,
+        documentPath: documentPath,
+        cause: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
   Future<CashSession> closeCashSession({
     required String cashSessionId,
     required double countedCashAmount,
     required double terminalReportedAmount,
     required String notes,
+    void Function(CashCloseProgressStage stage)? onStageChanged,
   }) async {
     _requireCashManager();
-    if (countedCashAmount < 0 || terminalReportedAmount < 0) {
-      throw ArgumentError('Los montos de cierre no pueden ser negativos.');
+    if (!isValidCashCloseAmount(countedCashAmount) ||
+        !isValidCashCloseAmount(terminalReportedAmount)) {
+      throw ArgumentError('Los montos de cierre deben ser numeros validos.');
     }
 
     final docRef = _cashSessionsRef.doc(cashSessionId);
-    final doc = await docRef.get();
+    final doc = await _cashCloseStage(
+      stage: CashCloseProgressStage.validatingOrders,
+      operation: 'read_cash_session',
+      documentPath: docRef.path,
+      onStageChanged: onStageChanged,
+      action: docRef.get,
+    );
     if (!doc.exists) {
       throw StateError('La caja ya no existe.');
     }
@@ -6803,14 +6841,27 @@ class TacoPosRepository {
       throw StateError('Esta caja ya fue cerrada.');
     }
 
-    final blockers = await _cashCloseBlockersForSession(session);
+    final blockers = await _cashCloseStage(
+      stage: CashCloseProgressStage.validatingOrders,
+      operation: 'validate_cash_close_blockers',
+      documentPath: docRef.path,
+      onStageChanged: onStageChanged,
+      action: () =>
+          _cashCloseBlockersForSession(session, onStageChanged: onStageChanged),
+    );
     if (!blockers.canClose) {
       throw StateError('${blockers.message}\n${blockers.detail}');
     }
 
-    final pendingWithdrawals = await _pendingCashWithdrawalRequestsForClose(
-      cashSessionId: cashSessionId,
-      businessDate: session.businessDate,
+    final pendingWithdrawals = await _cashCloseStage(
+      stage: CashCloseProgressStage.validatingOrders,
+      operation: 'validate_pending_withdrawals',
+      documentPath: _cashWithdrawalRequestsRef.path,
+      onStageChanged: onStageChanged,
+      action: () => _pendingCashWithdrawalRequestsForClose(
+        cashSessionId: cashSessionId,
+        businessDate: session.businessDate,
+      ),
     );
     if (pendingWithdrawals.isNotEmpty) {
       throw StateError(
@@ -6818,7 +6869,13 @@ class TacoPosRepository {
       );
     }
 
-    final totals = await _cashSessionTotalsOnce(cashSessionId);
+    final totals = await _cashCloseStage(
+      stage: CashCloseProgressStage.calculating,
+      operation: 'calculate_cash_totals',
+      documentPath: docRef.path,
+      onStageChanged: onStageChanged,
+      action: () => _cashSessionTotalsOnce(cashSessionId),
+    );
     final totalCountedRealMoney = totals.totalCountedRealMoney(
       countedCashAmount: countedCashAmount,
       terminalReportedAmount: terminalReportedAmount,
@@ -6870,38 +6927,67 @@ class TacoPosRepository {
       'overAmount': overAmount,
       'notes': notes.trim(),
     };
-    final shortageActivityRef = netDifference < 0
-        ? _restaurantRef.collection('activityLog').doc()
-        : null;
-    await _db.runTransaction((transaction) async {
-      final freshDoc = await transaction.get(docRef);
-      if (!freshDoc.exists) {
-        throw StateError('La caja ya no existe.');
-      }
-      final freshSession = CashSession.fromDoc(freshDoc);
-      if (!canFinalizeCashSessionClose(
-        status: freshSession.status,
-        hasClosedAt: freshSession.closedAt != null,
-      )) {
-        throw StateError('Esta caja ya fue cerrada.');
-      }
-      transaction.update(docRef, closeData);
-      if (shortageActivityRef != null) {
-        transaction.set(shortageActivityRef, {
-          'type': 'cash_close_shortage',
-          ..._currentBranchFields,
-          'cashSessionId': cashSessionId,
-          'businessDate': session.businessDate,
-          'shortageAmount': shortageAmount,
-          'netDifference': netDifference,
-          ..._employeeAuditFields(prefix: 'createdBy'),
-          'createdAt': FieldValue.serverTimestamp(),
-          'createdBy': _auth.currentUser?.uid ?? 'anonymous',
-        });
-      }
-    });
+    _validateCashCloseFirestoreData(closeData);
+    await _cashCloseStage(
+      stage: CashCloseProgressStage.updatingCashSession,
+      operation: 'update_cash_session',
+      documentPath: docRef.path,
+      onStageChanged: onStageChanged,
+      action: () => _db.runTransaction((transaction) async {
+        final freshDoc = await transaction.get(docRef);
+        if (!freshDoc.exists) {
+          throw StateError('La caja ya no existe.');
+        }
+        final freshSession = CashSession.fromDoc(freshDoc);
+        if (!canFinalizeCashSessionClose(
+          status: freshSession.status,
+          hasClosedAt: freshSession.closedAt != null,
+        )) {
+          throw StateError('Esta caja ya fue cerrada.');
+        }
+        transaction.update(docRef, closeData);
+      }),
+    );
 
-    final updatedDoc = await docRef.get();
+    if (netDifference < 0) {
+      final activityRef = _restaurantRef.collection('activityLog').doc();
+      try {
+        await _cashCloseStage(
+          stage: CashCloseProgressStage.registeringActivityLog,
+          operation: 'create_cash_close_shortage_activity_log',
+          documentPath: activityRef.path,
+          onStageChanged: onStageChanged,
+          action: () => activityRef.set({
+            'type': 'cash_close_shortage',
+            ..._currentBranchFields,
+            'cashSessionId': cashSessionId,
+            'businessDate': session.businessDate,
+            'shortageAmount': shortageAmount,
+            'netDifference': netDifference,
+            ..._employeeAuditFields(prefix: 'createdBy'),
+            'createdAt': FieldValue.serverTimestamp(),
+            'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+          }),
+        );
+      } catch (error, stackTrace) {
+        debugPrintCashCloseFailure(
+          error: error,
+          stackTrace: stackTrace,
+          businessDate: session.businessDate,
+          cashSessionId: cashSessionId,
+          countedCashAmount: countedCashAmount,
+          terminalReportedAmount: terminalReportedAmount,
+        );
+      }
+    }
+
+    final updatedDoc = await _cashCloseStage(
+      stage: CashCloseProgressStage.updatingCashSession,
+      operation: 'read_closed_cash_session',
+      documentPath: docRef.path,
+      onStageChanged: onStageChanged,
+      action: docRef.get,
+    );
     invalidateReportDataCache(
       branchId: session.branchId,
       startBusinessDate: session.businessDate,
@@ -6909,6 +6995,17 @@ class TacoPosRepository {
     );
     invalidateCashScheduleCache(branchId: session.branchId);
     return CashSession.fromDoc(updatedDoc);
+  }
+
+  void _validateCashCloseFirestoreData(Map<String, Object?> data) {
+    for (final entry in data.entries) {
+      final value = entry.value;
+      if (value is num && !value.isFinite) {
+        throw ArgumentError(
+          'Existe informacion invalida en el corte: ${entry.key}.',
+        );
+      }
+    }
   }
 
   Future<HistoricalCashCorrectionPreview> previewHistoricalCashCorrection({
