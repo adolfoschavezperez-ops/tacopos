@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/app_update/app_update_policy.dart';
+import 'package:tacopos/services/device_registry_service.dart';
 
 void main() {
   group('evaluateAppUpdatePolicy', () {
@@ -201,6 +202,46 @@ void main() {
         DeviceUpdateStatus.updateRecommended,
       );
       expect(parseDeviceUpdateStatus('otro'), DeviceUpdateStatus.unknown);
+    });
+
+    test('current 4 minimum 3 recommended 4 is upToDate', () {
+      final status = evaluateCanonicalAppUpdatePolicy(
+        currentVersionCode: 4,
+        active: true,
+        minimumSupportedVersionCode: 3,
+        recommendedVersionCode: 4,
+        forceUpdate: false,
+      );
+
+      expect(status, AppUpdatePolicyStatus.upToDate);
+    });
+
+    test('device registry uses the expected restaurant devices path', () {
+      expect(
+        DeviceRegistryService.documentPathForDevice('device-123'),
+        'restaurants/main_restaurant/devices/device-123',
+      );
+    });
+
+    test('device id validation rejects empty and slash ids', () {
+      expect(DeviceRegistryService.isValidDeviceId(null), isFalse);
+      expect(DeviceRegistryService.isValidDeviceId(''), isFalse);
+      expect(DeviceRegistryService.isValidDeviceId('abc/def'), isFalse);
+      expect(DeviceRegistryService.isValidDeviceId('firebase-uid'), isTrue);
+    });
+
+    test('telemetry failures do not change an upToDate policy result', () {
+      final policyStatus = evaluateCanonicalAppUpdatePolicy(
+        currentVersionCode: 4,
+        active: true,
+        minimumSupportedVersionCode: 3,
+        recommendedVersionCode: 4,
+        forceUpdate: false,
+      );
+      final telemetryStatus = parseDeviceUpdateStatus('unknown');
+
+      expect(policyStatus, AppUpdatePolicyStatus.upToDate);
+      expect(telemetryStatus, DeviceUpdateStatus.unknown);
     });
   });
 }

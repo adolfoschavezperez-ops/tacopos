@@ -190,7 +190,9 @@ class AppUpdateService {
         );
       }
 
-      final deviceRolloutGroup = await _loadDeviceRolloutGroup();
+      final deviceRolloutGroup = config.rolloutGroups.isEmpty
+          ? null
+          : await _loadDeviceRolloutGroup();
       final decision = evaluateAppUpdatePolicy(
         AppUpdatePolicyInput(
           currentVersionCode: currentVersion.versionCode,
@@ -335,14 +337,40 @@ class AppUpdateService {
   Future<String?> _loadDeviceRolloutGroup() async {
     final uid = _auth.currentUser?.uid;
     if (uid == null || uid.isEmpty) return null;
-    final snapshot = await _firestore
-        .collection('restaurants')
-        .doc(AppConstants.restaurantId)
-        .collection('devices')
-        .doc(uid)
-        .get()
-        .timeout(const Duration(seconds: 5));
-    return snapshot.data()?['rolloutGroup']?.toString();
+    try {
+      final snapshot = await _firestore
+          .collection('restaurants')
+          .doc(AppConstants.restaurantId)
+          .collection('devices')
+          .doc(uid)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      return snapshot.data()?['rolloutGroup']?.toString();
+    } on FirebaseException catch (error, stackTrace) {
+      debugPrint(
+        'DEVICE_ROLLOUT_DIAGNOSTIC '
+        'restaurantId=${AppConstants.restaurantId} '
+        'deviceId=$uid '
+        'documentPath=restaurants/${AppConstants.restaurantId}/devices/$uid '
+        'firebaseCode=${error.code} '
+        'firebaseMessage=${error.message} '
+        'exceptionType=${error.runtimeType} '
+        'stackTrace=$stackTrace',
+      );
+      return null;
+    } catch (error, stackTrace) {
+      debugPrint(
+        'DEVICE_ROLLOUT_DIAGNOSTIC '
+        'restaurantId=${AppConstants.restaurantId} '
+        'deviceId=$uid '
+        'documentPath=restaurants/${AppConstants.restaurantId}/devices/$uid '
+        'exceptionType=${error.runtimeType} '
+        'firebaseCode=unknown '
+        'firebaseMessage=$error '
+        'stackTrace=$stackTrace',
+      );
+      return null;
+    }
   }
 
   AppUpdateDecision _avoidNonPlayUpdateLoop(

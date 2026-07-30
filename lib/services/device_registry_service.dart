@@ -100,6 +100,15 @@ class DeviceRegistryService {
       .doc(AppConstants.restaurantId)
       .collection('devices');
 
+  static String documentPathForDevice(String deviceId) {
+    return 'restaurants/${AppConstants.restaurantId}/devices/$deviceId';
+  }
+
+  static bool isValidDeviceId(String? deviceId) {
+    final value = deviceId?.trim();
+    return value != null && value.isNotEmpty && !value.contains('/');
+  }
+
   Stream<List<RegisteredDevice>> watchDevices() {
     return _devicesRef.snapshots().map((snapshot) {
       final devices = snapshot.docs.map(RegisteredDevice.fromDoc).toList();
@@ -118,8 +127,20 @@ class DeviceRegistryService {
     AppUpdateCheckResult? updateResult,
     bool force = false,
   }) async {
-    final uid = _auth.currentUser?.uid;
-    if (uid == null || uid.isEmpty) return;
+    final uid = _auth.currentUser?.uid.trim();
+    if (!DeviceRegistryService.isValidDeviceId(uid)) {
+      _logDiagnostic(
+        deviceId: uid ?? '',
+        documentPath: uid == null ? '' : documentPathForDevice(uid),
+        exceptionType: 'InvalidDeviceId',
+        firebaseCode: 'invalid-argument',
+        firebaseMessage: 'deviceId is null, empty, or contains slash.',
+        stackTrace: StackTrace.current,
+        attemptedFields: const [],
+      );
+      return;
+    }
+    final deviceId = uid!;
 
     final status = _statusFromUpdateResult(updateResult);
     final statusName = deviceUpdateStatusName(status);
@@ -133,19 +154,18 @@ class DeviceRegistryService {
 
     try {
       final version = await _updateService.currentVersionInfo();
-      final doc = _devicesRef.doc(uid);
-      final existing = await doc.get().timeout(const Duration(seconds: 5));
+      final doc = _devicesRef.doc(deviceId);
       final session = AppSession.instance;
       final employee = session.employee;
       final data = <String, Object?>{
-        'deviceId': uid,
+        'deviceId': deviceId,
+        'deviceName': _defaultDeviceName(),
         'branchId': session.currentBranchId,
         'branchName': session.currentBranchName,
         'role': _inferRole(),
         'platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
         'appVersionName': version.versionName,
         'appVersionCode': version.versionCode,
-        'recommendedVersionCode': updateResult?.recommendedVersionCode ?? 0,
         'availableVersionCode':
             updateResult?.playUpdateAvailability.availableVersionCode ?? 0,
         'lastSeenAt': FieldValue.serverTimestamp(),
@@ -155,15 +175,29 @@ class DeviceRegistryService {
         'updateStatus': statusName,
         'updatedAt': FieldValue.serverTimestamp(),
       };
-      if (!existing.exists) {
-        data['deviceName'] = _defaultDeviceName();
-        data['rolloutGroup'] = 'pilot';
-      }
       await doc.set(data, SetOptions(merge: true));
       _lastHeartbeatAt = now;
       _lastStatusName = statusName;
+    } on FirebaseException catch (error, stackTrace) {
+      _logDiagnostic(
+        deviceId: deviceId,
+        documentPath: documentPathForDevice(deviceId),
+        exceptionType: error.runtimeType.toString(),
+        firebaseCode: error.code,
+        firebaseMessage: error.message ?? '',
+        stackTrace: stackTrace,
+        attemptedFields: _attemptedFields(),
+      );
     } catch (error) {
-      debugPrint('DEVICE_REGISTRY_WRITE_FAILED: $error');
+      _logDiagnostic(
+        deviceId: deviceId,
+        documentPath: documentPathForDevice(deviceId),
+        exceptionType: error.runtimeType.toString(),
+        firebaseCode: 'unknown',
+        firebaseMessage: error.toString(),
+        stackTrace: StackTrace.current,
+        attemptedFields: _attemptedFields(),
+      );
     }
   }
 
@@ -213,5 +247,47 @@ class DeviceRegistryService {
       DeviceUpdateStatus.unknown => 3,
       DeviceUpdateStatus.upToDate => 4,
     };
+  }
+
+  List<String> _attemptedFields() {
+    return const [
+      'deviceId',
+      'deviceName',
+      'branchId',
+      'branchName',
+      'role',
+      'platform',
+      'appVersionName',
+      'appVersionCode',
+      'lastSeenAt',
+      'employeeId',
+      'employeeName',
+      'updateStatus',
+      'lastUpdateCheckAt',
+      'availableVersionCode',
+      'updatedAt',
+    ];
+  }
+
+  void _logDiagnostic({
+    required String deviceId,
+    required String documentPath,
+    required String firebaseCode,
+    required String firebaseMessage,
+    required String exceptionType,
+    required StackTrace stackTrace,
+    required List<String> attemptedFields,
+  }) {
+    debugPrint(
+      'DEVICE_REGISTRATION_DIAGNOSTIC '
+      'restaurantId=${AppConstants.restaurantId} '
+      'deviceId=$deviceId '
+      'documentPath=$documentPath '
+      'firebaseCode=$firebaseCode '
+      'firebaseMessage=$firebaseMessage '
+      'exceptionType=$exceptionType '
+      'attemptedFields=${attemptedFields.join(',')} '
+      'stackTrace=$stackTrace',
+    );
   }
 }

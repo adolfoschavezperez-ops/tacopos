@@ -29,7 +29,9 @@ before(async () => {
 });
 
 after(async () => {
-  await testEnv.cleanup();
+  if (testEnv) {
+    await testEnv.cleanup();
+  }
 });
 
 beforeEach(async () => {
@@ -155,6 +157,92 @@ describe('TacoPOS Firestore production guard rails', () => {
         businessDate: '2026-07-25',
         status: 'open',
       }),
+    );
+  });
+
+  it('permite crear el primer registro del dispositivo autenticado', async () => {
+    const deviceId = 'device-uid-1';
+    const db = authedDb(deviceId);
+
+    await assertSucceeds(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/devices/${deviceId}`), {
+        deviceId,
+        deviceName: 'Caja',
+        branchId: BRANCH_ID,
+        branchName: 'Aviacion',
+        role: 'Caja',
+        platform: 'android',
+        appVersionName: '1.0.3',
+        appVersionCode: 4,
+        lastSeenAt: new Date('2026-07-30T10:00:00.000Z'),
+        employeeId: 'cashier-1',
+        employeeName: 'Caja',
+        updateStatus: 'up_to_date',
+        lastUpdateCheckAt: new Date('2026-07-30T10:00:00.000Z'),
+        availableVersionCode: 0,
+        updatedAt: new Date('2026-07-30T10:00:00.000Z'),
+      }),
+    );
+  });
+
+  it('rechaza escribir devices de otro uid', async () => {
+    const db = authedDb('device-uid-1');
+
+    await assertFails(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/devices/device-uid-2`), {
+        deviceId: 'device-uid-2',
+        deviceName: 'Caja',
+        branchId: BRANCH_ID,
+        branchName: 'Aviacion',
+        role: 'Caja',
+        platform: 'android',
+        appVersionName: '1.0.3',
+        appVersionCode: 4,
+        lastSeenAt: new Date('2026-07-30T10:00:00.000Z'),
+        employeeId: 'cashier-1',
+        employeeName: 'Caja',
+        updateStatus: 'up_to_date',
+        lastUpdateCheckAt: new Date('2026-07-30T10:00:00.000Z'),
+        availableVersionCode: 0,
+        updatedAt: new Date('2026-07-30T10:00:00.000Z'),
+      }),
+    );
+  });
+
+  it('rechaza campos no permitidos en devices', async () => {
+    const deviceId = 'device-uid-1';
+    const db = authedDb(deviceId);
+
+    await assertFails(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/devices/${deviceId}`), {
+        deviceId,
+        deviceName: 'Caja',
+        branchId: BRANCH_ID,
+        branchName: 'Aviacion',
+        role: 'Caja',
+        platform: 'android',
+        appVersionName: '1.0.3',
+        appVersionCode: 4,
+        lastSeenAt: new Date('2026-07-30T10:00:00.000Z'),
+        employeeId: 'cashier-1',
+        employeeName: 'Caja',
+        updateStatus: 'up_to_date',
+        lastUpdateCheckAt: new Date('2026-07-30T10:00:00.000Z'),
+        availableVersionCode: 0,
+        updatedAt: new Date('2026-07-30T10:00:00.000Z'),
+        packageInfo: { version: '1.0.3' },
+      }),
+    );
+  });
+
+  it('rechaza leer devices sin autenticacion', async () => {
+    await seed(`restaurants/${RESTAURANT_ID}/devices/device-uid-1`, {
+      deviceId: 'device-uid-1',
+      deviceName: 'Caja',
+    });
+
+    await assertFails(
+      getDoc(doc(anonDb(), `restaurants/${RESTAURANT_ID}/devices/device-uid-1`)),
     );
   });
 
