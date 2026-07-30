@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'core/theme/app_theme.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
+import 'widgets/app_update_gate.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,7 +34,7 @@ class TacoPosApp extends StatelessWidget {
       title: kIsWeb ? 'TacoPOS Backoffice' : 'TacoPOS',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
-      home: const LoginGate(),
+      home: const AppUpdateGate(child: LoginGate()),
     );
   }
 }

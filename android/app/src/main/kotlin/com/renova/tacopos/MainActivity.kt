@@ -1,6 +1,9 @@
 package com.renova.tacopos
 
+import android.content.Intent
 import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
 import io.flutter.FlutterInjector
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -8,6 +11,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val kitchenSoundChannel = "tacopos/kitchen_sound"
+    private val appUpdateChannel = "tacopos/app_update"
     private var kitchenBeepPlayer: MediaPlayer? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -22,6 +26,19 @@ class MainActivity : FlutterActivity() {
                     }
                     "playKitchenExpressBeep" -> {
                         playKitchenSound("assets/sounds/kitchen_express_beep.wav")
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, appUpdateChannel)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "versionCode" -> result.success(currentVersionCode())
+                    "canOpenPlayStore" -> result.success(canOpenPlayStore())
+                    "openPlayStore" -> {
+                        openPlayStore()
                         result.success(null)
                     }
                     else -> result.notImplemented()
@@ -60,6 +77,42 @@ class MainActivity : FlutterActivity() {
             kitchenBeepPlayer?.release()
             kitchenBeepPlayer = null
             throw error
+        }
+    }
+
+    private fun canOpenPlayStore(): Boolean {
+        val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
+        val webIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://play.google.com/store/apps/details?id=$packageName"),
+        )
+        return marketIntent.resolveActivity(packageManager) != null ||
+            webIntent.resolveActivity(packageManager) != null
+    }
+
+    private fun openPlayStore() {
+        val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
+        marketIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (marketIntent.resolveActivity(packageManager) != null) {
+            startActivity(marketIntent)
+            return
+        }
+
+        val webIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://play.google.com/store/apps/details?id=$packageName"),
+        )
+        webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(webIntent)
+    }
+
+    private fun currentVersionCode(): Long {
+        val packageInfo = packageManager.getPackageInfo(packageName, 0)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            packageInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageInfo.versionCode.toLong()
         }
     }
 }
