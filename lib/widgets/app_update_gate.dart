@@ -27,6 +27,7 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
   late final AppUpdateService _updateService;
   late final DeviceRegistryService _deviceRegistryService;
   late final StreamSubscription<void> _downloadedSubscription;
+  late final StreamSubscription<void> _immediateSubscription;
   late final StreamSubscription<AppUpdateInstallProgress> _progressSubscription;
   AppUpdateCheckResult? _lastResult;
   AppUpdateCheckResult? _requiredUpdate;
@@ -46,6 +47,11 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
     _downloadedSubscription = _updateService.flexibleUpdateDownloaded.listen(
       (_) => _onFlexibleUpdateDownloaded(),
     );
+    _immediateSubscription = _updateService.immediateUpdateInProgress.listen((
+      _,
+    ) {
+      if (mounted) setState(() => _updating = true);
+    });
     _progressSubscription = _updateService.flexibleUpdateProgress.listen((
       progress,
     ) {
@@ -59,6 +65,7 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
   void dispose() {
     AppSession.instance.removeListener(_onSessionChanged);
     _downloadedSubscription.cancel();
+    _immediateSubscription.cancel();
     _progressSubscription.cancel();
     super.dispose();
   }
@@ -86,12 +93,14 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
       _requiredUpdate = result.decision.isRequired ? result : null;
     });
     if (result.decision.isRequired) {
-      if (result.canStartPlayUpdate) {
+      if (result.canStartImmediateUpdate) {
         unawaited(_runImmediateUpdate(result));
       }
       return;
     }
-    if (result.decision.isRecommended && !_recommendedShown) {
+    if (result.decision.isRecommended &&
+        result.canStartFlexibleUpdate &&
+        !_recommendedShown) {
       _recommendedShown = true;
       unawaited(_showRecommendedUpdate(result));
     }
@@ -167,6 +176,42 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
     );
   }
 
+  Future<void> _openGooglePlay() async {
+    try {
+      await _updateService.openGooglePlay();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_friendlyUpdateError(error))));
+    }
+  }
+
+  Future<void> _handleVersionStatusTap() async {
+    final result = _lastResult;
+    if (result == null) return;
+    if (result.decision.isRecommended) {
+      await _showRecommendedUpdate(result);
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Version instalada'),
+        content: Text(
+          'TacoPOS\nVersion ${result.currentVersionName} '
+          '(${result.currentVersionCode})',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Aceptar'),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _friendlyUpdateError(Object error) {
     final text = error.toString();
     if (text.contains('APP_UPDATE_NOT_PLAY_INSTALLED')) {
@@ -190,30 +235,99 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
         updating: _updating,
         errorMessage: _requiredError,
         onRetry: _checkForUpdate,
-        onUpdate: requiredUpdate.canStartPlayUpdate
+        onUpdate: requiredUpdate.canStartImmediateUpdate
             ? () => _runImmediateUpdate(requiredUpdate)
             : null,
+        onOpenGooglePlay: _openGooglePlay,
       );
     }
 
-    return Stack(
-      children: [
-        widget.child,
-        if (_updating)
-          Positioned.fill(
-            child: ColoredBox(
-              color: const Color(0xAA000000),
-              child: Center(
-                child: _UpdateProgressCard(
-                  title: 'Actualizando TacoPOS',
-                  message:
-                      'Google Play esta descargando la actualizacion flexible.',
-                  progress: _progress?.progress,
+    if (_checking && _lastResult == null) {
+      return const _CheckingVersionScreen();
+    }
+
+    return AppUpdateScope(
+      result: _lastResult,
+      checking: _checking,
+      flexibleReadyToInstall: _flexibleReadyToInstall,
+      onStatusTap: _handleVersionStatusTap,
+      onStartFlexibleUpdate: _lastResult?.canStartFlexibleUpdate == true
+          ? _runFlexibleUpdate
+          : null,
+      onCompleteFlexibleUpdate: _updateService.completeFlexibleUpdate,
+      child: Stack(
+        children: [
+          widget.child,
+          if (_updating)
+            Positioned.fill(
+              child: ColoredBox(
+                color: const Color(0xAA000000),
+                child: Center(
+                  child: _UpdateProgressCard(
+                    title: 'Actualizando TacoPOS',
+                    message:
+                        'Google Play esta descargando la actualizacion flexible.',
+                    progress: _progress?.progress,
+                  ),
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+class AppUpdateScope extends InheritedWidget {
+  const AppUpdateScope({
+    super.key,
+    required super.child,
+    required this.result,
+    required this.checking,
+    required this.flexibleReadyToInstall,
+    required this.onStatusTap,
+    required this.onCompleteFlexibleUpdate,
+    this.onStartFlexibleUpdate,
+  });
+
+  final AppUpdateCheckResult? result;
+  final bool checking;
+  final bool flexibleReadyToInstall;
+  final Future<void> Function() onStatusTap;
+  final Future<void> Function()? onStartFlexibleUpdate;
+  final Future<void> Function() onCompleteFlexibleUpdate;
+
+  static AppUpdateScope? maybeOf(BuildContext context) {
+    return context.dependOnInheritedWidgetOfExactType<AppUpdateScope>();
+  }
+
+  @override
+  bool updateShouldNotify(AppUpdateScope oldWidget) {
+    return result != oldWidget.result ||
+        checking != oldWidget.checking ||
+        flexibleReadyToInstall != oldWidget.flexibleReadyToInstall;
+  }
+}
+
+class _CheckingVersionScreen extends StatelessWidget {
+  const _CheckingVersionScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return const MaterialApp(
+      title: 'TacoPOS',
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        backgroundColor: Color(0xFF090909),
+        body: SafeArea(
+          child: Center(
+            child: _UpdateProgressCard(
+              title: 'Verificando version...',
+              message: 'Preparando TacoPOS.',
+            ),
           ),
-      ],
+        ),
+      ),
     );
   }
 }
@@ -229,14 +343,16 @@ class _RecommendedUpdateDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final canUpdate = result.canStartPlayUpdate;
+    final canUpdate = result.canStartFlexibleUpdate;
     return AlertDialog(
       title: const Text('Actualizacion disponible'),
       content: Text(
         '${result.decision.message}\n\n'
         'Version instalada: ${result.currentVersionName} '
         '(${result.currentVersionCode})\n'
-        'Version recomendada: ${result.recommendedVersionCode}'
+        'Version disponible: '
+        '${result.playUpdateAvailability.availableVersionCode ?? result.recommendedVersionCode}'
+        '${result.releaseNotes == null || result.releaseNotes!.trim().isEmpty ? '' : '\n\n${result.releaseNotes}'}'
         '${canUpdate ? '' : '\n\nNo se pudo consultar la actualizacion en Google Play.'}',
       ),
       actions: [
@@ -261,6 +377,7 @@ class _RequiredUpdateScreen extends StatelessWidget {
     required this.errorMessage,
     required this.onRetry,
     required this.onUpdate,
+    required this.onOpenGooglePlay,
   });
 
   final AppUpdateCheckResult result;
@@ -269,13 +386,17 @@ class _RequiredUpdateScreen extends StatelessWidget {
   final String? errorMessage;
   final VoidCallback onRetry;
   final VoidCallback? onUpdate;
+  final VoidCallback onOpenGooglePlay;
 
   @override
   Widget build(BuildContext context) {
     final busy = checking || updating;
-    final nonPlayMessage = result.errorCode == 'APP_UPDATE_NOT_PLAY_INSTALLED'
-        ? '\n\nAPP_UPDATE_NOT_PLAY_INSTALLED: desinstala la APK debug e instala TacoPOS desde el enlace privado de Prueba interna.'
-        : '';
+    final supportMessage =
+        result.errorCode == 'APP_UPDATE_REQUIRED_NOT_AVAILABLE'
+        ? 'La actualizacion ya fue publicada, pero Google Play todavia no la muestra para este dispositivo. Espera unos minutos y vuelve a intentarlo.'
+        : result.errorCode == 'APP_UPDATE_NOT_PLAY_INSTALLED'
+        ? 'Esta tablet debe instalar TacoPOS desde el enlace privado de Prueba interna de Google Play.'
+        : 'Esta version de TacoPOS ya no puede continuar operando. Actualiza para seguir utilizando el sistema.';
     return MaterialApp(
       title: 'TacoPOS',
       debugShowCheckedModeBanner: false,
@@ -310,15 +431,23 @@ class _RequiredUpdateScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        '${result.decision.message}$nonPlayMessage',
+                        supportMessage,
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Color(0xFFE0E0E0)),
                       ),
+                      if (result.decision.message.trim().isNotEmpty) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          result.decision.message,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Color(0xFFB8B8B8)),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       Text(
                         'Version instalada: ${result.currentVersionName} '
                         '(${result.currentVersionCode})\n'
-                        'Version minima: ${result.minimumSupportedVersionCode}',
+                        'Version requerida: ${result.minimumSupportedVersionCode}',
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Color(0xFFB8B8B8)),
                       ),
@@ -341,6 +470,12 @@ class _RequiredUpdateScreen extends StatelessWidget {
                           onPressed: onUpdate,
                           icon: const Icon(Icons.system_update_alt),
                           label: const Text('Actualizar ahora'),
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: onOpenGooglePlay,
+                          icon: const Icon(Icons.open_in_new),
+                          label: const Text('Abrir Google Play'),
                         ),
                         const SizedBox(height: 10),
                         OutlinedButton.icon(

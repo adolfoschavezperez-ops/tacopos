@@ -6,8 +6,10 @@ import '../core/theme/brand_colors.dart';
 import '../models/branch.dart';
 import '../models/employee.dart';
 import '../services/app_session.dart';
+import '../services/app_update_service.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/app_update_gate.dart';
 import '../widgets/glass.dart';
 import '../widgets/loading_panel.dart';
 import 'home_screen.dart';
@@ -302,6 +304,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                   icon: const Icon(Icons.login),
                                   label: Text(_busy ? 'Entrando...' : 'Entrar'),
                                 ),
+                                const SizedBox(height: 14),
+                                const _LoginVersionStatus(),
                               ],
                             ),
                           );
@@ -317,6 +321,144 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+}
+
+class _LoginVersionStatus extends StatelessWidget {
+  const _LoginVersionStatus();
+
+  @override
+  Widget build(BuildContext context) {
+    final updateScope = AppUpdateScope.maybeOf(context);
+    final result = updateScope?.result;
+    final versionName = result?.currentVersionName.trim();
+    final versionCode = result?.currentVersionCode ?? 0;
+    final displayVersion = versionName == null || versionName.isEmpty
+        ? 'desconocida'
+        : '$versionName ($versionCode)';
+    final status = _status(result);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: updateScope?.onStatusTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'TacoPOS · Version $displayVersion',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: BrandColors.textMuted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(status.icon, color: status.color, size: 15),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(
+                      status.label,
+                      textAlign: TextAlign.center,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: status.color,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  if (status.actionLabel != null &&
+                      updateScope?.onStartFlexibleUpdate != null) ...[
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: updateScope!.onStartFlexibleUpdate,
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 28),
+                      ),
+                      child: Text(status.actionLabel!),
+                    ),
+                  ],
+                  if (updateScope?.flexibleReadyToInstall == true) ...[
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: updateScope!.onCompleteFlexibleUpdate,
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 28),
+                      ),
+                      child: const Text('Reiniciar y actualizar'),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  _VersionStatusView _status(AppUpdateCheckResult? result) {
+    if (result == null || result.errorCode == 'APP_UPDATE_CONFIG_UNAVAILABLE') {
+      return const _VersionStatusView(
+        icon: Icons.help_outline,
+        label: 'No se pudo verificar la version',
+        color: BrandColors.textMuted,
+      );
+    }
+    if (result.decision.isRequired) {
+      return const _VersionStatusView(
+        icon: Icons.warning_amber_outlined,
+        label: 'Esta version ya no es compatible',
+        actionLabel: 'Actualizar ahora',
+        color: BrandColors.danger,
+      );
+    }
+    if (result.decision.isRecommended && result.canStartFlexibleUpdate) {
+      return const _VersionStatusView(
+        icon: Icons.info_outline,
+        label: 'Hay una actualizacion disponible',
+        actionLabel: 'Actualizar',
+        color: BrandColors.accentYellow,
+      );
+    }
+    if (result.decision.isRecommended) {
+      return const _VersionStatusView(
+        icon: Icons.help_outline,
+        label: 'No se pudo verificar la version',
+        color: BrandColors.textMuted,
+      );
+    }
+    return const _VersionStatusView(
+      icon: Icons.check_circle_outline,
+      label: 'Actualizado',
+      color: BrandColors.success,
+    );
+  }
+}
+
+class _VersionStatusView {
+  const _VersionStatusView({
+    required this.icon,
+    required this.label,
+    required this.color,
+    this.actionLabel,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final String? actionLabel;
 }
 
 bool _canAccessBackoffice(Employee employee) {

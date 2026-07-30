@@ -18,6 +18,7 @@ class RegisteredDevice {
     required this.appVersionName,
     required this.appVersionCode,
     required this.recommendedVersionCode,
+    required this.availableVersionCode,
     required this.employeeId,
     required this.employeeName,
     required this.updateStatus,
@@ -35,6 +36,7 @@ class RegisteredDevice {
   final String appVersionName;
   final int appVersionCode;
   final int recommendedVersionCode;
+  final int availableVersionCode;
   final String employeeId;
   final String employeeName;
   final DeviceUpdateStatus updateStatus;
@@ -54,6 +56,7 @@ class RegisteredDevice {
       appVersionName: data['appVersionName']?.toString() ?? '',
       appVersionCode: _readInt(data['appVersionCode']),
       recommendedVersionCode: _readInt(data['recommendedVersionCode']),
+      availableVersionCode: _readInt(data['availableVersionCode']),
       employeeId: data['employeeId']?.toString() ?? '',
       employeeName: data['employeeName']?.toString() ?? '',
       updateStatus: parseDeviceUpdateStatus(data['updateStatus']?.toString()),
@@ -143,7 +146,10 @@ class DeviceRegistryService {
         'appVersionName': version.versionName,
         'appVersionCode': version.versionCode,
         'recommendedVersionCode': updateResult?.recommendedVersionCode ?? 0,
+        'availableVersionCode':
+            updateResult?.playUpdateAvailability.availableVersionCode ?? 0,
         'lastSeenAt': FieldValue.serverTimestamp(),
+        'lastUpdateCheckAt': FieldValue.serverTimestamp(),
         'employeeId': employee?.id ?? '',
         'employeeName': employee?.name ?? '',
         'updateStatus': statusName,
@@ -163,6 +169,9 @@ class DeviceRegistryService {
 
   DeviceUpdateStatus _statusFromUpdateResult(AppUpdateCheckResult? result) {
     if (result == null || result.errorCode != null) {
+      if (result?.errorCode == 'APP_UPDATE_REQUIRED_NOT_AVAILABLE') {
+        return DeviceUpdateStatus.playUpdateUnavailable;
+      }
       return DeviceUpdateStatus.unknown;
     }
     return result.decision.deviceStatus;
@@ -199,9 +208,10 @@ class DeviceRegistryService {
   int _statusRank(DeviceUpdateStatus status) {
     return switch (status) {
       DeviceUpdateStatus.updateRequired => 0,
-      DeviceUpdateStatus.updateRecommended => 1,
-      DeviceUpdateStatus.unknown => 2,
-      DeviceUpdateStatus.upToDate => 3,
+      DeviceUpdateStatus.playUpdateUnavailable => 1,
+      DeviceUpdateStatus.updateRecommended => 2,
+      DeviceUpdateStatus.unknown => 3,
+      DeviceUpdateStatus.upToDate => 4,
     };
   }
 }

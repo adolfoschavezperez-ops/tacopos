@@ -18,22 +18,33 @@ class AppVersionInfo {
 class PlayUpdateAvailability {
   const PlayUpdateAvailability({
     required this.updateAvailable,
-    required this.updateAllowed,
+    required this.flexibleAllowed,
+    required this.immediateAllowed,
     required this.installedFromPlay,
     required this.installerPackageName,
+    this.updateAvailability,
     this.availableVersionCode,
     this.installStatus,
+    this.errorCode,
+    this.errorMessage,
   });
 
   final bool updateAvailable;
-  final bool updateAllowed;
+  final bool flexibleAllowed;
+  final bool immediateAllowed;
   final bool installedFromPlay;
   final String installerPackageName;
+  final int? updateAvailability;
   final int? availableVersionCode;
   final int? installStatus;
+  final String? errorCode;
+  final String? errorMessage;
 
-  bool get canStartUpdate =>
-      installedFromPlay && updateAvailable && updateAllowed;
+  bool get canStartFlexibleUpdate =>
+      installedFromPlay && updateAvailable && flexibleAllowed;
+
+  bool get canStartImmediateUpdate =>
+      installedFromPlay && updateAvailable && immediateAllowed;
 }
 
 class AppUpdateInstallProgress {
@@ -83,7 +94,35 @@ class AppUpdateCheckResult {
   final String? criticalReason;
 
   bool get installedFromPlay => playUpdateAvailability.installedFromPlay;
-  bool get canStartPlayUpdate => playUpdateAvailability.canStartUpdate;
+  bool get canStartFlexibleUpdate =>
+      playUpdateAvailability.canStartFlexibleUpdate;
+  bool get canStartImmediateUpdate =>
+      playUpdateAvailability.canStartImmediateUpdate;
+  bool get requiredButPlayUnavailable =>
+      decision.isRequired && !canStartImmediateUpdate;
+
+  AppUpdateCheckResult copyWith({
+    AppUpdateDecision? decision,
+    PlayUpdateAvailability? playUpdateAvailability,
+    String? errorCode,
+    String? errorMessage,
+  }) {
+    return AppUpdateCheckResult(
+      decision: decision ?? this.decision,
+      currentVersionCode: currentVersionCode,
+      currentVersionName: currentVersionName,
+      minimumSupportedVersionCode: minimumSupportedVersionCode,
+      recommendedVersionCode: recommendedVersionCode,
+      playUpdateAvailability:
+          playUpdateAvailability ?? this.playUpdateAvailability,
+      configActive: configActive,
+      errorCode: errorCode ?? this.errorCode,
+      errorMessage: errorMessage ?? this.errorMessage,
+      releaseNotes: releaseNotes,
+      rolloutGroup: rolloutGroup,
+      criticalReason: criticalReason,
+    );
+  }
 }
 
 class AppUpdateService {
@@ -92,7 +131,10 @@ class AppUpdateService {
       StreamController<AppUpdateInstallProgress>.broadcast();
   static final StreamController<void> _downloadedController =
       StreamController<void>.broadcast();
+  static final StreamController<void> _immediateInProgressController =
+      StreamController<void>.broadcast();
   static bool _methodHandlerConfigured = false;
+  static AppUpdateCheckResult? _lastValidPolicyResult;
 
   AppUpdateService({FirebaseFirestore? firestore, FirebaseAuth? auth})
     : _firestore = firestore ?? FirebaseFirestore.instance,
@@ -106,6 +148,8 @@ class AppUpdateService {
   Stream<AppUpdateInstallProgress> get flexibleUpdateProgress =>
       _progressController.stream;
   Stream<void> get flexibleUpdateDownloaded => _downloadedController.stream;
+  Stream<void> get immediateUpdateInProgress =>
+      _immediateInProgressController.stream;
 
   bool get isSupportedPlatform =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -123,9 +167,7 @@ class AppUpdateService {
         currentVersionName: currentVersion.versionName,
         minimumSupportedVersionCode: currentVersion.versionCode,
         recommendedVersionCode: currentVersion.versionCode,
-        playUpdateAvailability: _emptyPlayAvailability(
-          installedFromPlay: false,
-        ),
+        playUpdateAvailability: _emptyPlayAvailability(),
         configActive: false,
       );
     }
@@ -143,7 +185,7 @@ class AppUpdateService {
           currentVersionName: currentVersion.versionName,
           minimumSupportedVersionCode: currentVersion.versionCode,
           recommendedVersionCode: currentVersion.versionCode,
-          playUpdateAvailability: await _checkPlayUpdate('flexible'),
+          playUpdateAvailability: await _checkPlayUpdate(),
           configActive: false,
         );
       }
@@ -161,18 +203,14 @@ class AppUpdateService {
           enabledRolloutGroups: config.rolloutGroups,
         ),
       );
-      final playAvailability = decision.isRequired
-          ? await _checkPlayUpdate('immediate')
-          : decision.isRecommended
-          ? await _checkPlayUpdate('flexible')
-          : await _checkPlayUpdate('flexible');
+      final playAvailability = await _checkPlayUpdate();
 
       final adjustedDecision = _avoidNonPlayUpdateLoop(
         decision,
         playAvailability,
       );
 
-      return AppUpdateCheckResult(
+      final result = AppUpdateCheckResult(
         decision: adjustedDecision,
         currentVersionCode: currentVersion.versionCode,
         currentVersionName: currentVersion.versionName,
@@ -183,15 +221,31 @@ class AppUpdateService {
         releaseNotes: config.releaseNotes,
         rolloutGroup: deviceRolloutGroup,
         criticalReason: config.criticalReason,
-        errorCode: playAvailability.installedFromPlay
-            ? null
-            : 'APP_UPDATE_NOT_PLAY_INSTALLED',
-        errorMessage: playAvailability.installedFromPlay
-            ? null
-            : 'La app no fue instalada desde Google Play.',
+        errorCode: _diagnosticCode(adjustedDecision, playAvailability),
+        errorMessage: _diagnosticMessage(adjustedDecision, playAvailability),
       );
+      if (result.errorCode == 'APP_UPDATE_REQUIRED_NOT_AVAILABLE') {
+        debugPrint(
+          'APP_UPDATE_REQUIRED_NOT_AVAILABLE '
+          'currentVersionCode=${result.currentVersionCode} '
+          'minimumSupportedVersionCode=${result.minimumSupportedVersionCode} '
+          'recommendedVersionCode=${result.recommendedVersionCode} '
+          'availableVersionCode=${playAvailability.availableVersionCode} '
+          'updateAvailability=${playAvailability.updateAvailability} '
+          'immediateAllowed=${playAvailability.immediateAllowed}',
+        );
+      }
+      _lastValidPolicyResult = result;
+      return result;
     } catch (error) {
       debugPrint('APP_UPDATE_CHECK_FAILED: $error');
+      final cached = _lastValidPolicyResult;
+      if (cached != null) {
+        return cached.copyWith(
+          errorCode: 'APP_UPDATE_CONFIG_UNAVAILABLE',
+          errorMessage: error.toString(),
+        );
+      }
       return AppUpdateCheckResult(
         decision: const AppUpdateDecision(
           severity: AppUpdateSeverity.none,
@@ -202,9 +256,7 @@ class AppUpdateService {
         currentVersionName: currentVersion.versionName,
         minimumSupportedVersionCode: currentVersion.versionCode,
         recommendedVersionCode: currentVersion.versionCode,
-        playUpdateAvailability: _emptyPlayAvailability(
-          installedFromPlay: false,
-        ),
+        playUpdateAvailability: _emptyPlayAvailability(),
         configActive: false,
         errorCode: 'APP_UPDATE_CONFIG_UNAVAILABLE',
         errorMessage: error.toString(),
@@ -233,19 +285,24 @@ class AppUpdateService {
     await _channel.invokeMethod<void>('completeFlexibleUpdate');
   }
 
-  Future<PlayUpdateAvailability> _checkPlayUpdate(String mode) async {
+  Future<void> openGooglePlay() async {
+    await _channel.invokeMethod<void>('openGooglePlay');
+  }
+
+  Future<PlayUpdateAvailability> _checkPlayUpdate() async {
     if (!isSupportedPlatform) {
-      return _emptyPlayAvailability(installedFromPlay: false);
+      return _emptyPlayAvailability();
     }
     try {
       final value = await _channel.invokeMapMethod<String, Object?>(
         'checkUpdate',
-        {'mode': mode},
       );
       final data = value ?? const <String, Object?>{};
       return PlayUpdateAvailability(
+        updateAvailability: _readIntOrNull(data['updateAvailability']),
         updateAvailable: data['updateAvailable'] == true,
-        updateAllowed: data['updateAllowed'] == true,
+        flexibleAllowed: data['flexibleAllowed'] == true,
+        immediateAllowed: data['immediateAllowed'] == true,
         installedFromPlay: data['installedFromPlay'] == true,
         installerPackageName: data['installerPackageName']?.toString() ?? '',
         availableVersionCode: _readIntOrNull(data['availableVersionCode']),
@@ -255,11 +312,9 @@ class AppUpdateService {
       debugPrint(
         'APP_UPDATE_PLAY_CHECK_FAILED: ${error.code} ${error.message}',
       );
-      return const PlayUpdateAvailability(
-        updateAvailable: false,
-        updateAllowed: false,
-        installedFromPlay: false,
-        installerPackageName: '',
+      return _emptyPlayAvailability(
+        errorCode: error.code,
+        errorMessage: error.message,
       );
     }
   }
@@ -314,14 +369,48 @@ class AppUpdateService {
     );
   }
 
+  String? _diagnosticCode(
+    AppUpdateDecision decision,
+    PlayUpdateAvailability availability,
+  ) {
+    if (availability.errorCode != null) return availability.errorCode;
+    if (!availability.installedFromPlay &&
+        decision.severity != AppUpdateSeverity.none) {
+      return 'APP_UPDATE_NOT_PLAY_INSTALLED';
+    }
+    if (decision.isRequired && !availability.canStartImmediateUpdate) {
+      return 'APP_UPDATE_REQUIRED_NOT_AVAILABLE';
+    }
+    return null;
+  }
+
+  String? _diagnosticMessage(
+    AppUpdateDecision decision,
+    PlayUpdateAvailability availability,
+  ) {
+    return switch (_diagnosticCode(decision, availability)) {
+      'APP_UPDATE_NOT_PLAY_INSTALLED' =>
+        'La app no fue instalada desde Google Play.',
+      'APP_UPDATE_REQUIRED_NOT_AVAILABLE' =>
+        'Google Play todavia no muestra la actualizacion para este dispositivo.',
+      final code when code != null => availability.errorMessage,
+      _ => null,
+    };
+  }
+
   PlayUpdateAvailability _emptyPlayAvailability({
-    required bool installedFromPlay,
+    bool installedFromPlay = false,
+    String? errorCode,
+    String? errorMessage,
   }) {
     return PlayUpdateAvailability(
       updateAvailable: false,
-      updateAllowed: false,
+      flexibleAllowed: false,
+      immediateAllowed: false,
       installedFromPlay: installedFromPlay,
       installerPackageName: '',
+      errorCode: errorCode,
+      errorMessage: errorMessage,
     );
   }
 
@@ -358,6 +447,10 @@ class AppUpdateService {
     _channel.setMethodCallHandler((call) async {
       if (call.method == 'flexibleUpdateDownloaded') {
         _downloadedController.add(null);
+        return;
+      }
+      if (call.method == 'immediateUpdateInProgress') {
+        _immediateInProgressController.add(null);
         return;
       }
       if (call.method == 'flexibleUpdateStatus') {

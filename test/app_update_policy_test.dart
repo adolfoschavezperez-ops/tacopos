@@ -3,6 +3,80 @@ import 'package:tacopos/core/app_update/app_update_policy.dart';
 
 void main() {
   group('evaluateAppUpdatePolicy', () {
+    test(
+      'canonical policy returns upToDate for current 3 minimum 3 recommended 3',
+      () {
+        final status = evaluateCanonicalAppUpdatePolicy(
+          currentVersionCode: 3,
+          active: true,
+          minimumSupportedVersionCode: 3,
+          recommendedVersionCode: 3,
+          forceUpdate: false,
+        );
+
+        expect(status, AppUpdatePolicyStatus.upToDate);
+      },
+    );
+
+    test(
+      'canonical policy returns recommended for current 3 recommended 4',
+      () {
+        final status = evaluateCanonicalAppUpdatePolicy(
+          currentVersionCode: 3,
+          active: true,
+          minimumSupportedVersionCode: 3,
+          recommendedVersionCode: 4,
+          forceUpdate: false,
+        );
+
+        expect(status, AppUpdatePolicyStatus.recommended);
+      },
+    );
+
+    test('canonical policy returns required below minimum', () {
+      final status = evaluateCanonicalAppUpdatePolicy(
+        currentVersionCode: 3,
+        active: true,
+        minimumSupportedVersionCode: 4,
+        recommendedVersionCode: 4,
+        forceUpdate: false,
+      );
+
+      expect(status, AppUpdatePolicyStatus.required);
+    });
+
+    test('canonical policy forceUpdate requires only below recommended', () {
+      final required = evaluateCanonicalAppUpdatePolicy(
+        currentVersionCode: 3,
+        active: true,
+        minimumSupportedVersionCode: 3,
+        recommendedVersionCode: 4,
+        forceUpdate: true,
+      );
+      final upToDate = evaluateCanonicalAppUpdatePolicy(
+        currentVersionCode: 4,
+        active: true,
+        minimumSupportedVersionCode: 3,
+        recommendedVersionCode: 4,
+        forceUpdate: true,
+      );
+
+      expect(required, AppUpdatePolicyStatus.required);
+      expect(upToDate, AppUpdatePolicyStatus.upToDate);
+    });
+
+    test('canonical policy active false is upToDate', () {
+      final status = evaluateCanonicalAppUpdatePolicy(
+        currentVersionCode: 1,
+        active: false,
+        minimumSupportedVersionCode: 4,
+        recommendedVersionCode: 4,
+        forceUpdate: true,
+      );
+
+      expect(status, AppUpdatePolicyStatus.upToDate);
+    });
+
     test('does nothing when current version is up to date', () {
       final decision = evaluateAppUpdatePolicy(
         const AppUpdatePolicyInput(

@@ -210,6 +210,10 @@ class _Filters extends StatelessWidget {
                 child: Text('Actualizacion obligatoria'),
               ),
               DropdownMenuItem(
+                value: DeviceUpdateStatus.playUpdateUnavailable,
+                child: Text('Pendiente en Google Play'),
+              ),
+              DropdownMenuItem(
                 value: DeviceUpdateStatus.unknown,
                 child: Text('Sin conexion reciente'),
               ),
@@ -313,6 +317,10 @@ class _StatusPill extends StatelessWidget {
       DeviceUpdateStatus.updateRequired => (
         'Actualizacion obligatoria',
         BrandColors.danger,
+      ),
+      DeviceUpdateStatus.playUpdateUnavailable => (
+        'Pendiente en Google Play',
+        BrandColors.accentOrange,
       ),
       DeviceUpdateStatus.unknown => (
         'Sin conexion reciente',

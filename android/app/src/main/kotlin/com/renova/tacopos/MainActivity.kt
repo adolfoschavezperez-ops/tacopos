@@ -2,6 +2,7 @@ package com.renova.tacopos
 
 import android.content.Intent
 import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Build
 import com.google.android.play.core.appupdate.AppUpdateManager
 import com.google.android.play.core.appupdate.AppUpdateManagerFactory
@@ -55,12 +56,15 @@ class MainActivity : FlutterActivity() {
                 "versionName" -> result.success(currentVersionName())
                 "installerPackageName" -> result.success(installerPackageName())
                 "checkUpdate" -> {
-                    val mode = call.argument<String>("mode") ?: "flexible"
-                    checkUpdate(mode, result)
+                    checkUpdate(result)
                 }
                 "startFlexibleUpdate" -> startUpdate(AppUpdateType.FLEXIBLE, result)
                 "startImmediateUpdate" -> startUpdate(AppUpdateType.IMMEDIATE, result)
                 "completeFlexibleUpdate" -> completeFlexibleUpdate(result)
+                "openGooglePlay" -> {
+                    openGooglePlay()
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -72,6 +76,7 @@ class MainActivity : FlutterActivity() {
             if (appUpdateInfo.updateAvailability() ==
                 UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS
             ) {
+                appUpdateMethodChannel?.invokeMethod("immediateUpdateInProgress", null)
                 startUpdate(AppUpdateType.IMMEDIATE, null)
             }
             if (appUpdateInfo.installStatus() == InstallStatus.DOWNLOADED) {
@@ -132,20 +137,24 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun checkUpdate(mode: String, result: MethodChannel.Result) {
+    private fun checkUpdate(result: MethodChannel.Result) {
         val manager = appUpdateManager
         if (manager == null) {
             result.error("APP_UPDATE_MANAGER_UNAVAILABLE", "Google Play update manager is unavailable.", null)
             return
         }
-        val updateType = if (mode == "immediate") AppUpdateType.IMMEDIATE else AppUpdateType.FLEXIBLE
         manager.appUpdateInfo
             .addOnSuccessListener { appUpdateInfo ->
+                val updateCanRun =
+                    appUpdateInfo.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE ||
+                        appUpdateInfo.updateAvailability() ==
+                        UpdateAvailability.DEVELOPER_TRIGGERED_UPDATE_IN_PROGRESS
                 result.success(
                     mapOf(
-                        "updateAvailable" to
-                            (appUpdateInfo.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE),
-                        "updateAllowed" to appUpdateInfo.isUpdateTypeAllowed(updateType),
+                        "updateAvailability" to appUpdateInfo.updateAvailability(),
+                        "updateAvailable" to updateCanRun,
+                        "flexibleAllowed" to appUpdateInfo.isUpdateTypeAllowed(AppUpdateType.FLEXIBLE),
+                        "immediateAllowed" to appUpdateInfo.isUpdateTypeAllowed(AppUpdateType.IMMEDIATE),
                         "installStatus" to appUpdateInfo.installStatus(),
                         "availableVersionCode" to appUpdateInfo.availableVersionCode(),
                         "installedFromPlay" to installedFromPlay(),
@@ -238,6 +247,22 @@ class MainActivity : FlutterActivity() {
 
     private fun notifyFlexibleUpdateDownloaded() {
         appUpdateMethodChannel?.invokeMethod("flexibleUpdateDownloaded", null)
+    }
+
+    private fun openGooglePlay() {
+        val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
+        marketIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (marketIntent.resolveActivity(packageManager) != null) {
+            startActivity(marketIntent)
+            return
+        }
+
+        val webIntent = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://play.google.com/store/apps/details?id=$packageName"),
+        )
+        webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(webIntent)
     }
 
     private fun currentVersionCode(): Long {

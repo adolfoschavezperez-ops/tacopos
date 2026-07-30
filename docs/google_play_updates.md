@@ -4,9 +4,9 @@
 
 - `applicationId`: `com.renova.tacopos`
 - Archivo Gradle principal: `android/app/build.gradle.kts`
-- Version preparada para la primera carga privada: `1.0.2+3`
-- `versionName`: `1.0.2`
-- `versionCode`: `3`
+- Version preparada para la siguiente prueba privada: `1.0.3+4`
+- `versionName`: `1.0.3`
+- `versionCode`: `4`
 - La version se incrementa desde `pubspec.yaml`.
 
 La APK release auditada antes de la preparacion estaba firmada con la llave
@@ -98,8 +98,12 @@ No guardar URL de APK, hash de APK ni rutas de descarga directa.
 
 - Web: no ejecuta Google Play In-App Updates y funciona normalmente.
 - Misma version o configuracion inactiva: no muestra actualizacion.
-- Version recomendada: muestra `Actualizacion disponible`, permite
-  `Recordarme despues` e inicia actualizacion flexible con `Actualizar ahora`.
+- Login: muestra `TacoPOS · Version <versionName> (<versionCode>)` y el estado
+  `Actualizado`, `Hay una actualizacion disponible`, `Esta version ya no es
+  compatible` o `No se pudo verificar la version`.
+- Version recomendada: muestra `Actualizacion disponible` solo si Google Play
+  confirma una version disponible y permite flexible; permite `Recordarme
+  despues` e inicia actualizacion flexible con `Actualizar ahora`.
 - Flexible descargada: muestra `Actualizacion lista para instalar` y permite
   `Reiniciar y actualizar`.
 - Version critica: muestra `Actualizacion necesaria`, bloquea la entrada a la
@@ -108,6 +112,9 @@ No guardar URL de APK, hash de APK ni rutas de descarga directa.
   se pudo determinar como obsoleta.
 - App no instalada desde Play: muestra `APP_UPDATE_NOT_PLAY_INSTALLED` y evita
   ciclos de actualizacion.
+- Version critica no propagada por Play: mantiene el bloqueo administrativo,
+  muestra que Google Play todavia no presenta la actualizacion y registra
+  `APP_UPDATE_REQUIRED_NOT_AVAILABLE`.
 
 ## Registro de dispositivos
 
@@ -129,7 +136,9 @@ Campos:
 - `appVersionName`
 - `appVersionCode`
 - `recommendedVersionCode`
+- `availableVersionCode`
 - `lastSeenAt`
+- `lastUpdateCheckAt`
 - `employeeId`
 - `employeeName`
 - `updateStatus`
@@ -141,6 +150,7 @@ Estados:
 - `up_to_date`
 - `update_recommended`
 - `update_required`
+- `play_update_unavailable`
 - `unknown`
 
 Nombres esperados para ajustar manualmente en Firestore si hace falta:
@@ -169,7 +179,7 @@ los dispositivos cuyo `rolloutGroup` este incluido.
 
 Google Play compara por `versionCode`.
 
-- `1.0.2+3`: primera version Google Play.
-- `1.0.3+4`: siguiente version menor.
+- `1.0.3+4`: siguiente version para probar actualizaciones desde Google Play.
 - `1.0.4+5`: siguiente version menor.
 - `1.0.5+6`: siguiente version menor.
+- `1.0.6+7`: siguiente version menor.
