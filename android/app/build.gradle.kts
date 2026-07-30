@@ -17,6 +17,15 @@ val hasReleaseKeystore = keystorePropertiesFile.exists()
 if (hasReleaseKeystore) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
+val isReleaseBuild = gradle.startParameter.taskNames.any {
+    it.contains("Release", ignoreCase = true) || it.contains("release", ignoreCase = true)
+}
+if (isReleaseBuild && !hasReleaseKeystore) {
+    throw GradleException(
+        "Release signing is not configured. Create android/key.properties with storePassword, " +
+            "keyPassword, keyAlias and storeFile before building APK/AAB release for Google Play."
+    )
+}
 
 android {
     namespace = "com.renova.tacopos"
@@ -53,10 +62,8 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (hasReleaseKeystore) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
     }
@@ -64,4 +71,8 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation("com.google.android.play:app-update-ktx:2.1.0")
 }

@@ -33,6 +33,7 @@ import 'cash_schedule_report_view.dart';
 import 'authorization_admin_screen.dart';
 import 'branch_catalog_screen.dart';
 import 'discount_admin_screen.dart';
+import 'device_versions_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'finance_admin_screen.dart';
 import 'kitchen_admin_screen.dart';
@@ -2771,6 +2772,16 @@ class _SettingsSection extends StatelessWidget {
           () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const DiscountAdminScreen()),
+          ),
+        ),
+      if (kIsWeb && employee?.hasAdminAccess == true)
+        _SettingsLink(
+          'Dispositivos y versiones',
+          'Tablets registradas, version instalada y estado de actualizacion.',
+          Icons.devices_other_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const DeviceVersionsScreen()),
           ),
         ),
       if (kIsWeb && employee?.hasAdminAccess == true)

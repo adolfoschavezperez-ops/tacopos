@@ -1,88 +1,175 @@
 # TacoPOS Google Play updates
 
-## Android audit
+## Estado tecnico
 
 - `applicationId`: `com.renova.tacopos`
-- Gradle file: `android/app/build.gradle.kts`
-- Version source: `pubspec.yaml`
-- Current prepared version: `1.0.1+2`
-- Current release signing fallback: Android debug key when `android/key.properties` does not exist
-- Observed APK certificate for `build/app/outputs/flutter-apk/app-release.apk`:
-  - DN: `C=US, O=Android, CN=Android Debug`
-  - SHA-1: `56:63:67:74:4D:99:B9:3A:69:F9:D7:93:17:FF:45:F5:11:58:27:17`
-  - SHA-256: `e1:59:99:74:f4:8e:ae:ff:e9:2b:05:7f:38:f8:9e:5c:ca:0b:d2:ec:c3:6a:fa:fd:a6:67:2c:97:b6:e8:d2:b3`
+- Archivo Gradle principal: `android/app/build.gradle.kts`
+- Version preparada para la primera carga privada: `1.0.2+3`
+- `versionName`: `1.0.2`
+- `versionCode`: `3`
+- La version se incrementa desde `pubspec.yaml`.
 
-## Migration risk
+La APK release auditada antes de la preparacion estaba firmada con la llave
+debug de Android:
 
-The APKs currently installed from local files were built with the Android debug
-certificate. A Google Play install can update them without uninstalling only if
-the Play-delivered package is considered the same signed app by Android.
+- DN: `C=US, O=Android, CN=Android Debug`
+- SHA-1: `56:63:67:74:4D:99:B9:3A:69:F9:D7:93:17:FF:45:F5:11:58:27:17`
+- SHA-256: `e1:59:99:74:f4:8e:ae:ff:e9:2b:05:7f:38:f8:9e:5c:ca:0b:d2:ec:c3:6a:fa:fd:a6:67:2c:97:b6:e8:d2:b3`
 
-Do not switch to a new release key for tablets that already have the debug-signed
-APK installed unless you accept uninstall/reinstall or a managed migration plan.
-For production, create a permanent release key before the first public/internal
-Play upload and keep it backed up.
+Esa llave no debe usarse como firma definitiva de produccion.
 
-## Permanent release key setup
+## Firma release
 
-Do not commit `.jks`, `.keystore`, or real `key.properties` files. They are
-ignored by Git.
+`android/key.properties` es obligatorio para generar `apk --release` o
+`appbundle --release`. Si falta, Gradle falla con un mensaje claro para evitar
+subir a Google Play una build release firmada con debug.
 
-1. Create and store the keystore outside the repo:
+No se debe subir a Git:
 
-   ```powershell
-   keytool -genkeypair -v -keystore C:\secure\tacopos\tacopos-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias tacopos
-   ```
+- `android/key.properties`
+- archivos `.jks`
+- archivos `.keystore`
+- contrasenas reales
 
-2. Copy `android/key.properties.example` to `android/key.properties`.
-3. Replace placeholders with the real passwords and `storeFile`.
-4. Back up the keystore and passwords in a secure password vault.
-5. Run `flutter build appbundle --release`.
+El repo incluye solo `android/key.properties.example`:
 
-When `android/key.properties` exists, Gradle signs release builds with that key.
-When it does not exist, Gradle keeps the current debug signing fallback.
+```properties
+storePassword=CHANGE_ME
+keyPassword=CHANGE_ME
+keyAlias=tacopos
+storeFile=C:/secure/tacopos/tacopos-release.jks
+```
 
-## Remote update configuration
+Crear la llave fuera del repo:
 
-Create this Firestore document:
+```powershell
+keytool -genkeypair -v -keystore C:\secure\tacopos\tacopos-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias tacopos
+```
+
+Guardar la llave y sus contrasenas en un gestor seguro. Todas las versiones
+futuras deben conservar `applicationId`, incrementar `versionCode` y usar la
+misma upload key.
+
+## Play App Signing
+
+Para Google Play:
+
+1. Activar Play App Signing al crear la app.
+2. Usar la llave release local como upload key.
+3. Subir el AAB firmado con esa upload key.
+4. Google Play firma los APK distribuidos a tablets.
+
+## Configuracion Firestore
+
+Documento:
 
 `restaurants/main_restaurant/settings/appUpdates`
 
-Fields:
+Campos finales:
 
-- `minimumSupportedVersionCode`: number. Lowest version allowed to operate.
-- `recommendedVersionCode`: number. Version that should be suggested.
-- `updateMessage`: string shown to the operator.
-- `forceUpdate`: boolean. If true, versions below `recommendedVersionCode` are forced.
+- `minimumSupportedVersionCode`: numero.
+- `recommendedVersionCode`: numero.
+- `forceUpdate`: booleano.
+- `updateMessage`: texto mostrado al operador.
+- `active`: booleano.
+- `publishedAt`: timestamp.
+- `releaseNotes`: texto opcional.
+- `rolloutGroup`: texto opcional informativo.
+- `rolloutGroups`: lista opcional con `pilot`, `operations`, `all`.
+- `criticalReason`: texto opcional.
 
-Suggested initial values for version `2`:
+Ejemplo inicial para `versionCode` 3:
 
-- `minimumSupportedVersionCode`: `1`
-- `recommendedVersionCode`: `2`
-- `updateMessage`: `Hay una nueva version de TacoPOS disponible.`
-- `forceUpdate`: `false`
+```js
+{
+  minimumSupportedVersionCode: 3,
+  recommendedVersionCode: 3,
+  forceUpdate: false,
+  active: true,
+  updateMessage: "TacoPOS esta actualizado.",
+  releaseNotes: "Primera version distribuida mediante Google Play.",
+  publishedAt: serverTimestamp()
+}
+```
 
-For a critical update, set `minimumSupportedVersionCode` to the required build
-number and `forceUpdate` to `true`.
+No guardar URL de APK, hash de APK ni rutas de descarga directa.
 
-## Google Play Console manual steps
+## Comportamiento
 
-1. Create the app with package `com.renova.tacopos`.
-2. Enable Play App Signing.
-3. Upload the generated AAB to Internal testing.
-4. Add tester Google accounts or a tester group.
-5. Complete required store listing, content rating, data safety, and app access forms.
-6. Publish only to Internal testing first.
-7. Install from the Play testing link on tablets.
+- Web: no ejecuta Google Play In-App Updates y funciona normalmente.
+- Misma version o configuracion inactiva: no muestra actualizacion.
+- Version recomendada: muestra `Actualizacion disponible`, permite
+  `Recordarme despues` e inicia actualizacion flexible con `Actualizar ahora`.
+- Flexible descargada: muestra `Actualizacion lista para instalar` y permite
+  `Reiniciar y actualizar`.
+- Version critica: muestra `Actualizacion necesaria`, bloquea la entrada a la
+  operacion e inicia actualizacion inmediata.
+- Firestore sin respuesta: registra diagnostico y no bloquea una version que no
+  se pudo determinar como obsoleta.
+- App no instalada desde Play: muestra `APP_UPDATE_NOT_PLAY_INSTALLED` y evita
+  ciclos de actualizacion.
 
-TacoPOS opens the Google Play listing for installation. It does not download APKs
-directly and does not use Firebase App Distribution as a production updater.
+## Registro de dispositivos
 
-Current app behavior:
+Las tablets escriben un registro ligero en:
 
-- Recommended update: shows a dialog, lets the operator continue temporarily,
-  and can open Google Play.
-- Required update: blocks operation below `minimumSupportedVersionCode` or below
-  `recommendedVersionCode` when `forceUpdate=true`, then opens Google Play.
-- If Firestore config cannot be fetched or there is no update configured, the app
-  continues operating.
+`restaurants/{restaurantId}/devices/{deviceId}`
+
+`deviceId` usa el UID anonimo de Firebase, no un identificador fisico del
+hardware.
+
+Campos:
+
+- `deviceId`
+- `deviceName`
+- `branchId`
+- `branchName`
+- `role`
+- `platform`
+- `appVersionName`
+- `appVersionCode`
+- `recommendedVersionCode`
+- `lastSeenAt`
+- `employeeId`
+- `employeeName`
+- `updateStatus`
+- `rolloutGroup`
+- `updatedAt`
+
+Estados:
+
+- `up_to_date`
+- `update_recommended`
+- `update_required`
+- `unknown`
+
+Nombres esperados para ajustar manualmente en Firestore si hace falta:
+
+- Caja
+- Cocina 1
+- Cocina 2
+- Mesero 1
+- Mesero 2
+- Administracion
+- Respaldo
+
+## Rollout seguro
+
+Usar `devices/{deviceId}.rolloutGroup` y
+`settings/appUpdates.rolloutGroups` para preparar grupos:
+
+1. `pilot`: una tablet de prueba.
+2. `operations`: Caja y Cocina.
+3. `all`: las siete tablets.
+
+Si `rolloutGroups` esta vacio, aplica a todos. Si tiene valores, solo aplica a
+los dispositivos cuyo `rolloutGroup` este incluido.
+
+## Versionado sugerido
+
+Google Play compara por `versionCode`.
+
+- `1.0.2+3`: primera version Google Play.
+- `1.0.3+4`: siguiente version menor.
+- `1.0.4+5`: siguiente version menor.
+- `1.0.5+6`: siguiente version menor.

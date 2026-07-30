@@ -2,17 +2,22 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../services/app_session.dart';
 import '../services/app_update_service.dart';
+import '../services/device_registry_service.dart';
 
 class AppUpdateGate extends StatefulWidget {
   const AppUpdateGate({
     super.key,
     required this.child,
     AppUpdateService? updateService,
-  }) : _updateService = updateService;
+    DeviceRegistryService? deviceRegistryService,
+  }) : _updateService = updateService,
+       _deviceRegistryService = deviceRegistryService;
 
   final Widget child;
   final AppUpdateService? _updateService;
+  final DeviceRegistryService? _deviceRegistryService;
 
   @override
   State<AppUpdateGate> createState() => _AppUpdateGateState();
@@ -20,17 +25,51 @@ class AppUpdateGate extends StatefulWidget {
 
 class _AppUpdateGateState extends State<AppUpdateGate> {
   late final AppUpdateService _updateService;
+  late final DeviceRegistryService _deviceRegistryService;
+  late final StreamSubscription<void> _downloadedSubscription;
+  late final StreamSubscription<AppUpdateInstallProgress> _progressSubscription;
+  AppUpdateCheckResult? _lastResult;
   AppUpdateCheckResult? _requiredUpdate;
+  AppUpdateInstallProgress? _progress;
   String? _requiredError;
   bool _checking = true;
   bool _updating = false;
   bool _recommendedShown = false;
+  bool _flexibleReadyToInstall = false;
 
   @override
   void initState() {
     super.initState();
     _updateService = widget._updateService ?? AppUpdateService();
+    _deviceRegistryService =
+        widget._deviceRegistryService ?? DeviceRegistryService.instance;
+    _downloadedSubscription = _updateService.flexibleUpdateDownloaded.listen(
+      (_) => _onFlexibleUpdateDownloaded(),
+    );
+    _progressSubscription = _updateService.flexibleUpdateProgress.listen((
+      progress,
+    ) {
+      if (mounted) setState(() => _progress = progress);
+    });
+    AppSession.instance.addListener(_onSessionChanged);
     unawaited(_checkForUpdate());
+  }
+
+  @override
+  void dispose() {
+    AppSession.instance.removeListener(_onSessionChanged);
+    _downloadedSubscription.cancel();
+    _progressSubscription.cancel();
+    super.dispose();
+  }
+
+  void _onSessionChanged() {
+    unawaited(
+      _deviceRegistryService.recordHeartbeat(
+        updateResult: _lastResult,
+        force: true,
+      ),
+    );
   }
 
   Future<void> _checkForUpdate() async {
@@ -39,13 +78,15 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
       _requiredError = null;
     });
     final result = await _updateService.checkForUpdate();
+    await _deviceRegistryService.recordHeartbeat(updateResult: result);
     if (!mounted) return;
     setState(() {
       _checking = false;
+      _lastResult = result;
       _requiredUpdate = result.decision.isRequired ? result : null;
     });
     if (result.decision.isRequired) {
-      if (result.playUpdateAvailable) {
+      if (result.canStartPlayUpdate) {
         unawaited(_runImmediateUpdate(result));
       }
       return;
@@ -66,7 +107,7 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _requiredError = error.toString();
+        _requiredError = _friendlyUpdateError(error);
       });
     } finally {
       if (mounted) {
@@ -90,23 +131,53 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
   }
 
   Future<void> _runFlexibleUpdate() async {
-    setState(() => _updating = true);
+    setState(() {
+      _updating = true;
+      _progress = null;
+    });
     try {
       await _updateService.startFlexibleUpdate();
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'No se pudo iniciar la actualizacion. Puedes continuar operando.',
-          ),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_friendlyUpdateError(error))));
     } finally {
       if (mounted) {
         setState(() => _updating = false);
       }
     }
+  }
+
+  void _onFlexibleUpdateDownloaded() {
+    if (!mounted || _flexibleReadyToInstall) return;
+    setState(() {
+      _flexibleReadyToInstall = true;
+      _updating = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        duration: const Duration(days: 1),
+        content: const Text('Actualizacion lista para instalar'),
+        action: SnackBarAction(
+          label: 'Reiniciar y actualizar',
+          onPressed: () => unawaited(_updateService.completeFlexibleUpdate()),
+        ),
+      ),
+    );
+  }
+
+  String _friendlyUpdateError(Object error) {
+    final text = error.toString();
+    if (text.contains('APP_UPDATE_NOT_PLAY_INSTALLED')) {
+      return 'APP_UPDATE_NOT_PLAY_INSTALLED: instala TacoPOS desde el enlace privado de Prueba interna de Google Play.';
+    }
+    if (text.contains('APP_UPDATE_CHECK_FAILED') ||
+        text.contains('APP_UPDATE_START_FAILED') ||
+        text.contains('APP_UPDATE_MANAGER_UNAVAILABLE')) {
+      return 'No se pudo consultar la actualizacion en Google Play.';
+    }
+    return 'No se pudo iniciar la actualizacion en Google Play.';
   }
 
   @override
@@ -119,7 +190,7 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
         updating: _updating,
         errorMessage: _requiredError,
         onRetry: _checkForUpdate,
-        onUpdate: requiredUpdate.playUpdateAvailable
+        onUpdate: requiredUpdate.canStartPlayUpdate
             ? () => _runImmediateUpdate(requiredUpdate)
             : null,
       );
@@ -129,13 +200,15 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
       children: [
         widget.child,
         if (_updating)
-          const Positioned.fill(
+          Positioned.fill(
             child: ColoredBox(
-              color: Color(0xAA000000),
+              color: const Color(0xAA000000),
               child: Center(
                 child: _UpdateProgressCard(
                   title: 'Actualizando TacoPOS',
-                  message: 'Google Play esta preparando la actualizacion.',
+                  message:
+                      'Google Play esta descargando la actualizacion flexible.',
+                  progress: _progress?.progress,
                 ),
               ),
             ),
@@ -156,21 +229,24 @@ class _RecommendedUpdateDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final canUpdate = result.canStartPlayUpdate;
     return AlertDialog(
       title: const Text('Actualizacion disponible'),
       content: Text(
         '${result.decision.message}\n\n'
-        'Version instalada: ${result.currentVersionCode}\n'
-        'Version recomendada: ${result.recommendedVersionCode}',
+        'Version instalada: ${result.currentVersionName} '
+        '(${result.currentVersionCode})\n'
+        'Version recomendada: ${result.recommendedVersionCode}'
+        '${canUpdate ? '' : '\n\nNo se pudo consultar la actualizacion en Google Play.'}',
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Continuar por ahora'),
+          child: const Text('Recordarme despues'),
         ),
         FilledButton(
-          onPressed: result.playUpdateAvailable ? () => onUpdate() : null,
-          child: const Text('Actualizar'),
+          onPressed: canUpdate ? () => onUpdate() : null,
+          child: const Text('Actualizar ahora'),
         ),
       ],
     );
@@ -197,6 +273,9 @@ class _RequiredUpdateScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final busy = checking || updating;
+    final nonPlayMessage = result.errorCode == 'APP_UPDATE_NOT_PLAY_INSTALLED'
+        ? '\n\nAPP_UPDATE_NOT_PLAY_INSTALLED: desinstala la APK debug e instala TacoPOS desde el enlace privado de Prueba interna.'
+        : '';
     return MaterialApp(
       title: 'TacoPOS',
       debugShowCheckedModeBanner: false,
@@ -205,7 +284,7 @@ class _RequiredUpdateScreen extends StatelessWidget {
         body: SafeArea(
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 460),
+              constraints: const BoxConstraints(maxWidth: 480),
               child: Card(
                 color: const Color(0xFF1E1E1E),
                 child: Padding(
@@ -221,7 +300,7 @@ class _RequiredUpdateScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 18),
                       const Text(
-                        'Actualizacion requerida',
+                        'Actualizacion necesaria',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white,
@@ -231,13 +310,14 @@ class _RequiredUpdateScreen extends StatelessWidget {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        result.decision.message,
+                        '${result.decision.message}$nonPlayMessage',
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Color(0xFFE0E0E0)),
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        'Version instalada: ${result.currentVersionCode}\n'
+                        'Version instalada: ${result.currentVersionName} '
+                        '(${result.currentVersionCode})\n'
                         'Version minima: ${result.minimumSupportedVersionCode}',
                         textAlign: TextAlign.center,
                         style: const TextStyle(color: Color(0xFFB8B8B8)),
@@ -245,7 +325,7 @@ class _RequiredUpdateScreen extends StatelessWidget {
                       if (errorMessage != null) ...[
                         const SizedBox(height: 12),
                         Text(
-                          'No se pudo iniciar desde Google Play. Revisa conexion o que la app este instalada desde Play.\n$errorMessage',
+                          errorMessage!,
                           textAlign: TextAlign.center,
                           style: const TextStyle(color: Color(0xFFFFB4AB)),
                         ),
@@ -282,10 +362,15 @@ class _RequiredUpdateScreen extends StatelessWidget {
 }
 
 class _UpdateProgressCard extends StatelessWidget {
-  const _UpdateProgressCard({required this.title, required this.message});
+  const _UpdateProgressCard({
+    required this.title,
+    required this.message,
+    this.progress,
+  });
 
   final String title;
   final String message;
+  final double? progress;
 
   @override
   Widget build(BuildContext context) {
@@ -296,7 +381,10 @@ class _UpdateProgressCard extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const CircularProgressIndicator(color: Color(0xFFFFC928)),
+            CircularProgressIndicator(
+              color: const Color(0xFFFFC928),
+              value: progress,
+            ),
             const SizedBox(height: 14),
             Text(
               title,
@@ -311,6 +399,13 @@ class _UpdateProgressCard extends StatelessWidget {
               textAlign: TextAlign.center,
               style: const TextStyle(color: Color(0xFFCFCFCF)),
             ),
+            if (progress != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                '${(progress! * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                style: const TextStyle(color: Color(0xFFB8B8B8)),
+              ),
+            ],
           ],
         ),
       ),
