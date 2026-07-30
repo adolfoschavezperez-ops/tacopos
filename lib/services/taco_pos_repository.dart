@@ -4324,6 +4324,9 @@ class TacoPosRepository {
   ) async {
     final ordersSnapshot = await _ordersRef.get();
     final paymentsSnapshot = await _db.collectionGroup('payments').get();
+    final cashSessionsSnapshot = await _cashSessionsRef.get();
+    final withdrawalsSnapshot = await _cashWithdrawalRequestsRef.get();
+    final partnerContributionsSnapshot = await _partnerContributionsRef.get();
     final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).toList();
     final paymentInputs = paymentsSnapshot.docs.map((doc) {
       final parentOrderId = doc.reference.parent.parent?.id ?? '';
@@ -4337,10 +4340,65 @@ class TacoPosRepository {
         tipAmount: _cashAuditTipAmount(doc.data()),
       );
     }).toList();
+    final previousSessions =
+        cashSessionsSnapshot.docs
+            .map(CashSession.fromDoc)
+            .where(
+              (row) =>
+                  row.branchId == session.branchId &&
+                  row.businessDate.compareTo(session.businessDate) < 0,
+            )
+            .toList()
+          ..sort((a, b) => b.businessDate.compareTo(a.businessDate));
+    final previousSession = previousSessions.isEmpty
+        ? null
+        : previousSessions.first;
+    final previousWithdrawals = withdrawalsSnapshot.docs
+        .where((doc) {
+          final data = doc.data();
+          if (previousSession == null) return false;
+          return data['cashSessionId'] == previousSession.id ||
+              (data['branchId'] == session.branchId &&
+                  data['businessDate'] == previousSession.businessDate);
+        })
+        .map(
+          (doc) => _cashAuditMovementFromData(
+            id: doc.id,
+            type: 'Retiro corte anterior',
+            data: doc.data(),
+            includedInSession: true,
+          ),
+        )
+        .toList();
+    final nonSaleMovements = [
+      ...partnerContributionsSnapshot.docs
+          .where((doc) => _cashAuditMovementMatchesSession(doc.data(), session))
+          .map(
+            (doc) => _cashAuditMovementFromData(
+              id: doc.id,
+              type: 'Aportacion socio',
+              data: doc.data(),
+              includedInSession: doc.data()['cashSessionId'] == session.id,
+            ),
+          ),
+      ...withdrawalsSnapshot.docs
+          .where((doc) => _cashAuditMovementMatchesSession(doc.data(), session))
+          .map(
+            (doc) => _cashAuditMovementFromData(
+              id: doc.id,
+              type: 'Retiro / ajuste caja',
+              data: doc.data(),
+              includedInSession: doc.data()['cashSessionId'] == session.id,
+            ),
+          ),
+    ];
     return buildCashDifferenceAuditReport(
       session: session,
       orders: orders,
       payments: paymentInputs,
+      previousSession: previousSession,
+      previousWithdrawals: previousWithdrawals,
+      nonSaleMovements: nonSaleMovements,
     );
   }
 
@@ -4357,6 +4415,46 @@ class TacoPosRepository {
       if (value > 0) return value;
     }
     return 0;
+  }
+
+  bool _cashAuditMovementMatchesSession(
+    Map<String, dynamic> data,
+    CashSession session,
+  ) {
+    if (data['cashSessionId'] == session.id) return true;
+    if (data['branchId'] != session.branchId) return false;
+    final date = (data['businessDate'] ?? data['date'])?.toString();
+    return date == session.businessDate;
+  }
+
+  CashAuditMovementRow _cashAuditMovementFromData({
+    required String id,
+    required String type,
+    required Map<String, dynamic> data,
+    required bool includedInSession,
+  }) {
+    final dateValue = data['businessDate'] ?? data['date'] ?? data['createdAt'];
+    return CashAuditMovementRow(
+      type: type,
+      id: id,
+      amount: _numberToDouble(data['amount']),
+      method: (data['method'] ?? data['paymentMethod'] ?? 'cash').toString(),
+      date: dateValue is Timestamp
+          ? _businessDateFor(dateValue.toDate())
+          : (dateValue ?? '').toString(),
+      user:
+          (data['requestedByEmployeeName'] ??
+                  data['authorizedByEmployeeName'] ??
+                  data['partnerName'] ??
+                  data['employeeName'] ??
+                  data['createdByEmployeeName'] ??
+                  '')
+              .toString(),
+      status: (data['status'] ?? '').toString(),
+      includedInSession: includedInSession,
+      notes: (data['reason'] ?? data['notes'] ?? data['description'] ?? '')
+          .toString(),
+    );
   }
 
   void invalidateCanonicalSalesSummaryCache() {

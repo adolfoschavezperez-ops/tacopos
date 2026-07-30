@@ -82,6 +82,13 @@ void main() {
       expect(report.activeCashPayments, closeTo(950, 0.001));
       expect(report.cardCandidates.first.paymentId, 'cash-as-card-candidate');
       expect(report.cardCandidates.first.confidence, 'Alto');
+      expect(
+        report.findings
+            .where((row) => row.type == 'Clasificacion')
+            .single
+            .reducesGlobalDifference,
+        'No',
+      );
       expect(report.cashCandidates, isNotEmpty);
       expect(report.changeIssues, isEmpty);
     });

@@ -1677,96 +1677,154 @@ class _CashDifferenceAuditScreenState
             return const LoadingPanel(message: 'Auditando corte...');
           }
           final report = snapshot.data!;
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
-            children: [
-              SectionHeader(
-                title: 'Corte ${report.session.businessDate}',
-                subtitle:
-                    '${report.session.branchName} | ${report.session.id} | Solo lectura',
-                trailing: Wrap(
-                  spacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: _reload,
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('Actualizar'),
+          return DefaultTabController(
+            length: 9,
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  child: SectionHeader(
+                    title: 'Corte ${report.session.businessDate}',
+                    subtitle:
+                        '${report.session.branchName} | ${report.session.id} | Solo lectura',
+                    trailing: Wrap(
+                      spacing: 8,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: _reload,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('Actualizar'),
+                        ),
+                        FilledButton.icon(
+                          onPressed: () => _export(report),
+                          icon: const Icon(Icons.download_outlined),
+                          label: const Text('Exportar CSV'),
+                        ),
+                      ],
                     ),
-                    FilledButton.icon(
-                      onPressed: () => _export(report),
-                      icon: const Icon(Icons.download_outlined),
-                      label: const Text('Exportar CSV'),
-                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const TabBar(
+                  isScrollable: true,
+                  dividerHeight: 0,
+                  tabs: [
+                    Tab(text: 'Conciliacion global'),
+                    Tab(text: 'Por orden'),
+                    Tab(text: 'Por pago'),
+                    Tab(text: 'Fondo y arrastre'),
+                    Tab(text: 'Propinas'),
+                    Tab(text: 'Cancelaciones'),
+                    Tab(text: 'Ingresos no venta'),
+                    Tab(text: 'Terminal'),
+                    Tab(text: 'Hallazgos'),
                   ],
                 ),
-              ),
-              const SizedBox(height: 10),
-              _CashAuditWarning(report: report),
-              const SizedBox(height: 12),
-              _CashAuditSummary(report: report),
-              const SizedBox(height: 12),
-              _CashAuditIssuesSection(
-                title: 'Candidatos tarjeta',
-                icon: Icons.credit_card_outlined,
-                accent: BrandColors.info,
-                emptyText: 'Sin candidatos de tarjeta.',
-                rows: report.cardCandidates,
-              ),
-              const SizedBox(height: 12),
-              _CashAuditIssuesSection(
-                title: 'Candidatos efectivo',
-                icon: Icons.account_balance_wallet_outlined,
-                accent: BrandColors.success,
-                emptyText: 'Sin candidatos de efectivo.',
-                rows: report.cashCandidates,
-              ),
-              const SizedBox(height: 12),
-              _CashAuditIssuesSection(
-                title: 'Propinas detectadas',
-                icon: Icons.volunteer_activism_outlined,
-                accent: BrandColors.accentOrange,
-                emptyText: 'Sin campos de propina detectados.',
-                rows: report.tipCandidates,
-              ),
-              const SizedBox(height: 12),
-              _CashAuditIssuesSection(
-                title: 'Cambio / recibido',
-                icon: Icons.price_check_outlined,
-                accent: BrandColors.accentYellow,
-                emptyText: 'Sin diferencias en recibido menos cambio.',
-                rows: report.changeIssues,
-              ),
-              const SizedBox(height: 12),
-              _CashAuditIssuesSection(
-                title: 'Inconsistencias de fecha o corte',
-                icon: Icons.warning_amber_outlined,
-                accent: BrandColors.danger,
-                emptyText: 'Sin inconsistencias de businessDate/cashSessionId.',
-                rows: report.inconsistencies,
-              ),
-              const SizedBox(height: 12),
-              _CashAuditPaymentsSection(
-                title: 'Pagos activos incluidos',
-                rows: report.activePayments,
-                emptyText: 'Sin pagos activos para este corte.',
-              ),
-              const SizedBox(height: 12),
-              _CashAuditPaymentsSection(
-                title: 'Pagos cancelados',
-                rows: report.cancelledPayments,
-                emptyText: 'Sin pagos cancelados.',
-              ),
-              const SizedBox(height: 12),
-              _CashAuditPaymentsSection(
-                title: 'Pagos excluidos',
-                rows: report.excludedPayments,
-                emptyText: 'Sin pagos excluidos.',
-                maxRows: 80,
-              ),
-              const SizedBox(height: 12),
-              _CashAuditOrdersSection(rows: report.orders),
-            ],
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _CashAuditScroll(
+                        children: [
+                          _CashAuditWarning(report: report),
+                          const SizedBox(height: 12),
+                          _CashAuditGlobalSection(report: report),
+                          const SizedBox(height: 12),
+                          _CashAuditSummary(report: report),
+                        ],
+                      ),
+                      _CashAuditScroll(
+                        children: [
+                          _CashAuditOrdersSection(rows: report.orders),
+                        ],
+                      ),
+                      _CashAuditScroll(
+                        children: [
+                          _CashAuditPaymentsSection(
+                            title: 'Pagos activos incluidos',
+                            rows: report.activePayments,
+                            emptyText: 'Sin pagos activos para este corte.',
+                          ),
+                          const SizedBox(height: 12),
+                          _CashAuditIssuesSection(
+                            title: 'Cambio / recibido',
+                            icon: Icons.price_check_outlined,
+                            accent: BrandColors.accentYellow,
+                            emptyText:
+                                'Sin diferencias en recibido menos cambio.',
+                            rows: report.changeIssues,
+                          ),
+                        ],
+                      ),
+                      _CashAuditScroll(
+                        children: [_CashAuditCarrySection(report: report)],
+                      ),
+                      _CashAuditScroll(
+                        children: [
+                          _CashAuditTipTotals(report: report),
+                          const SizedBox(height: 12),
+                          _CashAuditIssuesSection(
+                            title: 'Propinas detectadas',
+                            icon: Icons.volunteer_activism_outlined,
+                            accent: BrandColors.accentOrange,
+                            emptyText: 'Sin campos de propina detectados.',
+                            rows: report.tipCandidates,
+                          ),
+                        ],
+                      ),
+                      _CashAuditScroll(
+                        children: [
+                          _CashAuditCancellationTotals(report: report),
+                          const SizedBox(height: 12),
+                          _CashAuditPaymentsSection(
+                            title: 'Pagos cancelados',
+                            rows: report.cancelledPayments,
+                            emptyText: 'Sin pagos cancelados.',
+                          ),
+                        ],
+                      ),
+                      _CashAuditScroll(
+                        children: [
+                          _CashAuditMovementsSection(
+                            title: 'Ingresos / movimientos no venta',
+                            rows: report.nonSaleMovements,
+                            emptyText:
+                                'No se encontraron aportaciones o movimientos no venta para este corte.',
+                          ),
+                        ],
+                      ),
+                      _CashAuditScroll(
+                        children: [
+                          _CashAuditTerminalSection(report: report),
+                          const SizedBox(height: 12),
+                          _CashAuditIssuesSection(
+                            title: 'Candidatos tarjeta',
+                            icon: Icons.credit_card_outlined,
+                            accent: BrandColors.info,
+                            emptyText: 'Sin candidatos de tarjeta.',
+                            rows: report.cardCandidates,
+                          ),
+                        ],
+                      ),
+                      _CashAuditScroll(
+                        children: [
+                          _CashAuditFindingsSection(rows: report.findings),
+                          const SizedBox(height: 12),
+                          _CashAuditIssuesSection(
+                            title: 'Inconsistencias de fecha o corte',
+                            icon: Icons.warning_amber_outlined,
+                            accent: BrandColors.danger,
+                            emptyText:
+                                'Sin inconsistencias de businessDate/cashSessionId.',
+                            rows: report.inconsistencies,
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           );
         },
       ),
@@ -1791,6 +1849,92 @@ class _CashAuditWarning extends StatelessWidget {
           color: BrandColors.textSecondary,
           fontWeight: FontWeight.w700,
         ),
+      ),
+    );
+  }
+}
+
+class _CashAuditScroll extends StatelessWidget {
+  const _CashAuditScroll({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      children: children,
+    );
+  }
+}
+
+class _CashAuditGlobalSection extends StatelessWidget {
+  const _CashAuditGlobalSection({required this.report});
+
+  final CashDifferenceAuditReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: 'Conciliacion global',
+      icon: Icons.balance_outlined,
+      accent: BrandColors.accentYellow,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _MetricWrap(
+            children: [
+              _CashMetricCard(
+                label: 'Dinero observado',
+                value: report.observedMoney,
+                accent: BrandColors.accentYellow,
+                prominent: true,
+              ),
+              _CashMetricCard(
+                label: 'Venta neta POS',
+                value: report.netSales,
+                accent: BrandColors.info,
+                prominent: true,
+              ),
+              _CashMetricCard(
+                label: 'Diferencia global',
+                value: report.globalDifference,
+                accent: BrandColors.danger,
+                prominent: true,
+              ),
+              _CashMetricCard(
+                label: 'Fondo para cuadrar',
+                value: report.openingCashNeededToBalance,
+                accent: BrandColors.accentOrange,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _InfoLine(
+            label: 'Venta bruta POS',
+            value: _moneyText(report.grossSales),
+          ),
+          _InfoLine(
+            label: 'Descuentos POS',
+            value: _moneyText(report.discountTotal),
+          ),
+          _InfoLine(
+            label: 'Fondo registrado',
+            value: _moneyText(report.session.openingCashAmount),
+          ),
+          _InfoLine(
+            label: 'Brecha de fondo',
+            value: _moneyText(report.openingCashGap),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Reclasificar un pago entre cash/card corrige columnas de metodo, pero no reduce esta diferencia global.',
+            style: TextStyle(
+              color: BrandColors.textSecondary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1882,6 +2026,294 @@ class _CashAuditSummary extends StatelessWidget {
   }
 }
 
+class _CashAuditCarrySection extends StatelessWidget {
+  const _CashAuditCarrySection({required this.report});
+
+  final CashDifferenceAuditReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final previous = report.previousSession;
+    return _CashSection(
+      title: 'Fondo y arrastre',
+      icon: Icons.savings_outlined,
+      accent: BrandColors.accentOrange,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _InfoLine(
+            label: 'Fondo registrado',
+            value: _moneyText(report.session.openingCashAmount),
+          ),
+          _InfoLine(
+            label: 'Fondo requerido',
+            value: _moneyText(report.openingCashNeededToBalance),
+          ),
+          _InfoLine(
+            label: 'Diferencia',
+            value: _moneyText(report.openingCashGap),
+          ),
+          const SizedBox(height: 12),
+          if (previous == null)
+            const Text(
+              'No se encontro corte anterior para esta sucursal.',
+              style: TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          else ...[
+            Text(
+              'Corte anterior ${previous.businessDate}',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 8),
+            _InfoLine(label: 'Estado', value: previous.status),
+            _InfoLine(
+              label: 'Fondo inicial',
+              value: _moneyText(previous.openingCashAmount),
+            ),
+            _InfoLine(
+              label: 'Efectivo contado',
+              value: _moneyText(previous.countedCashAmount),
+            ),
+            _InfoLine(
+              label: 'Terminal reportada',
+              value: _moneyText(previous.terminalReportedAmount),
+            ),
+            _InfoLine(
+              label: 'Diferencia neta',
+              value: _moneyText(previous.netDifference),
+            ),
+            _InfoLine(
+              label: 'Correccion historica',
+              value: previous.correctionMode
+                  ? _auditDateText(previous.correctedAt)
+                  : 'No',
+            ),
+            const SizedBox(height: 12),
+            _CashAuditMovementsSection(
+              title: 'Retiros del corte anterior',
+              rows: report.previousWithdrawals,
+              emptyText: 'Sin retiros registrados para el corte anterior.',
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CashAuditTipTotals extends StatelessWidget {
+  const _CashAuditTipTotals({required this.report});
+
+  final CashDifferenceAuditReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: 'Totales propinas',
+      icon: Icons.volunteer_activism_outlined,
+      accent: BrandColors.accentOrange,
+      child: _MetricWrap(
+        children: [
+          _CashMetricCard(
+            label: 'Propinas efectivo',
+            value: report.tipCashTotal,
+            accent: BrandColors.success,
+          ),
+          _CashMetricCard(
+            label: 'Propinas tarjeta',
+            value: report.tipCardTotal,
+            accent: BrandColors.info,
+          ),
+          _CashMetricCard(
+            label: 'Total propinas',
+            value: report.tipTotal,
+            accent: BrandColors.accentOrange,
+            prominent: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashAuditCancellationTotals extends StatelessWidget {
+  const _CashAuditCancellationTotals({required this.report});
+
+  final CashDifferenceAuditReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: 'Totales cancelaciones',
+      icon: Icons.cancel_outlined,
+      accent: BrandColors.danger,
+      child: _MetricWrap(
+        children: [
+          _CashMetricCard(
+            label: 'Cancelado efectivo',
+            value: report.cancelledCashTotal,
+            accent: BrandColors.success,
+          ),
+          _CashMetricCard(
+            label: 'Cancelado tarjeta',
+            value: report.cancelledCardTotal,
+            accent: BrandColors.info,
+          ),
+          _CashMetricCard(
+            label: 'Pagos cancelados',
+            value: report.cancelledPayments.length.toDouble(),
+            accent: BrandColors.danger,
+            prominent: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashAuditTerminalSection extends StatelessWidget {
+  const _CashAuditTerminalSection({required this.report});
+
+  final CashDifferenceAuditReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: 'Terminal',
+      icon: Icons.credit_card_outlined,
+      accent: BrandColors.info,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _MetricWrap(
+            children: [
+              _CashMetricCard(
+                label: 'Tarjeta POS',
+                value: report.cardPos,
+                accent: BrandColors.info,
+              ),
+              _CashMetricCard(
+                label: 'Terminal reportada',
+                value: report.session.terminalReportedAmount,
+                accent: BrandColors.textPrimary,
+                prominent: true,
+              ),
+              _CashMetricCard(
+                label: 'Diferencia terminal',
+                value: report.cardDifference,
+                accent: BrandColors.danger,
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Se requiere comparar contra el detalle de operaciones de la terminal: hora, importe, referencia, folio asociado y estado. TacoPOS no lee directamente ese lote.',
+            style: TextStyle(
+              color: BrandColors.textSecondary,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashAuditMovementsSection extends StatelessWidget {
+  const _CashAuditMovementsSection({
+    required this.title,
+    required this.rows,
+    required this.emptyText,
+  });
+
+  final String title;
+  final List<CashAuditMovementRow> rows;
+  final String emptyText;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: '$title (${rows.length})',
+      icon: Icons.swap_vert_circle_outlined,
+      accent: BrandColors.accentOrange,
+      child: rows.isEmpty
+          ? Text(
+              emptyText,
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          : _CashAuditTable(
+              columns: const [
+                'Tipo',
+                'Importe',
+                'Metodo',
+                'Fecha',
+                'Usuario',
+                'Estado',
+                'Incluido',
+                'Notas',
+              ],
+              rows: rows.map((row) {
+                return [
+                  row.type,
+                  _moneyText(row.amount),
+                  row.method,
+                  row.date,
+                  row.user,
+                  row.status,
+                  row.includedInSession ? 'Si' : 'No',
+                  row.notes,
+                ];
+              }).toList(),
+            ),
+    );
+  }
+}
+
+class _CashAuditFindingsSection extends StatelessWidget {
+  const _CashAuditFindingsSection({required this.rows});
+
+  final List<CashAuditFindingRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: 'Hallazgos (${rows.length})',
+      icon: Icons.fact_check_outlined,
+      accent: BrandColors.accentYellow,
+      child: _CashAuditTable(
+        columns: const [
+          'Hallazgo',
+          'Tipo',
+          'Importe',
+          'Efectivo',
+          'Tarjeta',
+          'Reduce global',
+          'Confianza',
+          'Evidencia',
+        ],
+        rows: rows.map((row) {
+          return [
+            row.finding,
+            row.type,
+            _moneyText(row.amount),
+            _moneyText(row.cashEffect),
+            _moneyText(row.cardEffect),
+            row.reducesGlobalDifference,
+            row.confidence,
+            row.evidence,
+          ];
+        }).toList(),
+      ),
+    );
+  }
+}
+
 class _CashAuditIssuesSection extends StatelessWidget {
   const _CashAuditIssuesSection({
     required this.title,
@@ -1944,17 +2376,15 @@ class _CashAuditPaymentsSection extends StatelessWidget {
     required this.title,
     required this.rows,
     required this.emptyText,
-    this.maxRows = 120,
   });
 
   final String title;
   final List<CashAuditPaymentRow> rows;
   final String emptyText;
-  final int maxRows;
 
   @override
   Widget build(BuildContext context) {
-    final visibleRows = rows.take(maxRows).toList();
+    final visibleRows = rows.take(120).toList();
     return _CashSection(
       title: '$title (${rows.length})',
       icon: Icons.payments_outlined,
@@ -1974,7 +2404,12 @@ class _CashAuditPaymentsSection extends StatelessWidget {
                   columns: const [
                     'Folio',
                     'Metodo',
+                    'Base',
+                    'Cobrado',
+                    'Aplicado',
                     'Importe',
+                    'Recibido',
+                    'Cambio',
                     'Estado',
                     'Fecha',
                     'businessDate',
@@ -1985,7 +2420,12 @@ class _CashAuditPaymentsSection extends StatelessWidget {
                     return [
                       row.label,
                       row.originalMethod,
+                      _moneyText(row.baseAmount),
+                      _moneyText(row.chargedAmount),
+                      _moneyText(row.appliedAmount ?? 0),
                       _moneyText(row.amountForAudit),
+                      _moneyText(row.receivedAmount ?? 0),
+                      _moneyText(row.changeAmount ?? 0),
                       row.status,
                       _auditDateText(row.createdAt),
                       row.businessDate,
@@ -2037,9 +2477,14 @@ class _CashAuditOrdersSection extends StatelessWidget {
                 'Estado',
                 'businessDate',
                 'cashSessionId',
+                'Bruto',
+                'Descuento',
                 'Neto',
                 'Pagos activos',
+                'Pagos cancelados',
+                'Pendiente calc',
                 'Dif',
+                'Observacion',
               ],
               rows: rows.take(120).map((row) {
                 return [
@@ -2048,9 +2493,14 @@ class _CashAuditOrdersSection extends StatelessWidget {
                   row.status,
                   row.businessDate,
                   row.cashSessionId,
+                  _moneyText(row.grossSubtotal),
+                  _moneyText(row.discountAmount),
                   _moneyText(row.netTotal),
                   _moneyText(row.activePaymentTotal),
+                  _moneyText(row.cancelledPaymentTotal),
+                  _moneyText(row.calculatedPendingTotal),
                   _moneyText(row.paymentVsNetDifference),
+                  row.observation,
                 ];
               }).toList(),
             ),

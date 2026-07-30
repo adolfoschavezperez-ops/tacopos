@@ -16,8 +16,12 @@ class CashDifferenceAuditReport {
     required this.cardCandidates,
     required this.tipCandidates,
     required this.changeIssues,
+    required this.findings,
+    required this.nonSaleMovements,
+    required this.previousWithdrawals,
     required this.explainedCashAmount,
     required this.explainedCardAmount,
+    this.previousSession,
   });
 
   final CashSession session;
@@ -30,14 +34,22 @@ class CashDifferenceAuditReport {
   final List<CashAuditIssueRow> cardCandidates;
   final List<CashAuditIssueRow> tipCandidates;
   final List<CashAuditIssueRow> changeIssues;
+  final List<CashAuditFindingRow> findings;
+  final List<CashAuditMovementRow> nonSaleMovements;
+  final List<CashAuditMovementRow> previousWithdrawals;
   final double explainedCashAmount;
   final double explainedCardAmount;
+  final CashSession? previousSession;
 
-  double get netSales =>
-      orders.where((row) => row.countsForSales).fold(0, (sum, row) {
-        final net = row.netTotal > 0 ? row.netTotal : row.total;
-        return sum + net;
-      });
+  double get grossSales => orders
+      .where((row) => row.countsForSales)
+      .fold(0, (sum, row) => sum + row.grossSubtotal);
+  double get discountTotal => orders
+      .where((row) => row.countsForSales)
+      .fold(0, (sum, row) => sum + row.discountAmount);
+  double get netSales => orders
+      .where((row) => row.countsForSales)
+      .fold(0, (sum, row) => sum + row.netTotal);
 
   double get cashPos =>
       session.expectedCashAmount -
@@ -49,6 +61,13 @@ class CashDifferenceAuditReport {
   double get cardPos => session.expectedCardChargedAmount;
   double get cardDifference => session.terminalReportedAmount - cardPos;
   double get totalDifference => cashDifference + cardDifference;
+  double get observedMoney =>
+      countedCashLessOpening + session.terminalReportedAmount;
+  double get globalDifference => observedMoney - netSales;
+  double get openingCashNeededToBalance =>
+      session.countedCashAmount + session.terminalReportedAmount - netSales;
+  double get openingCashGap =>
+      openingCashNeededToBalance - session.openingCashAmount;
   double get activePaymentTotal =>
       activePayments.fold(0, (sum, row) => sum + row.amountForAudit);
   double get activeCashPayments => activePayments
@@ -61,6 +80,42 @@ class CashDifferenceAuditReport {
       (cashDifference.abs() - explainedCashAmount).clamp(0, double.infinity);
   double get unexplainedCardAmount =>
       (cardDifference.abs() - explainedCardAmount).clamp(0, double.infinity);
+  double get orderLedgerDifference =>
+      orders.fold(0, (sum, row) => sum + row.paymentVsNetDifference);
+  double get cancelledCashTotal => cancelledPayments
+      .where((row) => row.normalizedMethod == 'cash')
+      .fold(0, (sum, row) => sum + row.amountForAudit);
+  double get cancelledCardTotal => cancelledPayments
+      .where((row) => row.normalizedMethod == 'card')
+      .fold(0, (sum, row) => sum + row.amountForAudit);
+  double get tipCashTotal => tipCandidates
+      .where((row) => normalizeCashAuditPaymentMethod(row.method) == 'cash')
+      .fold(0, (sum, row) => sum + row.amount);
+  double get tipCardTotal => tipCandidates
+      .where((row) => normalizeCashAuditPaymentMethod(row.method) == 'card')
+      .fold(0, (sum, row) => sum + row.amount);
+  double get tipTotal => tipCandidates.fold(0, (sum, row) => sum + row.amount);
+  double get cashReceivedChangeDifferenceTotal {
+    var total = 0.0;
+    for (final row in activePayments) {
+      if (row.normalizedMethod != 'cash') continue;
+      final received = row.receivedAmount;
+      final change = row.changeAmount;
+      if (received == null || change == null) continue;
+      if (received == 0 && change == 0) continue;
+      total += (received - change) - row.amountForAudit;
+    }
+    return total;
+  }
+
+  double get confirmedGlobalExplanationTotal => findings
+      .where((row) => row.reducesGlobalDifference == 'Si')
+      .fold(0, (sum, row) => sum + row.amount.abs());
+  double get unexplainedGlobalAmount =>
+      (globalDifference.abs() - confirmedGlobalExplanationTotal).clamp(
+        0,
+        double.infinity,
+      );
 }
 
 class CashAuditOrderRow {
@@ -81,6 +136,9 @@ class CashAuditOrderRow {
     required this.paidTotal,
     required this.pendingTotal,
     required this.activePaymentTotal,
+    required this.cancelledPaymentTotal,
+    required this.calculatedPendingTotal,
+    required this.observation,
     required this.inclusionReason,
   });
 
@@ -100,12 +158,14 @@ class CashAuditOrderRow {
   final double paidTotal;
   final double pendingTotal;
   final double activePaymentTotal;
+  final double cancelledPaymentTotal;
+  final double calculatedPendingTotal;
+  final String observation;
   final String inclusionReason;
 
   bool get countsForSales =>
       !{'cancelled', 'voided'}.contains(status.trim().toLowerCase());
-  double get paymentVsNetDifference =>
-      activePaymentTotal - (netTotal > 0 ? netTotal : total);
+  double get paymentVsNetDifference => activePaymentTotal - netTotal;
 }
 
 class CashAuditPaymentRow {
@@ -189,6 +249,52 @@ class CashAuditIssueRow {
   final String explanation;
 }
 
+class CashAuditFindingRow {
+  const CashAuditFindingRow({
+    required this.finding,
+    required this.type,
+    required this.amount,
+    required this.cashEffect,
+    required this.cardEffect,
+    required this.reducesGlobalDifference,
+    required this.confidence,
+    required this.evidence,
+  });
+
+  final String finding;
+  final String type;
+  final double amount;
+  final double cashEffect;
+  final double cardEffect;
+  final String reducesGlobalDifference;
+  final String confidence;
+  final String evidence;
+}
+
+class CashAuditMovementRow {
+  const CashAuditMovementRow({
+    required this.type,
+    required this.id,
+    required this.amount,
+    required this.method,
+    required this.date,
+    required this.user,
+    required this.status,
+    required this.includedInSession,
+    required this.notes,
+  });
+
+  final String type;
+  final String id;
+  final double amount;
+  final String method;
+  final String date;
+  final String user;
+  final String status;
+  final bool includedInSession;
+  final String notes;
+}
+
 class CashAuditPaymentInput {
   const CashAuditPaymentInput({
     required this.payment,
@@ -205,6 +311,9 @@ CashDifferenceAuditReport buildCashDifferenceAuditReport({
   required CashSession session,
   required Iterable<PosOrder> orders,
   required Iterable<CashAuditPaymentInput> payments,
+  CashSession? previousSession,
+  Iterable<CashAuditMovementRow> nonSaleMovements = const [],
+  Iterable<CashAuditMovementRow> previousWithdrawals = const [],
 }) {
   final orderById = {for (final order in orders) order.id: order};
   final paymentRows = payments
@@ -227,8 +336,17 @@ CashDifferenceAuditReport buildCashDifferenceAuditReport({
           )
           .map((order) {
             final activePaymentTotal = (rowsByOrder[order.id] ?? const [])
-                .where((payment) => payment.isActive)
+                .where((payment) => payment.isActive && payment.included)
                 .fold(0.0, (sum, payment) => sum + payment.amountForAudit);
+            final cancelledPaymentTotal = (rowsByOrder[order.id] ?? const [])
+                .where((payment) => !payment.isActive)
+                .fold(0.0, (sum, payment) => sum + payment.amountForAudit);
+            final netTotal = order.netTotal ?? order.total;
+            final observation = _orderObservation(
+              order: order,
+              netTotal: netTotal,
+              activePaymentTotal: activePaymentTotal,
+            );
             return CashAuditOrderRow(
               orderId: order.id,
               label: _orderLabel(order),
@@ -241,11 +359,14 @@ CashDifferenceAuditReport buildCashDifferenceAuditReport({
               paymentStatus: order.paymentStatus,
               grossSubtotal: order.grossSubtotal ?? order.total,
               discountAmount: order.explicitDiscount,
-              netTotal: order.netTotal ?? order.total,
+              netTotal: netTotal,
               total: order.total,
               paidTotal: order.paidTotal,
               pendingTotal: order.pendingTotal,
               activePaymentTotal: activePaymentTotal,
+              cancelledPaymentTotal: cancelledPaymentTotal,
+              calculatedPendingTotal: netTotal - activePaymentTotal,
+              observation: observation,
               inclusionReason: order.cashSessionId == session.id
                   ? 'cashSessionId del corte'
                   : 'fallback historico por businessDate y sucursal',
@@ -269,6 +390,17 @@ CashDifferenceAuditReport buildCashDifferenceAuditReport({
   final cashCandidates = _cashCandidates(session, paymentRows);
   final tipCandidates = _tipCandidates(paymentRows);
   final changeIssues = _changeIssues(paymentRows);
+  final findings = _findings(
+    session: session,
+    orders: orderRows,
+    paymentRows: paymentRows,
+    cardCandidates: cardCandidates,
+    tipCandidates: tipCandidates,
+    changeIssues: changeIssues,
+    previousSession: previousSession,
+    nonSaleMovements: nonSaleMovements.toList(),
+    previousWithdrawals: previousWithdrawals.toList(),
+  );
   final explainedCard = cardCandidates.isEmpty
       ? 0.0
       : cardCandidates.first.amount;
@@ -287,8 +419,12 @@ CashDifferenceAuditReport buildCashDifferenceAuditReport({
     cardCandidates: cardCandidates,
     tipCandidates: tipCandidates,
     changeIssues: changeIssues,
+    findings: findings,
+    nonSaleMovements: nonSaleMovements.toList(),
+    previousWithdrawals: previousWithdrawals.toList(),
     explainedCashAmount: explainedCash,
     explainedCardAmount: explainedCard,
+    previousSession: previousSession,
   );
   debugPrint(
     'CASH_AUDIT_SUMMARY\n'
@@ -301,6 +437,9 @@ CashDifferenceAuditReport buildCashDifferenceAuditReport({
     'cashDifference=${report.cashDifference.toStringAsFixed(2)}\n'
     'terminalReported=${session.terminalReportedAmount.toStringAsFixed(2)}\n'
     'cardDifference=${report.cardDifference.toStringAsFixed(2)}\n'
+    'observedMoney=${report.observedMoney.toStringAsFixed(2)}\n'
+    'posNetSales=${report.netSales.toStringAsFixed(2)}\n'
+    'globalDifference=${report.globalDifference.toStringAsFixed(2)}\n'
     'explainedCash=${report.explainedCashAmount.toStringAsFixed(2)}\n'
     'unexplainedCash=${report.unexplainedCashAmount.toStringAsFixed(2)}\n'
     'explainedCard=${report.explainedCardAmount.toStringAsFixed(2)}\n'
@@ -594,6 +733,178 @@ List<CashAuditIssueRow> _changeIssues(List<CashAuditPaymentRow> rows) {
       .toList();
 }
 
+String _orderObservation({
+  required PosOrder order,
+  required double netTotal,
+  required double activePaymentTotal,
+}) {
+  final diff = activePaymentTotal - netTotal;
+  final observations = <String>[];
+  if (diff.abs() <= 0.02) {
+    observations.add('Cuadra exactamente');
+  } else if (diff > 0) {
+    observations.add('Pagada de mas');
+  } else {
+    observations.add('Pagada de menos');
+  }
+  if (netTotal == 0 && activePaymentTotal > 0) {
+    observations.add('Pago activo con netTotal cero');
+  }
+  if (netTotal > 0 && activePaymentTotal == 0) {
+    observations.add('Total sin pago');
+  }
+  if ({'cancelled', 'voided'}.contains(order.status.trim().toLowerCase()) &&
+      activePaymentTotal > 0) {
+    observations.add('Orden cancelada con pago activo');
+  }
+  if (order.paymentStatus == 'paid' && diff.abs() > 0.02) {
+    observations.add('Orden pagada con saldo');
+  }
+  if ((order.businessDate ?? order.operationalDate ?? '').trim().isEmpty ||
+      (order.cashSessionId ?? '').trim().isEmpty) {
+    observations.add('Metadata inconsistente');
+  }
+  return observations.join('; ');
+}
+
+List<CashAuditFindingRow> _findings({
+  required CashSession session,
+  required List<CashAuditOrderRow> orders,
+  required List<CashAuditPaymentRow> paymentRows,
+  required List<CashAuditIssueRow> cardCandidates,
+  required List<CashAuditIssueRow> tipCandidates,
+  required List<CashAuditIssueRow> changeIssues,
+  required CashSession? previousSession,
+  required List<CashAuditMovementRow> nonSaleMovements,
+  required List<CashAuditMovementRow> previousWithdrawals,
+}) {
+  final findings = <CashAuditFindingRow>[];
+  if (cardCandidates.isNotEmpty) {
+    final candidate = cardCandidates.first;
+    findings.add(
+      CashAuditFindingRow(
+        finding:
+            'Pago ${candidate.label} registrado cash, probable cobro con terminal',
+        type: 'Clasificacion',
+        amount: candidate.amount,
+        cashEffect: -candidate.amount,
+        cardEffect: candidate.amount,
+        reducesGlobalDifference: 'No',
+        confidence: candidate.confidence,
+        evidence:
+            '${candidate.paymentId} / ${candidate.orderId}. Corrige columnas cash/card, no el sobrante global.',
+      ),
+    );
+  }
+  for (final row in orders.where(
+    (row) =>
+        row.grossSubtotal > 0 &&
+        row.netTotal == 0 &&
+        row.activePaymentTotal == 0,
+  )) {
+    findings.add(
+      CashAuditFindingRow(
+        finding: '${row.label} con venta bruta y descuento total',
+        type: 'Registro',
+        amount: row.grossSubtotal,
+        cashEffect: 0,
+        cardEffect: 0,
+        reducesGlobalDifference: 'No confirmado',
+        confidence: 'Media',
+        evidence:
+            '${row.orderId}: gross=${_money(row.grossSubtotal)}, descuento=${_money(row.discountAmount)}, netTotal=0, pagos activos=${_money(row.activePaymentTotal)}.',
+      ),
+    );
+  }
+  for (final movement in nonSaleMovements.where(
+    (row) => row.amount > 0 && !row.type.toLowerCase().contains('retiro'),
+  )) {
+    findings.add(
+      CashAuditFindingRow(
+        finding: movement.type,
+        type: 'Ingreso no venta',
+        amount: movement.amount,
+        cashEffect: movement.method == 'card' ? 0 : movement.amount,
+        cardEffect: movement.method == 'card' ? movement.amount : 0,
+        reducesGlobalDifference: movement.includedInSession
+            ? 'Si'
+            : 'Pendiente',
+        confidence: movement.includedInSession ? 'Alta' : 'Media',
+        evidence: '${movement.id} ${movement.date} ${movement.user}',
+      ),
+    );
+  }
+  final tipTotal = tipCandidates.fold(0.0, (sum, row) => sum + row.amount);
+  if (tipTotal > 0) {
+    findings.add(
+      CashAuditFindingRow(
+        finding: 'Propinas detectadas en pagos',
+        type: 'Conteo/alcance',
+        amount: tipTotal,
+        cashEffect: 0,
+        cardEffect: 0,
+        reducesGlobalDifference: 'Pendiente',
+        confidence: 'Media',
+        evidence:
+            '${tipCandidates.length} pagos con campos de propina; comparar contra caja/terminal.',
+      ),
+    );
+  }
+  if (changeIssues.isNotEmpty) {
+    findings.add(
+      CashAuditFindingRow(
+        finding: 'Diferencias en recibido menos cambio',
+        type: 'Conteo/alcance',
+        amount: changeIssues.fold(0.0, (sum, row) => sum + row.amount),
+        cashEffect: 0,
+        cardEffect: 0,
+        reducesGlobalDifference: 'Pendiente',
+        confidence: 'Alta',
+        evidence:
+            '${changeIssues.length} pagos efectivos con cambio irregular.',
+      ),
+    );
+  }
+  if (previousSession != null) {
+    final previousNet = previousSession.netDifference;
+    findings.add(
+      CashAuditFindingRow(
+        finding: 'Corte anterior con diferencia neta',
+        type: 'Conteo/alcance',
+        amount: previousNet.abs(),
+        cashEffect: previousSession.cashDifference,
+        cardEffect: previousSession.cardDifference,
+        reducesGlobalDifference: 'Pendiente',
+        confidence: 'Media',
+        evidence:
+            '${previousSession.businessDate}: net=${_money(previousNet)}, retiros=${_money(previousWithdrawals.fold(0.0, (sum, row) => sum + row.amount))}. Requiere confirmar arrastre fisico.',
+      ),
+    );
+  }
+  final globalObserved =
+      session.countedCashAmount -
+      session.openingCashAmount +
+      session.terminalReportedAmount;
+  final globalNet = orders
+      .where((row) => row.countsForSales)
+      .fold(0.0, (sum, row) => sum + row.netTotal);
+  final globalDifference = globalObserved - globalNet;
+  findings.add(
+    CashAuditFindingRow(
+      finding: 'Diferencia global pendiente de explicar',
+      type: 'Registro / conteo',
+      amount: globalDifference.abs(),
+      cashEffect: 0,
+      cardEffect: 0,
+      reducesGlobalDifference: 'Pendiente',
+      confidence: 'Alta',
+      evidence:
+          'Dinero observado ${_money(globalObserved)} - venta neta POS ${_money(globalNet)}.',
+    ),
+  );
+  return findings;
+}
+
 String _orderLabel(PosOrder order) {
   if (order.takeoutNumber != null) return '#${order.takeoutNumber}';
   final customer = order.customerName?.trim();
@@ -627,7 +938,12 @@ List<List<String>> cashDifferenceAuditCsvRows(
     ['Resumen'],
     ['cashSessionId', report.session.id],
     ['businessDate', report.session.businessDate],
+    ['dinero observado', _money(report.observedMoney)],
+    ['venta bruta POS', _money(report.grossSales)],
+    ['descuentos POS', _money(report.discountTotal)],
     ['venta neta', _money(report.netSales)],
+    ['diferencia global', _money(report.globalDifference)],
+    ['fondo requerido para cuadrar', _money(report.openingCashNeededToBalance)],
     ['pagos activos', _money(report.activePaymentTotal)],
     ['efectivo POS', _money(report.cashPos)],
     ['conteo sin fondo', _money(report.countedCashLessOpening)],
@@ -640,7 +956,31 @@ List<List<String>> cashDifferenceAuditCsvRows(
     ['monto explicado tarjeta', _money(report.explainedCardAmount)],
     ['monto sin explicar efectivo', _money(report.unexplainedCashAmount)],
     ['monto sin explicar tarjeta', _money(report.unexplainedCardAmount)],
+    ['monto sin explicar global', _money(report.unexplainedGlobalAmount)],
   ]);
+  section('Hallazgos');
+  rows.add([
+    'hallazgo',
+    'tipo',
+    'importe',
+    'afecta efectivo',
+    'afecta tarjeta',
+    'reduce diferencia global',
+    'confianza',
+    'evidencia',
+  ]);
+  for (final row in report.findings) {
+    rows.add([
+      row.finding,
+      row.type,
+      _money(row.amount),
+      _money(row.cashEffect),
+      _money(row.cardEffect),
+      row.reducesGlobalDifference,
+      row.confidence,
+      row.evidence,
+    ]);
+  }
   section('Ordenes');
   rows.add([
     'orderId',
@@ -651,7 +991,10 @@ List<List<String>> cashDifferenceAuditCsvRows(
     'status',
     'netTotal',
     'pagos activos',
+    'pagos cancelados',
+    'pendiente calculado',
     'diferencia',
+    'observacion',
   ]);
   for (final row in report.orders) {
     rows.add([
@@ -663,7 +1006,10 @@ List<List<String>> cashDifferenceAuditCsvRows(
       row.status,
       _money(row.netTotal),
       _money(row.activePaymentTotal),
+      _money(row.cancelledPaymentTotal),
+      _money(row.calculatedPendingTotal),
       _money(row.paymentVsNetDifference),
+      row.observation,
     ]);
   }
   section('Pagos activos');
@@ -678,7 +1024,41 @@ List<List<String>> cashDifferenceAuditCsvRows(
   _addIssueRows(rows, report.cashCandidates);
   section('Candidatos tarjeta');
   _addIssueRows(rows, report.cardCandidates);
+  section('Ingresos no venta');
+  _addMovementRows(rows, report.nonSaleMovements);
+  section('Retiros corte anterior');
+  _addMovementRows(rows, report.previousWithdrawals);
   return rows;
+}
+
+void _addMovementRows(
+  List<List<String>> rows,
+  Iterable<CashAuditMovementRow> movements,
+) {
+  rows.add([
+    'tipo',
+    'id',
+    'importe',
+    'metodo',
+    'fecha',
+    'usuario',
+    'status',
+    'incluido en corte',
+    'notas',
+  ]);
+  for (final row in movements) {
+    rows.add([
+      row.type,
+      row.id,
+      _money(row.amount),
+      row.method,
+      row.date,
+      row.user,
+      row.status,
+      row.includedInSession ? 'si' : 'no',
+      row.notes,
+    ]);
+  }
 }
 
 void _addPaymentRows(
