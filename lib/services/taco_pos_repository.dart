@@ -16,6 +16,7 @@ import '../core/orders/order_activity.dart';
 import '../core/orders/order_types.dart';
 import '../core/purchases/purchase_capture_discount.dart';
 import '../core/reports/canonical_sales_summary.dart';
+import '../core/reports/cash_difference_audit.dart';
 import '../core/reports/cash_schedule_report.dart';
 import '../core/reports/finance_dashboard.dart';
 import '../core/reports/hourly_sales_comparison.dart';
@@ -4316,6 +4317,46 @@ class TacoPosRepository {
       selectedCashSession: session,
       activeOnly: activeOnly,
     );
+  }
+
+  Future<CashDifferenceAuditReport> getCashDifferenceAudit(
+    CashSession session,
+  ) async {
+    final ordersSnapshot = await _ordersRef.get();
+    final paymentsSnapshot = await _db.collectionGroup('payments').get();
+    final orders = ordersSnapshot.docs.map(PosOrder.fromDoc).toList();
+    final paymentInputs = paymentsSnapshot.docs.map((doc) {
+      final parentOrderId = doc.reference.parent.parent?.id ?? '';
+      final payment = Payment.fromDoc(doc);
+      final resolvedOrderId = payment.orderId.trim().isEmpty
+          ? parentOrderId
+          : payment.orderId;
+      return CashAuditPaymentInput(
+        payment: payment.copyWith(orderId: resolvedOrderId),
+        orderId: resolvedOrderId,
+        tipAmount: _cashAuditTipAmount(doc.data()),
+      );
+    }).toList();
+    return buildCashDifferenceAuditReport(
+      session: session,
+      orders: orders,
+      payments: paymentInputs,
+    );
+  }
+
+  double _cashAuditTipAmount(Map<String, dynamic> data) {
+    for (final key in const [
+      'tipAmount',
+      'tip',
+      'tips',
+      'propina',
+      'gratuity',
+      'employeeTip',
+    ]) {
+      final value = _numberToDouble(data[key]);
+      if (value > 0) return value;
+    }
+    return 0;
   }
 
   void invalidateCanonicalSalesSummaryCache() {

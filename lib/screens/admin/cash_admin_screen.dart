@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/reports/canonical_sales_summary.dart';
+import '../../core/reports/cash_difference_audit.dart';
 import '../../core/reports/report_data_bundle.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/branch.dart';
@@ -12,6 +13,7 @@ import '../../models/payment.dart';
 import '../../services/app_session.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
+import '../../utils/csv_exporter.dart';
 import '../../widgets/branded_scaffold.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
@@ -1192,6 +1194,12 @@ class _CashSessionDetailCard extends StatelessWidget {
                     icon: const Icon(Icons.add_card_outlined),
                     label: const Text('Agregar gasto historico'),
                   ),
+                if (!session.isOpen && _canAuditCashDifferences)
+                  OutlinedButton.icon(
+                    onPressed: () => _openCashDifferenceAudit(context),
+                    icon: const Icon(Icons.manage_search_outlined),
+                    label: const Text('Auditar diferencias'),
+                  ),
                 Icon(Icons.point_of_sale_outlined, color: statusColor),
               ],
             ),
@@ -1571,6 +1579,19 @@ class _CashSessionDetailCard extends StatelessWidget {
         employee?.canManageCash == true;
   }
 
+  bool get _canAuditCashDifferences {
+    final employee = AppSession.instance.employee;
+    return employee?.hasAdminAccess == true || employee?.canViewAdmin == true;
+  }
+
+  void _openCashDifferenceAudit(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => _CashDifferenceAuditScreen(session: session),
+      ),
+    );
+  }
+
   double _cardCommission(double cardTotal) {
     return cardTotal * 0.035 * 1.16;
   }
@@ -1584,6 +1605,525 @@ class _CashSessionDetailCard extends StatelessWidget {
     }
     return BrandColors.textSecondary;
   }
+}
+
+class _CashDifferenceAuditScreen extends StatefulWidget {
+  const _CashDifferenceAuditScreen({required this.session});
+
+  final CashSession session;
+
+  @override
+  State<_CashDifferenceAuditScreen> createState() =>
+      _CashDifferenceAuditScreenState();
+}
+
+class _CashDifferenceAuditScreenState
+    extends State<_CashDifferenceAuditScreen> {
+  late Future<CashDifferenceAuditReport> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = TacoPosRepository().getCashDifferenceAudit(widget.session);
+  }
+
+  void _reload() {
+    setState(() {
+      _future = TacoPosRepository().getCashDifferenceAudit(widget.session);
+    });
+  }
+
+  Future<void> _export(CashDifferenceAuditReport report) async {
+    final content = _cashAuditCsvContent(cashDifferenceAuditCsvRows(report));
+    final message = await exportCsvFile(
+      fileName:
+          'auditoria-corte-${widget.session.businessDate}-${widget.session.id}.csv',
+      content: content,
+    );
+    if (!mounted) return;
+    showAppSnackBar(context, message, type: AppSnackBarType.success);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final employee = AppSession.instance.employee;
+    final canAudit =
+        employee?.hasAdminAccess == true || employee?.canViewAdmin == true;
+    if (!canAudit) {
+      return const BrandedScaffold(
+        title: 'Auditoria de diferencias',
+        body: EmptyState(
+          icon: Icons.lock_outline,
+          title: 'Sin permiso',
+          message: 'Solo Admin puede auditar diferencias de corte.',
+        ),
+      );
+    }
+
+    return BrandedScaffold(
+      title: 'Auditoria de diferencias',
+      body: FutureBuilder<CashDifferenceAuditReport>(
+        future: _future,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return EmptyState(
+              icon: Icons.error_outline,
+              title: 'No se pudo cargar la auditoria',
+              message: '${snapshot.error}',
+            );
+          }
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const LoadingPanel(message: 'Auditando corte...');
+          }
+          final report = snapshot.data!;
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+            children: [
+              SectionHeader(
+                title: 'Corte ${report.session.businessDate}',
+                subtitle:
+                    '${report.session.branchName} | ${report.session.id} | Solo lectura',
+                trailing: Wrap(
+                  spacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _reload,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Actualizar'),
+                    ),
+                    FilledButton.icon(
+                      onPressed: () => _export(report),
+                      icon: const Icon(Icons.download_outlined),
+                      label: const Text('Exportar CSV'),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              _CashAuditWarning(report: report),
+              const SizedBox(height: 12),
+              _CashAuditSummary(report: report),
+              const SizedBox(height: 12),
+              _CashAuditIssuesSection(
+                title: 'Candidatos tarjeta',
+                icon: Icons.credit_card_outlined,
+                accent: BrandColors.info,
+                emptyText: 'Sin candidatos de tarjeta.',
+                rows: report.cardCandidates,
+              ),
+              const SizedBox(height: 12),
+              _CashAuditIssuesSection(
+                title: 'Candidatos efectivo',
+                icon: Icons.account_balance_wallet_outlined,
+                accent: BrandColors.success,
+                emptyText: 'Sin candidatos de efectivo.',
+                rows: report.cashCandidates,
+              ),
+              const SizedBox(height: 12),
+              _CashAuditIssuesSection(
+                title: 'Propinas detectadas',
+                icon: Icons.volunteer_activism_outlined,
+                accent: BrandColors.accentOrange,
+                emptyText: 'Sin campos de propina detectados.',
+                rows: report.tipCandidates,
+              ),
+              const SizedBox(height: 12),
+              _CashAuditIssuesSection(
+                title: 'Cambio / recibido',
+                icon: Icons.price_check_outlined,
+                accent: BrandColors.accentYellow,
+                emptyText: 'Sin diferencias en recibido menos cambio.',
+                rows: report.changeIssues,
+              ),
+              const SizedBox(height: 12),
+              _CashAuditIssuesSection(
+                title: 'Inconsistencias de fecha o corte',
+                icon: Icons.warning_amber_outlined,
+                accent: BrandColors.danger,
+                emptyText: 'Sin inconsistencias de businessDate/cashSessionId.',
+                rows: report.inconsistencies,
+              ),
+              const SizedBox(height: 12),
+              _CashAuditPaymentsSection(
+                title: 'Pagos activos incluidos',
+                rows: report.activePayments,
+                emptyText: 'Sin pagos activos para este corte.',
+              ),
+              const SizedBox(height: 12),
+              _CashAuditPaymentsSection(
+                title: 'Pagos cancelados',
+                rows: report.cancelledPayments,
+                emptyText: 'Sin pagos cancelados.',
+              ),
+              const SizedBox(height: 12),
+              _CashAuditPaymentsSection(
+                title: 'Pagos excluidos',
+                rows: report.excludedPayments,
+                emptyText: 'Sin pagos excluidos.',
+                maxRows: 80,
+              ),
+              const SizedBox(height: 12),
+              _CashAuditOrdersSection(rows: report.orders),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _CashAuditWarning extends StatelessWidget {
+  const _CashAuditWarning({required this.report});
+
+  final CashDifferenceAuditReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      borderRadius: 12,
+      padding: const EdgeInsets.all(12),
+      child: Text(
+        'Auditoria read-only. No cambia el corte, no recalcula formulas y no escribe en Firestore. '
+        'Los candidatos son pistas operativas para revisar tickets, terminal y dinero fisico.',
+        style: TextStyle(
+          color: BrandColors.textSecondary,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _CashAuditSummary extends StatelessWidget {
+  const _CashAuditSummary({required this.report});
+
+  final CashDifferenceAuditReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: 'Resumen',
+      icon: Icons.analytics_outlined,
+      accent: BrandColors.accentYellow,
+      child: _MetricWrap(
+        children: [
+          _CashMetricCard(
+            label: 'Venta neta',
+            value: report.netSales,
+            accent: BrandColors.accentYellow,
+            prominent: true,
+          ),
+          _CashMetricCard(
+            label: 'Pagos activos',
+            value: report.activePaymentTotal,
+            accent: BrandColors.info,
+          ),
+          _CashMetricCard(
+            label: 'Efectivo POS',
+            value: report.cashPos,
+            accent: BrandColors.success,
+          ),
+          _CashMetricCard(
+            label: 'Conteo sin fondo',
+            value: report.countedCashLessOpening,
+            accent: BrandColors.textPrimary,
+          ),
+          _CashMetricCard(
+            label: 'Diferencia efectivo',
+            value: report.cashDifference,
+            accent: _differenceColor(report.cashDifference),
+          ),
+          _CashMetricCard(
+            label: 'Tarjeta POS',
+            value: report.cardPos,
+            accent: BrandColors.info,
+          ),
+          _CashMetricCard(
+            label: 'Terminal reportada',
+            value: report.session.terminalReportedAmount,
+            accent: BrandColors.textPrimary,
+          ),
+          _CashMetricCard(
+            label: 'Diferencia tarjeta',
+            value: report.cardDifference,
+            accent: _differenceColor(report.cardDifference),
+          ),
+          _CashMetricCard(
+            label: 'Explicado efectivo',
+            value: report.explainedCashAmount,
+            accent: BrandColors.success,
+          ),
+          _CashMetricCard(
+            label: 'Sin explicar efectivo',
+            value: report.unexplainedCashAmount,
+            accent: BrandColors.accentOrange,
+          ),
+          _CashMetricCard(
+            label: 'Explicado tarjeta',
+            value: report.explainedCardAmount,
+            accent: BrandColors.info,
+          ),
+          _CashMetricCard(
+            label: 'Sin explicar tarjeta',
+            value: report.unexplainedCardAmount,
+            accent: BrandColors.accentOrange,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _differenceColor(double value) {
+    if (value < 0) return BrandColors.danger;
+    if (value > 0) return BrandColors.success;
+    return BrandColors.textSecondary;
+  }
+}
+
+class _CashAuditIssuesSection extends StatelessWidget {
+  const _CashAuditIssuesSection({
+    required this.title,
+    required this.icon,
+    required this.accent,
+    required this.emptyText,
+    required this.rows,
+  });
+
+  final String title;
+  final IconData icon;
+  final Color accent;
+  final String emptyText;
+  final List<CashAuditIssueRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: '$title (${rows.length})',
+      icon: icon,
+      accent: accent,
+      child: rows.isEmpty
+          ? Text(
+              emptyText,
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          : _CashAuditTable(
+              columns: const [
+                'Confianza',
+                'Importe',
+                'Folio',
+                'Metodo',
+                'Pago',
+                'Orden',
+                'Hora',
+                'Explicacion',
+              ],
+              rows: rows.take(20).map((row) {
+                return [
+                  row.confidence,
+                  _moneyText(row.amount),
+                  row.label,
+                  row.method,
+                  row.paymentId,
+                  row.orderId,
+                  _auditDateText(row.createdAt),
+                  row.explanation,
+                ];
+              }).toList(),
+            ),
+    );
+  }
+}
+
+class _CashAuditPaymentsSection extends StatelessWidget {
+  const _CashAuditPaymentsSection({
+    required this.title,
+    required this.rows,
+    required this.emptyText,
+    this.maxRows = 120,
+  });
+
+  final String title;
+  final List<CashAuditPaymentRow> rows;
+  final String emptyText;
+  final int maxRows;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleRows = rows.take(maxRows).toList();
+    return _CashSection(
+      title: '$title (${rows.length})',
+      icon: Icons.payments_outlined,
+      accent: BrandColors.info,
+      child: rows.isEmpty
+          ? Text(
+              emptyText,
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _CashAuditTable(
+                  columns: const [
+                    'Folio',
+                    'Metodo',
+                    'Importe',
+                    'Estado',
+                    'Fecha',
+                    'businessDate',
+                    'cashSessionId',
+                    'Motivo',
+                  ],
+                  rows: visibleRows.map((row) {
+                    return [
+                      row.label,
+                      row.originalMethod,
+                      _moneyText(row.amountForAudit),
+                      row.status,
+                      _auditDateText(row.createdAt),
+                      row.businessDate,
+                      row.cashSessionId,
+                      row.inclusionReason,
+                    ];
+                  }).toList(),
+                ),
+                if (rows.length > visibleRows.length)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Mostrando ${visibleRows.length} de ${rows.length}. Exporta CSV para ver todo.',
+                      style: const TextStyle(
+                        color: BrandColors.textMuted,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+class _CashAuditOrdersSection extends StatelessWidget {
+  const _CashAuditOrdersSection({required this.rows});
+
+  final List<CashAuditOrderRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CashSection(
+      title: 'Ordenes revisadas (${rows.length})',
+      icon: Icons.receipt_long_outlined,
+      accent: BrandColors.textSecondary,
+      child: rows.isEmpty
+          ? const Text(
+              'Sin ordenes relacionadas con el corte.',
+              style: TextStyle(
+                color: BrandColors.textMuted,
+                fontWeight: FontWeight.w700,
+              ),
+            )
+          : _CashAuditTable(
+              columns: const [
+                'Folio',
+                'Tipo',
+                'Estado',
+                'businessDate',
+                'cashSessionId',
+                'Neto',
+                'Pagos activos',
+                'Dif',
+              ],
+              rows: rows.take(120).map((row) {
+                return [
+                  row.label,
+                  row.orderType,
+                  row.status,
+                  row.businessDate,
+                  row.cashSessionId,
+                  _moneyText(row.netTotal),
+                  _moneyText(row.activePaymentTotal),
+                  _moneyText(row.paymentVsNetDifference),
+                ];
+              }).toList(),
+            ),
+    );
+  }
+}
+
+class _CashAuditTable extends StatelessWidget {
+  const _CashAuditTable({required this.columns, required this.rows});
+
+  final List<String> columns;
+  final List<List<String>> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: DataTable(
+        headingRowHeight: 34,
+        dataRowMinHeight: 36,
+        dataRowMaxHeight: 64,
+        columnSpacing: 18,
+        columns: columns
+            .map(
+              (column) => DataColumn(
+                label: Text(
+                  column,
+                  style: const TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            )
+            .toList(),
+        rows: rows
+            .map(
+              (row) => DataRow(
+                cells: row
+                    .map(
+                      (cell) => DataCell(
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 260),
+                          child: Text(
+                            cell.isEmpty ? '-' : cell,
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 2,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            )
+            .toList(),
+      ),
+    );
+  }
+}
+
+String _auditDateText(DateTime? date) {
+  if (date == null) return 'Sin fecha';
+  return DateFormat('yyyy-MM-dd HH:mm').format(date);
+}
+
+String _cashAuditCsvContent(List<List<String>> rows) {
+  return rows.map((row) => row.map(_cashAuditCsvCell).join(',')).join('\n');
+}
+
+String _cashAuditCsvCell(String value) {
+  final escaped = value.replaceAll('"', '""');
+  return '"$escaped"';
 }
 
 class _CashSection extends StatelessWidget {
