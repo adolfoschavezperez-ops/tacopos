@@ -45,6 +45,34 @@ const _activeOrderStatuses = {
 
 const _activePaymentStatuses = {'pending', 'pendiente', 'partial', 'parcial'};
 
+const _beverageCategories = {'bebida', 'bebidas', 'drink', 'drinks', 'bar'};
+
+const _kitchenPendingStatuses = {
+  'pending',
+  'pendiente',
+  'sent',
+  'enviado',
+  'enviada',
+  'cooking',
+  'cocinando',
+  'preparing',
+  'preparando',
+  'en_preparacion',
+  'cancel_requested',
+};
+
+const _kitchenReadyStatuses = {
+  'ready',
+  'listo',
+  'lista',
+  'completed',
+  'completado',
+  'completada',
+  'served',
+  'servido',
+  'servida',
+};
+
 class GhostOrderEvaluation {
   const GhostOrderEvaluation({
     required this.isGhost,
@@ -115,6 +143,106 @@ bool isActiveOrderItem(OrderItem item) {
       cancelStatus != 'accepted' &&
       item.cancelledAt == null &&
       item.cancelAcceptedAt == null;
+}
+
+bool itemRequiresKitchen(OrderItem item) {
+  if (!item.sendToKitchen) return false;
+  final category = normalizeOperationalStatus(
+    item.category,
+  ).replaceAll(RegExp(r'[\s-]+'), '_');
+  return !_beverageCategories.contains(category);
+}
+
+bool itemWasSentToKitchen(OrderItem item) {
+  final kitchenStatus = normalizeOperationalStatus(
+    item.kitchenStatus,
+  ).replaceAll(RegExp(r'[\s-]+'), '_');
+  final batchId = item.kitchenBatchId?.trim() ?? '';
+  return item.sentToKitchenAt != null ||
+      batchId.isNotEmpty ||
+      _kitchenPendingStatuses.contains(kitchenStatus) ||
+      _kitchenReadyStatuses.contains(kitchenStatus);
+}
+
+bool isKitchenPendingItem(OrderItem item) {
+  if (!isActiveOrderItem(item)) return false;
+  if (!itemRequiresKitchen(item)) return false;
+  if (!itemWasSentToKitchen(item)) return false;
+  final kitchenStatus = normalizeOperationalStatus(
+    item.kitchenStatus,
+  ).replaceAll(RegExp(r'[\s-]+'), '_');
+  return _kitchenPendingStatuses.contains(kitchenStatus) &&
+      !_kitchenReadyStatuses.contains(kitchenStatus);
+}
+
+bool isKitchenReadyItem(OrderItem item) {
+  if (!isActiveOrderItem(item)) return false;
+  if (!itemRequiresKitchen(item)) return false;
+  final kitchenStatus = normalizeOperationalStatus(
+    item.kitchenStatus,
+  ).replaceAll(RegExp(r'[\s-]+'), '_');
+  return _kitchenReadyStatuses.contains(kitchenStatus) ||
+      item.readyAt != null ||
+      item.paidAt != null;
+}
+
+bool hasPendingKitchenItems(Iterable<OrderItem> items) {
+  return items.any(isKitchenPendingItem);
+}
+
+int pendingKitchenItemsCount(Iterable<OrderItem> items) {
+  return items.where(isKitchenPendingItem).length;
+}
+
+String kitchenStatusForItems(Iterable<OrderItem> items) {
+  final activeKitchenItems = items
+      .where((item) => isActiveOrderItem(item) && itemRequiresKitchen(item))
+      .toList(growable: false);
+  if (activeKitchenItems.isEmpty) return 'not_required';
+
+  var hasPending = false;
+  var hasSent = false;
+  var hasCooking = false;
+  var hasReady = false;
+  for (final item in activeKitchenItems) {
+    final status = normalizeOperationalStatus(
+      item.kitchenStatus,
+    ).replaceAll(RegExp(r'[\s-]+'), '_');
+    if (status == 'cooking' ||
+        status == 'cocinando' ||
+        status == 'preparing' ||
+        status == 'preparando' ||
+        status == 'en_preparacion') {
+      hasCooking = true;
+      hasPending = true;
+    } else if (status == 'sent' ||
+        status == 'enviado' ||
+        status == 'enviada' ||
+        status == 'cancel_requested') {
+      hasSent = true;
+      hasPending = true;
+    } else if ((status == 'pending' || status == 'pendiente') &&
+        itemWasSentToKitchen(item)) {
+      hasPending = true;
+    } else if (isKitchenReadyItem(item)) {
+      hasReady = true;
+    }
+  }
+
+  if (hasCooking) return 'cooking';
+  if (hasSent) return 'sent';
+  if (hasPending) return 'pending';
+  if (hasReady) return 'ready';
+  return 'not_required';
+}
+
+bool shouldKeepTableOccupiedForOrder({
+  required PosOrder order,
+  required Iterable<OrderItem> items,
+  required Iterable<Payment> payments,
+}) {
+  return orderUsesPhysicalTables(order) &&
+      isOperationalOrderActive(order: order, items: items, payments: payments);
 }
 
 double activeCustomerPaymentAmount(Payment payment) {

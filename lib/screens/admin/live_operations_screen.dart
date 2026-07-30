@@ -611,7 +611,7 @@ class _KitchenLiveCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final activeItems = bundle.items.where(isKitchenQueueItem).toList();
+    final activeItems = bundle.items.where(isKitchenPendingItem).toList();
     final pendingIds = activeItems
         .where((item) => normalizeStatus(item.kitchenStatus) == 'sent')
         .map((item) => item.id)
@@ -619,7 +619,7 @@ class _KitchenLiveCard extends StatelessWidget {
     final cookingIds = activeItems
         .where(
           (item) =>
-              isActiveKitchenItem(item) &&
+              isKitchenPendingItem(item) &&
               ['sent', 'cooking'].contains(normalizeStatus(item.kitchenStatus)),
         )
         .map((item) => item.id)

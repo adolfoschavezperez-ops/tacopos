@@ -53,7 +53,13 @@ export '../core/orders/order_activity.dart'
         isActiveOrderItem,
         isActivePayment,
         isGhostOrder,
+        hasPendingKitchenItems,
+        isKitchenPendingItem,
+        isKitchenReadyItem,
+        itemRequiresKitchen,
+        kitchenStatusForItems,
         isOperationalOrderActive,
+        shouldKeepTableOccupiedForOrder,
         isStandingOrderVisibleInLiveViewer;
 export '../core/orders/order_types.dart';
 
@@ -205,6 +211,46 @@ class OrderTotalsRecalculation {
   final double discountAmount;
   final double netTotal;
   final bool changed;
+}
+
+class OperationalStateReconciliationResult {
+  const OperationalStateReconciliationResult({
+    required this.orderId,
+    required this.folio,
+    required this.tableId,
+    required this.tableName,
+    required this.tableStatusBefore,
+    required this.tableStatusAfter,
+    required this.orderStatus,
+    required this.orderKitchenStatusBefore,
+    required this.orderKitchenStatusAfter,
+    required this.activeItemsCount,
+    required this.pendingKitchenItemsCount,
+    required this.readyKitchenItemsCount,
+    required this.cancelledItemsCount,
+    required this.kitchenViewerIncluded,
+    required this.chargeBlocked,
+    required this.repairApplied,
+    required this.reason,
+  });
+
+  final String orderId;
+  final String folio;
+  final String tableId;
+  final String tableName;
+  final String tableStatusBefore;
+  final String tableStatusAfter;
+  final String orderStatus;
+  final String orderKitchenStatusBefore;
+  final String orderKitchenStatusAfter;
+  final int activeItemsCount;
+  final int pendingKitchenItemsCount;
+  final int readyKitchenItemsCount;
+  final int cancelledItemsCount;
+  final bool kitchenViewerIncluded;
+  final bool chargeBlocked;
+  final bool repairApplied;
+  final String reason;
 }
 
 class CheckoutPreparation {
@@ -4214,7 +4260,7 @@ class TacoPosRepository {
   }) {
     final cleanBatchId = kitchenBatchId?.trim();
     return items.where((item) {
-      if (!isKitchenQueueItem(item)) return false;
+      if (!isKitchenPendingItem(item)) return false;
       if (cleanBatchId == null || cleanBatchId.isEmpty) return true;
       return item.kitchenBatchId?.trim() == cleanBatchId;
     }).toList()..sort((a, b) {
@@ -6760,7 +6806,7 @@ class TacoPosRepository {
           .collection('items')
           .get();
       for (final item in itemsSnapshot.docs.map(OrderItem.fromDoc)) {
-        if (isActiveKitchenItem(item)) {
+        if (isKitchenPendingItem(item)) {
           pendingKitchenItemCount += item.qty;
         }
       }
@@ -8402,6 +8448,196 @@ class TacoPosRepository {
     return _businessDateFor(DateTime.now());
   }
 
+  Future<OperationalStateReconciliationResult>
+  reconcileOrderTableAndKitchenState({
+    required String restaurantId,
+    required String branchId,
+    required String orderId,
+    String reason = 'operational_state_reconciliation',
+  }) async {
+    final cleanOrderId = orderId.trim();
+    if (cleanOrderId.isEmpty) {
+      throw ArgumentError('orderId vacio para reconciliacion.');
+    }
+    if (restaurantId.trim().isNotEmpty &&
+        restaurantId.trim() != AppConstants.restaurantId) {
+      throw StateError('La orden pertenece a otro restaurante.');
+    }
+
+    final orderRef = _ordersRef.doc(cleanOrderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) {
+      throw StateError('La orden ya no existe.');
+    }
+    final order = PosOrder.fromDoc(orderDoc);
+    if (branchId.trim().isNotEmpty &&
+        !_matchesBranch(order.branchId, branchId)) {
+      throw StateError('La orden pertenece a otra sucursal.');
+    }
+
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    final activeItems = items.where(isActiveOrderItem).toList();
+    final pendingKitchenItems = items.where(isKitchenPendingItem).toList();
+    final readyKitchenItems = items.where(isKitchenReadyItem).toList();
+    final cancelledItemsCount = items.length - activeItems.length;
+    final nextKitchenStatus = kitchenStatusForItems(items);
+    final hasPending = pendingKitchenItems.isNotEmpty;
+    final linkedTableIds = order.linkedTableIds.toSet();
+
+    PosTable? firstTable;
+    final tableDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+    for (final tableId in linkedTableIds) {
+      final tableDoc = await _tablesRef.doc(tableId).get();
+      if (!tableDoc.exists) continue;
+      tableDocs.add(tableDoc);
+      firstTable ??= PosTable.fromDoc(tableDoc);
+    }
+    final tableStatusBefore = firstTable?.status ?? '';
+    final tableIdForLog = firstTable?.id ?? order.tableId;
+    final tableNameForLog = firstTable?.name ?? order.tableName;
+    var tableStatusAfter = tableStatusBefore;
+    var repairApplied = false;
+
+    if (isActiveOrderState(order) && activeItems.isNotEmpty) {
+      final batch = _db.batch();
+      for (final tableDoc in tableDocs) {
+        final table = PosTable.fromDoc(tableDoc);
+        final needsOccupiedAt = table.occupiedAt == null;
+        final needsRepair =
+            table.status != 'occupied' ||
+            table.currentOrderId?.trim() != order.id ||
+            table.currentOrderStatus?.trim() != order.status ||
+            needsOccupiedAt;
+        if (!needsRepair) continue;
+        repairApplied = true;
+        batch.set(tableDoc.reference, {
+          'status': 'occupied',
+          'currentOrderId': order.id,
+          'currentOrderStatus': order.status,
+          if (needsOccupiedAt) 'occupiedAt': FieldValue.serverTimestamp(),
+          ..._currentBranchFields,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+
+      final orderNeedsKitchenRepair =
+          order.kitchenStatus != nextKitchenStatus ||
+          (orderDoc.data()?['hasPendingKitchenItems'] as bool?) != hasPending ||
+          (orderDoc.data()?['pendingKitchenItemsCount'] as num?)?.toInt() !=
+              pendingKitchenItems.length;
+      if (orderNeedsKitchenRepair) {
+        repairApplied = true;
+        batch.update(orderRef, {
+          'kitchenStatus': nextKitchenStatus,
+          'hasPendingKitchenItems': hasPending,
+          'pendingKitchenItemsCount': pendingKitchenItems.length,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      if (repairApplied) {
+        _logActivityInBatch(
+          batch,
+          type: 'operational_state_reconciled',
+          orderId: order.id,
+          data: {
+            'actionType': 'operational_state_reconciled',
+            'folio': _shortLogFolio(order.id),
+            'tableId': tableIdForLog,
+            'tableName': tableNameForLog,
+            'previousTableStatus': tableStatusBefore,
+            'newTableStatus': 'occupied',
+            'previousKitchenStatus': order.kitchenStatus,
+            'newKitchenStatus': nextKitchenStatus,
+            'activeItemsCount': activeItems.length,
+            'pendingKitchenItemsCount': pendingKitchenItems.length,
+            'readyKitchenItemsCount': readyKitchenItems.length,
+            'cancelledItemsCount': cancelledItemsCount,
+            'businessDate':
+                _businessDateForOrder(order) ?? _currentBusinessDate(),
+            'cashSessionId': order.cashSessionId ?? '',
+            'branchId': order.branchId,
+            'employeeId': AppSession.instance.employee?.id ?? '',
+            'employeeName': AppSession.instance.employee?.name ?? '',
+            'timestamp': FieldValue.serverTimestamp(),
+            'reason': reason,
+            'message':
+                'Se reconciliaron los estados de $tableNameForLog, orden y Cocina.',
+          },
+        );
+        await batch.commit();
+        tableStatusAfter = 'occupied';
+      } else if (tableDocs.isNotEmpty) {
+        tableStatusAfter = PosTable.fromDoc(tableDocs.first).status;
+      }
+    }
+
+    final result = OperationalStateReconciliationResult(
+      orderId: order.id,
+      folio: _shortLogFolio(order.id),
+      tableId: tableIdForLog,
+      tableName: tableNameForLog,
+      tableStatusBefore: tableStatusBefore,
+      tableStatusAfter: tableStatusAfter,
+      orderStatus: order.status,
+      orderKitchenStatusBefore: order.kitchenStatus,
+      orderKitchenStatusAfter: nextKitchenStatus,
+      activeItemsCount: activeItems.length,
+      pendingKitchenItemsCount: pendingKitchenItems.length,
+      readyKitchenItemsCount: readyKitchenItems.length,
+      cancelledItemsCount: cancelledItemsCount,
+      kitchenViewerIncluded: hasPending,
+      chargeBlocked: hasPending,
+      repairApplied: repairApplied,
+      reason: reason,
+    );
+    developer.log(
+      'OPERATIONAL_STATE_RECONCILIATION '
+      'orderId=${result.orderId} '
+      'folio=${result.folio} '
+      'tableId=${result.tableId} '
+      'tableStatusBefore=${result.tableStatusBefore} '
+      'tableStatusAfter=${result.tableStatusAfter} '
+      'orderStatus=${result.orderStatus} '
+      'orderKitchenStatusBefore=${result.orderKitchenStatusBefore} '
+      'orderKitchenStatusAfter=${result.orderKitchenStatusAfter} '
+      'activeItems=${result.activeItemsCount} '
+      'pendingKitchenItems=${result.pendingKitchenItemsCount} '
+      'kitchenViewerIncluded=${result.kitchenViewerIncluded} '
+      'chargeBlocked=${result.chargeBlocked} '
+      'repairApplied=${result.repairApplied}',
+      name: 'TacoPOS.operationalState',
+    );
+    return result;
+  }
+
+  Future<void> reconcileOpenOrdersForKitchen() async {
+    final snapshot = await _ordersRef.get();
+    for (final order
+        in snapshot.docs
+            .map(PosOrder.fromDoc)
+            .where(isActiveOrder)
+            .where((order) => _matchesCurrentBranch(order.branchId))) {
+      if (!orderUsesPhysicalTables(order)) continue;
+      try {
+        await reconcileOrderTableAndKitchenState(
+          restaurantId: order.restaurantId,
+          branchId: order.branchId,
+          orderId: order.id,
+          reason: 'kitchen_opened',
+        );
+      } catch (error, stackTrace) {
+        developer.log(
+          'No se pudo reconciliar orden de cocina ${order.id}: $error',
+          name: 'TacoPOS.operationalState',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
+    }
+  }
+
   Future<_TableLinkCleanupResult> _reconcileStaleTableOrderLinks({
     required String businessDate,
     required List<OperationalOrderBlocker> blockers,
@@ -8440,9 +8676,31 @@ class TacoPosRepository {
     required Set<String> activeOrderIds,
     required String businessDate,
     required String triggeredBy,
-  }) {
+  }) async {
     final expectedOrderId = table.currentOrderId?.trim() ?? '';
     if (expectedOrderId.isEmpty) return Future.value(false);
+    final linkedOrderDoc = await _ordersRef.doc(expectedOrderId).get();
+    if (linkedOrderDoc.exists) {
+      final linkedOrder = PosOrder.fromDoc(linkedOrderDoc);
+      final linkedItems = await getOrderItemsOnce(expectedOrderId);
+      final linkedPayments = await getOrderPaymentsOnce(expectedOrderId);
+      final stillOccupiesTable = shouldKeepTableOccupiedForOrder(
+        order: linkedOrder,
+        items: linkedItems,
+        payments: linkedPayments,
+      );
+      if (stillOccupiesTable &&
+          _matchesCurrentBranch(linkedOrder.branchId) &&
+          linkedOrder.linkedTableIds.contains(table.id)) {
+        await reconcileOrderTableAndKitchenState(
+          restaurantId: linkedOrder.restaurantId,
+          branchId: linkedOrder.branchId,
+          orderId: linkedOrder.id,
+          reason: 'prevent_stale_table_cleanup_active_order',
+        );
+        return false;
+      }
+    }
     final tableRef = _tablesRef.doc(table.id);
     return _db.runTransaction<bool>((transaction) async {
       final freshDoc = await transaction.get(tableRef);
@@ -8673,12 +8931,12 @@ class TacoPosRepository {
         message: 'No tienes permiso para abrir ordenes.',
       );
       final order = await _bestActiveOrder(activeOrdersById.values.toList());
-      await _tablesRef.doc(table.id).set({
-        'status': order.status == 'open' ? 'occupied' : order.status,
-        'currentOrderId': order.id,
-        'currentOrderStatus': order.status,
-        'updatedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
+      await reconcileOrderTableAndKitchenState(
+        restaurantId: order.restaurantId,
+        branchId: order.branchId,
+        orderId: order.id,
+        reason: 'open_table_existing_order',
+      );
       final itemCount = await _orderItemCount(order.id);
       developer.log(
         '[TacoPOS][openTable] using existing orderId=${order.id} '
@@ -9514,6 +9772,16 @@ class TacoPosRepository {
       );
       if (ghostRepair == null) {
         await _syncOrderKitchenStateAfterItemChange(orderId);
+        final orderDoc = await _ordersRef.doc(orderId).get();
+        if (orderDoc.exists) {
+          final order = PosOrder.fromDoc(orderDoc);
+          await reconcileOrderTableAndKitchenState(
+            restaurantId: order.restaurantId,
+            branchId: order.branchId,
+            orderId: order.id,
+            reason: 'kitchen_cancellation_accepted',
+          );
+        }
       }
       return;
     }
@@ -9546,11 +9814,8 @@ class TacoPosRepository {
     final itemsSnapshot = await orderRef.collection('items').get();
     final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
     final activeBillableItems = items.where(isActiveOrderItem).toList();
-    final activeKitchenItems = items.where(isActiveKitchenItem).toList();
-    final activeReadyKitchenItems = activeBillableItems.where(
-      (item) =>
-          item.sendToKitchen && normalizeStatus(item.kitchenStatus) == 'ready',
-    );
+    final activeKitchenItems = items.where(isKitchenPendingItem).toList();
+    final activeReadyKitchenItems = items.where(isKitchenReadyItem);
 
     final nextKitchenStatus = _kitchenStatusForActiveItems(
       activeKitchenItems,
@@ -9571,10 +9836,7 @@ class TacoPosRepository {
     _setLinkedTablesStateInBatch(
       batch,
       order,
-      status: _tableStatusForKitchenState(
-        nextKitchenStatus,
-        hasActiveBillableItems: activeBillableItems.isNotEmpty,
-      ),
+      status: _tableStatusForKitchenState(),
     );
 
     await batch.commit();
@@ -9618,22 +9880,7 @@ class TacoPosRepository {
     return 'open';
   }
 
-  String _tableStatusForKitchenState(
-    String kitchenStatus, {
-    required bool hasActiveBillableItems,
-  }) {
-    if (!hasActiveBillableItems) {
-      return 'occupied';
-    }
-    if (kitchenStatus == 'ready') {
-      return 'ready';
-    }
-    if (kitchenStatus == 'cooking') {
-      return 'cooking';
-    }
-    if (kitchenStatus == 'sent' || kitchenStatus == 'pending') {
-      return 'sent';
-    }
+  String _tableStatusForKitchenState() {
     return 'occupied';
   }
 
@@ -9819,7 +10066,8 @@ class TacoPosRepository {
           item.paymentStatus == 'pending' &&
           (item.kitchenStatus == 'pending' ||
               item.kitchenStatus == 'not_required');
-      if (isActiveKitchenItem(item) &&
+      if (isActiveOrderItem(item) &&
+          itemRequiresKitchen(item) &&
           normalizeStatus(item.kitchenStatus) == 'pending') {
         sentCount += 1;
         batch.update(doc.reference, {
@@ -9944,6 +10192,14 @@ class TacoPosRepository {
     }
 
     await batch.commit();
+    if (order != null) {
+      await reconcileOrderTableAndKitchenState(
+        restaurantId: order.restaurantId,
+        branchId: order.branchId,
+        orderId: order.id,
+        reason: 'kitchen_status_updated',
+      );
+    }
   }
 
   Future<void> updateKitchenItemsStatus({
@@ -10017,6 +10273,14 @@ class TacoPosRepository {
     }
 
     await batch.commit();
+    if (order != null) {
+      await reconcileOrderTableAndKitchenState(
+        restaurantId: order.restaurantId,
+        branchId: order.branchId,
+        orderId: order.id,
+        reason: 'kitchen_items_status_updated',
+      );
+    }
   }
 
   String _aggregateKitchenStatus({
@@ -10030,7 +10294,7 @@ class TacoPosRepository {
     var hasReady = false;
 
     for (final item in allItems.where(
-      (item) => item.sendToKitchen && isActiveOrderItem(item),
+      (item) => itemRequiresKitchen(item) && isActiveOrderItem(item),
     )) {
       final status = changedIds.contains(item.id)
           ? changedStatus
@@ -10547,6 +10811,7 @@ class TacoPosRepository {
     }
 
     final order = PosOrder.fromDoc(orderDoc);
+    await _ensureKitchenReadyForPayment(orderId);
     final itemsSnapshot = await orderRef.collection('items').get();
     final paymentsSnapshot = await orderRef.collection('payments').get();
     final activeItems = itemsSnapshot.docs
@@ -11134,7 +11399,7 @@ class TacoPosRepository {
     if (!orderUsesPhysicalTables(order)) return;
     for (final tableId in order.linkedTableIds.toSet()) {
       batch.set(_tablesRef.doc(tableId), {
-        'status': release ? 'available' : status ?? order.status,
+        'status': release ? 'available' : 'occupied',
         'currentOrderId': release ? null : order.id,
         'currentOrderStatus': release ? null : status ?? order.status,
         if (release) 'tableGroupId': null,
@@ -12308,17 +12573,28 @@ class TacoPosRepository {
   }
 
   Future<void> _ensureKitchenReadyForPayment(String orderId) async {
+    final orderDoc = await _ordersRef.doc(orderId).get();
+    if (orderDoc.exists) {
+      final order = PosOrder.fromDoc(orderDoc);
+      await reconcileOrderTableAndKitchenState(
+        restaurantId: order.restaurantId,
+        branchId: order.branchId,
+        orderId: order.id,
+        reason: 'payment_validation',
+      );
+    }
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
         .get();
-    final hasKitchenPending = itemsSnapshot.docs
+    final pendingCount = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
-        .any(isActiveKitchenItem);
+        .where(isKitchenPendingItem)
+        .length;
 
-    if (hasKitchenPending) {
+    if (pendingCount > 0) {
       throw StateError(
-        'No puedes cobrar hasta que cocina marque todo como listo.',
+        'No se puede cobrar todavia. Hay $pendingCount ${pendingCount == 1 ? 'producto pendiente' : 'productos pendientes'} en Cocina.',
       );
     }
   }

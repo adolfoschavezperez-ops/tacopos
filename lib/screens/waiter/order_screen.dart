@@ -278,14 +278,30 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _showKitchenPendingDialog() async {
+    final pendingItems = _loadedItems.where(isKitchenPendingItem).toList();
+    final pendingCount = pendingItems.fold<int>(0, (total, item) {
+      return total + (item.qty <= 0 ? 1 : item.qty);
+    });
+    final productWord = pendingCount == 1
+        ? 'producto pendiente'
+        : 'productos pendientes';
+    final details = pendingItems
+        .map((item) => '${item.qty} ${item.productName}')
+        .take(6)
+        .join('\n');
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Hay productos pendientes en cocina'),
-        content: const Text(
-          'No puedes cobrar hasta que cocina marque todo como listo.',
+        content: Text(
+          'No se puede cobrar todavia. Hay $pendingCount $productWord en Cocina.'
+          '${details.isEmpty ? '' : '\n\n$details'}',
         ),
         actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Ver productos pendientes'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Entendido'),
@@ -1617,7 +1633,8 @@ class _TopOrderActions extends StatelessWidget {
     final pendingKitchenCount = items
         .where(
           (item) =>
-              isActiveKitchenItem(item) &&
+              isActiveOrderItem(item) &&
+              itemRequiresKitchen(item) &&
               normalizeStatus(item.kitchenStatus) == 'pending',
         )
         .length;
@@ -1637,7 +1654,7 @@ class _TopOrderActions extends StatelessWidget {
         : hadKitchenSend
         ? 'Enviar extras'
         : 'Enviar cocina';
-    final hasKitchenPending = items.any(isActiveKitchenItem);
+    final hasKitchenPending = items.any(isKitchenPendingItem);
     final canCloseEmpty =
         currentOrder != null &&
         currentOrder.status == 'open' &&

@@ -39,6 +39,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
     super.initState();
     _repository = TacoPosRepository();
     _bundlesStream = _repository.watchKitchenOrderBundles();
+    unawaited(_repository.reconcileOpenOrdersForKitchen());
     _kitchenIsOpenFuture = _repository
         .hasCompletedOpenKitchenForCurrentBusinessDate();
     LivePresenceService.instance.update(
