@@ -959,10 +959,108 @@ class _BenefitsForm extends StatelessWidget {
         ),
       ],
     };
+    final controls = switch (scope) {
+      _BenefitsScope.employees => [
+        _numberInput(
+          'Descuento empleado %',
+          benefits.employeeDiscount.percent.toStringAsFixed(0),
+          (value) =>
+              onChanged(_copyEmployeeDiscount(percent: double.tryParse(value))),
+        ),
+        _numberInput(
+          'Ordenes descuento/dia',
+          benefits.employeeDiscount.maxOrdersPerDay.toString(),
+          (value) => onChanged(
+            _copyEmployeeDiscount(maxOrdersPerDay: int.tryParse(value)),
+          ),
+        ),
+        _switch(
+          'Descuento requiere autorizacion',
+          benefits.employeeDiscount.requiresAuthorization,
+          (value) =>
+              onChanged(_copyEmployeeDiscount(requiresAuthorization: value)),
+        ),
+        _switch(
+          'Permitir descuento para llevar',
+          benefits.employeeDiscount.allowTakeout,
+          (value) => onChanged(_copyEmployeeDiscount(allowTakeout: value)),
+        ),
+        _numberInput(
+          'Comidas/dia',
+          benefits.employeeMeal.maxMealsPerDay.toString(),
+          (value) =>
+              onChanged(_copyEmployeeMeal(maxMealsPerDay: int.tryParse(value))),
+        ),
+        _numberInput(
+          'Monto maximo comida',
+          benefits.employeeMeal.maxAmount.toStringAsFixed(0),
+          (value) =>
+              onChanged(_copyEmployeeMeal(maxAmount: double.tryParse(value))),
+        ),
+        _switch(
+          'Comida solo consumo local',
+          benefits.employeeMeal.dineInOnly,
+          (value) => onChanged(_copyEmployeeMeal(dineInOnly: value)),
+        ),
+      ],
+      _BenefitsScope.partners => [
+        _numberInput(
+          'Descuento socio %',
+          benefits.partnerDiscount.percent.toStringAsFixed(0),
+          (value) =>
+              onChanged(_copyPartnerDiscount(percent: double.tryParse(value))),
+        ),
+        _numberInput(
+          'Ordenes socio/dia',
+          benefits.partnerDiscount.maxOrdersPerDay.toString(),
+          (value) => onChanged(
+            _copyPartnerDiscount(maxOrdersPerDay: int.tryParse(value)),
+          ),
+        ),
+        _switch(
+          'Requiere PIN',
+          benefits.partnerDiscount.requiresPin,
+          (value) => onChanged(_copyPartnerDiscount(requiresPin: value)),
+        ),
+        _switch(
+          'Permitir invitados',
+          benefits.partnerDiscount.allowGuests,
+          (value) => onChanged(_copyPartnerDiscount(allowGuests: value)),
+        ),
+      ],
+      _BenefitsScope.friendsAndFamily => [
+        _numberInput(
+          'Descuento familia %',
+          benefits.friendsAndFamilyDiscount.percent.toStringAsFixed(0),
+          (value) =>
+              onChanged(_copyFriendsDiscount(percent: double.tryParse(value))),
+        ),
+        _numberInput(
+          'Ordenes familia/dia',
+          benefits.friendsAndFamilyDiscount.maxOrdersPerDay.toString(),
+          (value) => onChanged(
+            _copyFriendsDiscount(maxOrdersPerDay: int.tryParse(value)),
+          ),
+        ),
+        _switch(
+          'Requiere autorizacion',
+          benefits.friendsAndFamilyDiscount.requiresAuthorization,
+          (value) =>
+              onChanged(_copyFriendsDiscount(requiresAuthorization: value)),
+        ),
+        _switch(
+          'Requiere motivo',
+          benefits.friendsAndFamilyDiscount.requiresReason,
+          (value) => onChanged(_copyFriendsDiscount(requiresReason: value)),
+        ),
+      ],
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Wrap(spacing: 12, runSpacing: 12, children: tiles),
+        const SizedBox(height: 12),
+        Wrap(spacing: 10, runSpacing: 8, children: controls),
         const SizedBox(height: 12),
         Align(
           alignment: Alignment.centerRight,
@@ -973,6 +1071,106 @@ class _BenefitsForm extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  BenefitPolicies _copyEmployeeDiscount({
+    bool? enabled,
+    double? percent,
+    int? maxOrdersPerDay,
+    bool? requiresAuthorization,
+    bool? allowTakeout,
+    bool? combinable,
+  }) {
+    final current = benefits.employeeDiscount;
+    return BenefitPolicies(
+      employeeDiscount: EmployeeDiscountPolicy(
+        enabled: enabled ?? current.enabled,
+        percent: percent ?? current.percent,
+        maxOrdersPerDay: maxOrdersPerDay ?? current.maxOrdersPerDay,
+        requiresAuthorization:
+            requiresAuthorization ?? current.requiresAuthorization,
+        allowTakeout: allowTakeout ?? current.allowTakeout,
+        combinable: combinable ?? current.combinable,
+      ),
+      employeeMeal: benefits.employeeMeal,
+      partnerDiscount: benefits.partnerDiscount,
+      friendsAndFamilyDiscount: benefits.friendsAndFamilyDiscount,
+    );
+  }
+
+  BenefitPolicies _copyEmployeeMeal({
+    bool? enabled,
+    int? maxMealsPerDay,
+    double? maxAmount,
+    bool? onlyDuringActiveShift,
+    bool? dineInOnly,
+    bool? requiresAuthorization,
+  }) {
+    final current = benefits.employeeMeal;
+    return BenefitPolicies(
+      employeeDiscount: benefits.employeeDiscount,
+      employeeMeal: EmployeeMealPolicy(
+        enabled: enabled ?? current.enabled,
+        maxMealsPerDay: maxMealsPerDay ?? current.maxMealsPerDay,
+        maxAmount: maxAmount ?? current.maxAmount,
+        onlyDuringActiveShift:
+            onlyDuringActiveShift ?? current.onlyDuringActiveShift,
+        dineInOnly: dineInOnly ?? current.dineInOnly,
+        requiresAuthorization:
+            requiresAuthorization ?? current.requiresAuthorization,
+      ),
+      partnerDiscount: benefits.partnerDiscount,
+      friendsAndFamilyDiscount: benefits.friendsAndFamilyDiscount,
+    );
+  }
+
+  BenefitPolicies _copyPartnerDiscount({
+    bool? enabled,
+    double? percent,
+    int? maxOrdersPerDay,
+    bool? requiresPin,
+    bool? allowGuests,
+    bool? combinable,
+  }) {
+    final current = benefits.partnerDiscount;
+    return BenefitPolicies(
+      employeeDiscount: benefits.employeeDiscount,
+      employeeMeal: benefits.employeeMeal,
+      partnerDiscount: PartnerDiscountPolicy(
+        enabled: enabled ?? current.enabled,
+        percent: percent ?? current.percent,
+        maxOrdersPerDay: maxOrdersPerDay ?? current.maxOrdersPerDay,
+        requiresPin: requiresPin ?? current.requiresPin,
+        allowGuests: allowGuests ?? current.allowGuests,
+        combinable: combinable ?? current.combinable,
+      ),
+      friendsAndFamilyDiscount: benefits.friendsAndFamilyDiscount,
+    );
+  }
+
+  BenefitPolicies _copyFriendsDiscount({
+    bool? enabled,
+    double? percent,
+    int? maxOrdersPerDay,
+    bool? requiresAuthorization,
+    bool? requiresReason,
+    bool? combinable,
+  }) {
+    final current = benefits.friendsAndFamilyDiscount;
+    return BenefitPolicies(
+      employeeDiscount: benefits.employeeDiscount,
+      employeeMeal: benefits.employeeMeal,
+      partnerDiscount: benefits.partnerDiscount,
+      friendsAndFamilyDiscount: FriendsAndFamilyDiscountPolicy(
+        enabled: enabled ?? current.enabled,
+        percent: percent ?? current.percent,
+        maxOrdersPerDay: maxOrdersPerDay ?? current.maxOrdersPerDay,
+        requiresAuthorization:
+            requiresAuthorization ?? current.requiresAuthorization,
+        requiresReason: requiresReason ?? current.requiresReason,
+        combinable: combinable ?? current.combinable,
+      ),
     );
   }
 }
@@ -1012,6 +1210,22 @@ Widget _field(TextEditingController controller, String label, double width) {
     child: TextField(
       controller: controller,
       decoration: InputDecoration(labelText: label),
+    ),
+  );
+}
+
+Widget _numberInput(
+  String label,
+  String initialValue,
+  ValueChanged<String> onSubmitted,
+) {
+  return SizedBox(
+    width: 190,
+    child: TextFormField(
+      initialValue: initialValue,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: InputDecoration(labelText: label),
+      onFieldSubmitted: onSubmitted,
     ),
   );
 }
