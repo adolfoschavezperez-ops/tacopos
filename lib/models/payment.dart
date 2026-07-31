@@ -58,6 +58,9 @@ class Payment {
     this.cancelledByEmployeeId,
     this.cancelledByEmployeeName,
     this.cancelReason,
+    this.saleFolioSequence,
+    this.saleFolioDisplay,
+    this.saleFolioFull,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -118,6 +121,9 @@ class Payment {
   final String? cancelledByEmployeeId;
   final String? cancelledByEmployeeName;
   final String? cancelReason;
+  final int? saleFolioSequence;
+  final String? saleFolioDisplay;
+  final String? saleFolioFull;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -195,6 +201,9 @@ class Payment {
       cancelledByEmployeeId: cancelledByEmployeeId,
       cancelledByEmployeeName: cancelledByEmployeeName,
       cancelReason: cancelReason,
+      saleFolioSequence: saleFolioSequence,
+      saleFolioDisplay: saleFolioDisplay,
+      saleFolioFull: saleFolioFull,
       restaurantId: restaurantId ?? this.restaurantId,
       restaurantName: restaurantName ?? this.restaurantName,
       branchId: branchId ?? this.branchId,
@@ -294,6 +303,9 @@ class Payment {
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
       cancelReason: data['cancelReason'] as String?,
+      saleFolioSequence: (data['saleFolioSequence'] as num?)?.toInt(),
+      saleFolioDisplay: data['saleFolioDisplay'] as String?,
+      saleFolioFull: data['saleFolioFull'] as String?,
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:

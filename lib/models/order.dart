@@ -65,6 +65,14 @@ class PosOrder {
     this.businessDate,
     this.operationalDate,
     this.cashSessionId,
+    this.saleFolioSequence,
+    this.saleFolioDisplay,
+    this.saleFolioFull,
+    this.saleFolioBusinessDate,
+    this.saleFolioBranchId,
+    this.saleFolioRestaurantId,
+    this.saleFolioAssignedAt,
+    this.saleFolioVersion,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -132,6 +140,14 @@ class PosOrder {
   final String? businessDate;
   final String? operationalDate;
   final String? cashSessionId;
+  final int? saleFolioSequence;
+  final String? saleFolioDisplay;
+  final String? saleFolioFull;
+  final String? saleFolioBusinessDate;
+  final String? saleFolioBranchId;
+  final String? saleFolioRestaurantId;
+  final DateTime? saleFolioAssignedAt;
+  final int? saleFolioVersion;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -236,6 +252,14 @@ class PosOrder {
       businessDate: _readOptionalString(data['businessDate']),
       operationalDate: _readOptionalString(data['operationalDate']),
       cashSessionId: _readOptionalString(data['cashSessionId']),
+      saleFolioSequence: (data['saleFolioSequence'] as num?)?.toInt(),
+      saleFolioDisplay: _readOptionalString(data['saleFolioDisplay']),
+      saleFolioFull: _readOptionalString(data['saleFolioFull']),
+      saleFolioBusinessDate: _readOptionalString(data['saleFolioBusinessDate']),
+      saleFolioBranchId: _readOptionalString(data['saleFolioBranchId']),
+      saleFolioRestaurantId: _readOptionalString(data['saleFolioRestaurantId']),
+      saleFolioAssignedAt: _toDate(data['saleFolioAssignedAt']),
+      saleFolioVersion: (data['saleFolioVersion'] as num?)?.toInt(),
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:
