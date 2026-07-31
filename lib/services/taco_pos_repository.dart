@@ -24,6 +24,7 @@ import '../core/reports/operational_blockers.dart';
 import '../core/reports/report_data_bundle.dart';
 import '../core/reports/report_performance_tracer.dart';
 import '../core/reports/yield_profit_report.dart';
+import '../core/sales/daily_sale_folio.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../models/active_session.dart';
@@ -174,9 +175,10 @@ class LiveStandingOrderBundle {
 }
 
 class PaymentResult {
-  const PaymentResult({required this.allPaid});
+  const PaymentResult({required this.allPaid, this.saleFolioDisplay});
 
   final bool allPaid;
+  final String? saleFolioDisplay;
 }
 
 class BackofficeCancellationResult {
@@ -896,6 +898,17 @@ class TacoPosRepository {
 
   DocumentReference<Map<String, dynamic>> get _discountSettingsRef =>
       _restaurantRef.collection('settings').doc('discounts');
+
+  DocumentReference<Map<String, dynamic>> get _saleFolioSettingsRef =>
+      _restaurantRef.collection('settings').doc('saleFolio');
+
+  CollectionReference<Map<String, dynamic>> _dailySaleCountersRef(
+    String branchId,
+  ) => _branchesRef.doc(branchId).collection('dailySaleCounters');
+
+  CollectionReference<Map<String, dynamic>> _saleAuditEventsRef(
+    String branchId,
+  ) => _branchesRef.doc(branchId).collection('saleAuditEvents');
 
   Map<String, Object?> get _currentBranchFields {
     final session = AppSession.instance;
@@ -4446,6 +4459,32 @@ class TacoPosRepository {
       previousWithdrawals: previousWithdrawals,
       nonSaleMovements: nonSaleMovements,
     );
+  }
+
+  Future<Map<String, int>> saleFolioCountersForRange({
+    required String startBusinessDate,
+    required String endBusinessDate,
+  }) async {
+    try {
+      final snapshot =
+          await _dailySaleCountersRef(AppSession.instance.currentBranchId)
+              .where('businessDate', isGreaterThanOrEqualTo: startBusinessDate)
+              .where('businessDate', isLessThanOrEqualTo: endBusinessDate)
+              .get();
+      return {
+        for (final doc in snapshot.docs)
+          (doc.data()['businessDate'] as String? ?? doc.id):
+              (doc.data()['lastSequence'] as num?)?.toInt() ?? 0,
+      };
+    } catch (error, stackTrace) {
+      developer.log(
+        'No se pudieron leer contadores de folio diario.',
+        name: 'TacoPOS.saleFolio',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return const {};
+    }
   }
 
   double _cashAuditTipAmount(Map<String, dynamic> data) {
@@ -10382,10 +10421,7 @@ class TacoPosRepository {
     );
     await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
-    final batch = _db.batch();
-    _setPayment(
-      batch: batch,
-      paymentRef: paymentRef,
+    final paymentData = _paymentData(
       order: order,
       cashSession: cashSession,
       type: 'full_table',
@@ -10396,40 +10432,24 @@ class TacoPosRepository {
       cashDetails: cashDetails,
       discount: effectiveDiscount,
     );
-
-    for (final doc in itemsSnapshot.docs) {
-      final item = OrderItem.fromDoc(doc);
-      if (item.paymentStatus != 'paid' && !item.isCancelled) {
-        batch.update(doc.reference, {
-          'paymentStatus': 'paid',
-          'paidAt': FieldValue.serverTimestamp(),
-          'paymentId': paymentRef.id,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      }
-    }
-
-    _recordDiscountUsageInBatch(
-      batch,
-      usageRef: _discountUsageRef.doc(),
+    final result = await _finalizeSaleWithDailyFolio(
       order: order,
-      paymentId: paymentRef.id,
       cashSession: cashSession,
-      discount: effectiveDiscount,
-    );
-    _markDiscountAuthorizationUsedInBatch(
-      batch,
-      discount: effectiveDiscount,
-      paymentId: paymentRef.id,
-    );
-    _closeOrderInBatch(
-      batch,
-      order,
+      paymentRef: paymentRef,
+      paymentData: paymentData,
+      itemDocs: itemsSnapshot.docs.where((doc) {
+        final item = OrderItem.fromDoc(doc);
+        return item.paymentStatus != 'paid' && !item.isCancelled;
+      }),
       paidTotal: order.total,
       discount: effectiveDiscount,
     );
-    await batch.commit();
-    return const PaymentResult(allPaid: true);
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
+    return result;
   }
 
   Future<PaymentResult> payPerson({
@@ -10488,6 +10508,44 @@ class TacoPosRepository {
     );
     await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final selectedItemDocs = itemsSnapshot.docs.where((doc) {
+      final item = OrderItem.fromDoc(doc);
+      return item.personNumber == personNumber &&
+          item.paymentStatus != 'paid' &&
+          !item.isCancelled;
+    }).toList();
+    final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
+    final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
+    if (pendingTotal <= 0.01) {
+      final paymentData = _paymentData(
+        order: order,
+        cashSession: cashSession,
+        type: 'person',
+        method: method,
+        baseAmount: baseAmount,
+        personNumber: personNumber,
+        personName: personName,
+        employeeId: employeeId,
+        employeeName: employeeName,
+        cashDetails: cashDetails,
+        discount: effectiveDiscount,
+      );
+      final result = await _finalizeSaleWithDailyFolio(
+        order: order,
+        cashSession: cashSession,
+        paymentRef: paymentRef,
+        paymentData: paymentData,
+        itemDocs: selectedItemDocs,
+        paidTotal: order.total,
+        discount: effectiveDiscount,
+      );
+      invalidateReportDataCache(
+        branchId: order.branchId,
+        startBusinessDate: order.businessDate,
+        endBusinessDate: order.businessDate,
+      );
+      return result;
+    }
     final batch = _db.batch();
     _setPayment(
       batch: batch,
@@ -10505,18 +10563,13 @@ class TacoPosRepository {
       discount: effectiveDiscount,
     );
 
-    for (final doc in itemsSnapshot.docs) {
-      final item = OrderItem.fromDoc(doc);
-      if (item.personNumber == personNumber &&
-          item.paymentStatus != 'paid' &&
-          !item.isCancelled) {
-        batch.update(doc.reference, {
-          'paymentStatus': 'paid',
-          'paidAt': FieldValue.serverTimestamp(),
-          'paymentId': paymentRef.id,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      }
+    for (final doc in selectedItemDocs) {
+      batch.update(doc.reference, {
+        'paymentStatus': 'paid',
+        'paidAt': FieldValue.serverTimestamp(),
+        'paymentId': paymentRef.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     }
 
     final allPaid = _updateOrderPaymentTotalsInBatch(
@@ -10613,6 +10666,43 @@ class TacoPosRepository {
     );
     await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final selectedItemDocs = itemsSnapshot.docs.where((doc) {
+      final item = OrderItem.fromDoc(doc);
+      return selectedPeople.contains(item.personNumber) &&
+          item.paymentStatus != 'paid' &&
+          !item.isCancelled;
+    }).toList();
+    final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
+    final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
+    if (pendingTotal <= 0.01) {
+      final paymentData = _paymentData(
+        order: order,
+        cashSession: cashSession,
+        type: 'person',
+        method: method,
+        baseAmount: baseAmount,
+        personName: names.join(', '),
+        employeeId: employeeId,
+        employeeName: employeeName,
+        cashDetails: cashDetails,
+        discount: effectiveDiscount,
+      );
+      final result = await _finalizeSaleWithDailyFolio(
+        order: order,
+        cashSession: cashSession,
+        paymentRef: paymentRef,
+        paymentData: paymentData,
+        itemDocs: selectedItemDocs,
+        paidTotal: order.total,
+        discount: effectiveDiscount,
+      );
+      invalidateReportDataCache(
+        branchId: order.branchId,
+        startBusinessDate: order.businessDate,
+        endBusinessDate: order.businessDate,
+      );
+      return result;
+    }
     final batch = _db.batch();
     _setPayment(
       batch: batch,
@@ -10629,18 +10719,13 @@ class TacoPosRepository {
       discount: effectiveDiscount,
     );
 
-    for (final doc in itemsSnapshot.docs) {
-      final item = OrderItem.fromDoc(doc);
-      if (selectedPeople.contains(item.personNumber) &&
-          item.paymentStatus != 'paid' &&
-          !item.isCancelled) {
-        batch.update(doc.reference, {
-          'paymentStatus': 'paid',
-          'paidAt': FieldValue.serverTimestamp(),
-          'paymentId': paymentRef.id,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      }
+    for (final doc in selectedItemDocs) {
+      batch.update(doc.reference, {
+        'paymentStatus': 'paid',
+        'paidAt': FieldValue.serverTimestamp(),
+        'paymentId': paymentRef.id,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     }
 
     final allPaid = _updateOrderPaymentTotalsInBatch(
@@ -10704,6 +10789,36 @@ class TacoPosRepository {
     );
     await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
+    final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
+    if (pendingTotal <= 0.01) {
+      final paymentData = _paymentData(
+        order: order,
+        cashSession: cashSession,
+        type: 'partial',
+        method: method,
+        baseAmount: baseAmount,
+        employeeId: employeeId,
+        employeeName: employeeName,
+        cashDetails: cashDetails,
+        discount: effectiveDiscount,
+      );
+      final result = await _finalizeSaleWithDailyFolio(
+        order: order,
+        cashSession: cashSession,
+        paymentRef: paymentRef,
+        paymentData: paymentData,
+        itemDocs: itemsSnapshot.docs,
+        paidTotal: order.total,
+        discount: effectiveDiscount,
+      );
+      invalidateReportDataCache(
+        branchId: order.branchId,
+        startBusinessDate: order.businessDate,
+        endBusinessDate: order.businessDate,
+      );
+      return result;
+    }
     final batch = _db.batch();
     _setPayment(
       batch: batch,
@@ -10772,10 +10887,7 @@ class TacoPosRepository {
     }
 
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
-    final batch = _db.batch();
-    _setPayment(
-      batch: batch,
-      paymentRef: paymentRef,
+    final paymentData = _paymentData(
       order: order,
       cashSession: cashSession,
       type: 'platform',
@@ -10784,22 +10896,23 @@ class TacoPosRepository {
       platformId: order.platformId,
       platformName: order.platformName,
     );
-
-    for (final doc in itemsSnapshot.docs) {
-      final item = OrderItem.fromDoc(doc);
-      if (item.paymentStatus != 'paid' && !item.isCancelled) {
-        batch.update(doc.reference, {
-          'paymentStatus': 'paid',
-          'paidAt': FieldValue.serverTimestamp(),
-          'paymentId': paymentRef.id,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      }
-    }
-
-    _closeOrderInBatch(batch, order, paidTotal: order.total);
-    await batch.commit();
-    return const PaymentResult(allPaid: true);
+    final result = await _finalizeSaleWithDailyFolio(
+      order: order,
+      cashSession: cashSession,
+      paymentRef: paymentRef,
+      paymentData: paymentData,
+      itemDocs: itemsSnapshot.docs.where((doc) {
+        final item = OrderItem.fromDoc(doc);
+        return item.paymentStatus != 'paid' && !item.isCancelled;
+      }),
+      paidTotal: order.total,
+    );
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
+    return result;
   }
 
   Future<CheckoutPreparation> prepareOrderForCheckout(String orderId) async {
@@ -11371,6 +11484,304 @@ class TacoPosRepository {
     return allPaid;
   }
 
+  Future<PaymentResult> _finalizeSaleWithDailyFolio({
+    required PosOrder order,
+    required CashSession cashSession,
+    required DocumentReference<Map<String, dynamic>> paymentRef,
+    required Map<String, Object?> paymentData,
+    required Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> itemDocs,
+    required double paidTotal,
+    AppliedDiscountDetails? discount,
+  }) async {
+    final config = await _loadSaleFolioConfig();
+    final orderRef = _ordersRef.doc(order.id);
+    final usageRef = _discountUsageRef.doc();
+    final employee = AppSession.instance.employee;
+    final actorId = employee?.id ?? _auth.currentUser?.uid ?? 'anonymous';
+    final actorName = employee?.name ?? actorId;
+    final deviceId = _auth.currentUser?.uid ?? 'anonymous';
+
+    return _db.runTransaction<PaymentResult>((transaction) async {
+      final freshOrderDoc = await transaction.get(orderRef);
+      if (!freshOrderDoc.exists) {
+        throw StateError('La orden ya no existe.');
+      }
+      final freshOrder = PosOrder.fromDoc(freshOrderDoc);
+      final existingFolio = freshOrder.saleFolioDisplay?.trim();
+      if (existingFolio != null && existingFolio.isNotEmpty) {
+        return PaymentResult(allPaid: true, saleFolioDisplay: existingFolio);
+      }
+
+      final businessDate =
+          _businessDateForOrder(freshOrder) ??
+          businessDateForOpenCashSession(cashSession);
+      if (freshOrder.total - paidTotal > 0.01) {
+        throw StateError('La venta aun tiene saldo pendiente.');
+      }
+      if (!config.appliesToBusinessDate(businessDate)) {
+        transaction.set(paymentRef, paymentData);
+        for (final doc in itemDocs) {
+          transaction.update(doc.reference, {
+            'paymentStatus': 'paid',
+            'paidAt': FieldValue.serverTimestamp(),
+            'paymentId': paymentRef.id,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+        transaction.update(orderRef, {
+          'status': 'paid',
+          'paymentStatus': 'paid',
+          'paidTotal': freshOrder.total,
+          'pendingTotal': 0.0,
+          ..._orderDiscountSnapshot(
+            discount,
+            freshOrder.total,
+            order: freshOrder,
+          ),
+          'paidAt': FieldValue.serverTimestamp(),
+          ..._currentBranchFields,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        _releaseLinkedTablesInTransaction(transaction, freshOrder);
+        return const PaymentResult(allPaid: true);
+      }
+
+      final counterRef = _dailySaleCountersRef(
+        freshOrder.branchId,
+      ).doc(businessDate);
+      final counterDoc = await transaction.get(counterRef);
+      final lastSequence =
+          (counterDoc.data()?['lastSequence'] as num?)?.toInt() ?? 0;
+      final nextSequence = lastSequence + 1;
+      final assignment = buildSaleFolioAssignment(
+        sequence: nextSequence,
+        businessDate: businessDate,
+        branchId: freshOrder.branchId,
+        branchName: freshOrder.branchName,
+        restaurantId: freshOrder.restaurantId,
+        config: config,
+      );
+      final now = FieldValue.serverTimestamp();
+      final folioFields = {
+        'saleFolioSequence': assignment.sequence,
+        'saleFolioDisplay': assignment.display,
+        'saleFolioFull': assignment.full,
+        'saleFolioBusinessDate': assignment.businessDate,
+        'saleFolioBranchId': assignment.branchId,
+        'saleFolioRestaurantId': assignment.restaurantId,
+        'saleFolioAssignedAt': now,
+        'saleFolioVersion': saleFolioVersion,
+      };
+      final paymentWithFolio = {
+        ...paymentData,
+        'saleFolioSequence': assignment.sequence,
+        'saleFolioDisplay': assignment.display,
+        'saleFolioFull': assignment.full,
+      };
+
+      transaction.set(counterRef, {
+        'businessDate': businessDate,
+        'restaurantId': freshOrder.restaurantId,
+        'branchId': freshOrder.branchId,
+        'lastSequence': nextSequence,
+        'updatedAt': now,
+        'updatedByDeviceId': deviceId,
+        'version': saleFolioVersion,
+      }, SetOptions(merge: true));
+      transaction.set(paymentRef, paymentWithFolio);
+      for (final doc in itemDocs) {
+        transaction.update(doc.reference, {
+          'paymentStatus': 'paid',
+          'paidAt': now,
+          'paymentId': paymentRef.id,
+          'updatedAt': now,
+        });
+      }
+      if (discount != null && discount.discountAmount > 0) {
+        transaction.set(usageRef, {
+          'restaurantId': freshOrder.restaurantId,
+          'restaurantName': freshOrder.restaurantName,
+          'branchId': freshOrder.branchId,
+          'branchName': freshOrder.branchName,
+          'businessDate': cashSession.businessDate,
+          'employeeId': discount.employeeBeneficiaryId,
+          'employeeName': discount.employeeBeneficiaryName,
+          'partnerId': discount.authorizedByPartnerId,
+          'partnerName': discount.authorizedByPartnerName,
+          'linkedEmployeeId': discount.authorizedByPartnerLinkedEmployeeId,
+          'linkedEmployeeName': discount.authorizedByPartnerLinkedEmployeeName,
+          'discountAuthorizationRequestId':
+              discount.discountAuthorizationRequestId,
+          'authorizationMode': discount.authorizationMode,
+          'authorizationStatus': discount.authorizationStatus,
+          'discountType': discount.type,
+          'discountName': discount.name,
+          'orderId': freshOrder.id,
+          'paymentId': paymentRef.id,
+          'amountBeforeDiscount': discount.amountBeforeDiscount,
+          'discountAmount': discount.discountAmount,
+          'totalAfterDiscount': discount.totalAfterDiscount,
+          'reason': discount.reason,
+          'status': 'active',
+          'createdAt': now,
+          ..._employeeAuditFields(prefix: 'createdBy'),
+        });
+      }
+      final requestId = discount?.discountAuthorizationRequestId?.trim();
+      if (requestId != null && requestId.isNotEmpty) {
+        transaction.update(_discountAuthorizationRequestsRef.doc(requestId), {
+          'status': 'used',
+          'usedAt': now,
+          'usedPaymentId': paymentRef.id,
+          'updatedAt': now,
+        });
+      }
+      transaction.update(orderRef, {
+        'status': 'paid',
+        'paymentStatus': 'paid',
+        'paidTotal': freshOrder.total,
+        'pendingTotal': 0.0,
+        ..._orderDiscountSnapshot(
+          discount,
+          freshOrder.total,
+          order: freshOrder,
+        ),
+        ...folioFields,
+        'paidAt': now,
+        ..._currentBranchFields,
+        'updatedAt': now,
+      });
+      _releaseLinkedTablesInTransaction(transaction, freshOrder);
+      _setSaleAuditEventInTransaction(
+        transaction,
+        branchId: freshOrder.branchId,
+        eventType: 'sale_folio_assigned',
+        order: freshOrder,
+        assignment: assignment,
+        amount: freshOrder.total,
+        paymentSnapshot: paymentWithFolio,
+        previousStatus: freshOrder.paymentStatus,
+        newStatus: 'paid',
+        reason: 'Folio diario asignado al cerrar venta',
+        performedBy: actorName,
+        authorizedBy: actorId,
+        deviceId: deviceId,
+        createdAt: now,
+      );
+      _setSaleAuditEventInTransaction(
+        transaction,
+        branchId: freshOrder.branchId,
+        eventType: 'sale_completed',
+        order: freshOrder,
+        assignment: assignment,
+        amount: freshOrder.total,
+        paymentSnapshot: paymentWithFolio,
+        previousStatus: freshOrder.paymentStatus,
+        newStatus: 'paid',
+        reason: 'Venta completada',
+        performedBy: actorName,
+        authorizedBy: actorId,
+        deviceId: deviceId,
+        createdAt: now,
+      );
+
+      return PaymentResult(allPaid: true, saleFolioDisplay: assignment.display);
+    });
+  }
+
+  Future<SaleFolioConfig> _loadSaleFolioConfig() async {
+    try {
+      final doc = await _saleFolioSettingsRef.get();
+      return SaleFolioConfig.fromMap(doc.data());
+    } catch (error, stackTrace) {
+      developer.log(
+        'No se pudo cargar configuracion de folio diario; usando defaults.',
+        name: 'TacoPOS.saleFolio',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      return const SaleFolioConfig();
+    }
+  }
+
+  void _releaseLinkedTablesInTransaction(
+    Transaction transaction,
+    PosOrder order,
+  ) {
+    if (!orderUsesPhysicalTables(order)) return;
+    for (final tableId in order.linkedTableIds.toSet()) {
+      transaction.set(_tablesRef.doc(tableId), {
+        'status': 'available',
+        'currentOrderId': null,
+        'currentOrderStatus': null,
+        'tableGroupId': null,
+        'tableGroupLabel': null,
+        'groupPrimaryTableId': null,
+        'occupiedAt': null,
+        ..._currentBranchFields,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+  }
+
+  void _setSaleAuditEventInTransaction(
+    Transaction transaction, {
+    required String branchId,
+    required String eventType,
+    required PosOrder order,
+    required SaleFolioAssignment assignment,
+    required double amount,
+    required Map<String, Object?> paymentSnapshot,
+    required String previousStatus,
+    required String newStatus,
+    required String reason,
+    required String authorizedBy,
+    required String performedBy,
+    required String deviceId,
+    required Object createdAt,
+  }) {
+    transaction.set(_saleAuditEventsRef(branchId).doc(), {
+      'eventType': eventType,
+      'orderId': order.id,
+      'saleFolioSequence': assignment.sequence,
+      'saleFolioFull': assignment.full,
+      'businessDate': assignment.businessDate,
+      'restaurantId': order.restaurantId,
+      'branchId': order.branchId,
+      'amount': amount,
+      'paymentMethodsSnapshot': [paymentSnapshot],
+      'previousStatus': previousStatus,
+      'newStatus': newStatus,
+      'reason': reason,
+      'authorizedBy': authorizedBy,
+      'performedBy': performedBy,
+      'deviceId': deviceId,
+      'createdAt': createdAt,
+      'eventVersion': saleFolioVersion,
+    });
+  }
+
+  SaleFolioAssignment? _saleFolioAssignmentFromOrder(PosOrder order) {
+    final sequence = order.saleFolioSequence;
+    final full = order.saleFolioFull?.trim();
+    if (sequence == null || sequence <= 0 || full == null || full.isEmpty) {
+      return null;
+    }
+    return SaleFolioAssignment(
+      sequence: sequence,
+      display: order.saleFolioDisplay?.trim().isNotEmpty == true
+          ? order.saleFolioDisplay!.trim()
+          : formatSaleFolioDisplay(sequence, 4),
+      full: full,
+      businessDate:
+          order.saleFolioBusinessDate ??
+          order.businessDate ??
+          _currentBusinessDate(),
+      branchId: order.saleFolioBranchId ?? order.branchId,
+      restaurantId: order.saleFolioRestaurantId ?? order.restaurantId,
+    );
+  }
+
   void _closeOrderInBatch(
     WriteBatch batch,
     PosOrder order, {
@@ -11446,6 +11857,41 @@ class TacoPosRepository {
     CashPaymentDetails? cashDetails,
     AppliedDiscountDetails? discount,
   }) {
+    batch.set(
+      paymentRef,
+      _paymentData(
+        order: order,
+        cashSession: cashSession,
+        type: type,
+        method: method,
+        baseAmount: baseAmount,
+        personNumber: personNumber,
+        personName: personName,
+        employeeId: employeeId,
+        employeeName: employeeName,
+        platformId: platformId,
+        platformName: platformName,
+        cashDetails: cashDetails,
+        discount: discount,
+      ),
+    );
+  }
+
+  Map<String, Object?> _paymentData({
+    required PosOrder order,
+    required CashSession cashSession,
+    required String type,
+    required String method,
+    required double baseAmount,
+    int? personNumber,
+    String? personName,
+    String? employeeId,
+    String? employeeName,
+    String? platformId,
+    String? platformName,
+    CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
+  }) {
     if (method == 'employee_consumption' &&
         (employeeId == null || employeeName == null)) {
       throw ArgumentError('Selecciona un empleado.');
@@ -11481,7 +11927,7 @@ class TacoPosRepository {
       throw ArgumentError('El efectivo recibido no cubre el total.');
     }
 
-    batch.set(paymentRef, {
+    return {
       'orderId': order.id,
       'tableId': order.tableId,
       'tableName': order.displayName,
@@ -11555,7 +12001,7 @@ class TacoPosRepository {
       'createdAt': FieldValue.serverTimestamp(),
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
-    });
+    };
   }
 
   Map<String, Object?> _orderDiscountSnapshot(
@@ -12027,6 +12473,25 @@ class TacoPosRepository {
         'createdAt': now,
         'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       });
+      final folioAssignment = _saleFolioAssignmentFromOrder(order);
+      if (folioAssignment != null) {
+        _setSaleAuditEventInTransaction(
+          transaction,
+          branchId: order.branchId,
+          eventType: 'payment_adjusted',
+          order: order,
+          assignment: folioAssignment,
+          amount: cancelledAmount,
+          paymentSnapshot: freshPaymentDoc.data() ?? const {},
+          previousStatus: order.paymentStatus,
+          newStatus: totals.paymentStatus,
+          reason: cleanReason,
+          authorizedBy: employee?.id ?? '',
+          performedBy: employee?.name ?? '',
+          deviceId: _auth.currentUser?.uid ?? 'anonymous',
+          createdAt: now,
+        );
+      }
 
       return BackofficeCancellationResult(
         affectedClosedCashSession: closedCashSessionId != null,
@@ -12198,6 +12663,28 @@ class TacoPosRepository {
         'createdAt': now,
         'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       });
+      final folioAssignment = _saleFolioAssignmentFromOrder(order);
+      if (folioAssignment != null) {
+        _setSaleAuditEventInTransaction(
+          transaction,
+          branchId: order.branchId,
+          eventType: 'sale_voided',
+          order: order,
+          assignment: folioAssignment,
+          amount: netTotal,
+          paymentSnapshot: {
+            'activePaymentsTotal': activePaymentsTotal,
+            'paymentsCount': activePayments.length,
+          },
+          previousStatus: order.paymentStatus,
+          newStatus: 'cancelled',
+          reason: cleanReason,
+          authorizedBy: employee?.id ?? '',
+          performedBy: employee?.name ?? '',
+          deviceId: _auth.currentUser?.uid ?? 'anonymous',
+          createdAt: now,
+        );
+      }
 
       return BackofficeCancellationResult(
         affectedClosedCashSession: closedCashSessionId != null,

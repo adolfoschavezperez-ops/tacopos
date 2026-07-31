@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/orders/global_discount_checkout.dart';
+import '../../core/sales/daily_sale_folio.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/employee.dart';
@@ -253,9 +254,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }
 
       afterSuccess?.call();
-      _showMessage('Pago registrado.');
-
       if (result.allPaid) {
+        final folio = result.saleFolioDisplay?.trim();
+        _showMessage(
+          folio == null || folio.isEmpty
+              ? 'Venta cobrada.'
+              : 'Venta cobrada. Folio $folio',
+        );
         await LivePresenceService.instance.clearCurrentOrder(
           currentAction: 'Viendo mesas',
         );
@@ -264,6 +269,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
         }
         Navigator.pop(context);
         Navigator.pop(context);
+      } else {
+        _showMessage('Pago registrado.');
       }
       return true;
     } catch (error) {
@@ -321,6 +328,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final message = error.toString().replaceFirst('Bad state: ', '');
     if (message == 'Debes abrir caja antes de cobrar.') {
       return message;
+    }
+    final saleFolioMessage = saleFolioFailureMessage(error);
+    if (saleFolioMessage != message) {
+      return saleFolioMessage;
     }
     return 'No se pudo cobrar: $message';
   }
