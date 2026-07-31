@@ -9,6 +9,8 @@ import '../../core/reports/hourly_sales_comparison.dart' as hourly;
 import '../../core/reports/operational_blockers.dart';
 import '../../core/reports/report_data_bundle.dart';
 import '../../core/reports/sales_discrepancy_audit.dart';
+import '../../core/sales/backoffice_sale_identity.dart';
+import '../../core/sales/daily_sale_folio.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
@@ -77,6 +79,7 @@ enum _ReportKind {
   cancellations,
   cancelledPayments,
   productStockOuts,
+  saleFolios,
   salesDiscrepancyAudit,
   discountsByDay,
   cashSchedule,
@@ -91,6 +94,7 @@ bool _reportNeedsCanonicalItems(_ReportKind kind) {
     _ReportKind.paymentMethod ||
     _ReportKind.employee ||
     _ReportKind.cancellations ||
+    _ReportKind.saleFolios ||
     _ReportKind.salesDiscrepancyAudit ||
     _ReportKind.discountsByDay => true,
     _ => false,
@@ -1713,7 +1717,7 @@ class _DiscountsByDayReportViewState extends State<_DiscountsByDayReportView> {
             child: TextField(
               controller: _searchController,
               decoration: const InputDecoration(
-                labelText: 'Folio / cliente / beneficiario',
+                labelText: 'ID / cliente / beneficiario',
                 prefixIcon: Icon(Icons.search),
               ),
               onChanged: (_) => setState(() {}),
@@ -2057,11 +2061,7 @@ class _SalesSectionState extends State<_SalesSection> {
       final payments = paymentsByOrder[order.id] ?? const <Payment>[];
       final methods = payments.map((payment) => payment.method).toSet();
       final matchesQuery =
-          query.isEmpty ||
-          order.id.toLowerCase().contains(query) ||
-          order.displayName.toLowerCase().contains(query) ||
-          (order.customerName ?? '').toLowerCase().contains(query) ||
-          (order.platformName ?? '').toLowerCase().contains(query);
+          query.isEmpty || backofficeSaleMatchesQuery(order, query);
       final matchesType = _orderType == 'all' || order.orderType == _orderType;
       final matchesStatus =
           _status == 'all' ||
@@ -2086,7 +2086,7 @@ class _SalesSectionState extends State<_SalesSection> {
                 child: TextField(
                   controller: _searchController,
                   decoration: const InputDecoration(
-                    labelText: 'Buscar folio, mesa, cliente o plataforma',
+                    labelText: 'Buscar ID, folio, mesa o cliente...',
                     prefixIcon: Icon(Icons.search),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -2177,6 +2177,7 @@ class _SaleTile extends StatelessWidget {
       (sum, payment) => sum + canonicalPaymentAppliedAmount(payment),
     );
     final attention = _durationBetween(order.createdAt, order.paidAt);
+    final identity = backofficeSaleIdentity(order);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: GlassCard(
@@ -2191,7 +2192,8 @@ class _SaleTile extends StatelessWidget {
               spacing: 16,
               runSpacing: 8,
               children: [
-                _InfoText('Folio', _shortId(order.id)),
+                _InfoText('ID', identity.visibleOrderId),
+                _InfoText('Folio', identity.dailyFolio),
                 _InfoText('Fecha', _dateTimeText(order.createdAt)),
                 _InfoText('Origen', order.displayName),
                 _InfoText('Tipo de orden', order.orderTypeLabel),
@@ -2334,6 +2336,9 @@ class _ReportsSectionState extends State<_ReportsSection> {
   Widget build(BuildContext context) {
     if (widget.reportKind == _ReportKind.productStockOuts) {
       return _buildProductStockOutReport(context);
+    }
+    if (widget.reportKind == _ReportKind.saleFolios) {
+      return _buildSaleFolioAuditReport(context);
     }
     if (widget.reportKind == _ReportKind.salesDiscrepancyAudit) {
       return _buildSalesDiscrepancyAuditReport(context);
@@ -2668,6 +2673,16 @@ class _ReportsSectionState extends State<_ReportsSection> {
       endBusinessDate: widget.endBusinessDate,
     );
   }
+
+  Widget _buildSaleFolioAuditReport(BuildContext context) {
+    return _SaleFolioAuditReportView(
+      repository: widget.repository,
+      orders: widget.orders,
+      payments: widget.payments,
+      startBusinessDate: widget.startBusinessDate,
+      endBusinessDate: widget.endBusinessDate,
+    );
+  }
 }
 
 class _SettingsSection extends StatelessWidget {
@@ -2890,9 +2905,328 @@ class _SmallMetric extends StatelessWidget {
   }
 }
 
+const _saleFolioAuditHeaders = [
+  'Fecha operativa',
+  'Folio',
+  'Folio completo',
+  'Orden',
+  'Mesa / cliente',
+  'Estado',
+  'Importe',
+  'Incidencia',
+  'Evento',
+];
+
+class _SaleFolioAuditReportView extends StatefulWidget {
+  const _SaleFolioAuditReportView({
+    required this.repository,
+    required this.orders,
+    required this.payments,
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+  });
+
+  final TacoPosRepository repository;
+  final List<PosOrder> orders;
+  final List<Payment> payments;
+  final String startBusinessDate;
+  final String endBusinessDate;
+
+  @override
+  State<_SaleFolioAuditReportView> createState() =>
+      _SaleFolioAuditReportViewState();
+}
+
+class _SaleFolioAuditReportViewState extends State<_SaleFolioAuditReportView> {
+  final _searchController = TextEditingController();
+  String _status = 'all';
+  String _incidence = 'all';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<Map<String, int>>(
+      future: widget.repository.saleFolioCountersForRange(
+        startBusinessDate: widget.startBusinessDate,
+        endBusinessDate: widget.endBusinessDate,
+      ),
+      builder: (context, snapshot) {
+        final rows = _filteredRows(_buildRows(snapshot.data ?? const {}));
+        final issuedRows = rows.where((row) => row.sequenceLabel != '-');
+        final issuedSequences =
+            issuedRows
+                .map((row) => int.tryParse(row.sequenceLabel))
+                .whereType<int>()
+                .toList()
+              ..sort();
+        final paidRows = rows.where(
+          (row) => row.status == 'Pagada' && !row.isMissing,
+        );
+        final voidedRows = rows.where((row) => row.status == 'Anulada');
+        final activeTotal = paidRows.fold<double>(
+          0,
+          (sum, row) => sum + row.amount,
+        );
+        final voidTotal = voidedRows.fold<double>(
+          0,
+          (sum, row) => sum + row.amount,
+        );
+        final csvRows = rows.map(_saleFolioCsvRow).toList();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            GlassPanel(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      'Folios de venta',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  FilledButton.icon(
+                    onPressed: csvRows.isEmpty
+                        ? null
+                        : () => _copyCsv(
+                            context,
+                            _saleFolioAuditHeaders,
+                            csvRows,
+                          ),
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text('CSV'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                _SmallMetric(
+                  'Primer folio',
+                  issuedSequences.isEmpty
+                      ? '-'
+                      : formatSaleFolioDisplay(issuedSequences.first, 4),
+                ),
+                _SmallMetric(
+                  'Ultimo folio',
+                  issuedSequences.isEmpty
+                      ? '-'
+                      : formatSaleFolioDisplay(issuedSequences.last, 4),
+                ),
+                _SmallMetric('Emitidos', '${issuedSequences.length}'),
+                _SmallMetric('Pagados', '${paidRows.length}'),
+                _SmallMetric('Anulados', '${voidedRows.length}'),
+                _SmallMetric(
+                  'Faltantes',
+                  '${rows.where((row) => row.isMissing).length}',
+                ),
+                _SmallMetric('Total activo', _money(activeTotal)),
+                _SmallMetric('Total anulado', _money(voidTotal)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            GlassPanel(
+              padding: const EdgeInsets.all(12),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 260,
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: const InputDecoration(
+                        labelText: 'Buscar folio u orden',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  _FilterMenu(
+                    value: _status,
+                    values: const {
+                      'all': 'Todos los estados',
+                      'paid': 'Pagadas',
+                      'voided': 'Anuladas',
+                      'missing': 'Faltantes',
+                      'historical': 'Historicas',
+                    },
+                    onChanged: (value) => setState(() => _status = value),
+                  ),
+                  _FilterMenu(
+                    value: _incidence,
+                    values: const {
+                      'all': 'Todas las incidencias',
+                      'ok': 'Sin incidencia',
+                      'missing': 'Folio faltante',
+                      'historical': 'Venta historica',
+                    },
+                    onChanged: (value) => setState(() => _incidence = value),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (snapshot.connectionState == ConnectionState.waiting)
+              const LoadingPanel(message: 'Cargando folios de venta...')
+            else
+              _ReportTable(headers: _saleFolioAuditHeaders, rows: csvRows),
+          ],
+        );
+      },
+    );
+  }
+
+  List<SaleFolioAuditRow> _filteredRows(List<SaleFolioAuditRow> rows) {
+    final query = _searchController.text.trim().toLowerCase();
+    return rows.where((row) {
+      final matchesQuery =
+          query.isEmpty ||
+          row.sequenceLabel.toLowerCase().contains(query) ||
+          row.fullFolio.toLowerCase().contains(query) ||
+          row.orderId.toLowerCase().contains(query) ||
+          row.customerLabel.toLowerCase().contains(query);
+      final matchesStatus = switch (_status) {
+        'paid' => row.status == 'Pagada',
+        'voided' => row.status == 'Anulada',
+        'missing' => row.isMissing,
+        'historical' => row.incidence == saleFolioHistoricalIncidence,
+        _ => true,
+      };
+      final matchesIncidence = switch (_incidence) {
+        'ok' => row.incidence == '-',
+        'missing' => row.incidence == saleFolioMissingIncidence,
+        'historical' => row.incidence == saleFolioHistoricalIncidence,
+        _ => true,
+      };
+      return matchesQuery && matchesStatus && matchesIncidence;
+    }).toList();
+  }
+
+  List<SaleFolioAuditRow> _buildRows(Map<String, int> counters) {
+    final rows = <SaleFolioAuditRow>[];
+    final issuedByDate = <String, Set<int>>{};
+    final orders = widget.orders.where((order) {
+      final businessDate = order.saleFolioBusinessDate ?? order.businessDate;
+      if (businessDate == null || businessDate.isEmpty) return false;
+      return businessDate.compareTo(widget.startBusinessDate) >= 0 &&
+          businessDate.compareTo(widget.endBusinessDate) <= 0;
+    }).toList();
+    final paymentsByOrder = <String, List<Payment>>{};
+    for (final payment in widget.payments) {
+      paymentsByOrder.putIfAbsent(payment.orderId, () => []).add(payment);
+    }
+    for (final order in orders) {
+      final businessDate =
+          order.saleFolioBusinessDate ?? order.businessDate ?? '-';
+      final sequence = order.saleFolioSequence;
+      final hasFolio = sequence != null && sequence > 0;
+      if (hasFolio) {
+        issuedByDate.putIfAbsent(businessDate, () => {}).add(sequence);
+      }
+      final cancelled =
+          isTerminalCancellationStatus(order.status) ||
+          order.cancelledAt != null ||
+          order.canceledAt != null;
+      final paid = order.paymentStatus == 'paid' || order.paidAt != null;
+      if (!hasFolio && !paid && !cancelled) {
+        continue;
+      }
+      rows.add(
+        SaleFolioAuditRow(
+          businessDate: businessDate,
+          sequenceLabel: hasFolio ? formatSaleFolioDisplay(sequence, 4) : '-',
+          fullFolio: hasFolio
+              ? order.saleFolioFull ?? order.saleFolioDisplay ?? '-'
+              : '-',
+          orderId: order.id,
+          customerLabel: order.displayName,
+          status: cancelled
+              ? 'Anulada'
+              : paid
+              ? 'Pagada'
+              : 'Abierta',
+          amount: order.netTotal ?? order.total,
+          incidence: hasFolio ? '-' : saleFolioHistoricalIncidence,
+          eventType: hasFolio
+              ? cancelled
+                    ? 'sale_voided'
+                    : 'sale_completed'
+              : 'historical_sale',
+        ),
+      );
+      for (final payment in paymentsByOrder[order.id] ?? const <Payment>[]) {
+        if (payment.saleFolioSequence != null &&
+            payment.saleFolioSequence! > 0) {
+          issuedByDate
+              .putIfAbsent(businessDate, () => {})
+              .add(payment.saleFolioSequence!);
+        }
+      }
+    }
+    for (final entry in counters.entries) {
+      final missing = missingSaleFolioSequences(
+        lastSequence: entry.value,
+        issuedSequences: issuedByDate[entry.key] ?? const {},
+      );
+      for (final sequence in missing) {
+        final display = formatSaleFolioDisplay(sequence, 4);
+        rows.add(
+          SaleFolioAuditRow(
+            businessDate: entry.key,
+            sequenceLabel: display,
+            fullFolio:
+                '${saleFolioPrefixForBranch(branchId: AppSession.instance.currentBranchId, name: AppSession.instance.currentBranchName)}-${entry.key}-$display',
+            orderId: '-',
+            customerLabel: '-',
+            status: 'Faltante',
+            amount: 0,
+            incidence: saleFolioMissingIncidence,
+            eventType: 'missing_sequence',
+          ),
+        );
+      }
+    }
+    rows.sort((a, b) {
+      final date = a.businessDate.compareTo(b.businessDate);
+      if (date != 0) return date;
+      return a.sequenceLabel.compareTo(b.sequenceLabel);
+    });
+    return rows;
+  }
+}
+
+List<String> _saleFolioCsvRow(SaleFolioAuditRow row) {
+  return [
+    _displayBusinessDate(row.businessDate),
+    row.sequenceLabel,
+    row.fullFolio,
+    row.orderId,
+    row.customerLabel,
+    row.status,
+    _money(row.amount),
+    row.incidence,
+    row.eventType,
+  ];
+}
+
 const _salesAuditHeaders = [
   'Fecha',
-  'Folio',
+  'ID',
   'Mesa / pedido',
   'Cliente',
   'Estado orden',
@@ -2915,7 +3249,7 @@ const _salesAuditHeaders = [
 const _discountDetailHeaders = [
   'Fecha operativa',
   'Hora',
-  'Folio',
+  'ID',
   'Mesa / Para llevar',
   'Cliente',
   'Subtotal bruto',
@@ -3121,7 +3455,7 @@ class _SalesDiscrepancyAuditReportState
             child: TextField(
               controller: _queryController,
               decoration: const InputDecoration(
-                labelText: 'Folio / cliente / mesa',
+                labelText: 'ID / cliente / mesa',
                 prefixIcon: Icon(Icons.search),
               ),
               onChanged: (_) => setState(() {}),
@@ -3475,7 +3809,7 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                   runSpacing: 10,
                   children: [
                     _InfoText('OrderId', row.order.id),
-                    _InfoText('Folio', _shortId(row.order.id)),
+                    _InfoText('ID', _shortId(row.order.id)),
                     _InfoText('Sucursal', row.order.branchName),
                     _InfoText('Mesa / pedido', row.order.displayName),
                     _InfoText('Cliente', row.order.customerName ?? '-'),
@@ -3770,7 +4104,7 @@ class _TotalsCorrectionDialogState extends State<_TotalsCorrectionDialog> {
                 title: 'Vista previa',
                 headers: const ['Campo', 'Actual', 'Nuevo'],
                 rows: [
-                  ['Folio', _shortId(row.order.id), _shortId(row.order.id)],
+                  ['ID', _shortId(row.order.id), _shortId(row.order.id)],
                   [
                     'Total articulos',
                     _money(preview.grossSubtotal),
@@ -4966,6 +5300,13 @@ List<_NavItem> _reportNavItems(Employee? employee) {
       'Pagos cancelados',
       reportKind: _ReportKind.cancelledPayments,
     ),
+    if (employee?.hasAdminAccess == true || employee?.canViewAdmin == true)
+      const _NavItem(
+        _BackofficeSection.reports,
+        Icons.confirmation_number_outlined,
+        'Folios de venta',
+        reportKind: _ReportKind.saleFolios,
+      ),
     const _NavItem(
       _BackofficeSection.reports,
       Icons.rule_folder_outlined,
@@ -5065,6 +5406,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.cancellations => 'Cancelaciones de tickets',
     _ReportKind.cancelledPayments => 'Pagos cancelados',
     _ReportKind.productStockOuts => 'Productos agotados',
+    _ReportKind.saleFolios => 'Folios de venta',
     _ReportKind.salesDiscrepancyAudit => 'Auditoria de discrepancias de ventas',
     _ReportKind.discountsByDay => 'Descuentos por dia',
     _ReportKind.cashSchedule => 'Horarios de apertura y cierre',
@@ -5179,7 +5521,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     ],
     _ReportKind.cancellations => [
       'Fecha',
-      'Folio',
+      'ID',
       'Mesa / pedido',
       'Importe',
       'Motivo',
@@ -5190,7 +5532,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     ],
     _ReportKind.cancelledPayments => [
       'Fecha',
-      'Folio',
+      'ID',
       'Mesa / pedido',
       'Metodo',
       'Base',
@@ -5210,6 +5552,7 @@ List<String> _reportHeaders(_ReportKind kind) {
       'Hora liberado',
       'Motivo liberacion',
     ],
+    _ReportKind.saleFolios => _saleFolioAuditHeaders,
     _ReportKind.salesDiscrepancyAudit => _salesAuditHeaders,
     _ReportKind.discountsByDay => _discountsByDayCsvHeaders,
     _ReportKind.cashSchedule => const [],
@@ -5571,6 +5914,8 @@ Future<List<List<String>>> _reportRows(
           )
           .first;
       return rows.map(_stockOutReportRow).toList();
+    case _ReportKind.saleFolios:
+      return const [];
     case _ReportKind.salesDiscrepancyAudit:
       return const [];
     case _ReportKind.discountsByDay:
@@ -6201,7 +6546,7 @@ void _showOperationalBlockersDetail(
             scrollDirection: Axis.horizontal,
             child: DataTable(
               columns: const [
-                DataColumn(label: Text('Folio')),
+                DataColumn(label: Text('ID')),
                 DataColumn(label: Text('Mesa / Para llevar')),
                 DataColumn(label: Text('Estado')),
                 DataColumn(label: Text('Saldo')),
@@ -6344,6 +6689,7 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
             final order = detail.order;
             final items = detail.items;
             final payments = detail.payments;
+            final identity = backofficeSaleIdentity(order);
             final orderIsCancelled =
                 isTerminalCancellationStatus(order.status) ||
                 order.cancelledAt != null ||
@@ -6381,7 +6727,10 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
                     spacing: 14,
                     runSpacing: 10,
                     children: [
-                      _InfoText('Folio', _shortId(order.id)),
+                      _InfoText('ID de venta', identity.visibleOrderId),
+                      _InfoText('Folio diario', identity.dailyFolio),
+                      if (identity.hasFullFolio)
+                        _InfoText('Folio completo', identity.fullFolio!),
                       _InfoText('Estado', formatOrderStatus(order.status)),
                       _InfoText(
                         'Pago',
@@ -6619,7 +6968,7 @@ Future<bool> _showPaymentCancellationDialog(
         builder: (context) => _BackofficeCancellationDialog(
           title: 'Cancelar pago',
           details: [
-            _InfoText('Folio de la orden', _shortId(detail.order.id)),
+            _InfoText('ID de venta', _shortId(detail.order.id)),
             _InfoText('Método de pago', _paymentMethodLabel(payment.method)),
             _InfoText(
               'Importe aplicado',
@@ -6674,7 +7023,16 @@ Future<bool> _showOrderCancellationDialog(
         builder: (context) => _BackofficeCancellationDialog(
           title: 'Cancelar venta',
           details: [
-            _InfoText('Folio', _shortId(order.id)),
+            _InfoText(
+              'ID de venta',
+              backofficeSaleIdentity(order).visibleOrderId,
+            ),
+            _InfoText('Folio diario', backofficeSaleIdentity(order).dailyFolio),
+            if (backofficeSaleIdentity(order).hasFullFolio)
+              _InfoText(
+                'Folio completo',
+                backofficeSaleIdentity(order).fullFolio!,
+              ),
             _InfoText(
               'Mesa / Para llevar / Parados sin mesa',
               order.displayName,
@@ -6983,6 +7341,11 @@ class _SalePaymentRow extends StatelessWidget {
           spacing: 18,
           runSpacing: 8,
           children: [
+            if (payment.saleFolioDisplay?.trim().isNotEmpty == true)
+              _PaymentDetailText(
+                label: 'Folio venta',
+                value: payment.saleFolioDisplay!.trim(),
+              ),
             _PaymentDetailText(
               label: 'Aplicado',
               value: _money(canonicalPaymentAppliedAmount(payment)),
@@ -7290,7 +7653,7 @@ String _durationText(Duration? duration) {
   return '${duration.inMinutes}m';
 }
 
-String _shortId(String id) => id.length <= 6 ? id : id.substring(0, 6);
+String _shortId(String id) => backofficeVisibleOrderId(id);
 
 String _dateTimeText(DateTime? date) {
   if (date == null) return '-';

@@ -3359,7 +3359,9 @@ class _CashCancellationSummary extends StatelessWidget {
         }
         lines.add(
           _CancelledItemLine(
-            folio: _shortId(order.id),
+            folio: order.saleFolioDisplay?.trim().isNotEmpty == true
+                ? order.saleFolioDisplay!.trim()
+                : _shortId(order.id),
             time: _time(date),
             amount: item.isCancelled ? item.total : 0,
             description:
