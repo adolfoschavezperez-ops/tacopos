@@ -181,6 +181,30 @@ class PaymentResult {
   final String? saleFolioDisplay;
 }
 
+class SaleFolioPaymentException implements Exception {
+  const SaleFolioPaymentException({
+    required this.stage,
+    required this.code,
+    required this.message,
+    required this.plugin,
+    required this.originalError,
+    required this.stackTrace,
+  });
+
+  final String stage;
+  final String code;
+  final String message;
+  final String plugin;
+  final Object originalError;
+  final StackTrace stackTrace;
+
+  @override
+  String toString() {
+    return 'No se pudo completar el cobro con folio diario. '
+        'Etapa: $stage. Codigo: $code. $message';
+  }
+}
+
 class BackofficeCancellationResult {
   const BackofficeCancellationResult({
     required this.affectedClosedCashSession,
@@ -11500,34 +11524,155 @@ class TacoPosRepository {
     final actorId = employee?.id ?? _auth.currentUser?.uid ?? 'anonymous';
     final actorName = employee?.name ?? actorId;
     final deviceId = _auth.currentUser?.uid ?? 'anonymous';
+    var transactionStage = 'iniciar cobro con folio diario';
 
-    return _db.runTransaction<PaymentResult>((transaction) async {
-      final freshOrderDoc = await transaction.get(orderRef);
-      if (!freshOrderDoc.exists) {
-        throw StateError('La orden ya no existe.');
-      }
-      final freshOrder = PosOrder.fromDoc(freshOrderDoc);
-      final existingFolio = freshOrder.saleFolioDisplay?.trim();
-      if (existingFolio != null && existingFolio.isNotEmpty) {
-        return PaymentResult(allPaid: true, saleFolioDisplay: existingFolio);
-      }
+    try {
+      return await _db.runTransaction<PaymentResult>((transaction) async {
+        transactionStage = 'leer orden';
+        final freshOrderDoc = await transaction.get(orderRef);
+        if (!freshOrderDoc.exists) {
+          throw StateError('La orden ya no existe.');
+        }
+        final freshOrder = PosOrder.fromDoc(freshOrderDoc);
+        final existingFolio = freshOrder.saleFolioDisplay?.trim();
+        if (existingFolio != null && existingFolio.isNotEmpty) {
+          return PaymentResult(allPaid: true, saleFolioDisplay: existingFolio);
+        }
 
-      final businessDate =
-          _businessDateForOrder(freshOrder) ??
-          businessDateForOpenCashSession(cashSession);
-      if (freshOrder.total - paidTotal > 0.01) {
-        throw StateError('La venta aun tiene saldo pendiente.');
-      }
-      if (!config.appliesToBusinessDate(businessDate)) {
-        transaction.set(paymentRef, paymentData);
+        final businessDate =
+            _businessDateForOrder(freshOrder) ??
+            businessDateForOpenCashSession(cashSession);
+        if (freshOrder.total - paidTotal > 0.01) {
+          throw StateError('La venta aun tiene saldo pendiente.');
+        }
+        if (!config.appliesToBusinessDate(businessDate)) {
+          transaction.set(paymentRef, paymentData);
+          for (final doc in itemDocs) {
+            transaction.update(doc.reference, {
+              'paymentStatus': 'paid',
+              'paidAt': FieldValue.serverTimestamp(),
+              'paymentId': paymentRef.id,
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+          }
+          transaction.update(orderRef, {
+            'status': 'paid',
+            'paymentStatus': 'paid',
+            'paidTotal': freshOrder.total,
+            'pendingTotal': 0.0,
+            ..._orderDiscountSnapshot(
+              discount,
+              freshOrder.total,
+              order: freshOrder,
+            ),
+            'paidAt': FieldValue.serverTimestamp(),
+            ..._currentBranchFields,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+          _releaseLinkedTablesInTransaction(transaction, freshOrder);
+          return const PaymentResult(allPaid: true);
+        }
+
+        transactionStage = 'leer contador diario';
+        final counterRef = _dailySaleCountersRef(
+          freshOrder.branchId,
+        ).doc(businessDate);
+        final counterDoc = await transaction.get(counterRef);
+        final lastSequence =
+            (counterDoc.data()?['lastSequence'] as num?)?.toInt() ?? 0;
+        final nextSequence = lastSequence + 1;
+        final assignment = buildSaleFolioAssignment(
+          sequence: nextSequence,
+          businessDate: businessDate,
+          branchId: freshOrder.branchId,
+          branchName: freshOrder.branchName,
+          restaurantId: freshOrder.restaurantId,
+          config: config,
+        );
+        final now = FieldValue.serverTimestamp();
+        final folioFields = {
+          'saleFolioSequence': assignment.sequence,
+          'saleFolioDisplay': assignment.display,
+          'saleFolioFull': assignment.full,
+          'saleFolioBusinessDate': assignment.businessDate,
+          'saleFolioBranchId': assignment.branchId,
+          'saleFolioRestaurantId': assignment.restaurantId,
+          'saleFolioAssignedAt': now,
+          'saleFolioVersion': saleFolioVersion,
+        };
+        final paymentWithFolio = {
+          ...paymentData,
+          'saleFolioSequence': assignment.sequence,
+          'saleFolioDisplay': assignment.display,
+          'saleFolioFull': assignment.full,
+        };
+        final auditPaymentSnapshot = buildSaleAuditPaymentSnapshot(
+          paymentId: paymentRef.id,
+          paymentData: paymentWithFolio,
+          assignment: assignment,
+        );
+
+        transactionStage = 'guardar contador diario';
+        transaction.set(counterRef, {
+          'businessDate': businessDate,
+          'restaurantId': freshOrder.restaurantId,
+          'branchId': freshOrder.branchId,
+          'lastSequence': nextSequence,
+          'updatedAt': now,
+          'updatedByDeviceId': deviceId,
+          'version': saleFolioVersion,
+        }, SetOptions(merge: true));
+        transactionStage = 'guardar pago final';
+        transaction.set(paymentRef, paymentWithFolio);
         for (final doc in itemDocs) {
           transaction.update(doc.reference, {
             'paymentStatus': 'paid',
-            'paidAt': FieldValue.serverTimestamp(),
+            'paidAt': now,
             'paymentId': paymentRef.id,
-            'updatedAt': FieldValue.serverTimestamp(),
+            'updatedAt': now,
           });
         }
+        if (discount != null && discount.discountAmount > 0) {
+          transaction.set(usageRef, {
+            'restaurantId': freshOrder.restaurantId,
+            'restaurantName': freshOrder.restaurantName,
+            'branchId': freshOrder.branchId,
+            'branchName': freshOrder.branchName,
+            'businessDate': cashSession.businessDate,
+            'employeeId': discount.employeeBeneficiaryId,
+            'employeeName': discount.employeeBeneficiaryName,
+            'partnerId': discount.authorizedByPartnerId,
+            'partnerName': discount.authorizedByPartnerName,
+            'linkedEmployeeId': discount.authorizedByPartnerLinkedEmployeeId,
+            'linkedEmployeeName':
+                discount.authorizedByPartnerLinkedEmployeeName,
+            'discountAuthorizationRequestId':
+                discount.discountAuthorizationRequestId,
+            'authorizationMode': discount.authorizationMode,
+            'authorizationStatus': discount.authorizationStatus,
+            'discountType': discount.type,
+            'discountName': discount.name,
+            'orderId': freshOrder.id,
+            'paymentId': paymentRef.id,
+            'amountBeforeDiscount': discount.amountBeforeDiscount,
+            'discountAmount': discount.discountAmount,
+            'totalAfterDiscount': discount.totalAfterDiscount,
+            'reason': discount.reason,
+            'status': 'active',
+            'createdAt': now,
+            ..._employeeAuditFields(prefix: 'createdBy'),
+          });
+        }
+        final requestId = discount?.discountAuthorizationRequestId?.trim();
+        if (requestId != null && requestId.isNotEmpty) {
+          transaction.update(_discountAuthorizationRequestsRef.doc(requestId), {
+            'status': 'used',
+            'usedAt': now,
+            'usedPaymentId': paymentRef.id,
+            'updatedAt': now,
+          });
+        }
+        transactionStage = 'cerrar orden';
         transaction.update(orderRef, {
           'status': 'paid',
           'paymentStatus': 'paid',
@@ -11538,155 +11683,106 @@ class TacoPosRepository {
             freshOrder.total,
             order: freshOrder,
           ),
-          'paidAt': FieldValue.serverTimestamp(),
+          ...folioFields,
+          'paidAt': now,
           ..._currentBranchFields,
-          'updatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': now,
         });
         _releaseLinkedTablesInTransaction(transaction, freshOrder);
-        return const PaymentResult(allPaid: true);
-      }
-
-      final counterRef = _dailySaleCountersRef(
-        freshOrder.branchId,
-      ).doc(businessDate);
-      final counterDoc = await transaction.get(counterRef);
-      final lastSequence =
-          (counterDoc.data()?['lastSequence'] as num?)?.toInt() ?? 0;
-      final nextSequence = lastSequence + 1;
-      final assignment = buildSaleFolioAssignment(
-        sequence: nextSequence,
-        businessDate: businessDate,
-        branchId: freshOrder.branchId,
-        branchName: freshOrder.branchName,
-        restaurantId: freshOrder.restaurantId,
-        config: config,
-      );
-      final now = FieldValue.serverTimestamp();
-      final folioFields = {
-        'saleFolioSequence': assignment.sequence,
-        'saleFolioDisplay': assignment.display,
-        'saleFolioFull': assignment.full,
-        'saleFolioBusinessDate': assignment.businessDate,
-        'saleFolioBranchId': assignment.branchId,
-        'saleFolioRestaurantId': assignment.restaurantId,
-        'saleFolioAssignedAt': now,
-        'saleFolioVersion': saleFolioVersion,
-      };
-      final paymentWithFolio = {
-        ...paymentData,
-        'saleFolioSequence': assignment.sequence,
-        'saleFolioDisplay': assignment.display,
-        'saleFolioFull': assignment.full,
-      };
-
-      transaction.set(counterRef, {
-        'businessDate': businessDate,
-        'restaurantId': freshOrder.restaurantId,
-        'branchId': freshOrder.branchId,
-        'lastSequence': nextSequence,
-        'updatedAt': now,
-        'updatedByDeviceId': deviceId,
-        'version': saleFolioVersion,
-      }, SetOptions(merge: true));
-      transaction.set(paymentRef, paymentWithFolio);
-      for (final doc in itemDocs) {
-        transaction.update(doc.reference, {
-          'paymentStatus': 'paid',
-          'paidAt': now,
-          'paymentId': paymentRef.id,
-          'updatedAt': now,
-        });
-      }
-      if (discount != null && discount.discountAmount > 0) {
-        transaction.set(usageRef, {
-          'restaurantId': freshOrder.restaurantId,
-          'restaurantName': freshOrder.restaurantName,
-          'branchId': freshOrder.branchId,
-          'branchName': freshOrder.branchName,
-          'businessDate': cashSession.businessDate,
-          'employeeId': discount.employeeBeneficiaryId,
-          'employeeName': discount.employeeBeneficiaryName,
-          'partnerId': discount.authorizedByPartnerId,
-          'partnerName': discount.authorizedByPartnerName,
-          'linkedEmployeeId': discount.authorizedByPartnerLinkedEmployeeId,
-          'linkedEmployeeName': discount.authorizedByPartnerLinkedEmployeeName,
-          'discountAuthorizationRequestId':
-              discount.discountAuthorizationRequestId,
-          'authorizationMode': discount.authorizationMode,
-          'authorizationStatus': discount.authorizationStatus,
-          'discountType': discount.type,
-          'discountName': discount.name,
-          'orderId': freshOrder.id,
-          'paymentId': paymentRef.id,
-          'amountBeforeDiscount': discount.amountBeforeDiscount,
-          'discountAmount': discount.discountAmount,
-          'totalAfterDiscount': discount.totalAfterDiscount,
-          'reason': discount.reason,
-          'status': 'active',
-          'createdAt': now,
-          ..._employeeAuditFields(prefix: 'createdBy'),
-        });
-      }
-      final requestId = discount?.discountAuthorizationRequestId?.trim();
-      if (requestId != null && requestId.isNotEmpty) {
-        transaction.update(_discountAuthorizationRequestsRef.doc(requestId), {
-          'status': 'used',
-          'usedAt': now,
-          'usedPaymentId': paymentRef.id,
-          'updatedAt': now,
-        });
-      }
-      transaction.update(orderRef, {
-        'status': 'paid',
-        'paymentStatus': 'paid',
-        'paidTotal': freshOrder.total,
-        'pendingTotal': 0.0,
-        ..._orderDiscountSnapshot(
-          discount,
-          freshOrder.total,
+        transactionStage = 'registrar auditoria de folio asignado';
+        _setSaleAuditEventInTransaction(
+          transaction,
+          branchId: freshOrder.branchId,
+          eventType: 'sale_folio_assigned',
           order: freshOrder,
-        ),
-        ...folioFields,
-        'paidAt': now,
-        ..._currentBranchFields,
-        'updatedAt': now,
-      });
-      _releaseLinkedTablesInTransaction(transaction, freshOrder);
-      _setSaleAuditEventInTransaction(
-        transaction,
-        branchId: freshOrder.branchId,
-        eventType: 'sale_folio_assigned',
-        order: freshOrder,
-        assignment: assignment,
-        amount: freshOrder.total,
-        paymentSnapshot: paymentWithFolio,
-        previousStatus: freshOrder.paymentStatus,
-        newStatus: 'paid',
-        reason: 'Folio diario asignado al cerrar venta',
-        performedBy: actorName,
-        authorizedBy: actorId,
-        deviceId: deviceId,
-        createdAt: now,
-      );
-      _setSaleAuditEventInTransaction(
-        transaction,
-        branchId: freshOrder.branchId,
-        eventType: 'sale_completed',
-        order: freshOrder,
-        assignment: assignment,
-        amount: freshOrder.total,
-        paymentSnapshot: paymentWithFolio,
-        previousStatus: freshOrder.paymentStatus,
-        newStatus: 'paid',
-        reason: 'Venta completada',
-        performedBy: actorName,
-        authorizedBy: actorId,
-        deviceId: deviceId,
-        createdAt: now,
-      );
+          assignment: assignment,
+          amount: freshOrder.total,
+          paymentSnapshot: auditPaymentSnapshot,
+          previousStatus: freshOrder.paymentStatus,
+          newStatus: 'paid',
+          reason: 'Folio diario asignado al cerrar venta',
+          performedBy: actorName,
+          authorizedBy: actorId,
+          deviceId: deviceId,
+          createdAt: now,
+        );
+        transactionStage = 'registrar auditoria de venta completada';
+        _setSaleAuditEventInTransaction(
+          transaction,
+          branchId: freshOrder.branchId,
+          eventType: 'sale_completed',
+          order: freshOrder,
+          assignment: assignment,
+          amount: freshOrder.total,
+          paymentSnapshot: auditPaymentSnapshot,
+          previousStatus: freshOrder.paymentStatus,
+          newStatus: 'paid',
+          reason: 'Venta completada',
+          performedBy: actorName,
+          authorizedBy: actorId,
+          deviceId: deviceId,
+          createdAt: now,
+        );
 
-      return PaymentResult(allPaid: true, saleFolioDisplay: assignment.display);
-    });
+        return PaymentResult(
+          allPaid: true,
+          saleFolioDisplay: assignment.display,
+        );
+      });
+    } on StateError {
+      rethrow;
+    } on FirebaseException catch (error, stackTrace) {
+      _logSaleFolioPaymentFailure(
+        stage: transactionStage,
+        code: error.code,
+        message: error.message ?? error.toString(),
+        plugin: error.plugin,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      throw SaleFolioPaymentException(
+        stage: transactionStage,
+        code: error.code,
+        message: error.message ?? error.toString(),
+        plugin: error.plugin,
+        originalError: error,
+        stackTrace: stackTrace,
+      );
+    } catch (error, stackTrace) {
+      _logSaleFolioPaymentFailure(
+        stage: transactionStage,
+        code: 'unknown',
+        message: error.toString(),
+        plugin: 'tacopos',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      throw SaleFolioPaymentException(
+        stage: transactionStage,
+        code: 'unknown',
+        message: error.toString(),
+        plugin: 'tacopos',
+        originalError: error,
+        stackTrace: stackTrace,
+      );
+    }
+  }
+
+  void _logSaleFolioPaymentFailure({
+    required String stage,
+    required String code,
+    required String message,
+    required String plugin,
+    required Object error,
+    required StackTrace stackTrace,
+  }) {
+    developer.log(
+      'Fallo al finalizar venta con folio diario. '
+      'stage=$stage code=$code plugin=$plugin message=$message',
+      name: 'TacoPOS.saleFolio.payment',
+      error: error,
+      stackTrace: stackTrace,
+    );
   }
 
   Future<SaleFolioConfig> _loadSaleFolioConfig() async {

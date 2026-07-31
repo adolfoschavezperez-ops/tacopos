@@ -1,4 +1,5 @@
 const fs = require('fs');
+const assert = require('assert');
 const {
   assertFails,
   assertSucceeds,
@@ -11,6 +12,7 @@ const {
   getDoc,
   getDocs,
   runTransaction,
+  serverTimestamp,
   setDoc,
   updateDoc,
 } = require('firebase/firestore');
@@ -296,6 +298,25 @@ describe('TacoPOS Firestore production guard rails', () => {
     );
   });
 
+  it('rechaza el payload anterior con serverTimestamp anidado en auditoria', async () => {
+    assert.throws(
+      () =>
+        setDoc(
+          auditDoc(authedDb('cashier-1')),
+          auditEventData({
+            paymentMethodsSnapshot: [
+              {
+                method: 'cash',
+                amount: 120,
+                createdAt: serverTimestamp(),
+              },
+            ],
+          }),
+        ),
+      /FieldValue|serverTimestamp|Unsupported|invalid/i,
+    );
+  });
+
   it('rechaza modificar evento de auditoria de venta', async () => {
     await seed(auditPath(), auditEventData());
 
@@ -397,6 +418,50 @@ describe('TacoPOS Firestore production guard rails', () => {
           updatedAt: new Date('2026-07-31T11:00:00.000Z'),
         });
         transaction.set(auditRef, auditEventData());
+      }),
+    );
+  });
+
+  it('permite orden y pago con campos de folio diario', async () => {
+    const db = authedDb('cashier-1');
+    await seed(`restaurants/${RESTAURANT_ID}/orders/order-fields`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      status: 'ready',
+      paymentStatus: 'pending',
+      total: 120,
+    });
+
+    await assertSucceeds(
+      setDoc(
+        doc(db, `restaurants/${RESTAURANT_ID}/orders/order-fields/payments/payment-1`),
+        {
+          restaurantId: RESTAURANT_ID,
+          branchId: BRANCH_ID,
+          orderId: 'order-fields',
+          method: 'cash',
+          status: 'active',
+          saleFolioSequence: 1,
+          saleFolioDisplay: '0001',
+          saleFolioFull: 'AVI-2026-07-31-0001',
+        },
+      ),
+    );
+    await assertSucceeds(
+      updateDoc(doc(db, `restaurants/${RESTAURANT_ID}/orders/order-fields`), {
+        status: 'paid',
+        paymentStatus: 'paid',
+        paidTotal: 120,
+        pendingTotal: 0,
+        saleFolioSequence: 1,
+        saleFolioDisplay: '0001',
+        saleFolioFull: 'AVI-2026-07-31-0001',
+        saleFolioBusinessDate: BUSINESS_DATE,
+        saleFolioBranchId: BRANCH_ID,
+        saleFolioRestaurantId: RESTAURANT_ID,
+        saleFolioAssignedAt: new Date('2026-07-31T11:00:00.000Z'),
+        saleFolioVersion: 1,
+        updatedAt: new Date('2026-07-31T11:00:00.000Z'),
       }),
     );
   });

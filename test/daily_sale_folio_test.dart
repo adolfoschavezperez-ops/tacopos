@@ -49,5 +49,40 @@ void main() {
         'No se pudo generar el folio de venta. Revisa la conexion e intentalo nuevamente. No se realizo un cobro duplicado.',
       );
     });
+
+    test(
+      'builds audit payment snapshot without server timestamp sentinels',
+      () {
+        final assignment = buildSaleFolioAssignment(
+          sequence: 1,
+          businessDate: '2026-07-31',
+          branchId: 'aviacion',
+          branchName: 'Los Padrinos Tacos - Aviacion',
+          restaurantId: 'tacopos',
+        );
+        final snapshot = buildSaleAuditPaymentSnapshot(
+          paymentId: 'payment-1',
+          assignment: assignment,
+          paymentData: {
+            'method': 'cash',
+            'amount': 120.0,
+            'cashSessionId': 'cash-1',
+            'createdAt': Object(),
+            'discountAppliedAt': Object(),
+            'nested': {'unsupported': Object()},
+            'optionalNull': null,
+          },
+        );
+
+        expect(snapshot['paymentId'], 'payment-1');
+        expect(snapshot['method'], 'cash');
+        expect(snapshot['amount'], 120.0);
+        expect(snapshot['saleFolioFull'], 'AVI-2026-07-31-0001');
+        expect(snapshot, isNot(contains('createdAt')));
+        expect(snapshot, isNot(contains('discountAppliedAt')));
+        expect(snapshot, isNot(contains('nested')));
+        expect(snapshot, isNot(contains('optionalNull')));
+      },
+    );
   });
 }

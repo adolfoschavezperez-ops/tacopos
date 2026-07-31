@@ -273,7 +273,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
         _showMessage('Pago registrado.');
       }
       return true;
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint(
+        'PAYMENT_ERROR type=${error.runtimeType} error=$error stack=$stackTrace',
+      );
       if (!mounted) {
         return false;
       }
@@ -325,6 +328,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   String _paymentErrorText(Object error) {
+    if (error is SaleFolioPaymentException) {
+      if (error.code == 'unavailable' ||
+          error.code == 'deadline-exceeded' ||
+          error.message.contains('network')) {
+        return 'No se pudo completar el cobro. Codigo: ${error.code}. Revisa la conexion e intentalo nuevamente. No se realizo un cobro duplicado.';
+      }
+      return 'No se pudo completar el cobro. Codigo: ${error.code}. Etapa: ${error.stage}.';
+    }
     final message = error.toString().replaceFirst('Bad state: ', '');
     if (message == 'Debes abrir caja antes de cobrar.') {
       return message;

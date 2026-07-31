@@ -92,6 +92,50 @@ const saleFolioMissingIncidence = 'FOLIO FALTANTE';
 const saleFolioHistoricalIncidence = 'SIN FOLIO - VENTA HISTORICA';
 const saleFolioVersion = 1;
 
+const _auditPaymentSnapshotFields = [
+  'type',
+  'paymentType',
+  'method',
+  'status',
+  'baseAmount',
+  'amount',
+  'chargedAmount',
+  'appliedAmount',
+  'cashSessionId',
+  'businessDate',
+  'employeeId',
+  'employeeName',
+  'platformId',
+  'platformName',
+  'cashReceivedAmount',
+  'cashChangeAmount',
+  'discountAmount',
+  'totalAfterDiscount',
+  'appliedDiscountType',
+  'appliedDiscountName',
+  'discountSource',
+];
+
+Map<String, Object?> buildSaleAuditPaymentSnapshot({
+  required String paymentId,
+  required Map<String, Object?> paymentData,
+  required SaleFolioAssignment assignment,
+}) {
+  final snapshot = <String, Object?>{
+    'paymentId': paymentId,
+    'saleFolioSequence': assignment.sequence,
+    'saleFolioDisplay': assignment.display,
+    'saleFolioFull': assignment.full,
+  };
+  for (final field in _auditPaymentSnapshotFields) {
+    final value = paymentData[field];
+    if (_isAuditSnapshotScalar(value)) {
+      snapshot[field] = value;
+    }
+  }
+  return snapshot;
+}
+
 SaleFolioAssignment buildSaleFolioAssignment({
   required int sequence,
   required String businessDate,
@@ -165,6 +209,10 @@ int _readDigits(Object? value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
   return int.tryParse(value?.toString() ?? '') ?? 4;
+}
+
+bool _isAuditSnapshotScalar(Object? value) {
+  return value is String || value is num || value is bool;
 }
 
 String _normalize(String value) {
