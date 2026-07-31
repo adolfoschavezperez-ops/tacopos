@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
+import 'commercial_branding.dart';
 
 class BrandLogoMark extends StatelessWidget {
   const BrandLogoMark({super.key, this.compact = false});
@@ -33,15 +34,7 @@ class BrandLogoMark extends StatelessWidget {
           clipBehavior: Clip.antiAlias,
           child: Padding(
             padding: EdgeInsets.all(compact ? 4 : 6),
-            child: Image.asset(
-              AppConstants.logoAsset,
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) => Icon(
-                Icons.local_fire_department,
-                size: compact ? 30 : 54,
-                color: BrandColors.accentYellow,
-              ),
-            ),
+            child: CommercialBrandLogo(size: size, fit: BoxFit.contain),
           ),
         ),
         const SizedBox(width: 14),
@@ -50,8 +43,8 @@ class BrandLogoMark extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                AppConstants.brandName.toUpperCase(),
+              CommercialBrandName(
+                uppercase: true,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(

@@ -25,6 +25,7 @@ import '../../utils/app_snackbar.dart';
 import '../../utils/csv_exporter.dart';
 import '../../utils/formatters.dart';
 import '../../widgets/backoffice_dashboard_widgets.dart';
+import '../../widgets/commercial_branding.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
@@ -33,6 +34,7 @@ import 'cash_schedule_report_view.dart';
 import 'authorization_admin_screen.dart';
 import 'branch_catalog_screen.dart';
 import 'discount_admin_screen.dart';
+import 'commercial_config_screen.dart';
 import 'device_versions_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'finance_admin_screen.dart';
@@ -411,13 +413,10 @@ class _SideNavHeader extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            SizedBox(
+            const SizedBox(
               width: 34,
               height: 34,
-              child: Image.asset(
-                'assets/branding/logo_los_padrinos.png',
-                fit: BoxFit.contain,
-              ),
+              child: CommercialBrandLogo(size: 34),
             ),
             toggle,
           ],
@@ -428,13 +427,10 @@ class _SideNavHeader extends StatelessWidget {
       height: 52,
       child: Row(
         children: [
-          SizedBox(
+          const SizedBox(
             width: 48,
             height: 48,
-            child: Image.asset(
-              'assets/branding/logo_los_padrinos.png',
-              fit: BoxFit.contain,
-            ),
+            child: CommercialBrandLogo(size: 48),
           ),
           const SizedBox(width: 10),
           const Expanded(
@@ -2689,6 +2685,17 @@ class _SettingsSection extends StatelessWidget {
         employee?.id.toLowerCase().trim() == 'admin' ||
         employee?.name.toLowerCase().trim() == 'admin';
     final links = <_SettingsLink>[
+      if (kIsWeb &&
+          (employee?.hasAdminAccess == true || employee?.canViewAdmin == true))
+        _SettingsLink(
+          'Configuracion comercial',
+          'Base multirrestaurante, branding, planes y politicas en preparacion.',
+          Icons.business_center_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const CommercialConfigScreen()),
+          ),
+        ),
       if (employee?.hasAdminAccess == true)
         _SettingsLink(
           'Sucursales',

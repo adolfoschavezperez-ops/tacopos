@@ -7,6 +7,7 @@ import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
 import '../services/app_session.dart';
 import '../services/taco_pos_repository.dart';
+import 'commercial_branding.dart';
 import 'glass.dart';
 
 class BrandedScaffold extends StatelessWidget {
@@ -57,8 +58,7 @@ class BrandedScaffold extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                         if (!compact)
-                          const Text(
-                            AppConstants.brandName,
+                          const CommercialBrandName(
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -318,14 +318,7 @@ class _AppBarLogo extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.all(3),
-        child: Image.asset(
-          AppConstants.logoAsset,
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) => const Icon(
-            Icons.local_fire_department,
-            color: BrandColors.accentYellow,
-          ),
-        ),
+        child: CommercialBrandLogo(size: compact ? 34 : 40),
       ),
     );
   }

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
-import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
 import '../models/branch.dart';
 import '../models/employee.dart';
@@ -10,6 +9,7 @@ import '../services/app_session.dart';
 import '../services/live_presence_service.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/glass.dart';
+import '../widgets/commercial_branding.dart';
 import 'admin/cash_admin_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'admin/backoffice_screen.dart';
@@ -292,20 +292,14 @@ class _HeroBlock extends StatelessWidget {
           child: SizedBox(
             width: compact ? 82 : 150,
             height: compact ? 82 : 150,
-            child: Image.asset(
-              AppConstants.logoAsset,
+            child: CommercialBrandLogo(
+              size: compact ? 82 : 150,
               fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) => const Icon(
-                Icons.local_fire_department,
-                size: 72,
-                color: BrandColors.accentYellow,
-              ),
             ),
           ),
         ),
         SizedBox(height: compact ? 14 : 34),
-        Text(
-          AppConstants.brandName,
+        CommercialBrandName(
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.headlineLarge?.copyWith(

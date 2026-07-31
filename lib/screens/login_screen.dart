@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
-import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
 import '../models/branch.dart';
 import '../models/employee.dart';
@@ -10,6 +9,7 @@ import '../services/app_update_service.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/app_update_gate.dart';
+import '../widgets/commercial_branding.dart';
 import '../widgets/glass.dart';
 import '../widgets/loading_panel.dart';
 import 'home_screen.dart';
@@ -225,22 +225,28 @@ class _LoginScreenState extends State<LoginScreen> {
                                   child: SizedBox(
                                     width: 118,
                                     height: 118,
-                                    child: Image.asset(
-                                      AppConstants.logoAsset,
+                                    child: const CommercialBrandLogo(
+                                      size: 118,
                                       fit: BoxFit.contain,
                                     ),
                                   ),
                                 ),
                                 const SizedBox(height: 22),
-                                Text(
-                                  kIsWeb
-                                      ? 'TacoPOS Backoffice'
-                                      : AppConstants.brandName,
-                                  textAlign: TextAlign.center,
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.headlineMedium,
-                                ),
+                                if (kIsWeb)
+                                  Text(
+                                    'TacoPOS Backoffice',
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.headlineMedium,
+                                  )
+                                else
+                                  CommercialBrandName(
+                                    textAlign: TextAlign.center,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.headlineMedium,
+                                  ),
                                 const SizedBox(height: 6),
                                 Text(
                                   kIsWeb
