@@ -9,6 +9,7 @@ import '../../core/reports/hourly_sales_comparison.dart' as hourly;
 import '../../core/reports/operational_blockers.dart';
 import '../../core/reports/report_data_bundle.dart';
 import '../../core/reports/sales_discrepancy_audit.dart';
+import '../../core/sales/backoffice_sale_identity.dart';
 import '../../core/sales/daily_sale_folio.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
@@ -1716,7 +1717,7 @@ class _DiscountsByDayReportViewState extends State<_DiscountsByDayReportView> {
             child: TextField(
               controller: _searchController,
               decoration: const InputDecoration(
-                labelText: 'Folio / cliente / beneficiario',
+                labelText: 'ID / cliente / beneficiario',
                 prefixIcon: Icon(Icons.search),
               ),
               onChanged: (_) => setState(() {}),
@@ -2060,11 +2061,7 @@ class _SalesSectionState extends State<_SalesSection> {
       final payments = paymentsByOrder[order.id] ?? const <Payment>[];
       final methods = payments.map((payment) => payment.method).toSet();
       final matchesQuery =
-          query.isEmpty ||
-          order.id.toLowerCase().contains(query) ||
-          order.displayName.toLowerCase().contains(query) ||
-          (order.customerName ?? '').toLowerCase().contains(query) ||
-          (order.platformName ?? '').toLowerCase().contains(query);
+          query.isEmpty || backofficeSaleMatchesQuery(order, query);
       final matchesType = _orderType == 'all' || order.orderType == _orderType;
       final matchesStatus =
           _status == 'all' ||
@@ -2089,7 +2086,7 @@ class _SalesSectionState extends State<_SalesSection> {
                 child: TextField(
                   controller: _searchController,
                   decoration: const InputDecoration(
-                    labelText: 'Buscar folio, mesa, cliente o plataforma',
+                    labelText: 'Buscar ID, folio, mesa o cliente...',
                     prefixIcon: Icon(Icons.search),
                   ),
                   onChanged: (_) => setState(() {}),
@@ -2180,6 +2177,7 @@ class _SaleTile extends StatelessWidget {
       (sum, payment) => sum + canonicalPaymentAppliedAmount(payment),
     );
     final attention = _durationBetween(order.createdAt, order.paidAt);
+    final identity = backofficeSaleIdentity(order);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: GlassCard(
@@ -2194,7 +2192,8 @@ class _SaleTile extends StatelessWidget {
               spacing: 16,
               runSpacing: 8,
               children: [
-                _InfoText('Folio', _saleFolioText(order)),
+                _InfoText('ID', identity.visibleOrderId),
+                _InfoText('Folio', identity.dailyFolio),
                 _InfoText('Fecha', _dateTimeText(order.createdAt)),
                 _InfoText('Origen', order.displayName),
                 _InfoText('Tipo de orden', order.orderTypeLabel),
@@ -3227,7 +3226,7 @@ List<String> _saleFolioCsvRow(SaleFolioAuditRow row) {
 
 const _salesAuditHeaders = [
   'Fecha',
-  'Folio',
+  'ID',
   'Mesa / pedido',
   'Cliente',
   'Estado orden',
@@ -3250,7 +3249,7 @@ const _salesAuditHeaders = [
 const _discountDetailHeaders = [
   'Fecha operativa',
   'Hora',
-  'Folio',
+  'ID',
   'Mesa / Para llevar',
   'Cliente',
   'Subtotal bruto',
@@ -3456,7 +3455,7 @@ class _SalesDiscrepancyAuditReportState
             child: TextField(
               controller: _queryController,
               decoration: const InputDecoration(
-                labelText: 'Folio / cliente / mesa',
+                labelText: 'ID / cliente / mesa',
                 prefixIcon: Icon(Icons.search),
               ),
               onChanged: (_) => setState(() {}),
@@ -3810,7 +3809,7 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                   runSpacing: 10,
                   children: [
                     _InfoText('OrderId', row.order.id),
-                    _InfoText('Folio', _shortId(row.order.id)),
+                    _InfoText('ID', _shortId(row.order.id)),
                     _InfoText('Sucursal', row.order.branchName),
                     _InfoText('Mesa / pedido', row.order.displayName),
                     _InfoText('Cliente', row.order.customerName ?? '-'),
@@ -4105,7 +4104,7 @@ class _TotalsCorrectionDialogState extends State<_TotalsCorrectionDialog> {
                 title: 'Vista previa',
                 headers: const ['Campo', 'Actual', 'Nuevo'],
                 rows: [
-                  ['Folio', _shortId(row.order.id), _shortId(row.order.id)],
+                  ['ID', _shortId(row.order.id), _shortId(row.order.id)],
                   [
                     'Total articulos',
                     _money(preview.grossSubtotal),
@@ -5522,7 +5521,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     ],
     _ReportKind.cancellations => [
       'Fecha',
-      'Folio',
+      'ID',
       'Mesa / pedido',
       'Importe',
       'Motivo',
@@ -5533,7 +5532,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     ],
     _ReportKind.cancelledPayments => [
       'Fecha',
-      'Folio',
+      'ID',
       'Mesa / pedido',
       'Metodo',
       'Base',
@@ -6547,7 +6546,7 @@ void _showOperationalBlockersDetail(
             scrollDirection: Axis.horizontal,
             child: DataTable(
               columns: const [
-                DataColumn(label: Text('Folio')),
+                DataColumn(label: Text('ID')),
                 DataColumn(label: Text('Mesa / Para llevar')),
                 DataColumn(label: Text('Estado')),
                 DataColumn(label: Text('Saldo')),
@@ -6690,6 +6689,7 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
             final order = detail.order;
             final items = detail.items;
             final payments = detail.payments;
+            final identity = backofficeSaleIdentity(order);
             final orderIsCancelled =
                 isTerminalCancellationStatus(order.status) ||
                 order.cancelledAt != null ||
@@ -6727,9 +6727,10 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
                     spacing: 14,
                     runSpacing: 10,
                     children: [
-                      _InfoText('Folio', _saleFolioText(order)),
-                      if (order.saleFolioFull?.trim().isNotEmpty == true)
-                        _InfoText('Folio completo', _saleFolioFullText(order)),
+                      _InfoText('ID de venta', identity.visibleOrderId),
+                      _InfoText('Folio diario', identity.dailyFolio),
+                      if (identity.hasFullFolio)
+                        _InfoText('Folio completo', identity.fullFolio!),
                       _InfoText('Estado', formatOrderStatus(order.status)),
                       _InfoText(
                         'Pago',
@@ -6967,7 +6968,7 @@ Future<bool> _showPaymentCancellationDialog(
         builder: (context) => _BackofficeCancellationDialog(
           title: 'Cancelar pago',
           details: [
-            _InfoText('Folio de la orden', _shortId(detail.order.id)),
+            _InfoText('ID de venta', _shortId(detail.order.id)),
             _InfoText('Método de pago', _paymentMethodLabel(payment.method)),
             _InfoText(
               'Importe aplicado',
@@ -7022,9 +7023,16 @@ Future<bool> _showOrderCancellationDialog(
         builder: (context) => _BackofficeCancellationDialog(
           title: 'Cancelar venta',
           details: [
-            _InfoText('Folio', _saleFolioText(order)),
-            if (order.saleFolioFull?.trim().isNotEmpty == true)
-              _InfoText('Folio completo', _saleFolioFullText(order)),
+            _InfoText(
+              'ID de venta',
+              backofficeSaleIdentity(order).visibleOrderId,
+            ),
+            _InfoText('Folio diario', backofficeSaleIdentity(order).dailyFolio),
+            if (backofficeSaleIdentity(order).hasFullFolio)
+              _InfoText(
+                'Folio completo',
+                backofficeSaleIdentity(order).fullFolio!,
+              ),
             _InfoText(
               'Mesa / Para llevar / Parados sin mesa',
               order.displayName,
@@ -7645,19 +7653,7 @@ String _durationText(Duration? duration) {
   return '${duration.inMinutes}m';
 }
 
-String _shortId(String id) => id.length <= 6 ? id : id.substring(0, 6);
-
-String _saleFolioText(PosOrder order) {
-  final display = order.saleFolioDisplay?.trim();
-  if (display != null && display.isNotEmpty) return display;
-  return _shortId(order.id);
-}
-
-String _saleFolioFullText(PosOrder order) {
-  final full = order.saleFolioFull?.trim();
-  if (full != null && full.isNotEmpty) return full;
-  return _saleFolioText(order);
-}
+String _shortId(String id) => backofficeVisibleOrderId(id);
 
 String _dateTimeText(DateTime? date) {
   if (date == null) return '-';
