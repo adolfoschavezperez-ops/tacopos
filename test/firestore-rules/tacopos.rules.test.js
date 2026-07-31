@@ -6,16 +6,19 @@ const {
 } = require('@firebase/rules-unit-testing');
 const {
   collectionGroup,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
+  runTransaction,
   setDoc,
   updateDoc,
 } = require('firebase/firestore');
 
-const PROJECT_ID = 'tacopos-renovadev-rules-test';
+const PROJECT_ID = 'tacopos-renovadev';
 const RESTAURANT_ID = 'tacopos';
 const BRANCH_ID = 'aviacion';
+const BUSINESS_DATE = '2026-07-31';
 
 let testEnv;
 
@@ -44,6 +47,58 @@ function authedDb(uid = 'anon-user') {
 
 function anonDb() {
   return testEnv.unauthenticatedContext().firestore();
+}
+
+function counterPath() {
+  return `restaurants/${RESTAURANT_ID}/branches/${BRANCH_ID}/dailySaleCounters/${BUSINESS_DATE}`;
+}
+
+function counterDoc(db) {
+  return doc(db, counterPath());
+}
+
+function counterData(overrides = {}) {
+  return {
+    businessDate: BUSINESS_DATE,
+    restaurantId: RESTAURANT_ID,
+    branchId: BRANCH_ID,
+    lastSequence: 1,
+    updatedAt: new Date('2026-07-31T11:00:00.000Z'),
+    updatedByDeviceId: 'device-1',
+    version: 1,
+    ...overrides,
+  };
+}
+
+function auditPath() {
+  return `restaurants/${RESTAURANT_ID}/branches/${BRANCH_ID}/saleAuditEvents/event-1`;
+}
+
+function auditDoc(db) {
+  return doc(db, auditPath());
+}
+
+function auditEventData(overrides = {}) {
+  return {
+    eventType: 'sale_completed',
+    orderId: 'order-folio',
+    saleFolioSequence: 1,
+    saleFolioFull: 'AVI-2026-07-31-0001',
+    businessDate: BUSINESS_DATE,
+    restaurantId: RESTAURANT_ID,
+    branchId: BRANCH_ID,
+    amount: 120,
+    paymentMethodsSnapshot: [{ method: 'cash', amount: 120 }],
+    previousStatus: 'pending',
+    newStatus: 'paid',
+    reason: 'Venta completada',
+    authorizedBy: 'cashier-1',
+    performedBy: 'Caja',
+    deviceId: 'device-1',
+    createdAt: new Date('2026-07-31T11:00:00.000Z'),
+    eventVersion: 1,
+    ...overrides,
+  };
 }
 
 async function seed(path, data) {
@@ -160,89 +215,189 @@ describe('TacoPOS Firestore production guard rails', () => {
     );
   });
 
-  it('permite crear el primer registro del dispositivo autenticado', async () => {
-    const deviceId = 'device-uid-1';
-    const db = authedDb(deviceId);
+  it('permite crear el contador diario con secuencia 1', async () => {
+    await assertSucceeds(
+      setDoc(counterDoc(authedDb('cashier-1')), counterData({ lastSequence: 1 })),
+    );
+  });
+
+  it('permite incrementar el contador diario de 1 a 2', async () => {
+    await seed(counterPath(), counterData({ lastSequence: 1 }));
 
     await assertSucceeds(
-      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/devices/${deviceId}`), {
-        deviceId,
-        deviceName: 'Caja',
-        branchId: BRANCH_ID,
-        branchName: 'Aviacion',
-        role: 'Caja',
-        platform: 'android',
-        appVersionName: '1.0.3',
-        appVersionCode: 4,
-        lastSeenAt: new Date('2026-07-30T10:00:00.000Z'),
-        employeeId: 'cashier-1',
-        employeeName: 'Caja',
-        updateStatus: 'up_to_date',
-        lastUpdateCheckAt: new Date('2026-07-30T10:00:00.000Z'),
-        availableVersionCode: 0,
-        updatedAt: new Date('2026-07-30T10:00:00.000Z'),
+      updateDoc(counterDoc(authedDb('cashier-1')), {
+        lastSequence: 2,
+        updatedAt: new Date('2026-07-31T11:01:00.000Z'),
+        updatedByDeviceId: 'device-2',
       }),
     );
   });
 
-  it('rechaza escribir devices de otro uid', async () => {
-    const db = authedDb('device-uid-1');
+  it('rechaza saltar el contador de 1 a 3', async () => {
+    await seed(counterPath(), counterData({ lastSequence: 1 }));
 
     await assertFails(
-      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/devices/device-uid-2`), {
-        deviceId: 'device-uid-2',
-        deviceName: 'Caja',
-        branchId: BRANCH_ID,
-        branchName: 'Aviacion',
-        role: 'Caja',
-        platform: 'android',
-        appVersionName: '1.0.3',
-        appVersionCode: 4,
-        lastSeenAt: new Date('2026-07-30T10:00:00.000Z'),
-        employeeId: 'cashier-1',
-        employeeName: 'Caja',
-        updateStatus: 'up_to_date',
-        lastUpdateCheckAt: new Date('2026-07-30T10:00:00.000Z'),
-        availableVersionCode: 0,
-        updatedAt: new Date('2026-07-30T10:00:00.000Z'),
+      updateDoc(counterDoc(authedDb('cashier-1')), {
+        lastSequence: 3,
+        updatedAt: new Date('2026-07-31T11:01:00.000Z'),
+        updatedByDeviceId: 'device-2',
       }),
     );
   });
 
-  it('rechaza campos no permitidos en devices', async () => {
-    const deviceId = 'device-uid-1';
-    const db = authedDb(deviceId);
+  it('rechaza disminuir el contador diario', async () => {
+    await seed(counterPath(), counterData({ lastSequence: 2 }));
 
     await assertFails(
-      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/devices/${deviceId}`), {
-        deviceId,
-        deviceName: 'Caja',
-        branchId: BRANCH_ID,
-        branchName: 'Aviacion',
-        role: 'Caja',
-        platform: 'android',
-        appVersionName: '1.0.3',
-        appVersionCode: 4,
-        lastSeenAt: new Date('2026-07-30T10:00:00.000Z'),
-        employeeId: 'cashier-1',
-        employeeName: 'Caja',
-        updateStatus: 'up_to_date',
-        lastUpdateCheckAt: new Date('2026-07-30T10:00:00.000Z'),
-        availableVersionCode: 0,
-        updatedAt: new Date('2026-07-30T10:00:00.000Z'),
-        packageInfo: { version: '1.0.3' },
+      updateDoc(counterDoc(authedDb('cashier-1')), {
+        lastSequence: 1,
+        updatedAt: new Date('2026-07-31T11:01:00.000Z'),
+        updatedByDeviceId: 'device-2',
       }),
     );
   });
 
-  it('rechaza leer devices sin autenticacion', async () => {
-    await seed(`restaurants/${RESTAURANT_ID}/devices/device-uid-1`, {
-      deviceId: 'device-uid-1',
-      deviceName: 'Caja',
+  it('rechaza eliminar el contador diario', async () => {
+    await seed(counterPath(), counterData({ lastSequence: 1 }));
+
+    await assertFails(deleteDoc(counterDoc(authedDb('cashier-1'))));
+  });
+
+  it('rechaza crear contador con restaurantId alterado', async () => {
+    await assertFails(
+      setDoc(
+        counterDoc(authedDb('cashier-1')),
+        counterData({ restaurantId: 'otro' }),
+      ),
+    );
+  });
+
+  it('rechaza crear contador con branchId alterado', async () => {
+    await assertFails(
+      setDoc(
+        counterDoc(authedDb('cashier-1')),
+        counterData({ branchId: 'otra-sucursal' }),
+      ),
+    );
+  });
+
+  it('rechaza crear contador con businessDate alterado', async () => {
+    await assertFails(
+      setDoc(
+        counterDoc(authedDb('cashier-1')),
+        counterData({ businessDate: '2026-08-01' }),
+      ),
+    );
+  });
+
+  it('permite crear evento de auditoria de venta', async () => {
+    await assertSucceeds(
+      setDoc(auditDoc(authedDb('cashier-1')), auditEventData()),
+    );
+  });
+
+  it('rechaza modificar evento de auditoria de venta', async () => {
+    await seed(auditPath(), auditEventData());
+
+    await assertFails(
+      updateDoc(auditDoc(authedDb('admin-1')), { reason: 'Cambio posterior' }),
+    );
+  });
+
+  it('rechaza eliminar evento de auditoria de venta', async () => {
+    await seed(auditPath(), auditEventData());
+
+    await assertFails(deleteDoc(auditDoc(authedDb('admin-1'))));
+  });
+
+  it('permite leer eventos de auditoria a usuario autenticado', async () => {
+    await seed(auditPath(), auditEventData());
+
+    await assertSucceeds(getDoc(auditDoc(authedDb('admin-1'))));
+  });
+
+  it('rechaza leer o escribir contador y auditoria sin autenticacion', async () => {
+    await seed(counterPath(), counterData({ lastSequence: 1 }));
+    await seed(auditPath(), auditEventData());
+
+    await assertFails(getDoc(counterDoc(anonDb())));
+    await assertFails(getDoc(auditDoc(anonDb())));
+    await assertFails(setDoc(counterDoc(anonDb()), counterData()));
+    await assertFails(setDoc(auditDoc(anonDb()), auditEventData()));
+  });
+
+  it('rechaza otra sucursal cuando el payload no coincide con la ruta', async () => {
+    const db = authedDb('cashier-1');
+
+    await assertFails(
+      setDoc(
+        doc(
+          db,
+          `restaurants/${RESTAURANT_ID}/branches/otra-sucursal/dailySaleCounters/${BUSINESS_DATE}`,
+        ),
+        counterData({ branchId: BRANCH_ID }),
+      ),
+    );
+  });
+
+  it('permite la transaccion completa de cobro con folio diario', async () => {
+    const db = authedDb('cashier-1');
+    await seed(`restaurants/${RESTAURANT_ID}/orders/order-folio`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      status: 'ready',
+      paymentStatus: 'pending',
+      total: 120,
+    });
+    await seed(`restaurants/${RESTAURANT_ID}/orders/order-folio/items/item-1`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      paymentStatus: 'pending',
     });
 
-    await assertFails(
-      getDoc(doc(anonDb(), `restaurants/${RESTAURANT_ID}/devices/device-uid-1`)),
+    await assertSucceeds(
+      runTransaction(db, async (transaction) => {
+        const orderRef = doc(db, `restaurants/${RESTAURANT_ID}/orders/order-folio`);
+        const itemRef = doc(db, `restaurants/${RESTAURANT_ID}/orders/order-folio/items/item-1`);
+        const paymentRef = doc(db, `restaurants/${RESTAURANT_ID}/orders/order-folio/payments/payment-1`);
+        const counterRef = counterDoc(db);
+        const auditRef = auditDoc(db);
+        await transaction.get(orderRef);
+        await transaction.get(counterRef);
+        transaction.set(counterRef, counterData({ lastSequence: 1 }));
+        transaction.set(paymentRef, {
+          restaurantId: RESTAURANT_ID,
+          branchId: BRANCH_ID,
+          orderId: 'order-folio',
+          method: 'cash',
+          status: 'active',
+          saleFolioSequence: 1,
+          saleFolioDisplay: '0001',
+          saleFolioFull: 'AVI-2026-07-31-0001',
+        });
+        transaction.update(itemRef, {
+          paymentStatus: 'paid',
+          paymentId: 'payment-1',
+          paidAt: new Date('2026-07-31T11:00:00.000Z'),
+          updatedAt: new Date('2026-07-31T11:00:00.000Z'),
+        });
+        transaction.update(orderRef, {
+          status: 'paid',
+          paymentStatus: 'paid',
+          paidTotal: 120,
+          pendingTotal: 0,
+          saleFolioSequence: 1,
+          saleFolioDisplay: '0001',
+          saleFolioFull: 'AVI-2026-07-31-0001',
+          saleFolioBusinessDate: BUSINESS_DATE,
+          saleFolioBranchId: BRANCH_ID,
+          saleFolioRestaurantId: RESTAURANT_ID,
+          saleFolioAssignedAt: new Date('2026-07-31T11:00:00.000Z'),
+          saleFolioVersion: 1,
+          updatedAt: new Date('2026-07-31T11:00:00.000Z'),
+        });
+        transaction.set(auditRef, auditEventData());
+      }),
     );
   });
 

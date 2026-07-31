@@ -44,50 +44,84 @@ service cloud.firestore {
         : validUpdate();
     }
 
-    function validDeviceFields() {
-      return request.resource.data.keys().hasOnly([
-        'deviceId',
-        'deviceName',
-        'branchId',
-        'branchName',
-        'role',
-        'platform',
-        'appVersionName',
-        'appVersionCode',
-        'lastSeenAt',
-        'employeeId',
-        'employeeName',
-        'updateStatus',
-        'lastUpdateCheckAt',
-        'availableVersionCode',
-        'updatedAt',
-        'rolloutGroup'
-      ]);
+    function validDailySaleCounterCreate(restaurantId, branchId, businessDate) {
+      return validCreate(restaurantId) &&
+        request.resource.data.keys().hasAll([
+          'businessDate',
+          'restaurantId',
+          'branchId',
+          'lastSequence',
+          'updatedAt',
+          'updatedByDeviceId',
+          'version'
+        ]) &&
+        request.resource.data.businessDate == businessDate &&
+        request.resource.data.branchId == branchId &&
+        request.resource.data.lastSequence is int &&
+        request.resource.data.lastSequence >= 1 &&
+        request.resource.data.version is int;
     }
 
-    function validDeviceWrite(deviceId) {
-      return signedIn() &&
-        request.auth.uid == deviceId &&
-        request.resource.data.deviceId == deviceId &&
-        request.resource.data.deviceId is string &&
-        request.resource.data.deviceName is string &&
-        request.resource.data.branchId is string &&
-        request.resource.data.branchName is string &&
-        request.resource.data.role is string &&
-        request.resource.data.platform is string &&
-        request.resource.data.appVersionName is string &&
-        request.resource.data.appVersionCode is int &&
-        request.resource.data.employeeId is string &&
-        request.resource.data.employeeName is string &&
-        request.resource.data.updateStatus in [
-          'up_to_date',
-          'update_recommended',
-          'update_required',
-          'play_update_unavailable',
-          'unknown'
-        ] &&
-        request.resource.data.availableVersionCode is int &&
-        validDeviceFields();
+    function validDailySaleCounterUpdate() {
+      return validUpdate() &&
+        request.resource.data.keys().hasAll([
+          'businessDate',
+          'restaurantId',
+          'branchId',
+          'lastSequence',
+          'updatedAt',
+          'updatedByDeviceId',
+          'version'
+        ]) &&
+        request.resource.data.businessDate == resource.data.businessDate &&
+        request.resource.data.version == resource.data.version &&
+        request.resource.data.lastSequence is int &&
+        request.resource.data.lastSequence == resource.data.lastSequence + 1;
+    }
+
+    function validSaleAuditEventType() {
+      return request.resource.data.eventType in [
+        'sale_folio_assigned',
+        'sale_completed',
+        'sale_cancelled',
+        'sale_voided',
+        'sale_reopened',
+        'payment_adjusted',
+        'deletion_attempt_blocked'
+      ];
+    }
+
+    function validSaleAuditEventCreate(restaurantId, branchId) {
+      return validCreate(restaurantId) &&
+        request.resource.data.keys().hasAll([
+          'eventType',
+          'orderId',
+          'saleFolioSequence',
+          'saleFolioFull',
+          'businessDate',
+          'restaurantId',
+          'branchId',
+          'amount',
+          'paymentMethodsSnapshot',
+          'previousStatus',
+          'newStatus',
+          'reason',
+          'authorizedBy',
+          'performedBy',
+          'deviceId',
+          'createdAt',
+          'eventVersion'
+        ]) &&
+        request.resource.data.branchId == branchId &&
+        validSaleAuditEventType() &&
+        request.resource.data.orderId is string &&
+        request.resource.data.orderId.size() > 0 &&
+        request.resource.data.businessDate is string &&
+        request.resource.data.businessDate.size() > 0 &&
+        request.resource.data.saleFolioSequence is int &&
+        request.resource.data.saleFolioFull is string &&
+        request.resource.data.saleFolioFull.size() > 0 &&
+        request.resource.data.eventVersion == 1;
     }
 
     match /restaurants/{restaurantId} {
@@ -101,6 +135,24 @@ service cloud.firestore {
         allow create: if validCreate(restaurantId);
         allow update: if validUpdate();
         allow delete: if false;
+
+        match /dailySaleCounters/{businessDate} {
+          allow get: if signedIn();
+          allow list: if signedIn();
+          allow create: if validDailySaleCounterCreate(
+            restaurantId,
+            branchId,
+            businessDate
+          );
+          allow update: if validDailySaleCounterUpdate();
+          allow delete: if false;
+        }
+
+        match /saleAuditEvents/{eventId} {
+          allow read: if signedIn();
+          allow create: if validSaleAuditEventCreate(restaurantId, branchId);
+          allow update, delete: if false;
+        }
       }
 
       match /employees/{employeeId} {
@@ -233,12 +285,6 @@ service cloud.firestore {
         allow read: if signedIn();
         allow create: if validCreate(restaurantId);
         allow update, delete: if false;
-      }
-
-      match /devices/{deviceId} {
-        allow read: if signedIn();
-        allow create, update: if validDeviceWrite(deviceId);
-        allow delete: if false;
       }
 
       match /suppliers/{supplierId} {
