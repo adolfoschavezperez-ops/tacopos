@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/commercial/tenant_runtime_context.dart';
@@ -10,25 +11,49 @@ import 'app_session.dart';
 
 class CommercialConfigService {
   CommercialConfigService({FirebaseFirestore? firestore, FirebaseAuth? auth})
-    : _firestore = firestore ?? FirebaseFirestore.instance,
-      _auth = auth ?? FirebaseAuth.instance;
+    : _firestore = firestore,
+      _auth = auth;
 
   static final instance = CommercialConfigService();
 
-  final FirebaseFirestore _firestore;
-  final FirebaseAuth _auth;
+  final FirebaseFirestore? _firestore;
+  final FirebaseAuth? _auth;
 
-  DocumentReference<Map<String, dynamic>> get _restaurantRef =>
-      _firestore.collection('restaurants').doc(AppConstants.restaurantId);
+  FirebaseFirestore? get _db {
+    if (_firestore != null) return _firestore;
+    if (Firebase.apps.isEmpty) return null;
+    return FirebaseFirestore.instance;
+  }
 
-  CollectionReference<Map<String, dynamic>> get _settingsRef =>
-      _restaurantRef.collection('settings');
+  FirebaseAuth? get _firebaseAuth {
+    if (_auth != null) return _auth;
+    if (Firebase.apps.isEmpty) return null;
+    return FirebaseAuth.instance;
+  }
 
-  DocumentReference<Map<String, dynamic>> settingRef(String id) =>
-      _settingsRef.doc(id);
+  DocumentReference<Map<String, dynamic>> _restaurantRef(
+    FirebaseFirestore db,
+  ) => db.collection('restaurants').doc(AppConstants.restaurantId);
+
+  CollectionReference<Map<String, dynamic>> _settingsRef(
+    FirebaseFirestore db,
+  ) => _restaurantRef(db).collection('settings');
+
+  DocumentReference<Map<String, dynamic>> settingRef(String id) {
+    final db = _db;
+    if (db == null) {
+      throw StateError('Firebase no esta inicializado.');
+    }
+    return _settingsRef(db).doc(id);
+  }
 
   Stream<CommercialBranding> watchBranding() {
-    return settingRef('branding')
+    final db = _db;
+    if (db == null) {
+      return Stream<CommercialBranding>.value(CommercialBranding.defaults());
+    }
+    return _settingsRef(db)
+        .doc('branding')
         .snapshots()
         .map((snapshot) => CommercialBranding.fromMap(snapshot.data()))
         .handleError((Object error, StackTrace stackTrace) {
@@ -45,13 +70,16 @@ class CommercialConfigService {
       branchId: AppSession.instance.currentBranchId,
       branchName: AppSession.instance.currentBranchName,
     );
+    final db = _db;
+    if (db == null) return fallback;
     try {
+      final settings = _settingsRef(db);
       final snapshots = await Future.wait([
-        settingRef('commercial').get(),
-        settingRef('branding').get(),
-        settingRef('features').get(),
-        settingRef('operations').get(),
-        settingRef('benefits').get(),
+        settings.doc('commercial').get(),
+        settings.doc('branding').get(),
+        settings.doc('features').get(),
+        settings.doc('operations').get(),
+        settings.doc('benefits').get(),
       ]).timeout(const Duration(seconds: 6));
 
       final commercial = snapshots[0].data();
@@ -94,14 +122,19 @@ class CommercialConfigService {
   }
 
   Future<CommercialPreparationResult> prepareCommercialConfiguration() async {
+    final db = _db;
+    if (db == null) {
+      throw StateError('Firebase no esta inicializado.');
+    }
     final defaults = _defaultDocuments();
     final created = <String>[];
     final existing = <String>[];
     final errors = <String>[];
+    final settings = _settingsRef(db);
 
     for (final entry in defaults.entries) {
       try {
-        final ref = settingRef(entry.key);
+        final ref = settings.doc(entry.key);
         final snapshot = await ref.get();
         if (snapshot.exists) {
           existing.add(entry.key);
@@ -139,7 +172,11 @@ class CommercialConfigService {
   }
 
   Future<void> saveBranding(CommercialBranding branding) async {
-    await settingRef('branding').set({
+    final db = _db;
+    if (db == null) {
+      throw StateError('Firebase no esta inicializado.');
+    }
+    await _settingsRef(db).doc('branding').set({
       ...branding.toFirestore(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -153,7 +190,11 @@ class CommercialConfigService {
   }
 
   Future<void> saveOperations(OperationalPolicy operations) async {
-    await settingRef('operations').set({
+    final db = _db;
+    if (db == null) {
+      throw StateError('Firebase no esta inicializado.');
+    }
+    await _settingsRef(db).doc('operations').set({
       ...operations.toFirestore(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -161,7 +202,11 @@ class CommercialConfigService {
   }
 
   Future<void> saveBenefits(BenefitPolicies benefits) async {
-    await settingRef('benefits').set({
+    final db = _db;
+    if (db == null) {
+      throw StateError('Firebase no esta inicializado.');
+    }
+    await _settingsRef(db).doc('benefits').set({
       ...benefits.toFirestore(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
@@ -191,15 +236,17 @@ class CommercialConfigService {
     Map<String, Object?> data = const {},
   }) async {
     try {
+      final db = _db;
+      if (db == null) return;
       final employee = AppSession.instance.employee;
-      await _restaurantRef.collection('activityLog').add({
+      await _restaurantRef(db).collection('activityLog').add({
         'type': type,
         'restaurantId': AppConstants.restaurantId,
         'branchId': AppSession.instance.currentBranchId,
         'branchName': AppSession.instance.currentBranchName,
         'employeeId': employee?.id ?? '',
         'employeeName': employee?.name ?? '',
-        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+        'createdBy': _firebaseAuth?.currentUser?.uid ?? 'anonymous',
         'createdAt': FieldValue.serverTimestamp(),
         ...data,
       });

@@ -313,9 +313,10 @@ class _CommercialConfigViewState extends State<_CommercialConfigView> {
         ),
         const SizedBox(height: 14),
         _SectionCard(
-          title: 'Caja y Cocina',
-          icon: Icons.tune_outlined,
+          title: 'Caja',
+          icon: Icons.point_of_sale_outlined,
           child: _OperationsForm(
+            scope: _OperationsScope.cash,
             operations: _operations,
             cardPercent: _cardPercent,
             saving: _saving,
@@ -325,9 +326,58 @@ class _CommercialConfigViewState extends State<_CommercialConfigView> {
         ),
         const SizedBox(height: 14),
         _SectionCard(
-          title: 'Descuentos, Empleados, Socios, Familia y amigos',
+          title: 'Cocina',
+          icon: Icons.soup_kitchen_outlined,
+          child: _OperationsForm(
+            scope: _OperationsScope.kitchen,
+            operations: _operations,
+            cardPercent: _cardPercent,
+            saving: _saving,
+            onChanged: (value) => setState(() => _operations = value),
+            onSave: _saveOperations,
+          ),
+        ),
+        const SizedBox(height: 14),
+        _SectionCard(
+          title: 'Descuentos',
+          icon: Icons.tune_outlined,
+          child: _DiscountsPolicyForm(
+            operations: _operations,
+            saving: _saving,
+            onChanged: (value) => setState(() => _operations = value),
+            onSave: _saveOperations,
+          ),
+        ),
+        const SizedBox(height: 14),
+        _SectionCard(
+          title: 'Empleados',
           icon: Icons.percent_outlined,
           child: _BenefitsForm(
+            scope: _BenefitsScope.employees,
+            benefits: _benefits,
+            saving: _saving,
+            onChanged: (value) => setState(() => _benefits = value),
+            onSave: _saveBenefits,
+          ),
+        ),
+        const SizedBox(height: 14),
+        _SectionCard(
+          title: 'Socios',
+          icon: Icons.handshake_outlined,
+          child: _BenefitsForm(
+            scope: _BenefitsScope.partners,
+            benefits: _benefits,
+            saving: _saving,
+            onChanged: (value) => setState(() => _benefits = value),
+            onSave: _saveBenefits,
+          ),
+        ),
+        const SizedBox(height: 14),
+        _SectionCard(
+          title: 'Familia y amigos',
+          icon: Icons.groups_2_outlined,
+          child: _BenefitsForm(
+            scope: _BenefitsScope.friendsAndFamily,
             benefits: _benefits,
             saving: _saving,
             onChanged: (value) => setState(() => _benefits = value),
@@ -619,8 +669,11 @@ class _FeaturesPreview extends StatelessWidget {
   }
 }
 
+enum _OperationsScope { cash, kitchen }
+
 class _OperationsForm extends StatelessWidget {
   const _OperationsForm({
+    required this.scope,
     required this.operations,
     required this.cardPercent,
     required this.saving,
@@ -628,6 +681,7 @@ class _OperationsForm extends StatelessWidget {
     required this.onSave,
   });
 
+  final _OperationsScope scope;
   final OperationalPolicy operations;
   final TextEditingController cardPercent;
   final bool saving;
@@ -636,61 +690,76 @@ class _OperationsForm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final cashControls = [
+      _switch(
+        'Caja requiere apertura',
+        operations.requireCashOpening,
+        (value) => onChanged(_copy(requireCashOpening: value)),
+      ),
+      _switch(
+        'Caja requiere cierre',
+        operations.requireCashClosing,
+        (value) => onChanged(_copy(requireCashClosing: value)),
+      ),
+      _switch(
+        'Pagos divididos',
+        operations.allowSplitPayments,
+        (value) => onChanged(_copy(allowSplitPayments: value)),
+      ),
+      _switch(
+        'Comision tarjeta',
+        operations.cardCommissionEnabled,
+        (value) => onChanged(_copy(cardCommissionEnabled: value)),
+      ),
+    ];
+    final kitchenControls = [
+      _switch(
+        'Cocina requiere apertura',
+        operations.requireKitchenOpening,
+        (value) => onChanged(_copy(requireKitchenOpening: value)),
+      ),
+      _switch(
+        'Cocina requiere cierre',
+        operations.requireKitchenClosing,
+        (value) => onChanged(_copy(requireKitchenClosing: value)),
+      ),
+      _switch(
+        'Bloquear cobro con cocina pendiente',
+        operations.blockPaymentWhileKitchenPending,
+        (value) => onChanged(_copy(blockPaymentWhileKitchenPending: value)),
+      ),
+      _switch(
+        'Permitir cobro con cocina pendiente',
+        operations.allowPaymentWithKitchenPending,
+        (value) => onChanged(_copy(allowPaymentWithKitchenPending: value)),
+      ),
+      _switch(
+        'Iniciar cocina automaticamente',
+        operations.autoStartKitchenSession,
+        (value) => onChanged(_copy(autoStartKitchenSession: value)),
+      ),
+      _switch(
+        'Cerrar cocina automaticamente',
+        operations.autoCloseKitchenSession,
+        (value) => onChanged(_copy(autoCloseKitchenSession: value)),
+      ),
+    ];
     return Column(
       children: [
         Wrap(
           spacing: 10,
           runSpacing: 8,
-          children: [
-            _switch(
-              'Caja requiere apertura',
-              operations.requireCashOpening,
-              (value) => onChanged(_copy(requireCashOpening: value)),
-            ),
-            _switch(
-              'Caja requiere cierre',
-              operations.requireCashClosing,
-              (value) => onChanged(_copy(requireCashClosing: value)),
-            ),
-            _switch(
-              'Cocina requiere apertura',
-              operations.requireKitchenOpening,
-              (value) => onChanged(_copy(requireKitchenOpening: value)),
-            ),
-            _switch(
-              'Cocina requiere cierre',
-              operations.requireKitchenClosing,
-              (value) => onChanged(_copy(requireKitchenClosing: value)),
-            ),
-            _switch(
-              'Bloquear cobro con cocina pendiente',
-              operations.blockPaymentWhileKitchenPending,
-              (value) =>
-                  onChanged(_copy(blockPaymentWhileKitchenPending: value)),
-            ),
-            _switch(
-              'Permitir cobro con cocina pendiente',
-              operations.allowPaymentWithKitchenPending,
-              (value) =>
-                  onChanged(_copy(allowPaymentWithKitchenPending: value)),
-            ),
-            _switch(
-              'Pagos divididos',
-              operations.allowSplitPayments,
-              (value) => onChanged(_copy(allowSplitPayments: value)),
-            ),
-            _switch(
-              'Comision tarjeta',
-              operations.cardCommissionEnabled,
-              (value) => onChanged(_copy(cardCommissionEnabled: value)),
-            ),
-          ],
+          children: scope == _OperationsScope.cash
+              ? cashControls
+              : kitchenControls,
         ),
-        const SizedBox(height: 12),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: _field(cardPercent, 'Comision tarjeta %', 190),
-        ),
+        if (scope == _OperationsScope.cash) ...[
+          const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _field(cardPercent, 'Comision tarjeta %', 190),
+          ),
+        ],
         const SizedBox(height: 12),
         Align(
           alignment: Alignment.centerRight,
@@ -711,6 +780,8 @@ class _OperationsForm extends StatelessWidget {
     bool? requireKitchenClosing,
     bool? blockPaymentWhileKitchenPending,
     bool? allowPaymentWithKitchenPending,
+    bool? autoStartKitchenSession,
+    bool? autoCloseKitchenSession,
     bool? allowSplitPayments,
     bool? cardCommissionEnabled,
   }) {
@@ -727,8 +798,10 @@ class _OperationsForm extends StatelessWidget {
       allowPaymentWithKitchenPending:
           allowPaymentWithKitchenPending ??
           operations.allowPaymentWithKitchenPending,
-      autoStartKitchenSession: operations.autoStartKitchenSession,
-      autoCloseKitchenSession: operations.autoCloseKitchenSession,
+      autoStartKitchenSession:
+          autoStartKitchenSession ?? operations.autoStartKitchenSession,
+      autoCloseKitchenSession:
+          autoCloseKitchenSession ?? operations.autoCloseKitchenSession,
       requireCancellationReason: operations.requireCancellationReason,
       requireDiscountAuthorization: operations.requireDiscountAuthorization,
       allowSplitPayments: allowSplitPayments ?? operations.allowSplitPayments,
@@ -740,14 +813,99 @@ class _OperationsForm extends StatelessWidget {
   }
 }
 
+class _DiscountsPolicyForm extends StatelessWidget {
+  const _DiscountsPolicyForm({
+    required this.operations,
+    required this.saving,
+    required this.onChanged,
+    required this.onSave,
+  });
+
+  final OperationalPolicy operations;
+  final bool saving;
+  final ValueChanged<OperationalPolicy> onChanged;
+  final VoidCallback onSave;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          children: [
+            _switch(
+              'Requiere autorizacion para descuento',
+              operations.requireDiscountAuthorization,
+              (value) => onChanged(_copy(requireDiscountAuthorization: value)),
+            ),
+            _switch(
+              'Requiere motivo de cancelacion',
+              operations.requireCancellationReason,
+              (value) => onChanged(_copy(requireCancellationReason: value)),
+            ),
+            _switch(
+              'Dia operativo sigue corte de caja',
+              operations.businessDayFollowsCashSession,
+              (value) => onChanged(_copy(businessDayFollowsCashSession: value)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton.icon(
+            onPressed: saving ? null : onSave,
+            icon: const Icon(Icons.save_outlined),
+            label: const Text('Guardar descuentos'),
+          ),
+        ),
+      ],
+    );
+  }
+
+  OperationalPolicy _copy({
+    bool? requireDiscountAuthorization,
+    bool? requireCancellationReason,
+    bool? businessDayFollowsCashSession,
+  }) {
+    return OperationalPolicy(
+      requireCashOpening: operations.requireCashOpening,
+      requireCashClosing: operations.requireCashClosing,
+      requireKitchenOpening: operations.requireKitchenOpening,
+      requireKitchenClosing: operations.requireKitchenClosing,
+      blockPaymentWhileKitchenPending:
+          operations.blockPaymentWhileKitchenPending,
+      allowPaymentWithKitchenPending: operations.allowPaymentWithKitchenPending,
+      autoStartKitchenSession: operations.autoStartKitchenSession,
+      autoCloseKitchenSession: operations.autoCloseKitchenSession,
+      requireCancellationReason:
+          requireCancellationReason ?? operations.requireCancellationReason,
+      requireDiscountAuthorization:
+          requireDiscountAuthorization ??
+          operations.requireDiscountAuthorization,
+      allowSplitPayments: operations.allowSplitPayments,
+      cardCommissionEnabled: operations.cardCommissionEnabled,
+      cardCommissionPercent: operations.cardCommissionPercent,
+      businessDayFollowsCashSession:
+          businessDayFollowsCashSession ??
+          operations.businessDayFollowsCashSession,
+    );
+  }
+}
+
+enum _BenefitsScope { employees, partners, friendsAndFamily }
+
 class _BenefitsForm extends StatelessWidget {
   const _BenefitsForm({
+    required this.scope,
     required this.benefits,
     required this.saving,
     required this.onChanged,
     required this.onSave,
   });
 
+  final _BenefitsScope scope;
   final BenefitPolicies benefits;
   final bool saving;
   final ValueChanged<BenefitPolicies> onChanged;
@@ -755,45 +913,56 @@ class _BenefitsForm extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tiles = switch (scope) {
+      _BenefitsScope.employees => [
+        _BenefitTile(
+          title: 'Descuento empleado',
+          lines: [
+            '${benefits.employeeDiscount.percent.toStringAsFixed(0)}% descuento',
+            '${benefits.employeeDiscount.maxOrdersPerDay} orden/dia',
+            benefits.employeeDiscount.requiresAuthorization
+                ? 'Con autorizacion'
+                : 'Sin autorizacion',
+          ],
+        ),
+        _BenefitTile(
+          title: 'Comida empleado',
+          lines: [
+            '${benefits.employeeMeal.maxMealsPerDay} comida/dia',
+            benefits.employeeMeal.dineInOnly ? 'Consumo local' : 'Flexible',
+            benefits.employeeMeal.requiresAuthorization
+                ? 'Con autorizacion'
+                : 'Sin autorizacion',
+          ],
+        ),
+      ],
+      _BenefitsScope.partners => [
+        _BenefitTile(
+          title: 'Socios',
+          lines: [
+            '${benefits.partnerDiscount.percent.toStringAsFixed(0)}% descuento',
+            '${benefits.partnerDiscount.maxOrdersPerDay} orden/dia',
+            benefits.partnerDiscount.requiresPin ? 'Requiere PIN' : 'Sin PIN',
+          ],
+        ),
+      ],
+      _BenefitsScope.friendsAndFamily => [
+        _BenefitTile(
+          title: 'Familia y amigos',
+          lines: [
+            '${benefits.friendsAndFamilyDiscount.percent.toStringAsFixed(0)}% descuento',
+            '${benefits.friendsAndFamilyDiscount.maxOrdersPerDay} orden/dia',
+            benefits.friendsAndFamilyDiscount.requiresAuthorization
+                ? 'Autorizacion requerida'
+                : 'Sin autorizacion',
+          ],
+        ),
+      ],
+    };
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            _BenefitTile(
-              title: 'Empleado',
-              lines: [
-                '${benefits.employeeDiscount.percent.toStringAsFixed(0)}% descuento',
-                '${benefits.employeeDiscount.maxOrdersPerDay} orden/dia',
-              ],
-            ),
-            _BenefitTile(
-              title: 'Comida empleado',
-              lines: [
-                '${benefits.employeeMeal.maxMealsPerDay} comida/dia',
-                benefits.employeeMeal.dineInOnly ? 'Consumo local' : 'Flexible',
-              ],
-            ),
-            _BenefitTile(
-              title: 'Socios',
-              lines: [
-                '${benefits.partnerDiscount.percent.toStringAsFixed(0)}% descuento',
-                benefits.partnerDiscount.requiresPin
-                    ? 'Requiere PIN'
-                    : 'Sin PIN',
-              ],
-            ),
-            _BenefitTile(
-              title: 'Familia y amigos',
-              lines: [
-                '${benefits.friendsAndFamilyDiscount.percent.toStringAsFixed(0)}% descuento',
-                'Autorizacion requerida',
-              ],
-            ),
-          ],
-        ),
+        Wrap(spacing: 12, runSpacing: 12, children: tiles),
         const SizedBox(height: 12),
         Align(
           alignment: Alignment.centerRight,
