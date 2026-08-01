@@ -54,7 +54,11 @@ export '../core/orders/order_activity.dart'
         isActiveOrderItem,
         isActivePayment,
         isGhostOrder,
+        awaitingKitchenSendItemsCount,
         hasPendingKitchenItems,
+        hasItemsAwaitingKitchenSend,
+        itemCanBeSentToKitchenBatch,
+        itemIsAwaitingKitchenSend,
         isKitchenPendingItem,
         isKitchenReadyItem,
         itemRequiresKitchen,
@@ -160,6 +164,16 @@ class KitchenOrderBundle {
       ..sort((a, b) => a.key.compareTo(b.key));
     return entries;
   }
+}
+
+class _KitchenSendTransactionResult {
+  const _KitchenSendTransactionResult({
+    required this.order,
+    required this.sentCount,
+  });
+
+  final PosOrder order;
+  final int sentCount;
 }
 
 class LiveStandingOrderBundle {
@@ -10096,44 +10110,74 @@ class TacoPosRepository {
 
   Future<int> sendOrderToKitchen(String orderId) async {
     _requireTakeOrders();
-    final itemsSnapshot = await _ordersRef
-        .doc(orderId)
-        .collection('items')
-        .get();
-    final batch = _db.batch();
-    final kitchenBatchId = _ordersRef
-        .doc(orderId)
-        .collection('kitchenBatches')
-        .doc()
-        .id;
-    final batchCreatedAt = Timestamp.now();
-    final allItems = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
-    final isExpressBatch = allItems.any((item) {
-      if (!item.sendToKitchen || item.isCancelled) return false;
-      final status = normalizeStatus(item.kitchenStatus);
-      final batchId = item.kitchenBatchId?.trim();
-      return batchId != null &&
-          batchId.isNotEmpty &&
-          {'sent', 'cooking', 'ready'}.contains(status);
-    });
-    final kitchenBatchType = isExpressBatch ? 'express' : 'initial';
-    final kitchenBatchLabel = isExpressBatch
-        ? 'Surtido express'
-        : 'Orden inicial';
-    var sentCount = 0;
+    final orderRef = _ordersRef.doc(orderId);
+    final itemRefs = (await orderRef.collection('items').get()).docs
+        .map((doc) => doc.reference)
+        .toList(growable: false);
+    if (itemRefs.isEmpty) return 0;
 
-    for (final doc in itemsSnapshot.docs) {
-      final item = OrderItem.fromDoc(doc);
-      final shouldAttachToBatch =
-          item.kitchenBatchId == null &&
-          item.paymentStatus == 'pending' &&
-          (item.kitchenStatus == 'pending' ||
-              item.kitchenStatus == 'not_required');
-      if (isActiveOrderItem(item) &&
-          itemRequiresKitchen(item) &&
-          normalizeStatus(item.kitchenStatus) == 'pending') {
-        sentCount += 1;
-        batch.update(doc.reference, {
+    final result = await _db.runTransaction<_KitchenSendTransactionResult>((
+      transaction,
+    ) async {
+      final orderDoc = await transaction.get(orderRef);
+      if (!orderDoc.exists) {
+        throw StateError('La orden ya no existe.');
+      }
+      final order = PosOrder.fromDoc(orderDoc);
+      if (isCancelledOrder(order) || isPaidOrder(order)) {
+        return _KitchenSendTransactionResult(order: order, sentCount: 0);
+      }
+
+      final itemDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final ref in itemRefs) {
+        final doc = await transaction.get(ref);
+        if (doc.exists) itemDocs.add(doc);
+      }
+      final allItems = itemDocs.map(OrderItem.fromDoc).toList();
+      final itemsToSend = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in itemDocs) {
+        final item = OrderItem.fromDoc(doc);
+        if (itemCanBeSentToKitchenBatch(item)) {
+          itemsToSend.add(doc);
+        }
+      }
+      if (itemsToSend.isEmpty) {
+        return _KitchenSendTransactionResult(order: order, sentCount: 0);
+      }
+
+      final isExpressBatch = allItems.any((item) {
+        if (!item.sendToKitchen || item.isCancelled) return false;
+        final status = normalizeStatus(item.kitchenStatus);
+        final batchId = item.kitchenBatchId?.trim();
+        return batchId != null &&
+            batchId.isNotEmpty &&
+            {'sent', 'cooking', 'ready'}.contains(status);
+      });
+      final kitchenBatchType = isExpressBatch ? 'express' : 'initial';
+      final kitchenBatchLabel = isExpressBatch
+          ? 'Orden extra'
+          : 'Orden inicial';
+      final kitchenBatchId = orderRef.collection('kitchenBatches').doc().id;
+      final batchCreatedAt = Timestamp.now();
+
+      transaction
+          .set(orderRef.collection('kitchenBatches').doc(kitchenBatchId), {
+            'restaurantId': order.restaurantId,
+            'restaurantName': order.restaurantName,
+            'branchId': order.branchId,
+            'branchName': order.branchName,
+            'orderId': order.id,
+            'status': 'sent',
+            'type': kitchenBatchType,
+            'label': kitchenBatchLabel,
+            'itemCount': itemsToSend.length,
+            'createdAt': batchCreatedAt,
+            'updatedAt': FieldValue.serverTimestamp(),
+            ..._employeeAuditFields(prefix: 'createdBy'),
+          });
+
+      for (final doc in itemsToSend) {
+        transaction.update(doc.reference, {
           'kitchenStatus': 'sent',
           'kitchenBatchId': kitchenBatchId,
           'kitchenBatchCreatedAt': batchCreatedAt,
@@ -10147,49 +10191,36 @@ class TacoPosRepository {
           'sentToKitchenAt': batchCreatedAt,
           'updatedAt': FieldValue.serverTimestamp(),
         });
-      } else if (shouldAttachToBatch) {
-        batch.update(doc.reference, {
-          'kitchenBatchId': kitchenBatchId,
-          'kitchenBatchCreatedAt': batchCreatedAt,
-          'batchCreatedAt': batchCreatedAt,
-          'isKitchenExpress': false,
-          'expressReason': '',
-          'expressPriority': false,
-          'kitchenBatchType': kitchenBatchType,
-          'kitchenBatchLabel': kitchenBatchLabel,
-          'sentToKitchenAt': batchCreatedAt,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
       }
-    }
 
-    if (sentCount == 0) {
+      transaction.update(orderRef, {
+        'status': 'sent',
+        'kitchenStatus': 'sent',
+        'lastKitchenBatchId': kitchenBatchId,
+        'lastKitchenBatchType': kitchenBatchType,
+        'lastKitchenBatchLabel': kitchenBatchLabel,
+        if (order.sentToKitchenAt == null) 'sentToKitchenAt': batchCreatedAt,
+        'lastSentToKitchenAt': batchCreatedAt,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      _setLinkedTablesStateInTransaction(transaction, order, status: 'sent');
+      return _KitchenSendTransactionResult(
+        order: order,
+        sentCount: itemsToSend.length,
+      );
+    });
+
+    if (result.sentCount == 0) {
       return 0;
     }
 
-    final orderDoc = await _ordersRef.doc(orderId).get();
-    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
-    batch.update(_ordersRef.doc(orderId), {
-      'status': 'sent',
-      'kitchenStatus': 'sent',
-      'lastKitchenBatchId': kitchenBatchId,
-      'lastKitchenBatchType': kitchenBatchType,
-      'lastKitchenBatchLabel': kitchenBatchLabel,
-      'sentToKitchenAt': batchCreatedAt,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
-    if (order != null) {
-      _setLinkedTablesStateInBatch(batch, order, status: 'sent');
-    }
-
-    await batch.commit();
     invalidateReportDataCache(
-      branchId: order?.branchId,
-      startBusinessDate: order?.businessDate,
-      endBusinessDate: order?.businessDate,
+      branchId: result.order.branchId,
+      startBusinessDate: result.order.businessDate,
+      endBusinessDate: result.order.businessDate,
     );
-    return sentCount;
+    return result.sentCount;
   }
 
   Future<void> updateKitchenStatus({
@@ -11933,6 +11964,23 @@ class TacoPosRepository {
           'timestamp': FieldValue.serverTimestamp(),
         },
       );
+    }
+  }
+
+  void _setLinkedTablesStateInTransaction(
+    Transaction transaction,
+    PosOrder order, {
+    String? status,
+  }) {
+    if (!orderUsesPhysicalTables(order)) return;
+    for (final tableId in order.linkedTableIds.toSet()) {
+      transaction.set(_tablesRef.doc(tableId), {
+        'status': 'occupied',
+        'currentOrderId': order.id,
+        'currentOrderStatus': status ?? order.status,
+        ..._currentBranchFields,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
     }
   }
 

@@ -158,11 +158,31 @@ bool itemWasSentToKitchen(OrderItem item) {
     item.kitchenStatus,
   ).replaceAll(RegExp(r'[\s-]+'), '_');
   final batchId = item.kitchenBatchId?.trim() ?? '';
+  final hasExplicitSendMarker =
+      item.sentToKitchenAt != null || batchId.isNotEmpty;
+  if (kitchenStatus == 'pending' || kitchenStatus == 'pendiente') {
+    return hasExplicitSendMarker;
+  }
   return item.sentToKitchenAt != null ||
       batchId.isNotEmpty ||
       _kitchenPendingStatuses.contains(kitchenStatus) ||
       _kitchenReadyStatuses.contains(kitchenStatus);
 }
+
+bool itemIsAwaitingKitchenSend(OrderItem item) {
+  if (!isActiveOrderItem(item)) return false;
+  if (!itemRequiresKitchen(item)) return false;
+  final kitchenStatus = normalizeOperationalStatus(
+    item.kitchenStatus,
+  ).replaceAll(RegExp(r'[\s-]+'), '_');
+  final batchId = item.kitchenBatchId?.trim() ?? '';
+  return (kitchenStatus == 'pending' || kitchenStatus == 'pendiente') &&
+      item.sentToKitchenAt == null &&
+      batchId.isEmpty;
+}
+
+bool itemCanBeSentToKitchenBatch(OrderItem item) =>
+    itemIsAwaitingKitchenSend(item) && item.paymentStatus == 'pending';
 
 bool isKitchenPendingItem(OrderItem item) {
   if (!isActiveOrderItem(item)) return false;
@@ -194,6 +214,14 @@ int pendingKitchenItemsCount(Iterable<OrderItem> items) {
   return items.where(isKitchenPendingItem).length;
 }
 
+bool hasItemsAwaitingKitchenSend(Iterable<OrderItem> items) {
+  return items.any(itemIsAwaitingKitchenSend);
+}
+
+int awaitingKitchenSendItemsCount(Iterable<OrderItem> items) {
+  return items.where(itemIsAwaitingKitchenSend).length;
+}
+
 String kitchenStatusForItems(Iterable<OrderItem> items) {
   final activeKitchenItems = items
       .where((item) => isActiveOrderItem(item) && itemRequiresKitchen(item))
@@ -204,6 +232,7 @@ String kitchenStatusForItems(Iterable<OrderItem> items) {
   var hasSent = false;
   var hasCooking = false;
   var hasReady = false;
+  var hasAwaitingSend = false;
   for (final item in activeKitchenItems) {
     final status = normalizeOperationalStatus(
       item.kitchenStatus,
@@ -224,6 +253,8 @@ String kitchenStatusForItems(Iterable<OrderItem> items) {
     } else if ((status == 'pending' || status == 'pendiente') &&
         itemWasSentToKitchen(item)) {
       hasPending = true;
+    } else if (status == 'pending' || status == 'pendiente') {
+      hasAwaitingSend = true;
     } else if (isKitchenReadyItem(item)) {
       hasReady = true;
     }
@@ -233,6 +264,7 @@ String kitchenStatusForItems(Iterable<OrderItem> items) {
   if (hasSent) return 'sent';
   if (hasPending) return 'pending';
   if (hasReady) return 'ready';
+  if (hasAwaitingSend) return 'pending';
   return 'not_required';
 }
 

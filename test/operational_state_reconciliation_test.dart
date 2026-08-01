@@ -29,6 +29,29 @@ void main() {
       expect(kitchenStatusForItems(items), 'sent');
     });
 
+    test('B2 item recien agregado queda pendiente sin aparecer en Cocina', () {
+      final item = _item(kitchenStatus: 'pending', kitchenBatchId: null);
+
+      expect(itemIsAwaitingKitchenSend(item), isTrue);
+      expect(itemCanBeSentToKitchenBatch(item), isTrue);
+      expect(isKitchenPendingItem(item), isFalse);
+      expect(itemWasSentToKitchen(item), isFalse);
+      expect(kitchenStatusForItems([item]), 'pending');
+    });
+
+    test('B3 pending con batch explicito si aparece en Cocina', () {
+      final item = _item(
+        kitchenStatus: 'pending',
+        kitchenBatchId: 'batch-a',
+        sentToKitchenAt: DateTime(2026, 7, 29),
+      );
+
+      expect(itemIsAwaitingKitchenSend(item), isFalse);
+      expect(itemCanBeSentToKitchenBatch(item), isFalse);
+      expect(itemWasSentToKitchen(item), isTrue);
+      expect(isKitchenPendingItem(item), isTrue);
+    });
+
     test(
       'C kitchen pending sin items pendientes permite limpiar estado obsoleto',
       () {
@@ -80,6 +103,43 @@ void main() {
 
       expect(pendingKitchenItemsCount(items), 1);
       expect(kitchenStatusForItems(items), 'sent');
+    });
+
+    test('F2 orden extra solo selecciona productos nuevos pendientes', () {
+      final previous = _item(
+        id: 'sent-before',
+        kitchenStatus: 'sent',
+        kitchenBatchId: 'batch-initial',
+        sentToKitchenAt: DateTime(2026, 7, 29),
+      );
+      final extra = _item(
+        id: 'new-extra',
+        kitchenStatus: 'pending',
+        kitchenBatchId: null,
+      );
+
+      expect(itemCanBeSentToKitchenBatch(previous), isFalse);
+      expect(itemCanBeSentToKitchenBatch(extra), isTrue);
+      expect(awaitingKitchenSendItemsCount([previous, extra]), 1);
+      expect(pendingKitchenItemsCount([previous, extra]), 1);
+    });
+
+    test('F3 reintento no considera enviados anteriores', () {
+      final sent = _item(
+        kitchenStatus: 'sent',
+        kitchenBatchId: 'batch-initial',
+        sentToKitchenAt: DateTime(2026, 7, 29),
+      );
+      final ready = _item(
+        id: 'ready',
+        kitchenStatus: 'ready',
+        kitchenBatchId: 'batch-initial',
+        readyAt: DateTime(2026, 7, 29, 1),
+      );
+
+      expect([sent, ready].where(itemCanBeSentToKitchenBatch), isEmpty);
+      expect(awaitingKitchenSendItemsCount([sent, ready]), 0);
+      expect(kitchenStatusForItems([sent, ready]), 'sent');
     });
 
     test(
