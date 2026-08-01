@@ -1,6 +1,9 @@
 const globalDiscountSource = 'global';
 const noDiscountSource = 'none';
 const globalDiscountCatalogId = 'discounts';
+const checkoutScopeMismatchMessage =
+    'El importe del cobro ya no coincide con la orden actual. '
+    'Se actualizaron los datos; revisa nuevamente antes de confirmar.';
 
 class CheckoutDiscountAmounts {
   const CheckoutDiscountAmounts({
@@ -175,4 +178,52 @@ double allocateGlobalDiscount({
 
 bool shouldRefreshGlobalDiscountSnapshot({required bool hasActivePayments}) {
   return !hasActivePayments;
+}
+
+String? validateCheckoutDraftScope({
+  required String currentOrderId,
+  required double currentOrderTotal,
+  required double currentSelectedAmount,
+  String? currentRestaurantId,
+  String? currentBranchId,
+  String? currentBusinessDate,
+  String? draftOrderId,
+  String? draftRestaurantId,
+  String? draftBranchId,
+  String? draftBusinessDate,
+  double? draftTotalSnapshot,
+  double? draftAmountBeforeDiscount,
+  double tolerance = 0.02,
+}) {
+  bool differs(String? draft, String? current) {
+    final cleanDraft = draft?.trim();
+    final cleanCurrent = current?.trim();
+    return cleanDraft != null &&
+        cleanDraft.isNotEmpty &&
+        cleanCurrent != null &&
+        cleanCurrent.isNotEmpty &&
+        cleanDraft != cleanCurrent;
+  }
+
+  if (differs(draftOrderId, currentOrderId) ||
+      differs(draftRestaurantId, currentRestaurantId) ||
+      differs(draftBranchId, currentBranchId) ||
+      differs(draftBusinessDate, currentBusinessDate)) {
+    return checkoutScopeMismatchMessage;
+  }
+  if (draftTotalSnapshot != null &&
+      (roundCheckoutMoney(draftTotalSnapshot) -
+                  roundCheckoutMoney(currentOrderTotal))
+              .abs() >
+          tolerance) {
+    return checkoutScopeMismatchMessage;
+  }
+  if (draftAmountBeforeDiscount != null &&
+      (roundCheckoutMoney(draftAmountBeforeDiscount) -
+                  roundCheckoutMoney(currentSelectedAmount))
+              .abs() >
+          tolerance) {
+    return checkoutScopeMismatchMessage;
+  }
+  return null;
 }

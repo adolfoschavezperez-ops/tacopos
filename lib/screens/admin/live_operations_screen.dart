@@ -1341,7 +1341,10 @@ class _LiveOrderDetail extends StatelessWidget {
                   await Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => PaymentScreen(orderId: order.id),
+                      builder: (_) => PaymentScreen(
+                        key: ValueKey('payment-${order.id}'),
+                        orderId: order.id,
+                      ),
                     ),
                   );
                 },

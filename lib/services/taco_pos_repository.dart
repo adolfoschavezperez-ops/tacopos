@@ -478,6 +478,11 @@ class AppliedDiscountDetails {
     required this.amountBeforeDiscount,
     required this.discountAmount,
     required this.totalAfterDiscount,
+    this.orderId,
+    this.restaurantId,
+    this.branchId,
+    this.businessDate,
+    this.totalSnapshot,
     this.authorizedByPartnerId,
     this.authorizedByPartnerName,
     this.authorizedByPartnerLinkedEmployeeId,
@@ -496,6 +501,11 @@ class AppliedDiscountDetails {
   final double amountBeforeDiscount;
   final double discountAmount;
   final double totalAfterDiscount;
+  final String? orderId;
+  final String? restaurantId;
+  final String? branchId;
+  final String? businessDate;
+  final double? totalSnapshot;
   final String? authorizedByPartnerId;
   final String? authorizedByPartnerName;
   final String? authorizedByPartnerLinkedEmployeeId;
@@ -2394,6 +2404,7 @@ class TacoPosRepository {
         throw StateError('El descuento general no esta activo.');
       }
       return _discountDetails(
+        order: order,
         type: 'general',
         name: config.name,
         percent: config.percent,
@@ -2429,6 +2440,7 @@ class TacoPosRepository {
           ? 'Comida empleado del dia'
           : 'Descuento empleado 30%';
       return _discountDetails(
+        order: order,
         type: type,
         name: name,
         percent: percent,
@@ -2477,6 +2489,7 @@ class TacoPosRepository {
           : request.requestedPartnerId;
       final approvedPartner = await _partnerById(approvedPartnerId);
       return _discountDetails(
+        order: order,
         type: type,
         name: 'Familia / amigos 20%',
         percent: 20.0,
@@ -2501,6 +2514,7 @@ class TacoPosRepository {
         throw StateError('PIN incorrecto. No se aplico descuento.');
       }
       return _discountDetails(
+        order: order,
         type: type,
         name: 'Socio 50%',
         percent: 50.0,
@@ -2594,6 +2608,7 @@ class TacoPosRepository {
   }
 
   AppliedDiscountDetails _discountDetails({
+    required PosOrder order,
     required String type,
     required String name,
     required double percent,
@@ -2622,6 +2637,11 @@ class TacoPosRepository {
       amountBeforeDiscount: amountBeforeDiscount,
       discountAmount: discountAmount,
       totalAfterDiscount: totalAfterDiscount.toDouble(),
+      orderId: order.id,
+      restaurantId: order.restaurantId,
+      branchId: order.branchId,
+      businessDate: _businessDateForOrder(order),
+      totalSnapshot: order.total,
       authorizedByPartnerId: authorizedByPartnerId,
       authorizedByPartnerName: authorizedByPartnerName,
       authorizedByPartnerLinkedEmployeeId: authorizedByPartnerLinkedEmployeeId,
@@ -10611,7 +10631,11 @@ class TacoPosRepository {
       amountBeforeDiscount: baseAmount,
       remainingGrossSubtotal: baseAmount,
     );
-    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
+    await _ensureDiscountAuthorizationStillUsable(
+      effectiveDiscount,
+      order,
+      baseAmount,
+    );
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final paymentData = _paymentData(
       order: order,
@@ -10698,7 +10722,11 @@ class TacoPosRepository {
       amountBeforeDiscount: baseAmount,
       remainingGrossSubtotal: remainingGrossSubtotal,
     );
-    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
+    await _ensureDiscountAuthorizationStillUsable(
+      effectiveDiscount,
+      order,
+      baseAmount,
+    );
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final selectedItemDocs = itemsSnapshot.docs.where((doc) {
       final item = OrderItem.fromDoc(doc);
@@ -10856,7 +10884,11 @@ class TacoPosRepository {
       amountBeforeDiscount: baseAmount,
       remainingGrossSubtotal: remainingGrossSubtotal,
     );
-    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
+    await _ensureDiscountAuthorizationStillUsable(
+      effectiveDiscount,
+      order,
+      baseAmount,
+    );
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final selectedItemDocs = itemsSnapshot.docs.where((doc) {
       final item = OrderItem.fromDoc(doc);
@@ -10979,7 +11011,11 @@ class TacoPosRepository {
       amountBeforeDiscount: baseAmount,
       remainingGrossSubtotal: order.pendingTotal,
     );
-    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
+    await _ensureDiscountAuthorizationStillUsable(
+      effectiveDiscount,
+      order,
+      baseAmount,
+    );
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
     final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
@@ -11279,6 +11315,11 @@ class TacoPosRepository {
       totalAfterDiscount: roundCheckoutMoney(
         amountBeforeDiscount - discountAmount,
       ),
+      orderId: order.id,
+      restaurantId: order.restaurantId,
+      branchId: order.branchId,
+      businessDate: _businessDateForOrder(order),
+      totalSnapshot: order.total,
     );
   }
 
@@ -12420,7 +12461,13 @@ class TacoPosRepository {
   Future<void> _ensureDiscountAuthorizationStillUsable(
     AppliedDiscountDetails? discount,
     PosOrder order,
+    double expectedAmountBeforeDiscount,
   ) async {
+    _ensurePaymentDiscountMatchesOrder(
+      order: order,
+      discount: discount,
+      expectedAmountBeforeDiscount: expectedAmountBeforeDiscount,
+    );
     final requestId = discount?.discountAuthorizationRequestId?.trim();
     if (requestId == null || requestId.isEmpty) {
       return;
@@ -12432,6 +12479,36 @@ class TacoPosRepository {
     final request = DiscountAuthorizationRequest.fromDoc(doc);
     if (request.orderId != order.id || !request.isUsable) {
       throw StateError('La autorización ya fue usada o ya no está vigente.');
+    }
+  }
+
+  void _ensurePaymentDiscountMatchesOrder({
+    required PosOrder order,
+    required AppliedDiscountDetails? discount,
+    required double expectedAmountBeforeDiscount,
+  }) {
+    if (discount == null) return;
+    final mismatch = validateCheckoutDraftScope(
+      currentOrderId: order.id,
+      currentRestaurantId: order.restaurantId,
+      currentBranchId: order.branchId,
+      currentBusinessDate: _businessDateForOrder(order),
+      currentOrderTotal: order.total,
+      currentSelectedAmount: expectedAmountBeforeDiscount,
+      draftOrderId: discount.orderId,
+      draftRestaurantId: discount.restaurantId,
+      draftBranchId: discount.branchId,
+      draftBusinessDate: discount.businessDate,
+      draftTotalSnapshot: discount.totalSnapshot,
+      draftAmountBeforeDiscount: discount.amountBeforeDiscount,
+    );
+    if (mismatch != null) throw StateError(mismatch);
+    if ((discount.discountAmount +
+                discount.totalAfterDiscount -
+                discount.amountBeforeDiscount)
+            .abs() >
+        0.02) {
+      throw StateError(checkoutScopeMismatchMessage);
     }
   }
 

@@ -260,7 +260,12 @@ class _OrderScreenState extends State<OrderScreen> {
     setState(() => _busy = false);
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => PaymentScreen(orderId: _boundOrderId)),
+      MaterialPageRoute(
+        builder: (_) => PaymentScreen(
+          key: ValueKey('payment-$_boundOrderId'),
+          orderId: _boundOrderId,
+        ),
+      ),
     );
     if (!mounted) {
       return;
