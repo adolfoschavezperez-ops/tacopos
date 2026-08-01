@@ -137,12 +137,41 @@ bool isActiveOrderItem(OrderItem item) {
   final status = normalizeOperationalStatus(item.status);
   final kitchenStatus = normalizeOperationalStatus(item.kitchenStatus);
   final cancelStatus = normalizeOperationalStatus(item.cancelStatus);
-  return !_cancelledStatuses.contains(status) &&
+  return item.qty > 0 &&
+      !_cancelledStatuses.contains(status) &&
       !_cancelledStatuses.contains(kitchenStatus) &&
       !_cancelledStatuses.contains(cancelStatus) &&
       cancelStatus != 'accepted' &&
       item.cancelledAt == null &&
       item.cancelAcceptedAt == null;
+}
+
+List<OrderItem> activeOrderItems(Iterable<OrderItem> items) {
+  return items.where(isActiveOrderItem).toList(growable: false);
+}
+
+double activeOrderItemsTotal(Iterable<OrderItem> items) {
+  return activeOrderItems(
+    items,
+  ).fold<double>(0, (total, item) => total + item.total);
+}
+
+bool hasActiveOrderItems(Iterable<OrderItem> items) {
+  return items.any(isActiveOrderItem);
+}
+
+bool isPartialCancellationWithActiveItems({
+  required PosOrder order,
+  required Iterable<OrderItem> items,
+}) {
+  if (!hasActiveOrderItems(items)) return false;
+  return isCancelledOrder(order) ||
+      normalizeOperationalStatus(order.status) == 'cancelled' ||
+      normalizeOperationalStatus(order.paymentStatus) == 'cancelled' ||
+      normalizeOperationalStatus(order.kitchenStatus) == 'cancelled' ||
+      (order.cancelReason?.trim().isNotEmpty ?? false) ||
+      order.cancelledByEmployeeId?.trim().isNotEmpty == true ||
+      order.cancelledByEmployeeName?.trim().isNotEmpty == true;
 }
 
 bool itemRequiresKitchen(OrderItem item) {

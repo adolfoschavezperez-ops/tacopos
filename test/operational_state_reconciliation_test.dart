@@ -209,24 +209,225 @@ void main() {
         isTrue,
       );
     });
+
+    test('K cancelar uno de varios conserva la orden activa', () {
+      final order = _order(total: 180, pendingTotal: 180);
+      final items = [
+        _item(id: 'cancelled', status: 'cancelled', cancelStatus: 'accepted'),
+        _item(id: 'active-a', total: 80),
+        _item(id: 'active-b', total: 100),
+      ];
+
+      expect(hasActiveOrderItems(items), isTrue);
+      expect(activeOrderItems(items).map((item) => item.id), [
+        'active-a',
+        'active-b',
+      ]);
+      expect(isGhostOrder(order, items, const []), isFalse);
+      expect(activeOrderItemsTotal(items), 180);
+    });
+
+    test('L cancelar dos de varios conserva la orden activa', () {
+      final order = _order(total: 75, pendingTotal: 75);
+      final items = [
+        _item(id: 'labio', status: 'cancelled', cancelStatus: 'accepted'),
+        _item(id: 'bistec', status: 'cancelled', cancelStatus: 'accepted'),
+        _item(id: 'activo', total: 75),
+      ];
+
+      expect(activeOrderItems(items).single.id, 'activo');
+      expect(isGhostOrder(order, items, const []), isFalse);
+      expect(kitchenStatusForItems(items), 'sent');
+    });
+
+    test('M items cancelados desaparecen de Cocina y activos permanecen', () {
+      final items = [
+        _item(
+          id: 'cancelled',
+          status: 'cancelled',
+          kitchenStatus: 'sent',
+          cancelStatus: 'accepted',
+        ),
+        _item(
+          id: 'active',
+          kitchenStatus: 'sent',
+          kitchenBatchId: 'batch-active',
+          sentToKitchenAt: DateTime(2026, 7, 29),
+        ),
+      ];
+
+      expect(items.where(isKitchenPendingItem).map((item) => item.id), [
+        'active',
+      ]);
+      expect(pendingKitchenItemsCount(items), 1);
+    });
+
+    test('N parcial no recibe metadatos de cancelacion total', () {
+      final order = _order(total: 50, pendingTotal: 50);
+      final items = [_item(id: 'active', total: 50)];
+
+      expect(
+        isPartialCancellationWithActiveItems(order: order, items: items),
+        isFalse,
+      );
+      expect(order.cancelReason, isNull);
+      expect(order.cancelledAt, isNull);
+      expect(order.cancelledByEmployeeId, isNull);
+    });
+
+    test('O detector identifica caso H4nnjJ equivalente', () {
+      final order = _order(
+        id: 'H4nnjJ',
+        status: 'cancelled',
+        kitchenStatus: 'cancelled',
+        paymentStatus: 'cancelled',
+        total: 90,
+        pendingTotal: 90,
+        cancelReason: 'Todos los productos cancelados',
+        cancelledAt: DateTime(2026, 7, 31),
+        cancelledByEmployeeId: 'emp-1',
+      );
+      final items = [
+        _item(id: 'labio', status: 'cancelled', cancelStatus: 'accepted'),
+        _item(id: 'bistec', status: 'cancelled', cancelStatus: 'accepted'),
+        _item(id: 'activo', total: 90),
+      ];
+
+      expect(
+        isPartialCancellationWithActiveItems(order: order, items: items),
+        isTrue,
+      );
+      expect(isGhostOrder(order, items, const []), isFalse);
+    });
+
+    test('P cancelar todos los items si cancela la orden y libera mesa', () {
+      final order = _order(total: 0, pendingTotal: 0);
+      final items = [
+        _item(id: 'a', status: 'cancelled', cancelStatus: 'accepted'),
+        _item(id: 'b', status: 'cancelled', cancelStatus: 'accepted'),
+      ];
+
+      expect(hasActiveOrderItems(items), isFalse);
+      expect(isGhostOrder(order, items, const []), isTrue);
+    });
+
+    test(
+      'Q cancelar todos los items de un batch no cancela otro batch activo',
+      () {
+        final order = _order(total: 120, pendingTotal: 120);
+        final items = [
+          _item(
+            id: 'batch-a-cancelled',
+            status: 'cancelled',
+            cancelStatus: 'accepted',
+            kitchenBatchId: 'batch-a',
+          ),
+          _item(
+            id: 'batch-b-active',
+            kitchenBatchId: 'batch-b',
+            kitchenStatus: 'sent',
+            sentToKitchenAt: DateTime(2026, 7, 29),
+            total: 120,
+          ),
+        ];
+
+        expect(isGhostOrder(order, items, const []), isFalse);
+        expect(
+          items.where(isKitchenPendingItem).single.kitchenBatchId,
+          'batch-b',
+        );
+      },
+    );
+
+    test('R batch mixto conserva items activos', () {
+      final items = [
+        _item(
+          id: 'cancelled',
+          status: 'cancelled',
+          cancelStatus: 'accepted',
+          kitchenBatchId: 'batch-mixed',
+        ),
+        _item(id: 'active', kitchenBatchId: 'batch-mixed', total: 70),
+      ];
+
+      expect(activeOrderItems(items).single.id, 'active');
+      expect(kitchenStatusForItems(items), 'sent');
+    });
+
+    test(
+      'S orden parcialmente cancelada puede cobrarse cuando cocina esta lista',
+      () {
+        final order = _order(status: 'ready', pendingTotal: 70);
+        final items = [
+          _item(id: 'cancelled', status: 'cancelled', cancelStatus: 'accepted'),
+          _item(
+            id: 'ready',
+            kitchenStatus: 'ready',
+            readyAt: DateTime(2026, 7, 29),
+            total: 70,
+          ),
+        ];
+
+        expect(hasPendingKitchenItems(items), isFalse);
+        expect(
+          shouldKeepTableOccupiedForOrder(
+            order: order,
+            items: items,
+            payments: const [],
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test('T orden parcialmente cancelada puede recibir orden extra', () {
+      final previous = _item(
+        id: 'previous',
+        kitchenStatus: 'ready',
+        readyAt: DateTime(2026, 7, 29),
+        kitchenBatchId: 'batch-a',
+      );
+      final extra = _item(
+        id: 'extra',
+        kitchenStatus: 'pending',
+        kitchenBatchId: null,
+      );
+
+      expect(itemCanBeSentToKitchenBatch(previous), isFalse);
+      expect(itemCanBeSentToKitchenBatch(extra), isTrue);
+    });
+
+    test('U reintento de cancelacion parcial es idempotente', () {
+      final items = [
+        _item(id: 'cancelled', status: 'cancelled', cancelStatus: 'accepted'),
+        _item(id: 'active', total: 55),
+      ];
+
+      expect(activeOrderItemsTotal(items), activeOrderItemsTotal(items));
+      expect(kitchenStatusForItems(items), kitchenStatusForItems(items));
+    });
   });
 }
 
 PosOrder _order({
   String id = 'order',
   String status = 'open',
+  String kitchenStatus = 'sent',
   String paymentStatus = 'pending',
   double total = 100,
   double pendingTotal = 100,
   String businessDate = '2026-07-29',
   DateTime? paidAt,
+  DateTime? cancelledAt,
+  String? cancelReason,
+  String? cancelledByEmployeeId,
 }) {
   return PosOrder(
     id: id,
     tableId: 'mesa_1',
     tableName: 'Mesa 1',
     status: status,
-    kitchenStatus: 'sent',
+    kitchenStatus: kitchenStatus,
     paymentStatus: paymentStatus,
     total: total,
     paidTotal: total - pendingTotal,
@@ -239,6 +440,9 @@ PosOrder _order({
     branchId: 'aviacion',
     branchName: 'Aviacion',
     paidAt: paidAt,
+    cancelledAt: cancelledAt,
+    cancelReason: cancelReason,
+    cancelledByEmployeeId: cancelledByEmployeeId,
   );
 }
 
