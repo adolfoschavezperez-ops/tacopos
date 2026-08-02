@@ -584,7 +584,9 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
                     contentPadding: EdgeInsets.zero,
                     title: Text(entry.value.purchaseItemName),
                     subtitle: Text(
-                      '${_formatQty(entry.value.quantity)} ${entry.value.unit} x ${_money(entry.value.unitCost)}',
+                      '${_formatQty(entry.value.quantity)} ${entry.value.unit} · '
+                      'Importe ${_money(entry.value.lineTotal)} · '
+                      'Unitario calc. ${_unitCost(entry.value.unitCostCalculated)}',
                     ),
                     trailing: Wrap(
                       spacing: 8,
@@ -1715,7 +1717,11 @@ class _PurchasesByItemReport extends StatelessWidget {
                             label: 'Cantidad',
                             value: '${_qty(row.quantity)} ${row.unit}',
                           ),
-                          _Metric(label: 'Total', value: row.total),
+                          _Metric(label: 'Importe total', value: row.total),
+                          _TextMetric(
+                            label: 'Unitario calc.',
+                            value: _unitCost(row.averageUnitCostCalculated),
+                          ),
                         ],
                       ),
                     ),
@@ -1733,10 +1739,10 @@ class _PurchasesByItemReport extends StatelessWidget {
     List<PurchaseItemReportRow> rows,
   ) async {
     final csv = [
-      'Insumo,Cantidad,Unidad,Total,Notas,Afecta rendimiento cocina',
+      'Insumo,Cantidad,Unidad,Importe total,Costo unitario calculado,Notas,Afecta rendimiento cocina',
       ...rows.map(
         (row) =>
-            '"${row.itemName}",${row.quantity},"${row.unit}",${row.total},${row.noteCount},"${row.affectsKitchenPerformance ? 'Si' : 'No'}"',
+            '"${row.itemName}",${row.quantity},"${row.unit}",${row.total},${row.averageUnitCostCalculated},${row.noteCount},"${row.affectsKitchenPerformance ? 'Si' : 'No'}"',
       ),
     ].join('\n');
     final message = await exportCsvFile(
@@ -2132,7 +2138,7 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
   final _nameController = TextEditingController();
   final _qtyController = TextEditingController(text: '1');
   final _unitController = TextEditingController(text: 'kg');
-  final _costController = TextEditingController();
+  final _lineTotalController = TextEditingController();
   final _notesController = TextEditingController();
   String? _itemId;
 
@@ -2152,7 +2158,7 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
         initial.kitchenStockItemName ?? initial.purchaseItemName;
     _qtyController.text = _formatQty(initial.quantity);
     _unitController.text = initial.unit;
-    _costController.text = initial.unitCost.toStringAsFixed(2);
+    _lineTotalController.text = initial.lineTotal.toStringAsFixed(2);
     _notesController.text = initial.notes;
   }
 
@@ -2161,7 +2167,7 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
     _nameController.dispose();
     _qtyController.dispose();
     _unitController.dispose();
-    _costController.dispose();
+    _lineTotalController.dispose();
     _notesController.dispose();
     super.dispose();
   }
@@ -2197,10 +2203,30 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
                 onChanged: _selectItem,
               ),
             ),
+            SizedBox(
+              width: 480,
+              child: Text(
+                'Costo unitario calculado: ${_unitCost(_previewUnitCost)}',
+                style: const TextStyle(
+                  color: BrandColors.textMuted,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
             _field(_nameController, 'Nombre libre', 240),
-            _field(_qtyController, 'Cantidad', 110),
+            _field(
+              _qtyController,
+              'Cantidad',
+              110,
+              onChanged: (_) => setState(() {}),
+            ),
             _field(_unitController, 'Unidad', 100),
-            _field(_costController, 'Costo unitario', 140),
+            _field(
+              _lineTotalController,
+              'Importe total',
+              140,
+              onChanged: (_) => setState(() {}),
+            ),
             _field(_notesController, 'Notas', 480),
           ],
         ),
@@ -2218,15 +2244,30 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
     );
   }
 
-  Widget _field(TextEditingController controller, String label, double width) {
+  Widget _field(
+    TextEditingController controller,
+    String label,
+    double width, {
+    ValueChanged<String>? onChanged,
+  }) {
     return SizedBox(
       width: width,
       child: TextField(
         controller: controller,
-        keyboardType: label == 'Nombre libre'
+        keyboardType: label == 'Nombre libre' || label == 'Unidad'
             ? TextInputType.text
             : const TextInputType.numberWithOptions(decimal: true),
+        inputFormatters: label == 'Nombre libre' || label == 'Unidad'
+            ? null
+            : [
+                FilteringTextInputFormatter.allow(
+                  label == 'Importe total'
+                      ? RegExp(r'^\d{0,9}([.,]\d{0,2})?$')
+                      : RegExp(r'^\d{0,9}([.,]\d{0,6})?$'),
+                ),
+              ],
         decoration: InputDecoration(labelText: label),
+        onChanged: onChanged,
       ),
     );
   }
@@ -2242,19 +2283,35 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
     });
   }
 
+  double get _previewUnitCost {
+    final quantity = _parse(_qtyController.text);
+    final lineTotal = _parse(_lineTotalController.text);
+    if (quantity <= 0 || lineTotal < 0) return 0;
+    return lineTotal / quantity;
+  }
+
   void _submit() {
     final quantity = _parse(_qtyController.text);
-    final unitCost = _parse(_costController.text);
+    final lineTotal = _parse(_lineTotalController.text);
     final name = _nameController.text.trim();
     final item = widget.items.where((item) => item.id == _itemId);
     if (item.isEmpty) {
       showAppSnackBar(context, 'Selecciona un insumo del catalogo.');
       return;
     }
-    if (name.isEmpty || quantity <= 0 || unitCost < 0) {
-      showAppSnackBar(context, 'Revisa nombre, cantidad y costo.');
+    if (name.isEmpty ||
+        quantity <= 0 ||
+        !quantity.isFinite ||
+        lineTotal < 0 ||
+        !lineTotal.isFinite) {
+      showAppSnackBar(context, 'Revisa nombre, cantidad e importe.');
       return;
     }
+    final lineTotalCents = purchaseAmountCents(lineTotal);
+    final unitCost = purchaseUnitCostFromLineTotal(
+      quantity: quantity,
+      lineTotalCents: lineTotalCents,
+    );
     Navigator.pop(
       context,
       PurchaseLineInput(
@@ -2268,6 +2325,8 @@ class _PurchaseLineDialogState extends State<_PurchaseLineDialog> {
         quantity: quantity,
         unit: _unitController.text.trim(),
         unitCost: unitCost,
+        lineTotalCents: lineTotalCents,
+        calculationMode: 'line_total',
         notes: _notesController.text,
       ),
     );
@@ -2352,12 +2411,12 @@ class _PurchaseDiscountDialogState extends State<PurchaseDiscountDialog> {
                     textValue: '${_formatQty(line.quantity)} ${line.unit}',
                   ),
                   _DiscountPreviewRow(
-                    label: 'Costo unitario capturado',
-                    value: line.unitCost,
+                    label: 'Importe total',
+                    value: line.lineTotal,
                   ),
                   _DiscountPreviewRow(
-                    label: 'Subtotal actual',
-                    value: line.total,
+                    label: 'Costo unitario calculado',
+                    textValue: _unitCost(line.unitCostCalculated),
                   ),
                 ] else ...[
                   _DiscountPreviewRow(
@@ -2366,7 +2425,7 @@ class _PurchaseDiscountDialogState extends State<PurchaseDiscountDialog> {
                   ),
                   const SizedBox(height: 4),
                   const Text(
-                    'El descuento se aplicará sobre los costos actuales de todos los artículos.',
+                    'El descuento se aplicara sobre los importes actuales de todos los articulos.',
                     style: TextStyle(
                       color: BrandColors.accentYellow,
                       fontSize: 12,
@@ -2408,8 +2467,8 @@ class _PurchaseDiscountDialogState extends State<PurchaseDiscountDialog> {
                 const Divider(),
                 if (line != null) ...[
                   _DiscountPreviewRow(
-                    label: 'Costo anterior',
-                    value: line.unitCost,
+                    label: 'Importe anterior',
+                    value: line.lineTotal,
                   ),
                   _DiscountPreviewRow(
                     label: 'Descuento',
@@ -2418,13 +2477,15 @@ class _PurchaseDiscountDialogState extends State<PurchaseDiscountDialog> {
                         : '0%',
                   ),
                   _DiscountPreviewRow(
-                    label: 'Costo final',
-                    value: finalLine?.unitCost ?? line.unitCost,
+                    label: 'Importe final',
+                    value: finalLine?.lineTotal ?? line.lineTotal,
                     emphasized: true,
                   ),
                   _DiscountPreviewRow(
-                    label: 'Subtotal final',
-                    value: finalTotal,
+                    label: 'Costo unitario calculado',
+                    textValue: _unitCost(
+                      finalLine?.unitCostCalculated ?? line.unitCostCalculated,
+                    ),
                     emphasized: true,
                   ),
                 ] else ...[
@@ -2718,7 +2779,9 @@ class _EditSupplierPurchaseDialogState
                         contentPadding: EdgeInsets.zero,
                         title: Text(line.purchaseItemName),
                         subtitle: Text(
-                          '${_formatQty(line.quantity)} ${line.unit} x ${_money(line.unitCost)}'
+                          '${_formatQty(line.quantity)} ${line.unit} · '
+                          'Importe ${_money(line.lineTotal)} · '
+                          'Unitario calc. ${_unitCost(line.unitCostCalculated)}'
                           '${line.notes.trim().isEmpty ? '' : ' · ${line.notes}'}',
                         ),
                         trailing: Wrap(
@@ -3307,11 +3370,13 @@ class _PurchaseDetailDialog extends StatelessWidget {
               return const LoadingPanel(message: 'Cargando detalle...');
             }
             final items = snapshot.data ?? const <SupplierPurchaseItem>[];
-            final itemsTotal = items.fold<double>(
+            final itemsTotalCents = items.fold<int>(
               0,
-              (sum, item) => sum + item.total,
+              (sum, item) => sum + item.lineTotalCents,
             );
-            final totalsMatch = (itemsTotal - purchase.total).abs() <= 0.01;
+            final itemsTotal = purchaseAmountFromCents(itemsTotalCents);
+            final difference = purchaseMoney(itemsTotal - purchase.total);
+            final totalsMatch = difference.abs() <= 0.01;
             return LayoutBuilder(
               builder: (context, constraints) {
                 final compact = constraints.maxWidth < 720;
@@ -3326,11 +3391,12 @@ class _PurchaseDetailDialog extends StatelessWidget {
                       ),
                       if (!totalsMatch) ...[
                         const SizedBox(height: 12),
-                        const GlassPanel(
-                          padding: EdgeInsets.all(12),
+                        GlassPanel(
+                          padding: const EdgeInsets.all(12),
                           child: Text(
+                            'Diferencia: ${_money(difference.abs())}. '
                             'El total de los productos no coincide con el total registrado.',
-                            style: TextStyle(
+                            style: const TextStyle(
                               color: BrandColors.danger,
                               fontWeight: FontWeight.w800,
                             ),
@@ -3714,8 +3780,8 @@ class _PurchaseItemsDetail extends StatelessWidget {
                   DataColumn(label: Text('Insumo')),
                   DataColumn(label: Text('Cantidad')),
                   DataColumn(label: Text('Unidad')),
-                  DataColumn(label: Text('Costo unitario')),
-                  DataColumn(label: Text('Total')),
+                  DataColumn(label: Text('Importe total')),
+                  DataColumn(label: Text('Costo unitario calculado')),
                   DataColumn(label: Text('Notas')),
                 ],
                 rows: items
@@ -3725,8 +3791,8 @@ class _PurchaseItemsDetail extends StatelessWidget {
                           DataCell(Text(_purchaseItemName(item))),
                           DataCell(Text(_formatQty(item.quantity))),
                           DataCell(Text(item.unit)),
-                          DataCell(Text(_money(item.unitCost))),
-                          DataCell(Text(_money(item.total))),
+                          DataCell(Text(_money(item.lineTotal))),
+                          DataCell(Text(_unitCost(item.unitCostCalculated))),
                           DataCell(Text(item.notes)),
                         ],
                       ),
@@ -3747,10 +3813,12 @@ class _PurchaseItemsDetail extends StatelessWidget {
         style: const TextStyle(fontWeight: FontWeight.w900),
       ),
       subtitle: Text(
-        '${_formatQty(item.quantity)} ${item.unit} x ${_money(item.unitCost)}'
+        '${_formatQty(item.quantity)} ${item.unit} · '
+        'Importe ${_money(item.lineTotal)} · '
+        'Unitario calc. ${_unitCost(item.unitCostCalculated)}'
         '${item.notes.trim().isEmpty ? '' : '\n${item.notes}'}',
       ),
-      trailing: MoneyText(value: item.total),
+      trailing: MoneyText(value: item.lineTotal),
     );
   }
 }
@@ -4107,7 +4175,7 @@ class _TextMetric extends StatelessWidget {
 String _qty(double value) {
   return value == value.roundToDouble()
       ? value.toStringAsFixed(0)
-      : value.toStringAsFixed(2);
+      : value.toStringAsFixed(3);
 }
 
 String _categoryLabel(String category) {
@@ -4291,7 +4359,9 @@ PurchaseLineInput _lineFromPurchaseItem(SupplierPurchaseItem item) {
     affectsKitchenStock: item.affectsKitchenStock,
     quantity: item.quantity,
     unit: item.unit,
-    unitCost: item.unitCost,
+    unitCost: item.unitCostCalculated,
+    lineTotalCents: item.lineTotalCents,
+    calculationMode: item.calculationMode,
     notes: item.notes,
   );
 }
@@ -4316,10 +4386,14 @@ String _money(double value) {
   return '\$${value.toStringAsFixed(2)}';
 }
 
+String _unitCost(double value) {
+  return '\$${value.toStringAsFixed(6)}';
+}
+
 String _formatQty(double value) {
   return value == value.roundToDouble()
       ? value.toStringAsFixed(0)
-      : value.toStringAsFixed(2);
+      : value.toStringAsFixed(3);
 }
 
 extension _FirstOrNull<T> on Iterable<T> {

@@ -225,6 +225,10 @@ class SupplierPurchaseItem {
     required this.unit,
     required this.unitCost,
     required this.total,
+    required this.lineTotal,
+    required this.lineTotalCents,
+    required this.unitCostCalculated,
+    required this.calculationMode,
     this.status = 'active',
     this.purchaseItemId,
     this.kitchenStockItemId,
@@ -243,6 +247,10 @@ class SupplierPurchaseItem {
   final String unit;
   final double unitCost;
   final double total;
+  final double lineTotal;
+  final int lineTotalCents;
+  final double unitCostCalculated;
+  final String calculationMode;
   final String status;
   final String notes;
 
@@ -251,9 +259,31 @@ class SupplierPurchaseItem {
   factory SupplierPurchaseItem.fromDoc(
     DocumentSnapshot<Map<String, dynamic>> doc,
   ) {
-    final data = doc.data() ?? {};
+    return SupplierPurchaseItem.fromData(doc.id, doc.data() ?? {});
+  }
+
+  factory SupplierPurchaseItem.fromData(String id, Map<String, dynamic> data) {
+    final quantity = _toDouble(data['quantity']);
+    final legacyUnitCost = _toDouble(data['unitCost']);
+    final hasLineTotal =
+        data.containsKey('lineTotal') || data.containsKey('lineTotalCents');
+    final lineTotalCents =
+        _toInt(data['lineTotalCents']) ??
+        purchaseAmountCents(
+          hasLineTotal
+              ? _toDouble(data['lineTotal'])
+              : quantity * legacyUnitCost,
+        );
+    final lineTotal = purchaseAmountFromCents(lineTotalCents);
+    final calculatedUnitCost = _toDouble(data['unitCostCalculated']);
+    final effectiveUnitCost = calculatedUnitCost > 0 || lineTotalCents == 0
+        ? calculatedUnitCost
+        : purchaseUnitCostFromLineTotal(
+            quantity: quantity,
+            lineTotalCents: lineTotalCents,
+          );
     return SupplierPurchaseItem(
-      id: doc.id,
+      id: id,
       purchaseItemId: data['purchaseItemId'] as String?,
       purchaseItemName:
           data['purchaseItemName'] as String? ??
@@ -269,10 +299,18 @@ class SupplierPurchaseItem {
           data['affectsKitchenStock'] as bool? ??
           data['affectsKitchenPerformance'] as bool? ??
           false,
-      quantity: _toDouble(data['quantity']),
+      quantity: quantity,
       unit: data['unit'] as String? ?? '',
-      unitCost: _toDouble(data['unitCost']),
-      total: _toDouble(data['total']),
+      unitCost: effectiveUnitCost > 0 ? effectiveUnitCost : legacyUnitCost,
+      total: lineTotal,
+      lineTotal: lineTotal,
+      lineTotalCents: lineTotalCents,
+      unitCostCalculated: effectiveUnitCost > 0
+          ? effectiveUnitCost
+          : legacyUnitCost,
+      calculationMode:
+          data['calculationMode'] as String? ??
+          (hasLineTotal ? 'line_total' : 'legacy_unit_cost'),
       status: data['status'] as String? ?? 'active',
       notes: data['notes'] as String? ?? '',
     );
@@ -653,6 +691,7 @@ class PurchaseItemReportRow {
     required this.quantity,
     required this.unit,
     required this.total,
+    required this.averageUnitCostCalculated,
     required this.noteCount,
     required this.affectsKitchenPerformance,
   });
@@ -662,23 +701,29 @@ class PurchaseItemReportRow {
   final double quantity;
   final String unit;
   final double total;
+  final double averageUnitCostCalculated;
   final int noteCount;
   final bool affectsKitchenPerformance;
 }
 
 class PurchaseLineInput {
-  const PurchaseLineInput({
+  PurchaseLineInput({
     required this.purchaseItemName,
     required this.quantity,
     required this.unit,
     required this.unitCost,
+    double? lineTotal,
+    int? lineTotalCents,
+    this.calculationMode = 'line_total',
     this.supplierPurchaseItemId,
     this.purchaseItemId,
     this.kitchenStockItemId,
     this.kitchenStockItemName,
     this.affectsKitchenStock = false,
     this.notes = '',
-  });
+  }) : lineTotalCents =
+           lineTotalCents ??
+           purchaseAmountCents(lineTotal ?? quantity * unitCost);
 
   final String? supplierPurchaseItemId;
   final String? purchaseItemId;
@@ -689,9 +734,34 @@ class PurchaseLineInput {
   final double quantity;
   final String unit;
   final double unitCost;
+  final int lineTotalCents;
+  final String calculationMode;
   final String notes;
 
-  double get total => (quantity * unitCost * 100).roundToDouble() / 100;
+  double get lineTotal => purchaseAmountFromCents(lineTotalCents);
+  double get total => lineTotal;
+  double get unitCostCalculated => purchaseUnitCostFromLineTotal(
+    quantity: quantity,
+    lineTotalCents: lineTotalCents,
+  );
+}
+
+int purchaseAmountCents(num value) {
+  final number = value.toDouble();
+  if (!number.isFinite) {
+    throw ArgumentError('El importe debe ser un numero finito.');
+  }
+  return (number * 100).round();
+}
+
+double purchaseAmountFromCents(int cents) => cents / 100;
+
+double purchaseUnitCostFromLineTotal({
+  required double quantity,
+  required int lineTotalCents,
+}) {
+  if (!quantity.isFinite || quantity <= 0) return 0;
+  return purchaseAmountFromCents(lineTotalCents) / quantity;
 }
 
 DateTime? _toDate(Object? value) {
@@ -710,6 +780,13 @@ double _toDouble(Object? value) {
     return double.tryParse(value.trim().replaceAll(',', '')) ?? 0;
   }
   return value is num ? value.toDouble() : 0;
+}
+
+int? _toInt(Object? value) {
+  if (value is int) return value;
+  if (value is num) return value.toInt();
+  if (value is String) return int.tryParse(value.trim().replaceAll(',', ''));
+  return null;
 }
 
 String? _optionalString(Object? value) {

@@ -2839,14 +2839,9 @@ class TacoPosRepository {
     if (items.isEmpty) {
       throw ArgumentError('Agrega al menos un renglon de compra.');
     }
-    final invalidItem = items.any(
-      (item) =>
-          item.purchaseItemName.trim().isEmpty ||
-          item.quantity <= 0 ||
-          item.unitCost < 0,
-    );
+    final invalidItem = items.any((item) => !isValidPurchaseLineInput(item));
     if (invalidItem) {
-      throw ArgumentError('Revisa cantidad y costo de los renglones.');
+      throw ArgumentError('Revisa cantidad e importe de los renglones.');
     }
     final employee = AppSession.instance.employee;
     final total = purchaseLinesTotal(items);
@@ -2896,10 +2891,15 @@ class TacoPosRepository {
         'affectsKitchenPerformance': item.affectsKitchenStock,
         'quantity': item.quantity,
         'unit': item.unit,
-        'unitCost': item.unitCost,
-        'total': item.total,
+        'unitCost': item.unitCostCalculated,
+        'unitCostCalculated': item.unitCostCalculated,
+        'lineTotal': item.lineTotal,
+        'lineTotalCents': item.lineTotalCents,
+        'calculationMode': item.calculationMode,
+        'total': item.lineTotal,
         'status': 'active',
         'notes': item.notes.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
       });
     }
     await batch.commit();
@@ -2949,12 +2949,10 @@ class TacoPosRepository {
           (item.kitchenStockItemId ?? item.purchaseItemId ?? '')
               .trim()
               .isEmpty ||
-          item.purchaseItemName.trim().isEmpty ||
-          item.quantity <= 0 ||
-          item.unitCost < 0,
+          !isValidPurchaseLineInput(item),
     );
     if (invalidItem) {
-      throw ArgumentError('Revisa cantidad y costo de los renglones.');
+      throw ArgumentError('Revisa cantidad e importe de los renglones.');
     }
     final purchaseRef = _supplierPurchasesRef.doc(purchase.id);
     final purchaseDoc = await purchaseRef.get();
@@ -3039,10 +3037,15 @@ class TacoPosRepository {
         'affectsKitchenPerformance': item.affectsKitchenStock,
         'quantity': item.quantity,
         'unit': item.unit,
-        'unitCost': item.unitCost,
-        'total': item.total,
+        'unitCost': item.unitCostCalculated,
+        'unitCostCalculated': item.unitCostCalculated,
+        'lineTotal': item.lineTotal,
+        'lineTotalCents': item.lineTotalCents,
+        'calculationMode': item.calculationMode,
+        'total': item.lineTotal,
         'status': 'active',
         'notes': item.notes.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
     }
     for (final entry in existingActiveDocs.entries) {
@@ -3053,6 +3056,10 @@ class TacoPosRepository {
         'status': 'removed',
         'quantity': 0,
         'unitCost': 0,
+        'unitCostCalculated': 0,
+        'lineTotal': 0,
+        'lineTotalCents': 0,
+        'calculationMode': 'line_total',
         'total': 0,
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
@@ -3550,7 +3557,7 @@ class TacoPosRepository {
         ),
       );
       current.quantity += item.quantity;
-      current.total += item.total;
+      current.totalCents += item.lineTotalCents;
       current.noteCount++;
       current.affectsKitchenPerformance =
           current.affectsKitchenPerformance || item.affectsKitchenStock;
@@ -3564,6 +3571,7 @@ class TacoPosRepository {
                 quantity: item.quantity,
                 unit: item.unit,
                 total: item.total,
+                averageUnitCostCalculated: item.averageUnitCostCalculated,
                 noteCount: item.noteCount,
                 affectsKitchenPerformance: item.affectsKitchenPerformance,
               ),
@@ -13899,8 +13907,11 @@ class _PurchaseItemReportAccumulator {
   final String unit;
   bool affectsKitchenPerformance;
   double quantity = 0;
-  double total = 0;
+  int totalCents = 0;
   int noteCount = 0;
+
+  double get total => purchaseAmountFromCents(totalCents);
+  double get averageUnitCostCalculated => quantity <= 0 ? 0 : total / quantity;
 }
 
 String _readText(Object? value, String fallback) {
