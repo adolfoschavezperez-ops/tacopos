@@ -6,6 +6,133 @@ import 'package:tacopos/models/purchase_models.dart';
 import 'package:tacopos/screens/admin/purchase_admin_screen.dart';
 
 void main() {
+  test('2.010 kg y 440.40 conserva importe exacto y calcula unitario', () {
+    final line = _lineFromTotal(2.010, 440.40, unit: 'kg');
+
+    expect(line.lineTotalCents, 44040);
+    expect(line.total, 440.40);
+    expect(line.unitCostCalculated, closeTo(219.1044776119, 0.0000001));
+  });
+
+  test('no recalcula el total con un unitario redondeado', () {
+    final line = _lineFromTotal(2.010, 440.40, unit: 'kg');
+    final roundedUnitCost = double.parse(
+      line.unitCostCalculated.toStringAsFixed(2),
+    );
+
+    expect(purchaseMoney(line.quantity * roundedUnitCost), 440.39);
+    expect(line.total, 440.40);
+  });
+
+  test('varias lineas suman centavos exactamente', () {
+    final lines = [
+      _lineFromTotal(2.010, 440.40, name: 'Bistec'),
+      _lineFromTotal(1.500, 380.20, name: 'Arrachera'),
+      _lineFromTotal(0.750, 291.60, name: 'Tripa'),
+    ];
+
+    expect(
+      lines.fold<int>(0, (sum, line) => sum + line.lineTotalCents),
+      111220,
+    );
+    expect(purchaseLinesTotal(lines), 1112.20);
+  });
+
+  test('cambiar cantidad conserva total y recalcula unitario', () {
+    final original = _lineFromTotal(2.010, 440.40, unit: 'kg');
+    final edited = _lineFromTotal(
+      2.020,
+      original.lineTotal,
+      unit: original.unit,
+    );
+
+    expect(edited.lineTotalCents, original.lineTotalCents);
+    expect(edited.total, 440.40);
+    expect(edited.unitCostCalculated, closeTo(218.019801, 0.000001));
+  });
+
+  test('cambiar total conserva cantidad y recalcula unitario', () {
+    final edited = _lineFromTotal(2.010, 500.00, unit: 'kg');
+
+    expect(edited.quantity, 2.010);
+    expect(edited.total, 500);
+    expect(edited.unitCostCalculated, closeTo(248.7562189, 0.000001));
+  });
+
+  test('cantidad cero e importe negativo se rechazan', () {
+    expect(isValidPurchaseLineInput(_lineFromTotal(0, 100)), isFalse);
+    expect(isValidPurchaseLineInput(_lineFromTotal(1, -0.01)), isFalse);
+  });
+
+  test(
+    'historico sin lineTotal carga desde cantidad por unitCost existente',
+    () {
+      final item = SupplierPurchaseItem.fromData('legacy', {
+        'purchaseItemName': 'Bistec',
+        'quantity': 2.010,
+        'unit': 'kg',
+        'unitCost': 219.1044776119,
+      });
+
+      expect(item.calculationMode, 'legacy_unit_cost');
+      expect(item.lineTotalCents, 44040);
+      expect(item.total, 440.40);
+    },
+  );
+
+  test('compra nueva carga lineTotal, lineTotalCents y unitCostCalculated', () {
+    final item = SupplierPurchaseItem.fromData('new', {
+      'purchaseItemName': 'Bistec',
+      'quantity': 2.010,
+      'unit': 'kg',
+      'unitCost': 219.1044776119,
+      'unitCostCalculated': 219.1044776119,
+      'lineTotal': 440.40,
+      'lineTotalCents': 44040,
+      'calculationMode': 'line_total',
+      'total': 440.40,
+    });
+
+    expect(item.calculationMode, 'line_total');
+    expect(item.lineTotal, 440.40);
+    expect(item.lineTotalCents, 44040);
+    expect(item.unitCostCalculated, closeTo(219.1044776119, 0.0000001));
+  });
+
+  test('inventario y cuentas por pagar usan importe total exacto', () {
+    final line = _lineFromTotal(2.010, 440.40, unit: 'kg');
+
+    expect(line.quantity, 2.010);
+    expect(line.lineTotal, 440.40);
+    expect(line.unitCostCalculated, closeTo(219.1044776119, 0.0000001));
+    expect(purchaseLinesTotal([line]), 440.40);
+  });
+
+  test('reporte y exportacion exponen importe total y unitario calculado', () {
+    const row = PurchaseItemReportRow(
+      itemId: 'bistec',
+      itemName: 'Bistec',
+      quantity: 2.010,
+      unit: 'kg',
+      total: 440.40,
+      averageUnitCostCalculated: 219.1044776119,
+      noteCount: 1,
+      affectsKitchenPerformance: true,
+    );
+
+    expect(row.total, 440.40);
+    expect(row.averageUnitCostCalculated, closeTo(219.1044776119, 0.0000001));
+  });
+
+  test('diferencia de un centavo se informa desde sumas exactas', () {
+    final linesTotal = purchaseLinesTotal([
+      _lineFromTotal(1, 10.00),
+      _lineFromTotal(1, 20.01),
+    ]);
+
+    expect(purchaseMoney(linesTotal - 30.00), 0.01);
+  });
+
   test('descuento por articulo convierte 10 x 100 en 10 x 80', () {
     final discounted = applyPurchaseLineDiscount(_line(10, 100), 20);
 
@@ -143,7 +270,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text(r'$80.00'), findsOneWidget);
+    expect(find.text(r'$80.000000'), findsOneWidget);
     expect(find.text(r'$800.00'), findsOneWidget);
 
     await tester.tap(find.text('Cancelar'));
@@ -183,7 +310,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.text(
-        'El descuento se aplicará sobre los costos actuales de todos los artículos.',
+        'El descuento se aplicara sobre los importes actuales de todos los articulos.',
       ),
       findsOneWidget,
     );
@@ -206,13 +333,37 @@ PurchaseLineInput _line(
   double quantity,
   double unitCost, {
   String name = 'Articulo',
+  String unit = 'pieza',
 }) {
   return PurchaseLineInput(
     purchaseItemName: name,
     kitchenStockItemId: name.toLowerCase().replaceAll(' ', '-'),
     kitchenStockItemName: name,
     quantity: quantity,
-    unit: 'pieza',
+    unit: unit,
     unitCost: unitCost,
+  );
+}
+
+PurchaseLineInput _lineFromTotal(
+  double quantity,
+  double lineTotal, {
+  String name = 'Articulo',
+  String unit = 'pieza',
+}) {
+  final cents = purchaseAmountCents(lineTotal);
+  final unitCost = purchaseUnitCostFromLineTotal(
+    quantity: quantity,
+    lineTotalCents: cents,
+  );
+  return PurchaseLineInput(
+    purchaseItemName: name,
+    kitchenStockItemId: name.toLowerCase().replaceAll(' ', '-'),
+    kitchenStockItemName: name,
+    quantity: quantity,
+    unit: unit,
+    unitCost: unitCost,
+    lineTotalCents: cents,
+    calculationMode: 'line_total',
   );
 }

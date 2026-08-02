@@ -7,11 +7,22 @@ bool isValidPurchaseDiscountPercent(double value) {
 }
 
 double purchaseMoney(num value) {
-  return (value * 100).roundToDouble() / 100;
+  return purchaseAmountFromCents(purchaseAmountCents(value));
 }
 
 double purchaseLinesTotal(Iterable<PurchaseLineInput> lines) {
-  return purchaseMoney(lines.fold<double>(0, (sum, line) => sum + line.total));
+  return purchaseAmountFromCents(
+    lines.fold<int>(0, (sum, line) => sum + line.lineTotalCents),
+  );
+}
+
+bool isValidPurchaseLineInput(PurchaseLineInput line) {
+  return line.purchaseItemName.trim().isNotEmpty &&
+      line.quantity.isFinite &&
+      line.quantity > 0 &&
+      line.lineTotalCents >= 0 &&
+      line.unitCostCalculated.isFinite &&
+      line.unitCostCalculated >= 0;
 }
 
 double purchaseDiscountAmount(double currentTotal, double percent) {
@@ -31,8 +42,8 @@ PurchaseLineInput applyPurchaseLineDiscount(
   double percent,
 ) {
   _validatePercent(percent);
-  final unitCost = _roundUnitCost(line.unitCost * (1 - percent / 100));
-  return _copyLine(line, unitCost: unitCost);
+  final lineTotal = purchaseDiscountedTotal(line.lineTotal, percent);
+  return _copyLine(line, lineTotalCents: purchaseAmountCents(lineTotal));
 }
 
 List<PurchaseLineInput> applyPurchaseGeneralDiscount(
@@ -52,35 +63,19 @@ List<PurchaseLineInput> applyPurchaseGeneralDiscount(
   if (lastValidIndex < 0) return List.unmodifiable(lines);
 
   final result = <PurchaseLineInput>[];
-  var allocated = 0.0;
+  var allocatedCents = 0;
   for (var index = 0; index < lines.length; index++) {
     final line = lines[index];
     if (line.quantity <= 0) {
       result.add(line);
       continue;
     }
-    final discountedUnitCost = index == lastValidIndex
-        ? purchaseMoney(
-                targetTotal - allocated,
-              ).clamp(0, double.infinity).toDouble() /
-              line.quantity
-        : line.unitCost * (1 - percent / 100);
-    final discounted = _copyLine(
-      line,
-      unitCost: _roundUnitCost(discountedUnitCost),
-    );
+    final lineTotalCents = index == lastValidIndex
+        ? (purchaseAmountCents(targetTotal) - allocatedCents).clamp(0, 1 << 62)
+        : purchaseAmountCents(line.lineTotal * (1 - percent / 100));
+    final discounted = _copyLine(line, lineTotalCents: lineTotalCents.toInt());
     result.add(discounted);
-    allocated = purchaseMoney(allocated + discounted.total);
-  }
-
-  final residual = purchaseMoney(targetTotal - purchaseLinesTotal(result));
-  if (residual.abs() >= 0.01) {
-    final line = result[lastValidIndex];
-    final adjustedLineTotal = purchaseMoney(line.total + residual);
-    result[lastValidIndex] = _copyLine(
-      line,
-      unitCost: _roundUnitCost(adjustedLineTotal / line.quantity),
-    );
+    allocatedCents += discounted.lineTotalCents;
   }
   return List.unmodifiable(result);
 }
@@ -98,8 +93,14 @@ double _roundUnitCost(double value) {
 
 PurchaseLineInput _copyLine(
   PurchaseLineInput line, {
-  required double unitCost,
+  required int lineTotalCents,
 }) {
+  final unitCost = _roundUnitCost(
+    purchaseUnitCostFromLineTotal(
+      quantity: line.quantity,
+      lineTotalCents: lineTotalCents,
+    ),
+  );
   return PurchaseLineInput(
     supplierPurchaseItemId: line.supplierPurchaseItemId,
     purchaseItemId: line.purchaseItemId,
@@ -110,6 +111,8 @@ PurchaseLineInput _copyLine(
     quantity: line.quantity,
     unit: line.unit,
     unitCost: unitCost,
+    lineTotalCents: lineTotalCents,
+    calculationMode: 'line_total',
     notes: line.notes,
   );
 }
