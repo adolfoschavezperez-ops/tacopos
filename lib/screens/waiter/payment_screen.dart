@@ -45,6 +45,33 @@ class _PaymentScreenState extends State<PaymentScreen> {
     );
   }
 
+  @override
+  void didUpdateWidget(covariant PaymentScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.orderId == widget.orderId) return;
+    setState(() {
+      _busy = false;
+    });
+    LivePresenceService.instance.update(
+      appMode: 'cash',
+      currentScreen: 'Cobro',
+      currentOrderId: widget.orderId,
+      currentAction: 'Cobrando',
+    );
+  }
+
+  @override
+  void dispose() {
+    LivePresenceService.instance.clearCurrentOrder(
+      currentAction: 'Viendo mesas',
+    );
+    super.dispose();
+  }
+
+  bool _isCurrentOrder(String orderId) {
+    return mounted && widget.orderId == orderId;
+  }
+
   Future<bool> _payFullTable(
     PosOrder order, {
     required String method,
@@ -52,6 +79,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
     Employee? employee,
     AppliedDiscountDetails? discount,
   }) async {
+    final operationOrderId = order.id;
+    if (!_isCurrentOrder(operationOrderId)) {
+      return false;
+    }
     if (!_validateEmployee(method, employee: employee)) {
       return false;
     }
@@ -59,6 +90,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final resolvedCashDetails =
         cashDetails ??
         await _cashDetailsIfNeeded(method: method, total: order.pendingTotal);
+    if (!_isCurrentOrder(operationOrderId)) {
+      return false;
+    }
     if (resolvedCashDetails == null && method == 'cash') {
       return false;
     }
@@ -72,13 +106,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }
     }
 
-    if (!mounted) {
+    if (!_isCurrentOrder(operationOrderId)) {
       return false;
     }
 
     return _runPayment(
+      operationOrderId: operationOrderId,
       () => _repository.payFullTable(
-        orderId: widget.orderId,
+        orderId: operationOrderId,
         method: method,
         employeeId: employee?.id,
         employeeName: employee?.name,
@@ -89,6 +124,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   Future<bool> _payPeople(
+    PosOrder order,
     List<int> personNumbers,
     String personName, {
     required String method,
@@ -97,12 +133,19 @@ class _PaymentScreenState extends State<PaymentScreen> {
     Employee? employee,
     AppliedDiscountDetails? discount,
   }) async {
+    final operationOrderId = order.id;
+    if (!_isCurrentOrder(operationOrderId)) {
+      return false;
+    }
     if (!_validateEmployee(method, employee: employee)) {
       return false;
     }
 
     final resolvedCashDetails =
         cashDetails ?? await _cashDetailsIfNeeded(method: method, total: total);
+    if (!_isCurrentOrder(operationOrderId)) {
+      return false;
+    }
     if (resolvedCashDetails == null && method == 'cash') {
       return false;
     }
@@ -116,13 +159,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }
     }
 
-    if (!mounted) {
+    if (!_isCurrentOrder(operationOrderId)) {
       return false;
     }
 
     return _runPayment(
+      operationOrderId: operationOrderId,
       () => _repository.payPeople(
-        orderId: widget.orderId,
+        orderId: operationOrderId,
         personNumbers: personNumbers,
         method: method,
         employeeId: employee?.id,
@@ -140,6 +184,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
     CashPaymentDetails? cashDetails,
     AppliedDiscountDetails? discount,
   }) async {
+    final operationOrderId = order.id;
+    if (!_isCurrentOrder(operationOrderId)) {
+      return false;
+    }
     if (amount <= 0 || amount > order.pendingTotal + 0.01) {
       _showMessage('Captura un monto valido menor o igual al pendiente.');
       return false;
@@ -148,6 +196,9 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final resolvedCashDetails =
         cashDetails ??
         await _cashDetailsIfNeeded(method: method, total: amount);
+    if (!_isCurrentOrder(operationOrderId)) {
+      return false;
+    }
     if (resolvedCashDetails == null && method == 'cash') {
       return false;
     }
@@ -161,13 +212,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
       }
     }
 
-    if (!mounted) {
+    if (!_isCurrentOrder(operationOrderId)) {
       return false;
     }
 
     return _runPayment(
+      operationOrderId: operationOrderId,
       () => _repository.payPartialAmount(
-        orderId: widget.orderId,
+        orderId: operationOrderId,
         baseAmount: amount,
         method: method,
         cashDetails: resolvedCashDetails,
@@ -177,16 +229,18 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   Future<void> _payPlatformOrder(PosOrder order) async {
+    final operationOrderId = order.id;
     final confirmed = await _confirm(
       title: 'Registrar pagado en plataforma',
       message: 'Se cerrara ${order.displayName} como pagado en plataforma.',
     );
-    if (!confirmed) {
+    if (!confirmed || !_isCurrentOrder(operationOrderId)) {
       return;
     }
 
     await _runPayment(
-      () => _repository.payPlatformOrder(orderId: widget.orderId),
+      operationOrderId: operationOrderId,
+      () => _repository.payPlatformOrder(orderId: operationOrderId),
     );
   }
 
@@ -237,9 +291,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   Future<bool> _runPayment(
     Future<PaymentResult> Function() action, {
+    required String operationOrderId,
     VoidCallback? afterSuccess,
   }) async {
-    if (_busy) {
+    if (_busy || !_isCurrentOrder(operationOrderId)) {
       return false;
     }
 
@@ -249,7 +304,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     try {
       final result = await action();
-      if (!mounted) {
+      if (!_isCurrentOrder(operationOrderId)) {
         return false;
       }
 
@@ -277,13 +332,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
       debugPrint(
         'PAYMENT_ERROR type=${error.runtimeType} error=$error stack=$stackTrace',
       );
-      if (!mounted) {
+      if (!_isCurrentOrder(operationOrderId)) {
         return false;
       }
       _showMessage(_paymentErrorText(error));
       return false;
     } finally {
-      if (mounted) {
+      if (_isCurrentOrder(operationOrderId)) {
         setState(() {
           _busy = false;
         });
@@ -292,6 +347,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   Future<void> _cancelPayment(Payment payment) async {
+    final operationOrderId = widget.orderId;
     if (AppSession.instance.employee?.canCancelPayments != true &&
         AppSession.instance.employee?.canViewAdmin != true) {
       _showMessage('No tienes permiso para cancelar pagos.');
@@ -301,22 +357,22 @@ class _PaymentScreenState extends State<PaymentScreen> {
       context: context,
       builder: (_) => const _ReasonDialog(title: 'Cancelar pago'),
     );
-    if (!mounted || reason == null) {
+    if (!_isCurrentOrder(operationOrderId) || reason == null) {
       return;
     }
 
     try {
       await _repository.cancelPayment(
-        orderId: widget.orderId,
+        orderId: operationOrderId,
         paymentId: payment.id,
         reason: reason,
       );
-      if (!mounted) {
+      if (!_isCurrentOrder(operationOrderId)) {
         return;
       }
       _showMessage('Pago cancelado.');
     } catch (error) {
-      if (!mounted) {
+      if (!_isCurrentOrder(operationOrderId)) {
         return;
       }
       _showMessage('$error'.replaceFirst('Bad state: ', ''));
@@ -354,6 +410,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     required bool hasClientPayment,
     required bool hasPersonPayments,
   }) async {
+    final operationOrderId = order.id;
+    if (!_isCurrentOrder(operationOrderId)) return;
     if (hasPersonPayments) {
       _showMessage('Esta cuenta ya inicio cobro por persona.');
       return;
@@ -371,11 +429,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
     final netPending =
         initialDiscount?.totalAfterDiscount ??
         _checkoutAccountTotals(order, activePayments).pendingTotal;
+    if (!_isCurrentOrder(operationOrderId)) return;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => _PaymentMethodSheet(
+        key: ValueKey('payment-method-$operationOrderId-full'),
         title: 'Cobrar mesa completa',
         subtitle: order.displayName,
         total: order.pendingTotal,
@@ -407,6 +467,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     required bool hasClientPayment,
     required bool hasPartialPayments,
   }) async {
+    final operationOrderId = order.id;
+    if (!_isCurrentOrder(operationOrderId)) return;
     if (hasPartialPayments) {
       _showMessage('Esta cuenta ya tiene pagos parciales.');
       return;
@@ -416,6 +478,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => _PeoplePaymentSheet(
+        key: ValueKey('people-payment-$operationOrderId'),
         order: order,
         items: items,
         employees: employees,
@@ -423,6 +486,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         personName: _personName,
         pendingForItems: _pendingForItems,
         netForAmount: (amount) {
+          if (!_isCurrentOrder(operationOrderId)) return amount;
           final prepared = _repository.preparedGlobalDiscountForAmount(
             order: order,
             amountBeforeDiscount: amount,
@@ -432,6 +496,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           return prepared?.totalAfterDiscount ?? amount;
         },
         onPreparedDiscount: (amount) async {
+          if (!_isCurrentOrder(operationOrderId)) return null;
           return _repository.preparedGlobalDiscountForAmount(
             order: order,
             amountBeforeDiscount: amount,
@@ -443,6 +508,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         onConfirm:
             (people, label, total, method, cashDetails, employee, discount) {
               return _payPeople(
+                order,
                 people,
                 label,
                 method: method,
@@ -461,6 +527,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     required List<Payment> activePayments,
     required bool hasPersonPayments,
   }) async {
+    final operationOrderId = order.id;
+    if (!_isCurrentOrder(operationOrderId)) return;
     if (hasPersonPayments) {
       _showMessage('Esta cuenta ya inicio cobro por persona.');
       return;
@@ -474,8 +542,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => _PartialPaymentSheet(
+        key: ValueKey('partial-payment-$operationOrderId'),
         order: order,
         onPreparedDiscount: (amount) async {
+          if (!_isCurrentOrder(operationOrderId)) return null;
           return _repository.preparedGlobalDiscountForAmount(
             order: order,
             amountBeforeDiscount: amount,
@@ -501,28 +571,51 @@ class _PaymentScreenState extends State<PaymentScreen> {
     PosOrder order,
     double amount,
   ) async {
+    final operationOrderId = order.id;
+    if (!_isCurrentOrder(operationOrderId)) return null;
     try {
       final employees = await _repository.getEmployeesOnce(activeOnly: true);
+      if (!_isCurrentOrder(operationOrderId)) return null;
       final partners = await _repository.getPartnersOnce(activeOnly: true);
+      if (!_isCurrentOrder(operationOrderId)) return null;
       final general = await _repository.getGeneralDiscountConfigOnce();
-      if (!mounted) return null;
-      return showDialog<AppliedDiscountDetails>(
-        context: context,
-        builder: (_) => _DiscountDialog(
-          repository: _repository,
-          order: order,
-          amount: amount,
-          employees: employees,
-          partners: partners,
-          generalDiscount: general,
-        ),
+      if (!_isCurrentOrder(operationOrderId) || !context.mounted) return null;
+      final discount = await _showDiscountDialog(
+        order: order,
+        amount: amount,
+        employees: employees,
+        partners: partners,
+        general: general,
       );
+      if (!_isCurrentOrder(operationOrderId)) return null;
+      return discount;
     } catch (error) {
-      if (mounted) {
+      if (_isCurrentOrder(operationOrderId)) {
         _showMessage(error.toString().replaceFirst('Bad state: ', ''));
       }
       return null;
     }
+  }
+
+  Future<AppliedDiscountDetails?> _showDiscountDialog({
+    required PosOrder order,
+    required double amount,
+    required List<Employee> employees,
+    required List<Partner> partners,
+    required GeneralDiscountConfig general,
+  }) {
+    return showDialog<AppliedDiscountDetails>(
+      context: context,
+      builder: (_) => _DiscountDialog(
+        key: ValueKey('discount-${order.id}'),
+        repository: _repository,
+        order: order,
+        amount: amount,
+        employees: employees,
+        partners: partners,
+        generalDiscount: general,
+      ),
+    );
   }
 
   @override
@@ -989,6 +1082,7 @@ class _PaymentSheetFrame extends StatelessWidget {
 
 class _PaymentMethodSheet extends StatefulWidget {
   const _PaymentMethodSheet({
+    super.key,
     required this.title,
     required this.subtitle,
     required this.total,
@@ -1224,6 +1318,7 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
 
 class _PartialPaymentSheet extends StatefulWidget {
   const _PartialPaymentSheet({
+    super.key,
     required this.order,
     required this.onPreparedDiscount,
     required this.onApplyDiscount,
@@ -1578,6 +1673,7 @@ class _DiscountSummary extends StatelessWidget {
 
 class _DiscountDialog extends StatefulWidget {
   const _DiscountDialog({
+    super.key,
     required this.repository,
     required this.order,
     required this.amount,
@@ -1838,6 +1934,7 @@ typedef _NetAmountCallback = double Function(double grossAmount);
 
 class _PeoplePaymentSheet extends StatefulWidget {
   const _PeoplePaymentSheet({
+    super.key,
     required this.order,
     required this.items,
     required this.employees,

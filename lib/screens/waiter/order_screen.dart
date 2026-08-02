@@ -260,7 +260,12 @@ class _OrderScreenState extends State<OrderScreen> {
     setState(() => _busy = false);
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => PaymentScreen(orderId: _boundOrderId)),
+      MaterialPageRoute(
+        builder: (_) => PaymentScreen(
+          key: ValueKey('payment-$_boundOrderId'),
+          orderId: _boundOrderId,
+        ),
+      ),
     );
     if (!mounted) {
       return;
@@ -278,7 +283,13 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _showKitchenPendingDialog() async {
-    final pendingItems = _loadedItems.where(isKitchenPendingItem).toList();
+    final pendingItems = _loadedItems
+        .where(
+          (item) =>
+              isKitchenPendingItem(item) || itemIsAwaitingKitchenSend(item),
+        )
+        .toList();
+    final awaitingSend = pendingItems.any(itemIsAwaitingKitchenSend);
     final pendingCount = pendingItems.fold<int>(0, (total, item) {
       return total + (item.qty <= 0 ? 1 : item.qty);
     });
@@ -292,10 +303,16 @@ class _OrderScreenState extends State<OrderScreen> {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Hay productos pendientes en cocina'),
+        title: Text(
+          awaitingSend
+              ? 'Hay productos pendientes de enviar a cocina'
+              : 'Hay productos pendientes en cocina',
+        ),
         content: Text(
-          'No se puede cobrar todavia. Hay $pendingCount $productWord en Cocina.'
-          '${details.isEmpty ? '' : '\n\n$details'}',
+          awaitingSend
+              ? 'No se puede cobrar todavia. Hay $pendingCount $productWord pendientes de enviar a Cocina.'
+              : 'No se puede cobrar todavia. Hay $pendingCount $productWord en Cocina.'
+                    '${details.isEmpty ? '' : '\n\n$details'}',
         ),
         actions: [
           TextButton(
@@ -1652,9 +1669,11 @@ class _TopOrderActions extends StatelessWidget {
     final sendLabel = pendingKitchenCount == 0
         ? 'Cocina al dia'
         : hadKitchenSend
-        ? 'Enviar extras'
-        : 'Enviar cocina';
+        ? 'Enviar orden extra'
+        : 'Enviar a Cocina';
     final hasKitchenPending = items.any(isKitchenPendingItem);
+    final hasKitchenWorkBeforeCheckout =
+        hasKitchenPending || pendingKitchenCount > 0;
     final canCloseEmpty =
         currentOrder != null &&
         currentOrder.status == 'open' &&
@@ -1667,8 +1686,10 @@ class _TopOrderActions extends StatelessWidget {
         currentOrder.total > 0 &&
         !busy &&
         itemsLoaded;
-    final chargeLabel = hasKitchenPending
-        ? 'Hay productos pendientes en cocina'
+    final chargeLabel = hasKitchenWorkBeforeCheckout
+        ? pendingKitchenCount > 0
+              ? 'Hay productos pendientes de enviar a cocina'
+              : 'Hay productos pendientes en cocina'
         : !canCharge
         ? 'No tienes permiso para cobrar'
         : 'Cobrar';
@@ -1730,7 +1751,7 @@ class _TopOrderActions extends StatelessWidget {
               child: _CompactHeaderAction(
                 onPressed: !canAttemptCharge
                     ? null
-                    : hasKitchenPending
+                    : hasKitchenWorkBeforeCheckout
                     ? onBlockedPayment
                     : onOpenPayment,
                 icon: const Icon(Icons.point_of_sale_outlined),
@@ -1785,7 +1806,7 @@ class _TopOrderActions extends StatelessWidget {
             child: FilledButton.icon(
               onPressed: !canAttemptCharge
                   ? null
-                  : hasKitchenPending
+                  : hasKitchenWorkBeforeCheckout
                   ? onBlockedPayment
                   : onOpenPayment,
               icon: const Icon(Icons.point_of_sale_outlined),

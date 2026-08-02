@@ -6668,6 +6668,49 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
     );
   }
 
+  Future<void> _reconcilePartialCancellation(_SaleDetailData detail) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Reconciliar cancelacion parcial'),
+        content: const Text(
+          'Se leeran nuevamente los articulos de la venta, se quitaran los datos de cancelacion total de la orden si quedan productos activos y se recalculara el total cobrable. No se crean productos, cobros ni folios.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cerrar'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.sync_outlined),
+            label: const Text('Reconciliar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await widget.repository.reconcilePartialCancellationFromBackoffice(
+        orderId: detail.order.id,
+      );
+      if (!mounted) return;
+      _reload();
+      showAppSnackBar(
+        context,
+        'Cancelacion parcial reconciliada.',
+        type: AppSnackBarType.success,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        error.toString().replaceFirst('Bad state: ', ''),
+        type: AppSnackBarType.error,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -6694,6 +6737,12 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
                 isTerminalCancellationStatus(order.status) ||
                 order.cancelledAt != null ||
                 order.canceledAt != null;
+            final canReconcilePartialCancellation =
+                _canCancelOrders &&
+                isPartialCancellationWithActiveItems(
+                  order: order,
+                  items: items,
+                );
             return SingleChildScrollView(
               padding: const EdgeInsets.all(22),
               child: Column(
@@ -6708,6 +6757,15 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
                               '${order.displayName} | ${_dateTimeText(order.createdAt)}',
                         ),
                       ),
+                      if (canReconcilePartialCancellation) ...[
+                        const SizedBox(width: 10),
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              _reconcilePartialCancellation(detail),
+                          icon: const Icon(Icons.sync_outlined),
+                          label: const Text('Reconciliar parcial'),
+                        ),
+                      ],
                       if (_canCancelOrders && !orderIsCancelled) ...[
                         const SizedBox(width: 10),
                         OutlinedButton.icon(

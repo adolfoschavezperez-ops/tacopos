@@ -52,9 +52,17 @@ export '../core/orders/order_activity.dart'
     show
         isActiveCustomerPayment,
         isActiveOrderItem,
+        activeOrderItems,
+        activeOrderItemsTotal,
+        hasActiveOrderItems,
         isActivePayment,
         isGhostOrder,
+        isPartialCancellationWithActiveItems,
+        awaitingKitchenSendItemsCount,
         hasPendingKitchenItems,
+        hasItemsAwaitingKitchenSend,
+        itemCanBeSentToKitchenBatch,
+        itemIsAwaitingKitchenSend,
         isKitchenPendingItem,
         isKitchenReadyItem,
         itemRequiresKitchen,
@@ -160,6 +168,16 @@ class KitchenOrderBundle {
       ..sort((a, b) => a.key.compareTo(b.key));
     return entries;
   }
+}
+
+class _KitchenSendTransactionResult {
+  const _KitchenSendTransactionResult({
+    required this.order,
+    required this.sentCount,
+  });
+
+  final PosOrder order;
+  final int sentCount;
 }
 
 class LiveStandingOrderBundle {
@@ -460,6 +478,11 @@ class AppliedDiscountDetails {
     required this.amountBeforeDiscount,
     required this.discountAmount,
     required this.totalAfterDiscount,
+    this.orderId,
+    this.restaurantId,
+    this.branchId,
+    this.businessDate,
+    this.totalSnapshot,
     this.authorizedByPartnerId,
     this.authorizedByPartnerName,
     this.authorizedByPartnerLinkedEmployeeId,
@@ -478,6 +501,11 @@ class AppliedDiscountDetails {
   final double amountBeforeDiscount;
   final double discountAmount;
   final double totalAfterDiscount;
+  final String? orderId;
+  final String? restaurantId;
+  final String? branchId;
+  final String? businessDate;
+  final double? totalSnapshot;
   final String? authorizedByPartnerId;
   final String? authorizedByPartnerName;
   final String? authorizedByPartnerLinkedEmployeeId;
@@ -2376,6 +2404,7 @@ class TacoPosRepository {
         throw StateError('El descuento general no esta activo.');
       }
       return _discountDetails(
+        order: order,
         type: 'general',
         name: config.name,
         percent: config.percent,
@@ -2411,6 +2440,7 @@ class TacoPosRepository {
           ? 'Comida empleado del dia'
           : 'Descuento empleado 30%';
       return _discountDetails(
+        order: order,
         type: type,
         name: name,
         percent: percent,
@@ -2459,6 +2489,7 @@ class TacoPosRepository {
           : request.requestedPartnerId;
       final approvedPartner = await _partnerById(approvedPartnerId);
       return _discountDetails(
+        order: order,
         type: type,
         name: 'Familia / amigos 20%',
         percent: 20.0,
@@ -2483,6 +2514,7 @@ class TacoPosRepository {
         throw StateError('PIN incorrecto. No se aplico descuento.');
       }
       return _discountDetails(
+        order: order,
         type: type,
         name: 'Socio 50%',
         percent: 50.0,
@@ -2576,6 +2608,7 @@ class TacoPosRepository {
   }
 
   AppliedDiscountDetails _discountDetails({
+    required PosOrder order,
     required String type,
     required String name,
     required double percent,
@@ -2604,6 +2637,11 @@ class TacoPosRepository {
       amountBeforeDiscount: amountBeforeDiscount,
       discountAmount: discountAmount,
       totalAfterDiscount: totalAfterDiscount.toDouble(),
+      orderId: order.id,
+      restaurantId: order.restaurantId,
+      branchId: order.branchId,
+      businessDate: _businessDateForOrder(order),
+      totalSnapshot: order.total,
       authorizedByPartnerId: authorizedByPartnerId,
       authorizedByPartnerName: authorizedByPartnerName,
       authorizedByPartnerLinkedEmployeeId: authorizedByPartnerLinkedEmployeeId,
@@ -9711,6 +9749,9 @@ class TacoPosRepository {
       throw StateError('El articulo ya no existe.');
     }
     final item = OrderItem.fromDoc(itemDoc);
+    if (item.isCancelled) {
+      return;
+    }
     if (item.kitchenStatus == 'ready') {
       throw StateError(
         'Este producto ya fue servido por cocina y no puede cancelarse.',
@@ -9735,14 +9776,10 @@ class TacoPosRepository {
       ..._employeeAuditFields(prefix: 'cancelledBy'),
       'updatedAt': FieldValue.serverTimestamp(),
     });
-    await recalculateOrderTotal(orderId);
-    final ghostRepair = await _autoCancelGhostOrderIfNeeded(
+    await _reconcileOrderAfterItemCancellation(
       orderId,
-      triggeredBy: 'last_item_cancelled',
+      reason: 'order_item_cancelled',
     );
-    if (ghostRepair == null) {
-      await _syncOrderKitchenStateAfterItemChange(orderId);
-    }
     await _restaurantRef.collection('activityLog').add({
       'type': 'order_item_cancelled',
       ..._currentBranchFields,
@@ -9814,6 +9851,9 @@ class TacoPosRepository {
     if (!item.hasCancellationRequested) {
       throw StateError('Este articulo no tiene cancelacion solicitada.');
     }
+    if (item.isCancelled) {
+      return;
+    }
     if (accepted) {
       await _ensureCancellationKeepsPaymentsValid(orderId, item);
       final now = FieldValue.serverTimestamp();
@@ -9828,24 +9868,10 @@ class TacoPosRepository {
         ..._employeeAuditFields(prefix: 'cancelledBy'),
         'updatedAt': now,
       });
-      await recalculateOrderTotal(orderId);
-      final ghostRepair = await _autoCancelGhostOrderIfNeeded(
+      await _reconcileOrderAfterItemCancellation(
         orderId,
-        triggeredBy: 'kitchen_cancellation_accepted',
+        reason: 'kitchen_cancellation_accepted',
       );
-      if (ghostRepair == null) {
-        await _syncOrderKitchenStateAfterItemChange(orderId);
-        final orderDoc = await _ordersRef.doc(orderId).get();
-        if (orderDoc.exists) {
-          final order = PosOrder.fromDoc(orderDoc);
-          await reconcileOrderTableAndKitchenState(
-            restaurantId: order.restaurantId,
-            branchId: order.branchId,
-            orderId: order.id,
-            reason: 'kitchen_cancellation_accepted',
-          );
-        }
-      }
       return;
     }
 
@@ -9861,6 +9887,151 @@ class TacoPosRepository {
     await _ordersRef.doc(orderId).update({
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  Future<void> _reconcileOrderAfterItemCancellation(
+    String orderId, {
+    required String reason,
+  }) async {
+    final orderRef = _ordersRef.doc(orderId);
+    final orderDoc = await orderRef.get();
+    if (!orderDoc.exists) {
+      throw StateError('La orden ya no existe.');
+    }
+    final order = PosOrder.fromDoc(orderDoc);
+    final itemsSnapshot = await orderRef.collection('items').get();
+    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
+    final activeItems = activeOrderItems(items);
+
+    if (activeItems.isEmpty) {
+      await recalculateOrderTotal(orderId);
+      final ghostRepair = await _autoCancelGhostOrderIfNeeded(
+        orderId,
+        triggeredBy: reason,
+      );
+      if (ghostRepair == null) {
+        await _syncOrderKitchenStateAfterItemChange(orderId);
+      }
+      return;
+    }
+
+    final payments = await getOrderPaymentsOnce(orderId);
+    final paidTotal = payments
+        .where((payment) => payment.isActive)
+        .fold<double>(0, (total, payment) => total + payment.baseAmount);
+    final grossSubtotal = activeOrderItemsTotal(activeItems);
+    final discountAmount = order.explicitDiscount
+        .clamp(0, grossSubtotal)
+        .toDouble();
+    final netTotal = (grossSubtotal - discountAmount)
+        .clamp(0, double.infinity)
+        .toDouble();
+    final adjustedPaidTotal = paidTotal.clamp(0, netTotal).toDouble();
+    final pendingTotal = (netTotal - adjustedPaidTotal)
+        .clamp(0, double.infinity)
+        .toDouble();
+    final nextPaymentStatus = adjustedPaidTotal <= 0
+        ? 'pending'
+        : pendingTotal <= 0.01
+        ? 'paid'
+        : 'partial';
+    final nextKitchenStatus = kitchenStatusForItems(items);
+    final nextOrderStatus = _orderStatusForKitchenState(
+      nextKitchenStatus,
+      hasActiveBillableItems: true,
+    );
+    final pendingKitchenItems = items.where(isKitchenPendingItem).toList();
+    final batchesSnapshot = await orderRef.collection('kitchenBatches').get();
+    final now = FieldValue.serverTimestamp();
+    final batch = _db.batch();
+
+    batch.update(orderRef, {
+      'status': nextOrderStatus,
+      'kitchenStatus': nextKitchenStatus,
+      'paymentStatus': nextPaymentStatus,
+      'total': grossSubtotal,
+      'grossSubtotal': grossSubtotal,
+      'netTotal': netTotal,
+      'paidTotal': adjustedPaidTotal,
+      'pendingTotal': pendingTotal,
+      'hasPendingKitchenItems': pendingKitchenItems.isNotEmpty,
+      'pendingKitchenItemsCount': pendingKitchenItems.length,
+      'cancelStatus': 'none',
+      'cancelReason': FieldValue.delete(),
+      'cancelledAt': FieldValue.delete(),
+      'canceledAt': FieldValue.delete(),
+      'cancelledByEmployeeId': FieldValue.delete(),
+      'cancelledByEmployeeName': FieldValue.delete(),
+      'updatedAt': now,
+    });
+
+    for (final batchDoc in batchesSnapshot.docs) {
+      final batchId = batchDoc.id.trim();
+      if (batchId.isEmpty) continue;
+      final itemsInBatch = items
+          .where((item) => item.kitchenBatchId?.trim() == batchId)
+          .toList();
+      if (itemsInBatch.isEmpty) continue;
+      final activeInBatch = activeOrderItems(itemsInBatch);
+      if (activeInBatch.isEmpty) {
+        batch.set(batchDoc.reference, {
+          'status': 'cancelled',
+          'itemCount': 0,
+          'activeItemCount': 0,
+          'cancelledAt': now,
+          'cancelReason': 'Todos los productos del batch fueron cancelados',
+          ..._employeeAuditFields(prefix: 'cancelledBy'),
+          'updatedAt': now,
+        }, SetOptions(merge: true));
+        continue;
+      }
+      batch.set(batchDoc.reference, {
+        'status': _kitchenBatchStatusForItems(activeInBatch),
+        'itemCount': activeInBatch.length,
+        'activeItemCount': activeInBatch.length,
+        'cancelledAt': FieldValue.delete(),
+        'cancelReason': FieldValue.delete(),
+        'updatedAt': now,
+      }, SetOptions(merge: true));
+    }
+
+    _setLinkedTablesStateInBatch(batch, order, status: 'occupied');
+    _logActivityInBatch(
+      batch,
+      type: 'partial_item_cancellation_reconciled',
+      orderId: order.id,
+      data: {
+        'actionType': 'partial_item_cancellation_reconciled',
+        'reason': reason,
+        'activeItemsCount': activeItems.length,
+        'cancelledItemsCount': items.length - activeItems.length,
+        'grossSubtotal': grossSubtotal,
+        'netTotal': netTotal,
+        'pendingTotal': pendingTotal,
+        'previousOrderStatus': order.status,
+        'newOrderStatus': nextOrderStatus,
+        'previousKitchenStatus': order.kitchenStatus,
+        'newKitchenStatus': nextKitchenStatus,
+        'message':
+            'Se reconcilio una cancelacion parcial conservando los productos activos.',
+      },
+    );
+    await batch.commit();
+    invalidateReportDataCache(
+      branchId: order.branchId,
+      startBusinessDate: order.businessDate,
+      endBusinessDate: order.businessDate,
+    );
+  }
+
+  String _kitchenBatchStatusForItems(Iterable<OrderItem> items) {
+    final status = kitchenStatusForItems(items);
+    return switch (status) {
+      'cooking' => 'cooking',
+      'ready' => 'ready',
+      'sent' || 'pending' => 'sent',
+      _ => 'sent',
+    };
   }
 
   Future<void> _syncOrderKitchenStateAfterItemChange(String orderId) async {
@@ -10096,44 +10267,74 @@ class TacoPosRepository {
 
   Future<int> sendOrderToKitchen(String orderId) async {
     _requireTakeOrders();
-    final itemsSnapshot = await _ordersRef
-        .doc(orderId)
-        .collection('items')
-        .get();
-    final batch = _db.batch();
-    final kitchenBatchId = _ordersRef
-        .doc(orderId)
-        .collection('kitchenBatches')
-        .doc()
-        .id;
-    final batchCreatedAt = Timestamp.now();
-    final allItems = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
-    final isExpressBatch = allItems.any((item) {
-      if (!item.sendToKitchen || item.isCancelled) return false;
-      final status = normalizeStatus(item.kitchenStatus);
-      final batchId = item.kitchenBatchId?.trim();
-      return batchId != null &&
-          batchId.isNotEmpty &&
-          {'sent', 'cooking', 'ready'}.contains(status);
-    });
-    final kitchenBatchType = isExpressBatch ? 'express' : 'initial';
-    final kitchenBatchLabel = isExpressBatch
-        ? 'Surtido express'
-        : 'Orden inicial';
-    var sentCount = 0;
+    final orderRef = _ordersRef.doc(orderId);
+    final itemRefs = (await orderRef.collection('items').get()).docs
+        .map((doc) => doc.reference)
+        .toList(growable: false);
+    if (itemRefs.isEmpty) return 0;
 
-    for (final doc in itemsSnapshot.docs) {
-      final item = OrderItem.fromDoc(doc);
-      final shouldAttachToBatch =
-          item.kitchenBatchId == null &&
-          item.paymentStatus == 'pending' &&
-          (item.kitchenStatus == 'pending' ||
-              item.kitchenStatus == 'not_required');
-      if (isActiveOrderItem(item) &&
-          itemRequiresKitchen(item) &&
-          normalizeStatus(item.kitchenStatus) == 'pending') {
-        sentCount += 1;
-        batch.update(doc.reference, {
+    final result = await _db.runTransaction<_KitchenSendTransactionResult>((
+      transaction,
+    ) async {
+      final orderDoc = await transaction.get(orderRef);
+      if (!orderDoc.exists) {
+        throw StateError('La orden ya no existe.');
+      }
+      final order = PosOrder.fromDoc(orderDoc);
+      if (isCancelledOrder(order) || isPaidOrder(order)) {
+        return _KitchenSendTransactionResult(order: order, sentCount: 0);
+      }
+
+      final itemDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final ref in itemRefs) {
+        final doc = await transaction.get(ref);
+        if (doc.exists) itemDocs.add(doc);
+      }
+      final allItems = itemDocs.map(OrderItem.fromDoc).toList();
+      final itemsToSend = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final doc in itemDocs) {
+        final item = OrderItem.fromDoc(doc);
+        if (itemCanBeSentToKitchenBatch(item)) {
+          itemsToSend.add(doc);
+        }
+      }
+      if (itemsToSend.isEmpty) {
+        return _KitchenSendTransactionResult(order: order, sentCount: 0);
+      }
+
+      final isExpressBatch = allItems.any((item) {
+        if (!item.sendToKitchen || item.isCancelled) return false;
+        final status = normalizeStatus(item.kitchenStatus);
+        final batchId = item.kitchenBatchId?.trim();
+        return batchId != null &&
+            batchId.isNotEmpty &&
+            {'sent', 'cooking', 'ready'}.contains(status);
+      });
+      final kitchenBatchType = isExpressBatch ? 'express' : 'initial';
+      final kitchenBatchLabel = isExpressBatch
+          ? 'Orden extra'
+          : 'Orden inicial';
+      final kitchenBatchId = orderRef.collection('kitchenBatches').doc().id;
+      final batchCreatedAt = Timestamp.now();
+
+      transaction
+          .set(orderRef.collection('kitchenBatches').doc(kitchenBatchId), {
+            'restaurantId': order.restaurantId,
+            'restaurantName': order.restaurantName,
+            'branchId': order.branchId,
+            'branchName': order.branchName,
+            'orderId': order.id,
+            'status': 'sent',
+            'type': kitchenBatchType,
+            'label': kitchenBatchLabel,
+            'itemCount': itemsToSend.length,
+            'createdAt': batchCreatedAt,
+            'updatedAt': FieldValue.serverTimestamp(),
+            ..._employeeAuditFields(prefix: 'createdBy'),
+          });
+
+      for (final doc in itemsToSend) {
+        transaction.update(doc.reference, {
           'kitchenStatus': 'sent',
           'kitchenBatchId': kitchenBatchId,
           'kitchenBatchCreatedAt': batchCreatedAt,
@@ -10147,49 +10348,36 @@ class TacoPosRepository {
           'sentToKitchenAt': batchCreatedAt,
           'updatedAt': FieldValue.serverTimestamp(),
         });
-      } else if (shouldAttachToBatch) {
-        batch.update(doc.reference, {
-          'kitchenBatchId': kitchenBatchId,
-          'kitchenBatchCreatedAt': batchCreatedAt,
-          'batchCreatedAt': batchCreatedAt,
-          'isKitchenExpress': false,
-          'expressReason': '',
-          'expressPriority': false,
-          'kitchenBatchType': kitchenBatchType,
-          'kitchenBatchLabel': kitchenBatchLabel,
-          'sentToKitchenAt': batchCreatedAt,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
       }
-    }
 
-    if (sentCount == 0) {
+      transaction.update(orderRef, {
+        'status': 'sent',
+        'kitchenStatus': 'sent',
+        'lastKitchenBatchId': kitchenBatchId,
+        'lastKitchenBatchType': kitchenBatchType,
+        'lastKitchenBatchLabel': kitchenBatchLabel,
+        if (order.sentToKitchenAt == null) 'sentToKitchenAt': batchCreatedAt,
+        'lastSentToKitchenAt': batchCreatedAt,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      _setLinkedTablesStateInTransaction(transaction, order, status: 'sent');
+      return _KitchenSendTransactionResult(
+        order: order,
+        sentCount: itemsToSend.length,
+      );
+    });
+
+    if (result.sentCount == 0) {
       return 0;
     }
 
-    final orderDoc = await _ordersRef.doc(orderId).get();
-    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
-    batch.update(_ordersRef.doc(orderId), {
-      'status': 'sent',
-      'kitchenStatus': 'sent',
-      'lastKitchenBatchId': kitchenBatchId,
-      'lastKitchenBatchType': kitchenBatchType,
-      'lastKitchenBatchLabel': kitchenBatchLabel,
-      'sentToKitchenAt': batchCreatedAt,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
-    if (order != null) {
-      _setLinkedTablesStateInBatch(batch, order, status: 'sent');
-    }
-
-    await batch.commit();
     invalidateReportDataCache(
-      branchId: order?.branchId,
-      startBusinessDate: order?.businessDate,
-      endBusinessDate: order?.businessDate,
+      branchId: result.order.branchId,
+      startBusinessDate: result.order.businessDate,
+      endBusinessDate: result.order.businessDate,
     );
-    return sentCount;
+    return result.sentCount;
   }
 
   Future<void> updateKitchenStatus({
@@ -10443,7 +10631,11 @@ class TacoPosRepository {
       amountBeforeDiscount: baseAmount,
       remainingGrossSubtotal: baseAmount,
     );
-    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
+    await _ensureDiscountAuthorizationStillUsable(
+      effectiveDiscount,
+      order,
+      baseAmount,
+    );
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final paymentData = _paymentData(
       order: order,
@@ -10530,7 +10722,11 @@ class TacoPosRepository {
       amountBeforeDiscount: baseAmount,
       remainingGrossSubtotal: remainingGrossSubtotal,
     );
-    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
+    await _ensureDiscountAuthorizationStillUsable(
+      effectiveDiscount,
+      order,
+      baseAmount,
+    );
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final selectedItemDocs = itemsSnapshot.docs.where((doc) {
       final item = OrderItem.fromDoc(doc);
@@ -10688,7 +10884,11 @@ class TacoPosRepository {
       amountBeforeDiscount: baseAmount,
       remainingGrossSubtotal: remainingGrossSubtotal,
     );
-    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
+    await _ensureDiscountAuthorizationStillUsable(
+      effectiveDiscount,
+      order,
+      baseAmount,
+    );
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final selectedItemDocs = itemsSnapshot.docs.where((doc) {
       final item = OrderItem.fromDoc(doc);
@@ -10811,7 +11011,11 @@ class TacoPosRepository {
       amountBeforeDiscount: baseAmount,
       remainingGrossSubtotal: order.pendingTotal,
     );
-    await _ensureDiscountAuthorizationStillUsable(effectiveDiscount, order);
+    await _ensureDiscountAuthorizationStillUsable(
+      effectiveDiscount,
+      order,
+      baseAmount,
+    );
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
     final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
@@ -11111,6 +11315,11 @@ class TacoPosRepository {
       totalAfterDiscount: roundCheckoutMoney(
         amountBeforeDiscount - discountAmount,
       ),
+      orderId: order.id,
+      restaurantId: order.restaurantId,
+      branchId: order.branchId,
+      businessDate: _businessDateForOrder(order),
+      totalSnapshot: order.total,
     );
   }
 
@@ -11936,6 +12145,23 @@ class TacoPosRepository {
     }
   }
 
+  void _setLinkedTablesStateInTransaction(
+    Transaction transaction,
+    PosOrder order, {
+    String? status,
+  }) {
+    if (!orderUsesPhysicalTables(order)) return;
+    for (final tableId in order.linkedTableIds.toSet()) {
+      transaction.set(_tablesRef.doc(tableId), {
+        'status': 'occupied',
+        'currentOrderId': order.id,
+        'currentOrderStatus': status ?? order.status,
+        ..._currentBranchFields,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+  }
+
   void _setPayment({
     required WriteBatch batch,
     required DocumentReference<Map<String, dynamic>> paymentRef,
@@ -12235,7 +12461,13 @@ class TacoPosRepository {
   Future<void> _ensureDiscountAuthorizationStillUsable(
     AppliedDiscountDetails? discount,
     PosOrder order,
+    double expectedAmountBeforeDiscount,
   ) async {
+    _ensurePaymentDiscountMatchesOrder(
+      order: order,
+      discount: discount,
+      expectedAmountBeforeDiscount: expectedAmountBeforeDiscount,
+    );
     final requestId = discount?.discountAuthorizationRequestId?.trim();
     if (requestId == null || requestId.isEmpty) {
       return;
@@ -12247,6 +12479,36 @@ class TacoPosRepository {
     final request = DiscountAuthorizationRequest.fromDoc(doc);
     if (request.orderId != order.id || !request.isUsable) {
       throw StateError('La autorización ya fue usada o ya no está vigente.');
+    }
+  }
+
+  void _ensurePaymentDiscountMatchesOrder({
+    required PosOrder order,
+    required AppliedDiscountDetails? discount,
+    required double expectedAmountBeforeDiscount,
+  }) {
+    if (discount == null) return;
+    final mismatch = validateCheckoutDraftScope(
+      currentOrderId: order.id,
+      currentRestaurantId: order.restaurantId,
+      currentBranchId: order.branchId,
+      currentBusinessDate: _businessDateForOrder(order),
+      currentOrderTotal: order.total,
+      currentSelectedAmount: expectedAmountBeforeDiscount,
+      draftOrderId: discount.orderId,
+      draftRestaurantId: discount.restaurantId,
+      draftBranchId: discount.branchId,
+      draftBusinessDate: discount.businessDate,
+      draftTotalSnapshot: discount.totalSnapshot,
+      draftAmountBeforeDiscount: discount.amountBeforeDiscount,
+    );
+    if (mismatch != null) throw StateError(mismatch);
+    if ((discount.discountAmount +
+                discount.totalAfterDiscount -
+                discount.amountBeforeDiscount)
+            .abs() >
+        0.02) {
+      throw StateError(checkoutScopeMismatchMessage);
     }
   }
 
@@ -12798,6 +13060,44 @@ class TacoPosRepository {
     return result;
   }
 
+  Future<BackofficeCancellationResult>
+  reconcilePartialCancellationFromBackoffice({required String orderId}) async {
+    _requireBackofficeCancelOrders();
+    final orderRef = _ordersRef.doc(orderId);
+    final initialOrderDoc = await orderRef.get();
+    if (!initialOrderDoc.exists) {
+      throw StateError('La orden ya no existe.');
+    }
+    final initialOrder = PosOrder.fromDoc(initialOrderDoc);
+    final initialItemsSnapshot = await orderRef.collection('items').get();
+    final initialItems = initialItemsSnapshot.docs.map(OrderItem.fromDoc);
+    if (!isPartialCancellationWithActiveItems(
+      order: initialOrder,
+      items: initialItems,
+    )) {
+      throw StateError(
+        'La orden no requiere reconciliacion de cancelacion parcial.',
+      );
+    }
+
+    await _reconcileOrderAfterItemCancellation(
+      orderId,
+      reason: 'backoffice_partial_cancellation_reconcile',
+    );
+
+    final updatedOrderDoc = await orderRef.get();
+    final updatedOrder = updatedOrderDoc.exists
+        ? PosOrder.fromDoc(updatedOrderDoc)
+        : initialOrder;
+    return BackofficeCancellationResult(
+      affectedClosedCashSession: false,
+      previousPaidTotal: initialOrder.paidTotal,
+      newPaidTotal: updatedOrder.paidTotal,
+      previousPendingTotal: initialOrder.pendingTotal,
+      newPendingTotal: updatedOrder.pendingTotal,
+    );
+  }
+
   Future<String?> _closedCashSessionIdForSale({
     required PosOrder order,
     required Iterable<Payment> payments,
@@ -12940,10 +13240,16 @@ class TacoPosRepository {
     if (order == null) {
       return;
     }
-    final newTotal = (order.total - cancellingItem.total).clamp(
-      0,
-      double.infinity,
+    final items = await getOrderItemsOnce(orderId);
+    final remainingTotal = activeOrderItemsTotal(
+      items.where((item) => item.id != cancellingItem.id),
     );
+    final discountAmount = order.explicitDiscount
+        .clamp(0, remainingTotal)
+        .toDouble();
+    final newTotal = (remainingTotal - discountAmount)
+        .clamp(0, double.infinity)
+        .toDouble();
     final payments = await getOrderPaymentsOnce(orderId);
     final paidTotal = payments
         .where((payment) => payment.isActive)
@@ -13246,22 +13552,27 @@ class TacoPosRepository {
         .collection('items')
         .get();
     final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
-    final total = items
-        .where((item) => !item.isCancelled)
-        .fold<double>(0, (runningTotal, item) => runningTotal + item.total);
+    final total = activeOrderItemsTotal(items);
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
     final payments = await getOrderPaymentsOnce(orderId);
     final paidTotal = payments
         .where((payment) => payment.isActive)
         .fold<double>(0, (total, payment) => total + payment.baseAmount);
-    final adjustedPending = (total - paidTotal).clamp(0, double.infinity);
+    final discountAmount = (order?.explicitDiscount ?? 0)
+        .clamp(0, total)
+        .toDouble();
+    final netTotal = (total - discountAmount).clamp(0, double.infinity);
+    final adjustedPaid = paidTotal.clamp(0, netTotal).toDouble();
+    final adjustedPending = (netTotal - adjustedPaid).clamp(0, double.infinity);
 
     await _ordersRef.doc(orderId).update({
       'total': total,
-      'paidTotal': paidTotal,
+      'grossSubtotal': total,
+      'netTotal': netTotal,
+      'paidTotal': adjustedPaid,
       'pendingTotal': adjustedPending,
-      'paymentStatus': paidTotal <= 0
+      'paymentStatus': adjustedPaid <= 0
           ? 'pending'
           : adjustedPending <= 0.01
           ? 'paid'

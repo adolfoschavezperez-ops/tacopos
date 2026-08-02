@@ -231,4 +231,103 @@ void main() {
       );
     });
   });
+
+  group('checkout draft scope isolation', () {
+    test('rechaza el caso exacto A \$66 aplicado sobre B \$124', () {
+      final mismatch = validateCheckoutDraftScope(
+        currentOrderId: 'nwV6kA',
+        currentRestaurantId: 'main_restaurant',
+        currentBranchId: 'aviacion',
+        currentBusinessDate: '2026-07-31',
+        currentOrderTotal: 124,
+        currentSelectedAmount: 124,
+        draftOrderId: 'orden-a-66',
+        draftRestaurantId: 'main_restaurant',
+        draftBranchId: 'aviacion',
+        draftBusinessDate: '2026-07-31',
+        draftTotalSnapshot: 66,
+        draftAmountBeforeDiscount: 66,
+      );
+
+      expect(mismatch, checkoutScopeMismatchMessage);
+    });
+
+    test(
+      'rechaza respuesta tardia aunque el importe seleccionado coincida',
+      () {
+        final mismatch = validateCheckoutDraftScope(
+          currentOrderId: 'orden-b',
+          currentOrderTotal: 66,
+          currentSelectedAmount: 66,
+          draftOrderId: 'orden-a',
+          draftTotalSnapshot: 66,
+          draftAmountBeforeDiscount: 66,
+        );
+
+        expect(mismatch, checkoutScopeMismatchMessage);
+      },
+    );
+
+    test('rechaza cambio de mesa/sucursal aunque el total sea igual', () {
+      final mismatch = validateCheckoutDraftScope(
+        currentOrderId: 'orden-b',
+        currentRestaurantId: 'main_restaurant',
+        currentBranchId: 'aviacion',
+        currentOrderTotal: 124,
+        currentSelectedAmount: 124,
+        draftOrderId: 'orden-b',
+        draftRestaurantId: 'main_restaurant',
+        draftBranchId: 'otra_sucursal',
+        draftTotalSnapshot: 124,
+        draftAmountBeforeDiscount: 124,
+      );
+
+      expect(mismatch, checkoutScopeMismatchMessage);
+    });
+
+    test('rechaza rebuild con snapshot de total anterior', () {
+      final mismatch = validateCheckoutDraftScope(
+        currentOrderId: 'orden-b',
+        currentOrderTotal: 124,
+        currentSelectedAmount: 124,
+        draftOrderId: 'orden-b',
+        draftTotalSnapshot: 66,
+        draftAmountBeforeDiscount: 124,
+      );
+
+      expect(mismatch, checkoutScopeMismatchMessage);
+    });
+
+    test('rechaza seleccion por persona residual de otra orden', () {
+      final mismatch = validateCheckoutDraftScope(
+        currentOrderId: 'orden-b',
+        currentOrderTotal: 124,
+        currentSelectedAmount: 58,
+        draftOrderId: 'orden-a',
+        draftTotalSnapshot: 66,
+        draftAmountBeforeDiscount: 66,
+      );
+
+      expect(mismatch, checkoutScopeMismatchMessage);
+    });
+
+    test('acepta borrador vigente de la misma orden y alcance', () {
+      final mismatch = validateCheckoutDraftScope(
+        currentOrderId: 'nwV6kA',
+        currentRestaurantId: 'main_restaurant',
+        currentBranchId: 'aviacion',
+        currentBusinessDate: '2026-07-31',
+        currentOrderTotal: 124,
+        currentSelectedAmount: 124,
+        draftOrderId: 'nwV6kA',
+        draftRestaurantId: 'main_restaurant',
+        draftBranchId: 'aviacion',
+        draftBusinessDate: '2026-07-31',
+        draftTotalSnapshot: 124,
+        draftAmountBeforeDiscount: 124,
+      );
+
+      expect(mismatch, isNull);
+    });
+  });
 }
