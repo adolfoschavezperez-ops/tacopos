@@ -101,8 +101,9 @@ AppUpdatePolicyStatus evaluateCanonicalAppUpdatePolicy({
 }) {
   if (active != true) return AppUpdatePolicyStatus.upToDate;
   final belowMinimum = currentVersionCode < minimumSupportedVersionCode;
-  final forceRequiresMinimum = forceUpdate == true && belowMinimum;
-  if (belowMinimum || forceRequiresMinimum) {
+  final forceRequiresRecommended =
+      forceUpdate == true && currentVersionCode < recommendedVersionCode;
+  if (belowMinimum || forceRequiresRecommended) {
     return AppUpdatePolicyStatus.required;
   }
   if (currentVersionCode < recommendedVersionCode) {

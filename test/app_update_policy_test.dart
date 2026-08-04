@@ -4,6 +4,8 @@ import 'package:tacopos/services/app_update_service.dart';
 import 'package:tacopos/services/device_registry_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('evaluateAppUpdatePolicy', () {
     test(
       'canonical policy returns upToDate for current 3 minimum 3 recommended 3',
@@ -47,7 +49,7 @@ void main() {
       expect(status, AppUpdatePolicyStatus.required);
     });
 
-    test('canonical policy forceUpdate requires only below minimum', () {
+    test('canonical policy forceUpdate requires below recommended', () {
       final required = evaluateCanonicalAppUpdatePolicy(
         currentVersionCode: 3,
         active: true,
@@ -64,7 +66,7 @@ void main() {
       );
 
       expect(required, AppUpdatePolicyStatus.required);
-      expect(upToDate, AppUpdatePolicyStatus.recommended);
+      expect(upToDate, AppUpdatePolicyStatus.required);
     });
 
     test('canonical policy active false is upToDate', () {
@@ -125,7 +127,7 @@ void main() {
       expect(decision.canContinue, isFalse);
     });
 
-    test('forceUpdate does not block versions that meet the minimum', () {
+    test('forceUpdate blocks versions below recommended', () {
       final decision = evaluateAppUpdatePolicy(
         const AppUpdatePolicyInput(
           currentVersionCode: 2,
@@ -136,10 +138,61 @@ void main() {
         ),
       );
 
-      expect(decision.severity, AppUpdateSeverity.recommended);
-      expect(decision.canContinue, isTrue);
+      expect(decision.severity, AppUpdateSeverity.required);
+      expect(decision.canContinue, isFalse);
       expect(decision.message, isNotEmpty);
     });
+
+    test(
+      'installed 10 minimum 10 recommended 11 force false does not block',
+      () {
+        final decision = evaluateAppUpdatePolicy(
+          const AppUpdatePolicyInput(
+            currentVersionCode: 10,
+            minimumSupportedVersionCode: 10,
+            recommendedVersionCode: 11,
+            forceUpdate: false,
+            updateMessage: 'Nueva version disponible',
+          ),
+        );
+
+        expect(decision.severity, AppUpdateSeverity.recommended);
+        expect(decision.canContinue, isTrue);
+      },
+    );
+
+    test('installed 10 minimum 10 recommended 11 force true blocks', () {
+      final decision = evaluateAppUpdatePolicy(
+        const AppUpdatePolicyInput(
+          currentVersionCode: 10,
+          minimumSupportedVersionCode: 10,
+          recommendedVersionCode: 11,
+          forceUpdate: true,
+          updateMessage: 'Actualizacion requerida',
+        ),
+      );
+
+      expect(decision.severity, AppUpdateSeverity.required);
+      expect(decision.canContinue, isFalse);
+    });
+
+    test(
+      'installed 11 minimum 10 recommended 11 force true does not block',
+      () {
+        final decision = evaluateAppUpdatePolicy(
+          const AppUpdatePolicyInput(
+            currentVersionCode: 11,
+            minimumSupportedVersionCode: 10,
+            recommendedVersionCode: 11,
+            forceUpdate: true,
+            updateMessage: '',
+          ),
+        );
+
+        expect(decision.severity, AppUpdateSeverity.none);
+        expect(decision.canContinue, isTrue);
+      },
+    );
 
     test('forceUpdate requires versions below minimum', () {
       final decision = evaluateAppUpdatePolicy(
@@ -335,7 +388,7 @@ void main() {
       expect(telemetryStatus, DeviceUpdateStatus.unknown);
     });
 
-    test('incomplete or invalid config fields fall back without throwing', () {
+    test('incomplete or invalid config fields do not throw or block', () {
       final input = appUpdatePolicyInputFromConfigDataForTest(<String, dynamic>{
         'minimumSupportedVersionCode': 'invalid',
         'recommendedVersionCode': null,
@@ -344,17 +397,176 @@ void main() {
         'rolloutGroups': 'all',
       }, currentVersionCode: 11);
 
-      expect(input.minimumSupportedVersionCode, 1);
-      expect(input.recommendedVersionCode, 1);
+      expect(input.minimumSupportedVersionCode, 11);
+      expect(input.recommendedVersionCode, 11);
       expect(input.forceUpdate, isFalse);
-      expect(
-        input.updateMessage,
-        'Hay una nueva version de TacoPOS disponible.',
-      );
-      expect(input.active, isTrue);
+      expect(input.updateMessage, isEmpty);
+      expect(input.active, isFalse);
       expect(input.enabledRolloutGroups, isEmpty);
       expect(() => evaluateAppUpdatePolicy(input), returnsNormally);
       expect(evaluateAppUpdatePolicy(input).canContinue, isTrue);
     });
   });
+
+  group('AppUpdatePolicyCache', () {
+    setUp(() {
+      resetAppUpdatePolicyMemoryCacheForTest();
+    });
+
+    test('guarda una politica valida localmente', () async {
+      final cache = _MemoryAppUpdatePolicyCache();
+      final policy = _storedPolicy(
+        active: true,
+        minimumSupportedVersionCode: 11,
+        recommendedVersionCode: 11,
+        forceUpdate: true,
+      );
+
+      await cache.save(policy);
+      final restored = await cache.load();
+
+      expect(restored, isNotNull);
+      expect(restored!.active, isTrue);
+      expect(restored.minimumSupportedVersionCode, 11);
+      expect(restored.recommendedVersionCode, 11);
+      expect(restored.forceUpdate, isTrue);
+      expect(restored.updateMessage, 'Actualizacion requerida');
+      expect(restored.fetchedAt, policy.fetchedAt);
+    });
+
+    test('restaura la politica despues de simular reinicio', () async {
+      final cache = _MemoryAppUpdatePolicyCache();
+      await cache.save(
+        _storedPolicy(
+          active: true,
+          minimumSupportedVersionCode: 11,
+          recommendedVersionCode: 11,
+          forceUpdate: false,
+        ),
+      );
+      resetAppUpdatePolicyMemoryCacheForTest();
+
+      final restartedCache = _MemoryAppUpdatePolicyCache(restored: cache.saved);
+      final restored = await restartedCache.load();
+      final decision = evaluateAppUpdatePolicy(
+        restored!.toPolicyInput(currentVersionCode: 10),
+      );
+
+      expect(decision.severity, AppUpdateSeverity.required);
+      expect(decision.canContinue, isFalse);
+    });
+
+    test('mantiene bloqueo sin internet despues del reinicio', () async {
+      final cache = _MemoryAppUpdatePolicyCache();
+      await cache.save(
+        _storedPolicy(
+          active: true,
+          minimumSupportedVersionCode: 11,
+          recommendedVersionCode: 11,
+          forceUpdate: false,
+        ),
+      );
+      resetAppUpdatePolicyMemoryCacheForTest();
+
+      final restored = await _MemoryAppUpdatePolicyCache(
+        restored: cache.saved,
+      ).load();
+      final decision = evaluateAppUpdatePolicy(
+        restored!.toPolicyInput(currentVersionCode: 10),
+      );
+
+      expect(decision.severity, AppUpdateSeverity.required);
+      expect(decision.canContinue, isFalse);
+    });
+
+    test('no bloquea sin internet cuando nunca hubo politica valida', () async {
+      final restored = await _MemoryAppUpdatePolicyCache().load();
+      final decision = restored == null
+          ? evaluateAppUpdatePolicy(
+              const AppUpdatePolicyInput(
+                currentVersionCode: 10,
+                minimumSupportedVersionCode: 10,
+                recommendedVersionCode: 10,
+                forceUpdate: false,
+                updateMessage: '',
+                active: false,
+              ),
+            )
+          : evaluateAppUpdatePolicy(
+              restored.toPolicyInput(currentVersionCode: 10),
+            );
+
+      expect(restored, isNull);
+      expect(decision.canContinue, isTrue);
+      expect(decision.severity, AppUpdateSeverity.none);
+    });
+
+    test(
+      'no sobrescribe la politica almacenada con configuracion invalida',
+      () async {
+        final cache = _MemoryAppUpdatePolicyCache();
+        await cache.save(
+          _storedPolicy(
+            active: true,
+            minimumSupportedVersionCode: 11,
+            recommendedVersionCode: 11,
+            forceUpdate: true,
+          ),
+        );
+        final invalidPolicy =
+            appUpdateStoredPolicyFromConfigDataForTest(<String, dynamic>{
+              'active': 'yes',
+              'minimumSupportedVersionCode': 'once',
+              'recommendedVersionCode': null,
+              'forceUpdate': 'true',
+              'updateMessage': 123,
+            });
+        if (invalidPolicy != null) {
+          await cache.save(invalidPolicy);
+        }
+
+        final restored = await cache.load();
+
+        expect(invalidPolicy, isNull);
+        expect(restored!.minimumSupportedVersionCode, 11);
+        expect(restored.recommendedVersionCode, 11);
+        expect(restored.forceUpdate, isTrue);
+      },
+    );
+  });
+}
+
+AppUpdateStoredPolicy _storedPolicy({
+  required bool active,
+  required int minimumSupportedVersionCode,
+  required int recommendedVersionCode,
+  required bool forceUpdate,
+}) {
+  return AppUpdateStoredPolicy(
+    active: active,
+    minimumSupportedVersionCode: minimumSupportedVersionCode,
+    recommendedVersionCode: recommendedVersionCode,
+    forceUpdate: forceUpdate,
+    updateMessage: forceUpdate
+        ? 'Actualizacion requerida'
+        : 'Nueva version disponible',
+    fetchedAt: DateTime.utc(2026, 8, 4, 12),
+  );
+}
+
+class _MemoryAppUpdatePolicyCache implements AppUpdatePolicyCache {
+  _MemoryAppUpdatePolicyCache({AppUpdateStoredPolicy? restored})
+    : saved = restored;
+
+  AppUpdateStoredPolicy? saved;
+
+  @override
+  Future<AppUpdateStoredPolicy?> load() async {
+    return saved;
+  }
+
+  @override
+  Future<void> save(AppUpdateStoredPolicy policy) async {
+    saved = policy;
+  }
 }
