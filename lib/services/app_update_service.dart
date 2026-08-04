@@ -212,15 +212,9 @@ class AppUpdateService {
           ? null
           : await _loadDeviceRolloutGroup();
       final decision = evaluateAppUpdatePolicy(
-        AppUpdatePolicyInput(
+        config.toPolicyInput(
           currentVersionCode: currentVersion.versionCode,
-          minimumSupportedVersionCode: config.minimumSupportedVersionCode,
-          recommendedVersionCode: config.recommendedVersionCode,
-          forceUpdate: config.forceUpdate,
-          updateMessage: config.updateMessage,
-          active: config.active,
           rolloutGroup: deviceRolloutGroup,
-          enabledRolloutGroups: config.rolloutGroups,
         ),
       );
       final playAvailability = await _checkPlayUpdate();
@@ -596,9 +590,37 @@ class _RemoteUpdateConfig {
     );
   }
 
+  AppUpdatePolicyInput toPolicyInput({
+    required int currentVersionCode,
+    String? rolloutGroup,
+  }) {
+    return AppUpdatePolicyInput(
+      currentVersionCode: currentVersionCode,
+      minimumSupportedVersionCode: minimumSupportedVersionCode,
+      recommendedVersionCode: recommendedVersionCode,
+      forceUpdate: forceUpdate,
+      updateMessage: updateMessage,
+      active: active,
+      rolloutGroup: rolloutGroup,
+      enabledRolloutGroups: rolloutGroups,
+    );
+  }
+
   static int _readInt(Object? value, {required int fallback}) {
     if (value is int) return value;
     if (value is num) return value.toInt();
     return int.tryParse(value?.toString() ?? '') ?? fallback;
   }
+}
+
+@visibleForTesting
+AppUpdatePolicyInput appUpdatePolicyInputFromConfigDataForTest(
+  Map<String, dynamic> data, {
+  required int currentVersionCode,
+  String? rolloutGroup,
+}) {
+  return _RemoteUpdateConfig.fromMap(data).toPolicyInput(
+    currentVersionCode: currentVersionCode,
+    rolloutGroup: rolloutGroup,
+  );
 }

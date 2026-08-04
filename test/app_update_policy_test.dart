@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/app_update/app_update_policy.dart';
+import 'package:tacopos/services/app_update_service.dart';
 import 'package:tacopos/services/device_registry_service.dart';
 
 void main() {
@@ -276,6 +277,21 @@ void main() {
       expect(decision.severity, AppUpdateSeverity.none);
     });
 
+    test('current 12 and minimum 11 allows continuing', () {
+      final decision = evaluateAppUpdatePolicy(
+        const AppUpdatePolicyInput(
+          currentVersionCode: 12,
+          minimumSupportedVersionCode: 11,
+          recommendedVersionCode: 11,
+          forceUpdate: false,
+          updateMessage: '',
+        ),
+      );
+
+      expect(decision.canContinue, isTrue);
+      expect(decision.severity, AppUpdateSeverity.none);
+    });
+
     test('current 10 and minimum 11 blocks', () {
       final decision = evaluateAppUpdatePolicy(
         const AppUpdatePolicyInput(
@@ -317,6 +333,28 @@ void main() {
 
       expect(policyStatus, AppUpdatePolicyStatus.upToDate);
       expect(telemetryStatus, DeviceUpdateStatus.unknown);
+    });
+
+    test('incomplete or invalid config fields fall back without throwing', () {
+      final input = appUpdatePolicyInputFromConfigDataForTest(<String, dynamic>{
+        'minimumSupportedVersionCode': 'invalid',
+        'recommendedVersionCode': null,
+        'forceUpdate': 'true',
+        'active': 'yes',
+        'rolloutGroups': 'all',
+      }, currentVersionCode: 11);
+
+      expect(input.minimumSupportedVersionCode, 1);
+      expect(input.recommendedVersionCode, 1);
+      expect(input.forceUpdate, isFalse);
+      expect(
+        input.updateMessage,
+        'Hay una nueva version de TacoPOS disponible.',
+      );
+      expect(input.active, isTrue);
+      expect(input.enabledRolloutGroups, isEmpty);
+      expect(() => evaluateAppUpdatePolicy(input), returnsNormally);
+      expect(evaluateAppUpdatePolicy(input).canContinue, isTrue);
     });
   });
 }
