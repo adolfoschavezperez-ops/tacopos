@@ -13,6 +13,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
+import '../../widgets/visit_survey_dialog.dart';
 import 'order_screen.dart';
 import 'takeout_orders_screen.dart';
 
@@ -108,7 +109,20 @@ class _TablesScreenState extends State<TablesScreen> {
     });
 
     try {
-      final order = await _repository.createOrGetOpenOrder(table);
+      VisitSurveyAnswer? visitAnswer;
+      if (!hasOpenOrder) {
+        visitAnswer = await showVisitSurveyDialog(context);
+        if (visitAnswer == null) {
+          return;
+        }
+      }
+
+      final order = await _repository.createOrGetOpenOrder(
+        table,
+        visitClassification: visitAnswer?.firestoreValue,
+        isFirstVisit: visitAnswer?.isFirstVisit,
+        visitSurveyAnsweredBy: employee?.id,
+      );
       debugPrint(
         '[TacoPOS][TablesScreen.open] tableId=${table.id} '
         'tableName=${table.name} orderId=${order.id} total=${order.total}',

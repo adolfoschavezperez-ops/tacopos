@@ -73,6 +73,11 @@ class PosOrder {
     this.saleFolioRestaurantId,
     this.saleFolioAssignedAt,
     this.saleFolioVersion,
+    this.visitClassification,
+    this.isFirstVisit,
+    this.visitSurveyAnsweredAt,
+    this.visitSurveyAnsweredBy,
+    this.visitSurveyVersion,
     this.restaurantId = AppConstants.restaurantId,
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
@@ -148,6 +153,11 @@ class PosOrder {
   final String? saleFolioRestaurantId;
   final DateTime? saleFolioAssignedAt;
   final int? saleFolioVersion;
+  final String? visitClassification;
+  final bool? isFirstVisit;
+  final DateTime? visitSurveyAnsweredAt;
+  final String? visitSurveyAnsweredBy;
+  final int? visitSurveyVersion;
   final String restaurantId;
   final String restaurantName;
   final String branchId;
@@ -260,6 +270,11 @@ class PosOrder {
       saleFolioRestaurantId: _readOptionalString(data['saleFolioRestaurantId']),
       saleFolioAssignedAt: _toDate(data['saleFolioAssignedAt']),
       saleFolioVersion: (data['saleFolioVersion'] as num?)?.toInt(),
+      visitClassification: _readOptionalString(data['visitClassification']),
+      isFirstVisit: data['isFirstVisit'] as bool?,
+      visitSurveyAnsweredAt: _toDate(data['visitSurveyAnsweredAt']),
+      visitSurveyAnsweredBy: _readOptionalString(data['visitSurveyAnsweredBy']),
+      visitSurveyVersion: (data['visitSurveyVersion'] as num?)?.toInt(),
       restaurantId:
           data['restaurantId'] as String? ?? AppConstants.restaurantId,
       restaurantName:
@@ -313,6 +328,23 @@ class PosOrder {
     if (tableIds.isNotEmpty) return tableIds;
     if (orderType == 'dine_in' && tableId.trim().isNotEmpty) return [tableId];
     return const [];
+  }
+
+  String get visitClassificationStatus {
+    final clean = visitClassification?.trim().toLowerCase();
+    if (clean == 'first_time') return 'first_time';
+    if (clean == 'returning') return 'returning';
+    if (isFirstVisit == true) return 'first_time';
+    if (isFirstVisit == false) return 'returning';
+    return 'unknown';
+  }
+
+  String get visitClassificationLabel {
+    return switch (visitClassificationStatus) {
+      'first_time' => 'Primera visita',
+      'returning' => 'Recurrente',
+      _ => 'Sin clasificar',
+    };
   }
 
   static Map<int, String> _readPersonNames(Object? value) {
