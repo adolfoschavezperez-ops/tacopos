@@ -9,10 +9,15 @@ import '../core/app_update/app_update_policy.dart';
 import '../core/constants/app_constants.dart';
 
 class AppVersionInfo {
-  const AppVersionInfo({required this.versionName, required this.versionCode});
+  const AppVersionInfo({
+    required this.versionName,
+    required this.versionCode,
+    this.packageName = '',
+  });
 
   final String versionName;
   final int versionCode;
+  final String packageName;
 }
 
 class PlayUpdateAvailability {
@@ -73,6 +78,8 @@ class AppUpdateCheckResult {
     required this.recommendedVersionCode,
     required this.playUpdateAvailability,
     required this.configActive,
+    this.currentPackageName = '',
+    this.forceUpdate = false,
     this.errorCode,
     this.errorMessage,
     this.releaseNotes,
@@ -87,6 +94,8 @@ class AppUpdateCheckResult {
   final int recommendedVersionCode;
   final PlayUpdateAvailability playUpdateAvailability;
   final bool configActive;
+  final String currentPackageName;
+  final bool forceUpdate;
   final String? errorCode;
   final String? errorMessage;
   final String? releaseNotes;
@@ -116,6 +125,8 @@ class AppUpdateCheckResult {
       playUpdateAvailability:
           playUpdateAvailability ?? this.playUpdateAvailability,
       configActive: configActive,
+      currentPackageName: currentPackageName,
+      forceUpdate: forceUpdate,
       errorCode: errorCode ?? this.errorCode,
       errorMessage: errorMessage ?? this.errorMessage,
       releaseNotes: releaseNotes,
@@ -126,6 +137,7 @@ class AppUpdateCheckResult {
 }
 
 class AppUpdateService {
+  static const googlePlayPackageId = 'com.renova.tacopos';
   static const MethodChannel _channel = MethodChannel('tacopos/app_update');
   static final StreamController<AppUpdateInstallProgress> _progressController =
       StreamController<AppUpdateInstallProgress>.broadcast();
@@ -157,7 +169,7 @@ class AppUpdateService {
   Future<AppUpdateCheckResult> checkForUpdate() async {
     final currentVersion = await currentVersionInfo();
     if (!isSupportedPlatform) {
-      return AppUpdateCheckResult(
+      final result = AppUpdateCheckResult(
         decision: const AppUpdateDecision(
           severity: AppUpdateSeverity.none,
           message: '',
@@ -165,17 +177,20 @@ class AppUpdateService {
         ),
         currentVersionCode: currentVersion.versionCode,
         currentVersionName: currentVersion.versionName,
+        currentPackageName: currentVersion.packageName,
         minimumSupportedVersionCode: currentVersion.versionCode,
         recommendedVersionCode: currentVersion.versionCode,
         playUpdateAvailability: _emptyPlayAvailability(),
         configActive: false,
       );
+      _logPolicyCheck(result);
+      return result;
     }
 
     try {
       final config = await _loadRemoteUpdateConfig();
       if (config == null || config.active != true) {
-        return AppUpdateCheckResult(
+        final result = AppUpdateCheckResult(
           decision: const AppUpdateDecision(
             severity: AppUpdateSeverity.none,
             message: '',
@@ -183,11 +198,14 @@ class AppUpdateService {
           ),
           currentVersionCode: currentVersion.versionCode,
           currentVersionName: currentVersion.versionName,
+          currentPackageName: currentVersion.packageName,
           minimumSupportedVersionCode: currentVersion.versionCode,
           recommendedVersionCode: currentVersion.versionCode,
           playUpdateAvailability: await _checkPlayUpdate(),
           configActive: false,
         );
+        _logPolicyCheck(result);
+        return result;
       }
 
       final deviceRolloutGroup = config.rolloutGroups.isEmpty
@@ -216,10 +234,12 @@ class AppUpdateService {
         decision: adjustedDecision,
         currentVersionCode: currentVersion.versionCode,
         currentVersionName: currentVersion.versionName,
+        currentPackageName: currentVersion.packageName,
         minimumSupportedVersionCode: config.minimumSupportedVersionCode,
         recommendedVersionCode: config.recommendedVersionCode,
         playUpdateAvailability: playAvailability,
         configActive: config.active,
+        forceUpdate: config.forceUpdate,
         releaseNotes: config.releaseNotes,
         rolloutGroup: deviceRolloutGroup,
         criticalReason: config.criticalReason,
@@ -237,18 +257,21 @@ class AppUpdateService {
           'immediateAllowed=${playAvailability.immediateAllowed}',
         );
       }
+      _logPolicyCheck(result);
       _lastValidPolicyResult = result;
       return result;
     } catch (error) {
       debugPrint('APP_UPDATE_CHECK_FAILED: $error');
       final cached = _lastValidPolicyResult;
       if (cached != null) {
-        return cached.copyWith(
+        final result = cached.copyWith(
           errorCode: 'APP_UPDATE_CONFIG_UNAVAILABLE',
           errorMessage: error.toString(),
         );
+        _logPolicyCheck(result);
+        return result;
       }
-      return AppUpdateCheckResult(
+      final result = AppUpdateCheckResult(
         decision: const AppUpdateDecision(
           severity: AppUpdateSeverity.none,
           message: '',
@@ -256,6 +279,7 @@ class AppUpdateService {
         ),
         currentVersionCode: currentVersion.versionCode,
         currentVersionName: currentVersion.versionName,
+        currentPackageName: currentVersion.packageName,
         minimumSupportedVersionCode: currentVersion.versionCode,
         recommendedVersionCode: currentVersion.versionCode,
         playUpdateAvailability: _emptyPlayAvailability(),
@@ -263,16 +287,27 @@ class AppUpdateService {
         errorCode: 'APP_UPDATE_CONFIG_UNAVAILABLE',
         errorMessage: error.toString(),
       );
+      _logPolicyCheck(result);
+      return result;
     }
   }
 
   Future<AppVersionInfo> currentVersionInfo() async {
     if (!isSupportedPlatform) {
-      return const AppVersionInfo(versionName: 'web', versionCode: 0);
+      return const AppVersionInfo(
+        versionName: 'web',
+        versionCode: 0,
+        packageName: 'web',
+      );
     }
     final versionCode = await _invokeInt('versionCode');
     final versionName = await _invokeString('versionName');
-    return AppVersionInfo(versionName: versionName, versionCode: versionCode);
+    final packageName = await _invokeString('packageName');
+    return AppVersionInfo(
+      versionName: versionName,
+      versionCode: versionCode,
+      packageName: packageName,
+    );
   }
 
   Future<void> startFlexibleUpdate() async {
@@ -289,6 +324,22 @@ class AppUpdateService {
 
   Future<void> openGooglePlay() async {
     await _channel.invokeMethod<void>('openGooglePlay');
+  }
+
+  void _logPolicyCheck(AppUpdateCheckResult result) {
+    debugPrint(
+      'APP_UPDATE_POLICY_CHECK '
+      'checkedAt=${DateTime.now().toIso8601String()} '
+      'packageName=${result.currentPackageName} '
+      'currentVersionName=${result.currentVersionName} '
+      'currentVersionCode=${result.currentVersionCode} '
+      'minimumSupportedVersionCode=${result.minimumSupportedVersionCode} '
+      'recommendedVersionCode=${result.recommendedVersionCode} '
+      'forceUpdate=${result.forceUpdate} '
+      'result=${result.decision.isRequired ? 'blocked' : 'allowed'} '
+      'errorCode=${result.errorCode ?? ''} '
+      'errorMessage=${result.errorMessage ?? ''}',
+    );
   }
 
   Future<PlayUpdateAvailability> _checkPlayUpdate() async {

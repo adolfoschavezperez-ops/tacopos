@@ -54,6 +54,7 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "versionCode" -> result.success(currentVersionCode())
                 "versionName" -> result.success(currentVersionName())
+                "packageName" -> result.success(packageName)
                 "installerPackageName" -> result.success(installerPackageName())
                 "checkUpdate" -> {
                     checkUpdate(result)

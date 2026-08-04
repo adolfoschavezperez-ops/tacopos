@@ -10,6 +10,7 @@ import '../services/app_session.dart';
 import '../services/live_presence_service.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/glass.dart';
+import '../widgets/mandatory_update_gate.dart';
 import 'admin/cash_admin_screen.dart';
 import 'admin/admin_dashboard_screen.dart';
 import 'admin/backoffice_screen.dart';
@@ -114,10 +115,16 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final Widget screen = switch (mode) {
-      AppMode.waiterCashier => const TablesScreen(),
+      AppMode.waiterCashier => const MandatoryUpdateGate(
+        screenName: 'Mesas',
+        child: TablesScreen(),
+      ),
       AppMode.cash => const CashSessionScreen(),
       AppMode.kitchenControl => const KitchenControlScreen(),
-      AppMode.kitchen => const KitchenScreen(),
+      AppMode.kitchen => const MandatoryUpdateGate(
+        screenName: 'Cocina',
+        child: KitchenScreen(),
+      ),
       AppMode.admin => const AdminDashboardScreen(),
     };
 

@@ -100,10 +100,9 @@ AppUpdatePolicyStatus evaluateCanonicalAppUpdatePolicy({
   required bool forceUpdate,
 }) {
   if (active != true) return AppUpdatePolicyStatus.upToDate;
-  if (currentVersionCode < minimumSupportedVersionCode) {
-    return AppUpdatePolicyStatus.required;
-  }
-  if (forceUpdate == true && currentVersionCode < recommendedVersionCode) {
+  final belowMinimum = currentVersionCode < minimumSupportedVersionCode;
+  final forceRequiresMinimum = forceUpdate == true && belowMinimum;
+  if (belowMinimum || forceRequiresMinimum) {
     return AppUpdatePolicyStatus.required;
   }
   if (currentVersionCode < recommendedVersionCode) {

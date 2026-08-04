@@ -46,16 +46,16 @@ void main() {
       expect(status, AppUpdatePolicyStatus.required);
     });
 
-    test('canonical policy forceUpdate requires only below recommended', () {
+    test('canonical policy forceUpdate requires only below minimum', () {
       final required = evaluateCanonicalAppUpdatePolicy(
         currentVersionCode: 3,
         active: true,
-        minimumSupportedVersionCode: 3,
+        minimumSupportedVersionCode: 4,
         recommendedVersionCode: 4,
         forceUpdate: true,
       );
       final upToDate = evaluateCanonicalAppUpdatePolicy(
-        currentVersionCode: 4,
+        currentVersionCode: 3,
         active: true,
         minimumSupportedVersionCode: 3,
         recommendedVersionCode: 4,
@@ -63,7 +63,7 @@ void main() {
       );
 
       expect(required, AppUpdatePolicyStatus.required);
-      expect(upToDate, AppUpdatePolicyStatus.upToDate);
+      expect(upToDate, AppUpdatePolicyStatus.recommended);
     });
 
     test('canonical policy active false is upToDate', () {
@@ -124,7 +124,7 @@ void main() {
       expect(decision.canContinue, isFalse);
     });
 
-    test('forceUpdate requires versions below recommended', () {
+    test('forceUpdate does not block versions that meet the minimum', () {
       final decision = evaluateAppUpdatePolicy(
         const AppUpdatePolicyInput(
           currentVersionCode: 2,
@@ -135,9 +135,39 @@ void main() {
         ),
       );
 
+      expect(decision.severity, AppUpdateSeverity.recommended);
+      expect(decision.canContinue, isTrue);
+      expect(decision.message, isNotEmpty);
+    });
+
+    test('forceUpdate requires versions below minimum', () {
+      final decision = evaluateAppUpdatePolicy(
+        const AppUpdatePolicyInput(
+          currentVersionCode: 10,
+          minimumSupportedVersionCode: 11,
+          recommendedVersionCode: 11,
+          forceUpdate: true,
+          updateMessage: 'Actualizacion requerida',
+        ),
+      );
+
       expect(decision.severity, AppUpdateSeverity.required);
       expect(decision.canContinue, isFalse);
-      expect(decision.message, isNotEmpty);
+    });
+
+    test('recommended higher with forceUpdate false does not block', () {
+      final decision = evaluateAppUpdatePolicy(
+        const AppUpdatePolicyInput(
+          currentVersionCode: 10,
+          minimumSupportedVersionCode: 10,
+          recommendedVersionCode: 11,
+          forceUpdate: false,
+          updateMessage: 'Nueva version disponible',
+        ),
+      );
+
+      expect(decision.severity, AppUpdateSeverity.recommended);
+      expect(decision.canContinue, isTrue);
     });
 
     test('inactive config does not block', () {
@@ -214,6 +244,51 @@ void main() {
       );
 
       expect(status, AppUpdatePolicyStatus.upToDate);
+    });
+
+    test('current 11 and minimum 11 allows continuing', () {
+      final decision = evaluateAppUpdatePolicy(
+        const AppUpdatePolicyInput(
+          currentVersionCode: 11,
+          minimumSupportedVersionCode: 11,
+          recommendedVersionCode: 11,
+          forceUpdate: false,
+          updateMessage: '',
+        ),
+      );
+
+      expect(decision.canContinue, isTrue);
+      expect(decision.severity, AppUpdateSeverity.none);
+    });
+
+    test('current 11 and minimum 10 allows continuing', () {
+      final decision = evaluateAppUpdatePolicy(
+        const AppUpdatePolicyInput(
+          currentVersionCode: 11,
+          minimumSupportedVersionCode: 10,
+          recommendedVersionCode: 11,
+          forceUpdate: false,
+          updateMessage: '',
+        ),
+      );
+
+      expect(decision.canContinue, isTrue);
+      expect(decision.severity, AppUpdateSeverity.none);
+    });
+
+    test('current 10 and minimum 11 blocks', () {
+      final decision = evaluateAppUpdatePolicy(
+        const AppUpdatePolicyInput(
+          currentVersionCode: 10,
+          minimumSupportedVersionCode: 11,
+          recommendedVersionCode: 11,
+          forceUpdate: false,
+          updateMessage: '',
+        ),
+      );
+
+      expect(decision.canContinue, isFalse);
+      expect(decision.severity, AppUpdateSeverity.required);
     });
 
     test('device registry uses the expected restaurant devices path', () {
