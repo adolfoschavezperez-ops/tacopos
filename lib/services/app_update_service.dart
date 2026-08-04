@@ -8,11 +8,18 @@ import 'package:flutter/services.dart';
 import '../core/app_update/app_update_policy.dart';
 import '../core/constants/app_constants.dart';
 
+const MethodChannel _appUpdateChannel = MethodChannel('tacopos/app_update');
+
 class AppVersionInfo {
-  const AppVersionInfo({required this.versionName, required this.versionCode});
+  const AppVersionInfo({
+    required this.versionName,
+    required this.versionCode,
+    this.packageName = '',
+  });
 
   final String versionName;
   final int versionCode;
+  final String packageName;
 }
 
 class PlayUpdateAvailability {
@@ -73,6 +80,8 @@ class AppUpdateCheckResult {
     required this.recommendedVersionCode,
     required this.playUpdateAvailability,
     required this.configActive,
+    this.currentPackageName = '',
+    this.forceUpdate = false,
     this.errorCode,
     this.errorMessage,
     this.releaseNotes,
@@ -87,6 +96,8 @@ class AppUpdateCheckResult {
   final int recommendedVersionCode;
   final PlayUpdateAvailability playUpdateAvailability;
   final bool configActive;
+  final String currentPackageName;
+  final bool forceUpdate;
   final String? errorCode;
   final String? errorMessage;
   final String? releaseNotes;
@@ -116,6 +127,8 @@ class AppUpdateCheckResult {
       playUpdateAvailability:
           playUpdateAvailability ?? this.playUpdateAvailability,
       configActive: configActive,
+      currentPackageName: currentPackageName,
+      forceUpdate: forceUpdate,
       errorCode: errorCode ?? this.errorCode,
       errorMessage: errorMessage ?? this.errorMessage,
       releaseNotes: releaseNotes,
@@ -125,8 +138,115 @@ class AppUpdateCheckResult {
   }
 }
 
+class AppUpdateStoredPolicy {
+  const AppUpdateStoredPolicy({
+    required this.active,
+    required this.minimumSupportedVersionCode,
+    required this.recommendedVersionCode,
+    required this.forceUpdate,
+    required this.updateMessage,
+    required this.fetchedAt,
+  });
+
+  final bool active;
+  final int minimumSupportedVersionCode;
+  final int recommendedVersionCode;
+  final bool forceUpdate;
+  final String updateMessage;
+  final DateTime fetchedAt;
+
+  AppUpdatePolicyInput toPolicyInput({required int currentVersionCode}) {
+    return AppUpdatePolicyInput(
+      currentVersionCode: currentVersionCode,
+      minimumSupportedVersionCode: minimumSupportedVersionCode,
+      recommendedVersionCode: recommendedVersionCode,
+      forceUpdate: forceUpdate,
+      updateMessage: updateMessage,
+      active: active,
+    );
+  }
+
+  Map<String, Object> toMap() {
+    return <String, Object>{
+      'active': active,
+      'minimumSupportedVersionCode': minimumSupportedVersionCode,
+      'recommendedVersionCode': recommendedVersionCode,
+      'forceUpdate': forceUpdate,
+      'updateMessage': updateMessage,
+      'fetchedAt': fetchedAt.toIso8601String(),
+    };
+  }
+
+  static AppUpdateStoredPolicy? fromMap(Map<dynamic, dynamic> data) {
+    final active = data['active'];
+    final minimumSupportedVersionCode = data['minimumSupportedVersionCode'];
+    final recommendedVersionCode = data['recommendedVersionCode'];
+    final forceUpdate = data['forceUpdate'];
+    final updateMessage = data['updateMessage'];
+    final fetchedAtText = data['fetchedAt'];
+    final minimumVersion = _readIntOrNull(minimumSupportedVersionCode);
+    final recommendedVersion = _readIntOrNull(recommendedVersionCode);
+    final fetchedAt = DateTime.tryParse(fetchedAtText?.toString() ?? '');
+    if (active is! bool ||
+        minimumVersion == null ||
+        recommendedVersion == null ||
+        forceUpdate is! bool ||
+        updateMessage is! String ||
+        fetchedAt == null) {
+      return null;
+    }
+    return AppUpdateStoredPolicy(
+      active: active,
+      minimumSupportedVersionCode: minimumVersion,
+      recommendedVersionCode: recommendedVersion,
+      forceUpdate: forceUpdate,
+      updateMessage: updateMessage,
+      fetchedAt: fetchedAt,
+    );
+  }
+
+  static int? _readIntOrNull(Object? value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value);
+    return null;
+  }
+}
+
+abstract class AppUpdatePolicyCache {
+  Future<void> save(AppUpdateStoredPolicy policy);
+  Future<AppUpdateStoredPolicy?> load();
+}
+
+class MethodChannelAppUpdatePolicyCache implements AppUpdatePolicyCache {
+  const MethodChannelAppUpdatePolicyCache();
+
+  @override
+  Future<void> save(AppUpdateStoredPolicy policy) async {
+    await _appUpdateChannel.invokeMethod<void>(
+      'saveUpdatePolicy',
+      policy.toMap(),
+    );
+  }
+
+  @override
+  Future<AppUpdateStoredPolicy?> load() async {
+    try {
+      final data = await _appUpdateChannel.invokeMapMethod<String, Object?>(
+        'loadUpdatePolicy',
+      );
+      if (data == null) return null;
+      return AppUpdateStoredPolicy.fromMap(data);
+    } catch (error) {
+      debugPrint('APP_UPDATE_POLICY_NATIVE_CACHE_LOAD_FAILED: $error');
+      return null;
+    }
+  }
+}
+
 class AppUpdateService {
-  static const MethodChannel _channel = MethodChannel('tacopos/app_update');
+  static const googlePlayPackageId = 'com.renova.tacopos';
+  static const MethodChannel _channel = _appUpdateChannel;
   static final StreamController<AppUpdateInstallProgress> _progressController =
       StreamController<AppUpdateInstallProgress>.broadcast();
   static final StreamController<void> _downloadedController =
@@ -134,16 +254,23 @@ class AppUpdateService {
   static final StreamController<void> _immediateInProgressController =
       StreamController<void>.broadcast();
   static bool _methodHandlerConfigured = false;
-  static AppUpdateCheckResult? _lastValidPolicyResult;
+  static _RemoteUpdateConfig? _lastValidPolicyConfig;
 
-  AppUpdateService({FirebaseFirestore? firestore, FirebaseAuth? auth})
-    : _firestore = firestore ?? FirebaseFirestore.instance,
-      _auth = auth ?? FirebaseAuth.instance {
+  AppUpdateService({
+    FirebaseFirestore? firestore,
+    FirebaseAuth? auth,
+    AppUpdatePolicyCache? policyCache,
+  }) : _policyCache = policyCache ?? const MethodChannelAppUpdatePolicyCache(),
+       _firestore = firestore ?? FirebaseFirestore.instance,
+       _auth = auth ?? FirebaseAuth.instance {
     _configureMethodHandler();
+    _localPolicyLoad = _restoreLastValidPolicyFromLocal();
   }
 
   final FirebaseFirestore _firestore;
   final FirebaseAuth _auth;
+  final AppUpdatePolicyCache _policyCache;
+  late final Future<void> _localPolicyLoad;
 
   Stream<AppUpdateInstallProgress> get flexibleUpdateProgress =>
       _progressController.stream;
@@ -157,7 +284,7 @@ class AppUpdateService {
   Future<AppUpdateCheckResult> checkForUpdate() async {
     final currentVersion = await currentVersionInfo();
     if (!isSupportedPlatform) {
-      return AppUpdateCheckResult(
+      final result = AppUpdateCheckResult(
         decision: const AppUpdateDecision(
           severity: AppUpdateSeverity.none,
           message: '',
@@ -165,17 +292,20 @@ class AppUpdateService {
         ),
         currentVersionCode: currentVersion.versionCode,
         currentVersionName: currentVersion.versionName,
+        currentPackageName: currentVersion.packageName,
         minimumSupportedVersionCode: currentVersion.versionCode,
         recommendedVersionCode: currentVersion.versionCode,
         playUpdateAvailability: _emptyPlayAvailability(),
         configActive: false,
       );
+      _logPolicyCheck(result);
+      return result;
     }
 
     try {
       final config = await _loadRemoteUpdateConfig();
-      if (config == null || config.active != true) {
-        return AppUpdateCheckResult(
+      if (config == null) {
+        final result = AppUpdateCheckResult(
           decision: const AppUpdateDecision(
             severity: AppUpdateSeverity.none,
             message: '',
@@ -183,26 +313,29 @@ class AppUpdateService {
           ),
           currentVersionCode: currentVersion.versionCode,
           currentVersionName: currentVersion.versionName,
+          currentPackageName: currentVersion.packageName,
           minimumSupportedVersionCode: currentVersion.versionCode,
           recommendedVersionCode: currentVersion.versionCode,
           playUpdateAvailability: await _checkPlayUpdate(),
           configActive: false,
         );
+        _logPolicyCheck(result);
+        return result;
+      }
+      if (config.active != true) {
+        final result = await _resultFromConfig(config, currentVersion);
+        await _rememberValidPolicy(config);
+        _logPolicyCheck(result);
+        return result;
       }
 
       final deviceRolloutGroup = config.rolloutGroups.isEmpty
           ? null
           : await _loadDeviceRolloutGroup();
       final decision = evaluateAppUpdatePolicy(
-        AppUpdatePolicyInput(
+        config.toPolicyInput(
           currentVersionCode: currentVersion.versionCode,
-          minimumSupportedVersionCode: config.minimumSupportedVersionCode,
-          recommendedVersionCode: config.recommendedVersionCode,
-          forceUpdate: config.forceUpdate,
-          updateMessage: config.updateMessage,
-          active: config.active,
           rolloutGroup: deviceRolloutGroup,
-          enabledRolloutGroups: config.rolloutGroups,
         ),
       );
       final playAvailability = await _checkPlayUpdate();
@@ -216,10 +349,12 @@ class AppUpdateService {
         decision: adjustedDecision,
         currentVersionCode: currentVersion.versionCode,
         currentVersionName: currentVersion.versionName,
+        currentPackageName: currentVersion.packageName,
         minimumSupportedVersionCode: config.minimumSupportedVersionCode,
         recommendedVersionCode: config.recommendedVersionCode,
         playUpdateAvailability: playAvailability,
         configActive: config.active,
+        forceUpdate: config.forceUpdate,
         releaseNotes: config.releaseNotes,
         rolloutGroup: deviceRolloutGroup,
         criticalReason: config.criticalReason,
@@ -237,18 +372,22 @@ class AppUpdateService {
           'immediateAllowed=${playAvailability.immediateAllowed}',
         );
       }
-      _lastValidPolicyResult = result;
+      _logPolicyCheck(result);
+      await _rememberValidPolicy(config);
       return result;
     } catch (error) {
       debugPrint('APP_UPDATE_CHECK_FAILED: $error');
-      final cached = _lastValidPolicyResult;
+      final cached = await _cachedPolicyConfig();
       if (cached != null) {
-        return cached.copyWith(
+        final cachedResult = await _resultFromConfig(cached, currentVersion);
+        final result = cachedResult.copyWith(
           errorCode: 'APP_UPDATE_CONFIG_UNAVAILABLE',
           errorMessage: error.toString(),
         );
+        _logPolicyCheck(result);
+        return result;
       }
-      return AppUpdateCheckResult(
+      final result = AppUpdateCheckResult(
         decision: const AppUpdateDecision(
           severity: AppUpdateSeverity.none,
           message: '',
@@ -256,6 +395,7 @@ class AppUpdateService {
         ),
         currentVersionCode: currentVersion.versionCode,
         currentVersionName: currentVersion.versionName,
+        currentPackageName: currentVersion.packageName,
         minimumSupportedVersionCode: currentVersion.versionCode,
         recommendedVersionCode: currentVersion.versionCode,
         playUpdateAvailability: _emptyPlayAvailability(),
@@ -263,16 +403,27 @@ class AppUpdateService {
         errorCode: 'APP_UPDATE_CONFIG_UNAVAILABLE',
         errorMessage: error.toString(),
       );
+      _logPolicyCheck(result);
+      return result;
     }
   }
 
   Future<AppVersionInfo> currentVersionInfo() async {
     if (!isSupportedPlatform) {
-      return const AppVersionInfo(versionName: 'web', versionCode: 0);
+      return const AppVersionInfo(
+        versionName: 'web',
+        versionCode: 0,
+        packageName: 'web',
+      );
     }
     final versionCode = await _invokeInt('versionCode');
     final versionName = await _invokeString('versionName');
-    return AppVersionInfo(versionName: versionName, versionCode: versionCode);
+    final packageName = await _invokeString('packageName');
+    return AppVersionInfo(
+      versionName: versionName,
+      versionCode: versionCode,
+      packageName: packageName,
+    );
   }
 
   Future<void> startFlexibleUpdate() async {
@@ -289,6 +440,85 @@ class AppUpdateService {
 
   Future<void> openGooglePlay() async {
     await _channel.invokeMethod<void>('openGooglePlay');
+  }
+
+  void _logPolicyCheck(AppUpdateCheckResult result) {
+    debugPrint(
+      'APP_UPDATE_POLICY_CHECK '
+      'checkedAt=${DateTime.now().toIso8601String()} '
+      'packageName=${result.currentPackageName} '
+      'currentVersionName=${result.currentVersionName} '
+      'currentVersionCode=${result.currentVersionCode} '
+      'minimumSupportedVersionCode=${result.minimumSupportedVersionCode} '
+      'recommendedVersionCode=${result.recommendedVersionCode} '
+      'forceUpdate=${result.forceUpdate} '
+      'result=${result.decision.isRequired ? 'blocked' : 'allowed'} '
+      'errorCode=${result.errorCode ?? ''} '
+      'errorMessage=${result.errorMessage ?? ''}',
+    );
+  }
+
+  Future<AppUpdateCheckResult> _resultFromConfig(
+    _RemoteUpdateConfig config,
+    AppVersionInfo currentVersion,
+  ) async {
+    final decision = config.active == true
+        ? evaluateAppUpdatePolicy(
+            config.toPolicyInput(
+              currentVersionCode: currentVersion.versionCode,
+            ),
+          )
+        : const AppUpdateDecision(
+            severity: AppUpdateSeverity.none,
+            message: '',
+            canContinue: true,
+          );
+    final playAvailability = await _checkPlayUpdate();
+    final adjustedDecision = _avoidNonPlayUpdateLoop(
+      decision,
+      playAvailability,
+    );
+    return AppUpdateCheckResult(
+      decision: adjustedDecision,
+      currentVersionCode: currentVersion.versionCode,
+      currentVersionName: currentVersion.versionName,
+      currentPackageName: currentVersion.packageName,
+      minimumSupportedVersionCode: config.minimumSupportedVersionCode,
+      recommendedVersionCode: config.recommendedVersionCode,
+      playUpdateAvailability: playAvailability,
+      configActive: config.active,
+      forceUpdate: config.forceUpdate,
+      releaseNotes: config.releaseNotes,
+      criticalReason: config.criticalReason,
+      errorCode: _diagnosticCode(adjustedDecision, playAvailability),
+      errorMessage: _diagnosticMessage(adjustedDecision, playAvailability),
+    );
+  }
+
+  Future<void> _rememberValidPolicy(_RemoteUpdateConfig config) async {
+    _lastValidPolicyConfig = config;
+    try {
+      await _policyCache.save(config.toStoredPolicy());
+    } catch (error) {
+      debugPrint('APP_UPDATE_POLICY_CACHE_SAVE_FAILED: $error');
+    }
+  }
+
+  Future<_RemoteUpdateConfig?> _cachedPolicyConfig() async {
+    await _localPolicyLoad;
+    return _lastValidPolicyConfig;
+  }
+
+  Future<void> _restoreLastValidPolicyFromLocal() async {
+    try {
+      final storedPolicy = await _policyCache.load();
+      if (storedPolicy == null) return;
+      _lastValidPolicyConfig = _RemoteUpdateConfig.fromStoredPolicy(
+        storedPolicy,
+      );
+    } catch (error) {
+      debugPrint('APP_UPDATE_POLICY_CACHE_LOAD_FAILED: $error');
+    }
   }
 
   Future<PlayUpdateAvailability> _checkPlayUpdate() async {
@@ -331,7 +561,11 @@ class AppUpdateService {
         .timeout(const Duration(seconds: 8));
     final data = snapshot.data();
     if (data == null) return null;
-    return _RemoteUpdateConfig.fromMap(data);
+    final config = _RemoteUpdateConfig.tryFromMap(data);
+    if (config == null) {
+      throw const _InvalidAppUpdateConfigException();
+    }
+    return config;
   }
 
   Future<String?> _loadDeviceRolloutGroup() async {
@@ -508,6 +742,7 @@ class _RemoteUpdateConfig {
     required this.updateMessage,
     required this.active,
     required this.rolloutGroups,
+    required this.fetchedAt,
     this.releaseNotes,
     this.criticalReason,
   });
@@ -518,36 +753,142 @@ class _RemoteUpdateConfig {
   final String updateMessage;
   final bool active;
   final List<String> rolloutGroups;
+  final DateTime fetchedAt;
   final String? releaseNotes;
   final String? criticalReason;
 
-  factory _RemoteUpdateConfig.fromMap(Map<String, dynamic> data) {
+  factory _RemoteUpdateConfig.fromStoredPolicy(AppUpdateStoredPolicy policy) {
+    return _RemoteUpdateConfig(
+      active: policy.active,
+      minimumSupportedVersionCode: policy.minimumSupportedVersionCode,
+      recommendedVersionCode: policy.recommendedVersionCode,
+      forceUpdate: policy.forceUpdate,
+      updateMessage: policy.updateMessage,
+      fetchedAt: policy.fetchedAt,
+      rolloutGroups: const [],
+    );
+  }
+
+  static _RemoteUpdateConfig? tryFromMap(
+    Map<String, dynamic> data, {
+    DateTime? fetchedAt,
+  }) {
+    final active = _readBool(data['active']);
+    final minimumSupportedVersionCode = _readIntOrNull(
+      data['minimumSupportedVersionCode'],
+    );
+    final recommendedVersionCode = _readIntOrNull(
+      data['recommendedVersionCode'],
+    );
+    final forceUpdate = _readBool(data['forceUpdate']);
+    final updateMessage = data['updateMessage'];
+    if (active == null ||
+        minimumSupportedVersionCode == null ||
+        recommendedVersionCode == null ||
+        forceUpdate == null ||
+        updateMessage is! String) {
+      return null;
+    }
     final groups = data['rolloutGroups'];
     return _RemoteUpdateConfig(
-      minimumSupportedVersionCode: _readInt(
-        data['minimumSupportedVersionCode'],
-        fallback: 1,
-      ),
-      recommendedVersionCode: _readInt(
-        data['recommendedVersionCode'],
-        fallback: 1,
-      ),
-      forceUpdate: data['forceUpdate'] == true,
-      updateMessage:
-          data['updateMessage']?.toString() ??
-          'Hay una nueva version de TacoPOS disponible.',
-      active: data['active'] != false,
+      minimumSupportedVersionCode: minimumSupportedVersionCode,
+      recommendedVersionCode: recommendedVersionCode,
+      forceUpdate: forceUpdate,
+      updateMessage: updateMessage,
+      active: active,
       rolloutGroups: groups is Iterable
           ? groups.map((group) => group.toString()).toList()
           : const [],
+      fetchedAt: fetchedAt ?? DateTime.now(),
       releaseNotes: data['releaseNotes']?.toString(),
       criticalReason: data['criticalReason']?.toString(),
     );
   }
 
-  static int _readInt(Object? value, {required int fallback}) {
+  AppUpdatePolicyInput toPolicyInput({
+    required int currentVersionCode,
+    String? rolloutGroup,
+  }) {
+    return AppUpdatePolicyInput(
+      currentVersionCode: currentVersionCode,
+      minimumSupportedVersionCode: minimumSupportedVersionCode,
+      recommendedVersionCode: recommendedVersionCode,
+      forceUpdate: forceUpdate,
+      updateMessage: updateMessage,
+      active: active,
+      rolloutGroup: rolloutGroup,
+      enabledRolloutGroups: rolloutGroups,
+    );
+  }
+
+  AppUpdateStoredPolicy toStoredPolicy() {
+    return AppUpdateStoredPolicy(
+      active: active,
+      minimumSupportedVersionCode: minimumSupportedVersionCode,
+      recommendedVersionCode: recommendedVersionCode,
+      forceUpdate: forceUpdate,
+      updateMessage: updateMessage,
+      fetchedAt: fetchedAt,
+    );
+  }
+
+  static int? _readIntOrNull(Object? value) {
     if (value is int) return value;
     if (value is num) return value.toInt();
-    return int.tryParse(value?.toString() ?? '') ?? fallback;
+    if (value is String) return int.tryParse(value);
+    return null;
   }
+
+  static bool? _readBool(Object? value) {
+    if (value is bool) return value;
+    return null;
+  }
+}
+
+class _InvalidAppUpdateConfigException implements Exception {
+  const _InvalidAppUpdateConfigException();
+
+  @override
+  String toString() {
+    return 'Invalid app update configuration';
+  }
+}
+
+@visibleForTesting
+AppUpdatePolicyInput appUpdatePolicyInputFromConfigDataForTest(
+  Map<String, dynamic> data, {
+  required int currentVersionCode,
+  String? rolloutGroup,
+}) {
+  final config = _RemoteUpdateConfig.tryFromMap(data);
+  if (config == null) {
+    return AppUpdatePolicyInput(
+      currentVersionCode: currentVersionCode,
+      minimumSupportedVersionCode: currentVersionCode,
+      recommendedVersionCode: currentVersionCode,
+      forceUpdate: false,
+      updateMessage: '',
+      active: false,
+    );
+  }
+  return config.toPolicyInput(
+    currentVersionCode: currentVersionCode,
+    rolloutGroup: rolloutGroup,
+  );
+}
+
+@visibleForTesting
+AppUpdateStoredPolicy? appUpdateStoredPolicyFromConfigDataForTest(
+  Map<String, dynamic> data, {
+  DateTime? fetchedAt,
+}) {
+  return _RemoteUpdateConfig.tryFromMap(
+    data,
+    fetchedAt: fetchedAt,
+  )?.toStoredPolicy();
+}
+
+@visibleForTesting
+void resetAppUpdatePolicyMemoryCacheForTest() {
+  AppUpdateService._lastValidPolicyConfig = null;
 }

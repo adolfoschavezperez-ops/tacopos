@@ -54,6 +54,7 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "versionCode" -> result.success(currentVersionCode())
                 "versionName" -> result.success(currentVersionName())
+                "packageName" -> result.success(packageName)
                 "installerPackageName" -> result.success(installerPackageName())
                 "checkUpdate" -> {
                     checkUpdate(result)
@@ -65,6 +66,11 @@ class MainActivity : FlutterActivity() {
                     openGooglePlay()
                     result.success(null)
                 }
+                "saveUpdatePolicy" -> {
+                    saveUpdatePolicy(call.arguments)
+                    result.success(null)
+                }
+                "loadUpdatePolicy" -> result.success(loadUpdatePolicy())
                 else -> result.notImplemented()
             }
         }
@@ -263,6 +269,49 @@ class MainActivity : FlutterActivity() {
         )
         webIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         startActivity(webIntent)
+    }
+
+    private fun saveUpdatePolicy(arguments: Any?) {
+        val data = arguments as? Map<*, *> ?: return
+        val active = data["active"] as? Boolean ?: return
+        val minimumSupportedVersionCode =
+            (data["minimumSupportedVersionCode"] as? Number)?.toLong() ?: return
+        val recommendedVersionCode =
+            (data["recommendedVersionCode"] as? Number)?.toLong() ?: return
+        val forceUpdate = data["forceUpdate"] as? Boolean ?: return
+        val updateMessage = data["updateMessage"] as? String ?: return
+        val fetchedAt = data["fetchedAt"] as? String ?: return
+
+        getSharedPreferences("tacopos_app_update", MODE_PRIVATE)
+            .edit()
+            .putBoolean("active", active)
+            .putLong("minimumSupportedVersionCode", minimumSupportedVersionCode)
+            .putLong("recommendedVersionCode", recommendedVersionCode)
+            .putBoolean("forceUpdate", forceUpdate)
+            .putString("updateMessage", updateMessage)
+            .putString("fetchedAt", fetchedAt)
+            .apply()
+    }
+
+    private fun loadUpdatePolicy(): Map<String, Any>? {
+        val prefs = getSharedPreferences("tacopos_app_update", MODE_PRIVATE)
+        if (!prefs.contains("active") ||
+            !prefs.contains("minimumSupportedVersionCode") ||
+            !prefs.contains("recommendedVersionCode") ||
+            !prefs.contains("forceUpdate") ||
+            !prefs.contains("updateMessage") ||
+            !prefs.contains("fetchedAt")
+        ) {
+            return null
+        }
+        return mapOf(
+            "active" to prefs.getBoolean("active", false),
+            "minimumSupportedVersionCode" to prefs.getLong("minimumSupportedVersionCode", 0L),
+            "recommendedVersionCode" to prefs.getLong("recommendedVersionCode", 0L),
+            "forceUpdate" to prefs.getBoolean("forceUpdate", false),
+            "updateMessage" to (prefs.getString("updateMessage", "") ?: ""),
+            "fetchedAt" to (prefs.getString("fetchedAt", "") ?: ""),
+        )
     }
 
     private fun currentVersionCode(): Long {
