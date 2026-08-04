@@ -8992,7 +8992,12 @@ class TacoPosRepository {
     return usefulConsumedQty / soldQty;
   }
 
-  Future<PosOrder> createOrGetOpenOrder(PosTable table) async {
+  Future<PosOrder> createOrGetOpenOrder(
+    PosTable table, {
+    String? visitClassification,
+    bool? isFirstVisit,
+    String? visitSurveyAnsweredBy,
+  }) async {
     developer.log(
       '[TacoPOS][openTable] tableId=${table.id} tableName=${table.name} '
       'currentOrderId=${table.currentOrderId ?? '-'} tableStatus=${table.status}',
@@ -9076,6 +9081,16 @@ class TacoPosRepository {
       'personNames': {'1': 'Persona 1'},
       'businessDate': businessDateForOpenCashSession(cashSession),
       'cashSessionId': cashSession.id,
+      if (visitClassification != null && isFirstVisit != null) ...{
+        'visitClassification': visitClassification,
+        'isFirstVisit': isFirstVisit,
+        'visitSurveyAnsweredAt': FieldValue.serverTimestamp(),
+        'visitSurveyAnsweredBy':
+            visitSurveyAnsweredBy?.trim().isNotEmpty == true
+            ? visitSurveyAnsweredBy!.trim()
+            : (_auth.currentUser?.uid ?? 'anonymous'),
+        'visitSurveyVersion': 1,
+      },
       ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),

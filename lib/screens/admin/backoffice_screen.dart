@@ -9,6 +9,7 @@ import '../../core/reports/hourly_sales_comparison.dart' as hourly;
 import '../../core/reports/operational_blockers.dart';
 import '../../core/reports/report_data_bundle.dart';
 import '../../core/reports/sales_discrepancy_audit.dart';
+import '../../core/reports/visit_classification_report.dart';
 import '../../core/sales/backoffice_sale_identity.dart';
 import '../../core/sales/daily_sale_folio.dart';
 import '../../core/theme/brand_colors.dart';
@@ -82,6 +83,7 @@ enum _ReportKind {
   saleFolios,
   salesDiscrepancyAudit,
   discountsByDay,
+  visitClassification,
   cashSchedule,
   yieldProfit,
 }
@@ -2353,6 +2355,9 @@ class _ReportsSectionState extends State<_ReportsSection> {
         endBusinessDate: widget.endBusinessDate,
       );
     }
+    if (widget.reportKind == _ReportKind.visitClassification) {
+      return _buildVisitClassificationReport(context);
+    }
     if (widget.reportKind == _ReportKind.hourlyYesterdayLastSales ||
         widget.reportKind == _ReportKind.hourlyPreviousWeek) {
       return _buildHourlyComparisonReport(context);
@@ -2434,6 +2439,70 @@ class _ReportsSectionState extends State<_ReportsSection> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildVisitClassificationReport(BuildContext context) {
+    final report = buildVisitClassificationWeeklyReport(
+      orders: widget.orders,
+      startBusinessDate: widget.startBusinessDate,
+      endBusinessDate: widget.endBusinessDate,
+    );
+    final rows = report.csvRows;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _reportToolbar(
+          rows: rows,
+          headers: visitClassificationCsvHeaders,
+          extraChildren: [
+            _SmallMetric('Nuevas', '${report.firstTimeTotal}'),
+            _SmallMetric('Recurrentes', '${report.returningTotal}'),
+            _SmallMetric('Clasificadas', '${report.classifiedTotal}'),
+            _SmallMetric('Sin clasificar', '${report.unknownTotal}'),
+          ],
+        ),
+        const SizedBox(height: 14),
+        GlassPanel(
+          padding: const EdgeInsets.all(12),
+          child: Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _SmallMetric(
+                'Promedio nuevas',
+                report.firstTimeWeeklyAverage.toStringAsFixed(1),
+              ),
+              _SmallMetric(
+                'Promedio recurrentes',
+                report.returningWeeklyAverage.toStringAsFixed(1),
+              ),
+              _SmallMetric(
+                'Promedio total',
+                report.classifiedWeeklyAverage.toStringAsFixed(1),
+              ),
+              _SmallMetric(
+                'Periodo',
+                '${_displayBusinessDate(widget.startBusinessDate)} al ${_displayBusinessDate(widget.endBusinessDate)}',
+              ),
+            ],
+          ),
+        ),
+        if (report.hasPartialWeeks) ...[
+          const SizedBox(height: 10),
+          const Text(
+            'El rango incluye semanas parciales; solo se contabilizan ventas dentro del periodo seleccionado.',
+            style: TextStyle(
+              color: BrandColors.textMuted,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+        const SizedBox(height: 14),
+        _VisitClassificationChart(rows: report.rows),
+        const SizedBox(height: 14),
+        _ReportTable(headers: visitClassificationCsvHeaders, rows: rows),
+      ],
     );
   }
 
@@ -5319,6 +5388,12 @@ List<_NavItem> _reportNavItems(Employee? employee) {
       'Descuentos por dia',
       reportKind: _ReportKind.discountsByDay,
     ),
+    const _NavItem(
+      _BackofficeSection.reports,
+      Icons.groups_2_outlined,
+      'Visitas nuevas y recurrentes',
+      reportKind: _ReportKind.visitClassification,
+    ),
     if (kIsWeb && employee?.hasAdminAccess == true)
       const _NavItem(
         _BackofficeSection.reports,
@@ -5409,6 +5484,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.saleFolios => 'Folios de venta',
     _ReportKind.salesDiscrepancyAudit => 'Auditoria de discrepancias de ventas',
     _ReportKind.discountsByDay => 'Descuentos por dia',
+    _ReportKind.visitClassification => 'Visitas nuevas y recurrentes',
     _ReportKind.cashSchedule => 'Horarios de apertura y cierre',
     _ReportKind.yieldProfit => 'Rendimiento y utilidad',
   };
@@ -5555,6 +5631,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     _ReportKind.saleFolios => _saleFolioAuditHeaders,
     _ReportKind.salesDiscrepancyAudit => _salesAuditHeaders,
     _ReportKind.discountsByDay => _discountsByDayCsvHeaders,
+    _ReportKind.visitClassification => visitClassificationCsvHeaders,
     _ReportKind.cashSchedule => const [],
     _ReportKind.yieldProfit => const [],
   };
@@ -5919,6 +5996,7 @@ Future<List<List<String>>> _reportRows(
     case _ReportKind.salesDiscrepancyAudit:
       return const [];
     case _ReportKind.discountsByDay:
+    case _ReportKind.visitClassification:
     case _ReportKind.cashSchedule:
     case _ReportKind.yieldProfit:
       return const [];
@@ -6082,6 +6160,166 @@ const _hourlyCsvHeaders = [
   'Ordenes fecha seleccionada',
   'Ordenes ultimo dia con ventas',
 ];
+
+class _VisitClassificationChart extends StatelessWidget {
+  const _VisitClassificationChart({required this.rows});
+
+  final List<VisitClassificationWeekRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    if (rows.isEmpty) {
+      return const EmptyState(
+        icon: Icons.groups_2_outlined,
+        title: 'Sin visitas clasificadas',
+        message: 'No hay ventas de mesa pagadas en el periodo seleccionado.',
+      );
+    }
+    final maxValue = rows.fold<int>(
+      1,
+      (max, row) =>
+          [max, row.firstTime, row.returning].reduce((a, b) => a > b ? a : b),
+    );
+    return GlassPanel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Comparativo semanal',
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 16,
+            runSpacing: 6,
+            children: const [
+              _VisitLegend(color: BrandColors.accentYellow, label: 'Nuevas'),
+              _VisitLegend(color: BrandColors.info, label: 'Recurrentes'),
+            ],
+          ),
+          const SizedBox(height: 12),
+          ...rows.map((row) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: _VisitWeekBars(row: row, maxValue: maxValue),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
+class _VisitLegend extends StatelessWidget {
+  const _VisitLegend({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+      ],
+    );
+  }
+}
+
+class _VisitWeekBars extends StatelessWidget {
+  const _VisitWeekBars({required this.row, required this.maxValue});
+
+  final VisitClassificationWeekRow row;
+  final int maxValue;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final labelWidth = constraints.maxWidth < 620 ? 120.0 : 190.0;
+        return Row(
+          children: [
+            SizedBox(
+              width: labelWidth,
+              child: Text(
+                row.weekLabel,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                children: [
+                  _VisitBar(
+                    value: row.firstTime,
+                    maxValue: maxValue,
+                    color: BrandColors.accentYellow,
+                  ),
+                  const SizedBox(height: 5),
+                  _VisitBar(
+                    value: row.returning,
+                    maxValue: maxValue,
+                    color: BrandColors.info,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _VisitBar extends StatelessWidget {
+  const _VisitBar({
+    required this.value,
+    required this.maxValue,
+    required this.color,
+  });
+
+  final int value;
+  final int maxValue;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final factor = maxValue <= 0 ? 0.0 : value / maxValue;
+    return Row(
+      children: [
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: factor,
+              minHeight: 10,
+              color: color,
+              backgroundColor: BrandColors.glassBorder,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 34,
+          child: Text(
+            '$value',
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 enum _HourlyComparisonMode { yesterdayVsLastSales, previousWeek }
 
@@ -6789,6 +7027,10 @@ class _SaleDetailDialogState extends State<_SaleDetailDialog> {
                       _InfoText('Folio diario', identity.dailyFolio),
                       if (identity.hasFullFolio)
                         _InfoText('Folio completo', identity.fullFolio!),
+                      _InfoText(
+                        'Tipo de visita',
+                        order.visitClassificationLabel,
+                      ),
                       _InfoText('Estado', formatOrderStatus(order.status)),
                       _InfoText(
                         'Pago',
