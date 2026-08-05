@@ -363,6 +363,13 @@ double canonicalPaymentAppliedAmount(Payment payment) {
   if (payment.totalAfterDiscount > 0) {
     return _roundMoney(payment.totalAfterDiscount);
   }
+  if (payment.discountAmount > 0) {
+    return _roundMoney(
+      (payment.baseAmount - payment.discountAmount)
+          .clamp(0, double.infinity)
+          .toDouble(),
+    );
+  }
   if (payment.baseAmount > 0) return _roundMoney(payment.baseAmount);
   return 0;
 }

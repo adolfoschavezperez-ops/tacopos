@@ -12,6 +12,7 @@ import '../core/cash/cash_session_timing.dart';
 import '../core/cash/operational_business_date.dart';
 import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
+import '../core/orders/employee_benefit_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_types.dart';
 import '../core/purchases/purchase_capture_discount.dart';
@@ -2412,8 +2413,10 @@ class TacoPosRepository {
       );
     }
 
-    if (type == 'employee_free_meal' || type == 'employee_30') {
-      if (type == 'employee_free_meal' && order.orderType == 'takeout') {
+    final employeeBenefitType = employeeBenefitTypeFromDiscountType(type);
+    if (employeeBenefitType != null) {
+      if (employeeBenefitType == EmployeeBenefitType.dailyMeal &&
+          order.orderType == 'takeout') {
         throw StateError('La comida del dia solo aplica en consumo local.');
       }
       final employee = await _employeeById(employeeId);
@@ -2435,16 +2438,18 @@ class TacoPosRepository {
         businessDate: cashSession.businessDate,
         branchId: order.branchId,
       );
-      final percent = type == 'employee_free_meal' ? 100.0 : 30.0;
-      final name = type == 'employee_free_meal'
-          ? 'Comida empleado del dia'
-          : 'Descuento empleado 30%';
+      final benefit = calculateEmployeeBenefitCheckout(
+        type: employeeBenefitType,
+        eligiblePendingAmount: amountBeforeDiscount,
+      );
       return _discountDetails(
         order: order,
-        type: type,
-        name: name,
-        percent: percent,
-        amountBeforeDiscount: amountBeforeDiscount,
+        type: benefit.discountType,
+        name: benefit.name,
+        percent: benefit.percent,
+        amountBeforeDiscount: benefit.amountBeforeDiscount,
+        discountAmountOverride: benefit.discountAmount,
+        totalAfterDiscountOverride: benefit.totalAfterDiscount,
         employeeBeneficiaryId: employee.id,
         employeeBeneficiaryName: employee.name,
       );
@@ -2623,20 +2628,34 @@ class TacoPosRepository {
     String authorizationMode = '',
     String authorizationStatus = '',
     String reason = '',
+    double? discountAmountOverride,
+    double? totalAfterDiscountOverride,
   }) {
-    final cleanPercent = percent.clamp(0, 100).toDouble();
-    final discountAmount = amountBeforeDiscount * cleanPercent / 100;
-    final totalAfterDiscount = (amountBeforeDiscount - discountAmount).clamp(
-      0,
-      double.infinity,
+    final percentValue = percent.isFinite ? percent : 0.0;
+    final amountValue = amountBeforeDiscount.isFinite
+        ? amountBeforeDiscount
+        : 0.0;
+    final cleanPercent = percentValue.clamp(0, 100).toDouble();
+    final subtotal = roundCheckoutMoney(
+      amountValue.clamp(0, double.infinity).toDouble(),
+    );
+    final discountAmount = roundCheckoutMoney(
+      (discountAmountOverride ?? subtotal * cleanPercent / 100)
+          .clamp(0, subtotal)
+          .toDouble(),
+    );
+    final totalAfterDiscount = roundCheckoutMoney(
+      (totalAfterDiscountOverride ?? subtotal - discountAmount)
+          .clamp(0, double.infinity)
+          .toDouble(),
     );
     return AppliedDiscountDetails(
       type: type,
       name: name,
       percent: cleanPercent,
-      amountBeforeDiscount: amountBeforeDiscount,
+      amountBeforeDiscount: subtotal,
       discountAmount: discountAmount,
-      totalAfterDiscount: totalAfterDiscount.toDouble(),
+      totalAfterDiscount: totalAfterDiscount,
       orderId: order.id,
       restaurantId: order.restaurantId,
       branchId: order.branchId,
