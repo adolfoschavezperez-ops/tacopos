@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/orders/checkout_submission_guard.dart';
 import '../../core/orders/employee_benefit_checkout.dart';
 import '../../core/orders/global_discount_checkout.dart';
 import '../../core/sales/daily_sale_folio.dart';
@@ -1116,6 +1117,7 @@ class _PaymentMethodSheet extends StatefulWidget {
 }
 
 class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
+  final _submissionGuard = CheckoutSubmissionGuard();
   final _cashController = TextEditingController();
   String? _method;
   Employee? _employee;
@@ -1192,39 +1194,47 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
   }
 
   Future<void> _submit() async {
-    final method = _method;
-    if (method == null) {
-      setState(() => _error = 'Selecciona una forma de pago.');
-      return;
-    }
-    if (method == 'employee_consumption' && widget.employees.isEmpty) {
-      setState(
-        () => _error = 'No hay empleados disponibles para este beneficio.',
-      );
-      return;
-    }
-    if (method == 'employee_consumption' && _employee == null) {
-      setState(() => _error = 'Selecciona un empleado.');
-      return;
-    }
-    final cashDetails = method == 'cash' ? _cashDetails() : null;
-    if (method == 'cash' && cashDetails == null) {
-      return;
-    }
+    if (!_submissionGuard.acquire()) return;
+    try {
+      final method = _method;
+      if (method == null) {
+        setState(() => _error = 'Selecciona una forma de pago.');
+        return;
+      }
+      if (method == 'employee_consumption' && widget.employees.isEmpty) {
+        setState(
+          () => _error = 'No hay empleados disponibles para este beneficio.',
+        );
+        return;
+      }
+      if (method == 'employee_consumption' && _employee == null) {
+        setState(() => _error = 'Selecciona un empleado.');
+        return;
+      }
+      final cashDetails = method == 'cash' ? _cashDetails() : null;
+      if (method == 'cash' && cashDetails == null) {
+        return;
+      }
 
-    setState(() => _submitting = true);
-    final ok = await widget.onConfirm(
-      method,
-      cashDetails,
-      _employee,
-      _discount,
-    );
-    if (!mounted) {
-      return;
-    }
-    setState(() => _submitting = false);
-    if (ok) {
-      Navigator.pop(context);
+      setState(() => _submitting = true);
+      final ok = await widget.onConfirm(
+        method,
+        cashDetails,
+        _employee,
+        _discount,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() => _submitting = false);
+      if (ok) {
+        Navigator.pop(context);
+      }
+    } finally {
+      _submissionGuard.release();
+      if (mounted && _submitting) {
+        setState(() => _submitting = false);
+      }
     }
   }
 
