@@ -550,6 +550,7 @@ class DiscountUsageRow {
     required this.discountType,
     required this.discountName,
     required this.amountBeforeDiscount,
+    required this.discountPercent,
     required this.discountAmount,
     required this.totalAfterDiscount,
     required this.status,
@@ -569,6 +570,7 @@ class DiscountUsageRow {
   final String discountType;
   final String discountName;
   final double amountBeforeDiscount;
+  final double discountPercent;
   final double discountAmount;
   final double totalAfterDiscount;
   final String status;
@@ -584,12 +586,17 @@ class DiscountUsageRow {
 
   factory DiscountUsageRow.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
+    return DiscountUsageRow.fromMap(doc.id, data);
+  }
+
+  factory DiscountUsageRow.fromMap(String id, Map<String, dynamic> data) {
     return DiscountUsageRow(
-      id: doc.id,
+      id: id,
       businessDate: data['businessDate'] as String? ?? '',
       discountType: data['discountType'] as String? ?? '',
       discountName: data['discountName'] as String? ?? '',
       amountBeforeDiscount: _numberToDouble(data['amountBeforeDiscount']),
+      discountPercent: _numberToDouble(data['discountPercent']),
       discountAmount: _numberToDouble(data['discountAmount']),
       totalAfterDiscount: _numberToDouble(data['totalAfterDiscount']),
       status: data['status'] as String? ?? 'active',
@@ -11903,6 +11910,7 @@ class TacoPosRepository {
             'authorizationStatus': discount.authorizationStatus,
             'discountType': discount.type,
             'discountName': discount.name,
+            'discountPercent': discount.percent,
             'orderId': freshOrder.id,
             'paymentId': paymentRef.id,
             'amountBeforeDiscount': discount.amountBeforeDiscount,
@@ -12488,6 +12496,7 @@ class TacoPosRepository {
       'authorizationStatus': discount.authorizationStatus,
       'discountType': discount.type,
       'discountName': discount.name,
+      'discountPercent': discount.percent,
       'orderId': order.id,
       'paymentId': paymentId,
       'amountBeforeDiscount': discount.amountBeforeDiscount,
