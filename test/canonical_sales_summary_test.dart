@@ -51,6 +51,68 @@ void main() {
     },
   );
 
+  test('comida del dia al 100 no genera ingreso de consumo empleado', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(
+        total: 0,
+        discountFields: const {'discountAmount': 100, 'discountPercent': 100},
+        payment: payment(
+          method: 'employee_consumption',
+          base: 100,
+          charged: 0,
+          discountAmount: 100,
+          applied: 0,
+        ),
+      ),
+    ]);
+
+    expect(summary.grossSales, 100);
+    expect(summary.discountTotal, 100);
+    expect(summary.netSales, 0);
+    expect(summary.employeeConsumption, 0);
+    expect(summary.totalCollected, 0);
+  });
+
+  test('descuento empleado 30 cobra solo el neto', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(
+        total: 70,
+        discountFields: const {'discountAmount': 30, 'discountPercent': 30},
+        payment: payment(
+          method: 'employee_consumption',
+          base: 100,
+          charged: 70,
+          discountAmount: 30,
+          applied: 70,
+        ),
+      ),
+    ]);
+
+    expect(summary.grossSales, 100);
+    expect(summary.discountTotal, 30);
+    expect(summary.netSales, 70);
+    expect(summary.employeeConsumption, 70);
+    expect(summary.totalCollected, 70);
+  });
+
+  test('pago historico con descuento 100 y charged cero no cae al bruto', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(
+        total: 0,
+        discountFields: const {'discountAmount': 100},
+        payment: payment(
+          method: 'employee_consumption',
+          base: 100,
+          charged: 0,
+          discountAmount: 100,
+        ),
+      ),
+    ]);
+
+    expect(summary.employeeConsumption, 0);
+    expect(summary.totalCollected, 0);
+  });
+
   test('efectivo con cambio: neto 80 recibido 100 cambio 20 cobrado 80', () {
     final summary = buildCanonicalSalesSummary([
       bundle(
@@ -309,6 +371,7 @@ Payment payment({
   required double base,
   required double charged,
   double? applied,
+  double discountAmount = 0,
   double? received,
   double? change,
   double cardFee = 0,
@@ -331,6 +394,7 @@ Payment payment({
     appliedAmount: applied,
     cashReceivedAmount: received,
     cashChangeAmount: change,
+    discountAmount: discountAmount,
     cardFeeAbsorbedAmount: cardFee,
     businessDate: businessDate,
     createdAt: createdAt,

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../core/orders/checkout_submission_guard.dart';
+import '../../core/orders/employee_benefit_checkout.dart';
 import '../../core/orders/global_discount_checkout.dart';
 import '../../core/sales/daily_sale_folio.dart';
 import '../../core/theme/brand_colors.dart';
@@ -1115,6 +1117,7 @@ class _PaymentMethodSheet extends StatefulWidget {
 }
 
 class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
+  final _submissionGuard = CheckoutSubmissionGuard();
   final _cashController = TextEditingController();
   String? _method;
   Employee? _employee;
@@ -1177,12 +1180,6 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
   Future<void> _applyDiscount() async {
     final discount = await widget.onApplyDiscount(widget.total);
     if (!mounted || discount == null) return;
-    if (_discount != null && discount.percent < _discount!.percent) {
-      setState(() {
-        _error = 'Ya hay un descuento mayor aplicado.';
-      });
-      return;
-    }
     setState(() {
       _discount = discount;
       _error = '';
@@ -1197,39 +1194,47 @@ class _PaymentMethodSheetState extends State<_PaymentMethodSheet> {
   }
 
   Future<void> _submit() async {
-    final method = _method;
-    if (method == null) {
-      setState(() => _error = 'Selecciona una forma de pago.');
-      return;
-    }
-    if (method == 'employee_consumption' && widget.employees.isEmpty) {
-      setState(
-        () => _error = 'No hay empleados disponibles para este beneficio.',
-      );
-      return;
-    }
-    if (method == 'employee_consumption' && _employee == null) {
-      setState(() => _error = 'Selecciona un empleado.');
-      return;
-    }
-    final cashDetails = method == 'cash' ? _cashDetails() : null;
-    if (method == 'cash' && cashDetails == null) {
-      return;
-    }
+    if (!_submissionGuard.acquire()) return;
+    try {
+      final method = _method;
+      if (method == null) {
+        setState(() => _error = 'Selecciona una forma de pago.');
+        return;
+      }
+      if (method == 'employee_consumption' && widget.employees.isEmpty) {
+        setState(
+          () => _error = 'No hay empleados disponibles para este beneficio.',
+        );
+        return;
+      }
+      if (method == 'employee_consumption' && _employee == null) {
+        setState(() => _error = 'Selecciona un empleado.');
+        return;
+      }
+      final cashDetails = method == 'cash' ? _cashDetails() : null;
+      if (method == 'cash' && cashDetails == null) {
+        return;
+      }
 
-    setState(() => _submitting = true);
-    final ok = await widget.onConfirm(
-      method,
-      cashDetails,
-      _employee,
-      _discount,
-    );
-    if (!mounted) {
-      return;
-    }
-    setState(() => _submitting = false);
-    if (ok) {
-      Navigator.pop(context);
+      setState(() => _submitting = true);
+      final ok = await widget.onConfirm(
+        method,
+        cashDetails,
+        _employee,
+        _discount,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() => _submitting = false);
+      if (ok) {
+        Navigator.pop(context);
+      }
+    } finally {
+      _submissionGuard.release();
+      if (mounted && _submitting) {
+        setState(() => _submitting = false);
+      }
     }
   }
 
@@ -1737,11 +1742,18 @@ class _DiscountDialogState extends State<_DiscountDialog> {
             '${widget.generalDiscount.name} ${widget.generalDiscount.percent.toStringAsFixed(0)}%',
           ),
         ),
-      const DropdownMenuItem(
-        value: 'employee_free_meal',
-        child: Text('Comida empleado del dia'),
+      DropdownMenuItem(
+        value: employeeDailyMealDiscountType,
+        child: Text(
+          '$employeeDailyMealDiscountName - ${employeeDailyMealDiscountPercent.toStringAsFixed(0)}%',
+        ),
       ),
-      const DropdownMenuItem(value: 'employee_30', child: Text('Empleado 30%')),
+      DropdownMenuItem(
+        value: employeeRegularDiscountType,
+        child: Text(
+          '$employeeRegularDiscountName - ${employeeRegularDiscountPercent.toStringAsFixed(0)}%',
+        ),
+      ),
       const DropdownMenuItem(
         value: 'family_friend_20',
         child: Text('Familia / amigos 20%'),
@@ -1751,8 +1763,8 @@ class _DiscountDialogState extends State<_DiscountDialog> {
     if (!options.any((item) => item.value == _type)) {
       _type = options.first.value!;
     }
-    final needsEmployee =
-        _type == 'employee_free_meal' || _type == 'employee_30';
+    final employeeBenefitType = employeeBenefitTypeFromDiscountType(_type);
+    final needsEmployee = employeeBenefitType != null;
     final needsPartner = _type == 'partner_50';
     final employeeOptions = _employeeBenefitOptions;
     final canRequestPin =
@@ -1777,6 +1789,8 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                 items: options,
                 onChanged: (value) => setState(() {
                   _type = value ?? _type;
+                  _employee = null;
+                  _partner = null;
                   _error = '';
                   _info = '';
                 }),
@@ -1803,7 +1817,11 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                           ),
                         )
                         .toList(),
-                    onChanged: (value) => setState(() => _employee = value),
+                    onChanged: (value) => setState(() {
+                      _employee = value;
+                      _error = '';
+                      _info = '';
+                    }),
                   ),
               ],
               if (needsPartner) ...[
@@ -1853,6 +1871,16 @@ class _DiscountDialogState extends State<_DiscountDialog> {
                   ),
                 ),
               ],
+              if (employeeBenefitType != null) ...[
+                const SizedBox(height: 12),
+                _EmployeeBenefitPreview(
+                  employee: _employee?.name ?? 'Selecciona empleado',
+                  result: calculateEmployeeBenefitCheckout(
+                    type: employeeBenefitType,
+                    eligiblePendingAmount: widget.amount,
+                  ),
+                ),
+              ],
               if (_error.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -1881,8 +1909,8 @@ class _DiscountDialogState extends State<_DiscountDialog> {
   }
 
   Future<void> _apply() async {
-    if ((_type == 'employee_free_meal' || _type == 'employee_30') &&
-        _employeeBenefitOptions.isEmpty) {
+    final employeeBenefitType = employeeBenefitTypeFromDiscountType(_type);
+    if (employeeBenefitType != null && _employeeBenefitOptions.isEmpty) {
       setState(() {
         _error = 'No hay empleados disponibles para este beneficio.';
       });
@@ -1916,6 +1944,50 @@ class _DiscountDialogState extends State<_DiscountDialog> {
         _busy = false;
       });
     }
+  }
+}
+
+class _EmployeeBenefitPreview extends StatelessWidget {
+  const _EmployeeBenefitPreview({required this.employee, required this.result});
+
+  final String employee;
+  final EmployeeBenefitCheckoutResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: BrandColors.accentYellow.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: BrandColors.accentYellow.withValues(alpha: 0.24),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _PreviewRow(label: 'Empleado', textValue: employee),
+            _PreviewRow(
+              label: 'Subtotal elegible',
+              value: result.amountBeforeDiscount,
+            ),
+            _PreviewRow(
+              label: 'Beneficio',
+              textValue:
+                  '${result.name} - ${result.percent.toStringAsFixed(0)}%',
+            ),
+            _PreviewRow(label: 'Descuento', value: result.discountAmount),
+            _PreviewRow(
+              label: 'Total final',
+              value: result.totalAfterDiscount,
+              highlight: true,
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
