@@ -673,6 +673,7 @@ class PurchaseSupplierReportRow {
     required this.balance,
     required this.noteCount,
     required this.paymentWeekdayName,
+    this.purchases = const [],
   });
 
   final String supplierId;
@@ -682,6 +683,7 @@ class PurchaseSupplierReportRow {
   final double balance;
   final int noteCount;
   final String paymentWeekdayName;
+  final List<SupplierPurchase> purchases;
 }
 
 class PurchaseItemReportRow {

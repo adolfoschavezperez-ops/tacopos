@@ -2078,6 +2078,23 @@ class TacoPosRepository {
         });
   }
 
+  Future<List<SupplierPurchase>> getSupplierPurchasesForPeriod({
+    required DateTime startInclusive,
+    required DateTime endExclusive,
+    bool currentBranchOnly = true,
+  }) async {
+    _requirePurchaseAccess();
+    final snapshot = await _supplierPurchasesRef
+        .where('purchaseDate', isGreaterThanOrEqualTo: startInclusive)
+        .where('purchaseDate', isLessThan: endExclusive)
+        .get();
+    final purchases = snapshot.docs.map(SupplierPurchase.fromDoc).toList()
+      ..sort((a, b) => b.purchaseDate.compareTo(a.purchaseDate));
+    return currentBranchOnly
+        ? _filterCurrentBranch(purchases, (purchase) => purchase.branchId)
+        : purchases;
+  }
+
   Stream<List<SupplierPayment>> watchSupplierPayments({
     bool currentBranchOnly = true,
   }) {
@@ -3553,6 +3570,7 @@ class TacoPosRepository {
           balance: (totalPurchased - totalPaid).clamp(0, double.infinity),
           noteCount: supplierPurchases.length,
           paymentWeekdayName: supplier?.paymentWeekdayName ?? 'Sin dia fijo',
+          purchases: purchaseList,
         ),
       );
     }
