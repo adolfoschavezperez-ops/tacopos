@@ -168,6 +168,68 @@ void main() {
       expect(result.hasDiscrepancy, isFalse);
     });
 
+    test('reconstruye caso historico 325 con free meal 230 y 95', () {
+      final result = auditSalesIntegrity(
+        _order(
+          id: 'Z7nGWf',
+          total: 325,
+          paidTotal: 325,
+          pendingTotal: 0,
+          explicitDiscount: 95,
+          discountPercent: 100,
+        ),
+        [
+          _item(id: 'active-1', total: 230),
+          _item(id: 'active-2', total: 95),
+          _item(id: 'cancelled-1', total: 66, status: 'cancelled'),
+        ],
+        [
+          _payment(
+            id: 'free-230',
+            method: 'employee_consumption',
+            baseAmount: 230,
+            chargedAmount: 0,
+            received: 0,
+            change: 0,
+            discountAmount: 230,
+            totalAfterDiscount: 0,
+            appliedDiscountPercent: 100,
+            appliedDiscountType: 'employee_free_meal',
+            appliedDiscountName: 'Employee free meal',
+          ),
+          _payment(
+            id: 'free-95',
+            method: 'employee_consumption',
+            baseAmount: 95,
+            chargedAmount: 0,
+            received: 0,
+            change: 0,
+            discountAmount: 95,
+            totalAfterDiscount: 0,
+            appliedDiscountPercent: 100,
+            appliedDiscountType: 'employee_free_meal',
+            appliedDiscountName: 'Employee free meal',
+          ),
+        ],
+      );
+
+      expect(result.storedOrderDiscount, 95);
+      expect(result.reconstructedPaymentDiscount, 325);
+      expect(result.historicalDiscountDifference, 230);
+      expect(result.monetaryDiscountApplied, 325);
+      expect(result.discountPercentNormalized, 1);
+      expect(result.netCustomerDue, 0);
+      expect(result.moneyPaymentsApplied, 0);
+      expect(result.settledTotal, 325);
+      expect(result.diffPaidTotal, 0);
+      expect(result.diffPendingTotal, 0);
+      expect(result.failedCodes, contains('historical_discount_aggregate'));
+      expect(result.hasHistoricalDiscountAggregateMismatch, isTrue);
+      expect(result.failedCodes, isNot(contains('payments_order')));
+      expect(result.failedCodes, isNot(contains('paid_total')));
+      expect(result.failedCodes, isNot(contains('pending_total')));
+    });
+
     test('maps discount type labels from payment metadata', () {
       final result = auditSalesIntegrity(
         _order(total: 100, paidTotal: 100),
@@ -261,6 +323,7 @@ PosOrder _order({
   double paidTotal = 0,
   double pendingTotal = 0,
   double explicitDiscount = 0,
+  double? discountPercent,
 }) {
   return PosOrder(
     id: id,
@@ -275,11 +338,24 @@ PosOrder _order({
     personNames: const {},
     orderType: 'dine_in',
     explicitDiscount: explicitDiscount,
-    explicitDiscountFields: explicitDiscount > 0
-        ? {'discountAmount': explicitDiscount}
-        : const {},
+    explicitDiscountFields: _discountFields(explicitDiscount, discountPercent),
     paidAt: paymentStatus == 'paid' ? DateTime(2026) : null,
   );
+}
+
+Map<String, double> _discountFields(
+  double explicitDiscount,
+  double? discountPercent,
+) {
+  if (explicitDiscount <= 0) return const {};
+  final fields = {
+    'totalDiscountAmount': explicitDiscount,
+    'discountAmount': explicitDiscount,
+  };
+  if (discountPercent != null) {
+    fields['discountPercent'] = discountPercent;
+  }
+  return fields;
 }
 
 OrderItem _item({

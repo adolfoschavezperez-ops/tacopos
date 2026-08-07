@@ -14,6 +14,7 @@ import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/employee_benefit_checkout.dart';
 import '../core/orders/order_activity.dart';
+import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
 import '../core/purchases/purchase_capture_discount.dart';
 import '../core/reports/canonical_sales_summary.dart';
@@ -10761,6 +10762,9 @@ class TacoPosRepository {
       order,
       baseAmount,
     );
+    final previousActivePayments = (await getOrderPaymentsOnce(
+      order.id,
+    )).where((payment) => payment.isActive).toList();
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final paymentData = _paymentData(
       order: order,
@@ -10782,8 +10786,8 @@ class TacoPosRepository {
         final item = OrderItem.fromDoc(doc);
         return item.paymentStatus != 'paid' && !item.isCancelled;
       }),
-      paidTotal: order.total,
       discount: effectiveDiscount,
+      previousActivePayments: previousActivePayments,
     );
     invalidateReportDataCache(
       branchId: order.branchId,
@@ -10852,6 +10856,9 @@ class TacoPosRepository {
       order,
       baseAmount,
     );
+    final previousActivePayments = (await getOrderPaymentsOnce(
+      order.id,
+    )).where((payment) => payment.isActive).toList();
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final selectedItemDocs = itemsSnapshot.docs.where((doc) {
       final item = OrderItem.fromDoc(doc);
@@ -10881,8 +10888,8 @@ class TacoPosRepository {
         paymentRef: paymentRef,
         paymentData: paymentData,
         itemDocs: selectedItemDocs,
-        paidTotal: order.total,
         discount: effectiveDiscount,
+        previousActivePayments: previousActivePayments,
       );
       invalidateReportDataCache(
         branchId: order.branchId,
@@ -10892,7 +10899,7 @@ class TacoPosRepository {
       return result;
     }
     final batch = _db.batch();
-    _setPayment(
+    final paymentData = _setPayment(
       batch: batch,
       paymentRef: paymentRef,
       order: order,
@@ -10923,6 +10930,9 @@ class TacoPosRepository {
       baseAmount: baseAmount,
       closeItemsSnapshot: itemsSnapshot,
       discount: effectiveDiscount,
+      previousActivePayments: previousActivePayments,
+      newPaymentData: paymentData,
+      newPaymentId: paymentRef.id,
     );
     _recordDiscountUsageInBatch(
       batch,
@@ -11014,6 +11024,9 @@ class TacoPosRepository {
       order,
       baseAmount,
     );
+    final previousActivePayments = (await getOrderPaymentsOnce(
+      order.id,
+    )).where((payment) => payment.isActive).toList();
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final selectedItemDocs = itemsSnapshot.docs.where((doc) {
       final item = OrderItem.fromDoc(doc);
@@ -11042,8 +11055,8 @@ class TacoPosRepository {
         paymentRef: paymentRef,
         paymentData: paymentData,
         itemDocs: selectedItemDocs,
-        paidTotal: order.total,
         discount: effectiveDiscount,
+        previousActivePayments: previousActivePayments,
       );
       invalidateReportDataCache(
         branchId: order.branchId,
@@ -11053,7 +11066,7 @@ class TacoPosRepository {
       return result;
     }
     final batch = _db.batch();
-    _setPayment(
+    final paymentData = _setPayment(
       batch: batch,
       paymentRef: paymentRef,
       order: order,
@@ -11083,6 +11096,9 @@ class TacoPosRepository {
       baseAmount: baseAmount,
       closeItemsSnapshot: itemsSnapshot,
       discount: effectiveDiscount,
+      previousActivePayments: previousActivePayments,
+      newPaymentData: paymentData,
+      newPaymentId: paymentRef.id,
     );
     _recordDiscountUsageInBatch(
       batch,
@@ -11141,6 +11157,9 @@ class TacoPosRepository {
       order,
       baseAmount,
     );
+    final previousActivePayments = (await getOrderPaymentsOnce(
+      order.id,
+    )).where((payment) => payment.isActive).toList();
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
     final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
@@ -11162,8 +11181,8 @@ class TacoPosRepository {
         paymentRef: paymentRef,
         paymentData: paymentData,
         itemDocs: itemsSnapshot.docs,
-        paidTotal: order.total,
         discount: effectiveDiscount,
+        previousActivePayments: previousActivePayments,
       );
       invalidateReportDataCache(
         branchId: order.branchId,
@@ -11173,7 +11192,7 @@ class TacoPosRepository {
       return result;
     }
     final batch = _db.batch();
-    _setPayment(
+    final paymentData = _setPayment(
       batch: batch,
       paymentRef: paymentRef,
       order: order,
@@ -11194,6 +11213,9 @@ class TacoPosRepository {
       closeItemsSnapshot: itemsSnapshot,
       markItemsOnlyIfClosed: true,
       discount: effectiveDiscount,
+      previousActivePayments: previousActivePayments,
+      newPaymentData: paymentData,
+      newPaymentId: paymentRef.id,
     );
     _recordDiscountUsageInBatch(
       batch,
@@ -11239,6 +11261,9 @@ class TacoPosRepository {
       return const PaymentResult(allPaid: true);
     }
 
+    final previousActivePayments = (await getOrderPaymentsOnce(
+      order.id,
+    )).where((payment) => payment.isActive).toList();
     final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final paymentData = _paymentData(
       order: order,
@@ -11258,7 +11283,7 @@ class TacoPosRepository {
         final item = OrderItem.fromDoc(doc);
         return item.paymentStatus != 'paid' && !item.isCancelled;
       }),
-      paidTotal: order.total,
+      previousActivePayments: previousActivePayments,
     );
     invalidateReportDataCache(
       branchId: order.branchId,
@@ -11807,10 +11832,17 @@ class TacoPosRepository {
     required QuerySnapshot<Map<String, dynamic>> closeItemsSnapshot,
     bool markItemsOnlyIfClosed = false,
     AppliedDiscountDetails? discount,
+    Iterable<Payment> previousActivePayments = const [],
+    Map<String, Object?>? newPaymentData,
+    String? newPaymentId,
   }) {
-    final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
-    final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
-    final allPaid = pendingTotal <= 0.01;
+    final totals = _reconcileOrderPayments(
+      order: order,
+      previousActivePayments: previousActivePayments,
+      newPaymentData: newPaymentData,
+      newPaymentId: newPaymentId,
+    );
+    final allPaid = totals.pendingTotal <= 0.01;
 
     if (allPaid) {
       for (final doc in closeItemsSnapshot.docs) {
@@ -11823,15 +11855,19 @@ class TacoPosRepository {
       _closeOrderInBatch(
         batch,
         order,
-        paidTotal: order.total,
         discount: discount,
+        reconciliationTotals: totals,
       );
     } else {
       batch.update(_ordersRef.doc(order.id), {
         'paymentStatus': 'partial',
-        'paidTotal': paidTotal,
-        'pendingTotal': pendingTotal,
-        ..._orderDiscountSnapshot(discount, baseAmount, order: order),
+        'paidTotal': totals.paidTotal,
+        'pendingTotal': totals.pendingTotal,
+        ..._orderAggregateSnapshotFromPayments(
+          totals: totals,
+          order: order,
+          discount: discount,
+        ),
         'updatedAt': FieldValue.serverTimestamp(),
       });
       if (!markItemsOnlyIfClosed) {
@@ -11848,8 +11884,8 @@ class TacoPosRepository {
     required DocumentReference<Map<String, dynamic>> paymentRef,
     required Map<String, Object?> paymentData,
     required Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> itemDocs,
-    required double paidTotal,
     AppliedDiscountDetails? discount,
+    Iterable<Payment> previousActivePayments = const [],
   }) async {
     final config = await _loadSaleFolioConfig();
     final orderRef = _ordersRef.doc(order.id);
@@ -11876,7 +11912,13 @@ class TacoPosRepository {
         final businessDate =
             _businessDateForOrder(freshOrder) ??
             businessDateForOpenCashSession(cashSession);
-        if (freshOrder.total - paidTotal > 0.01) {
+        final totals = _reconcileOrderPayments(
+          order: freshOrder,
+          previousActivePayments: previousActivePayments,
+          newPaymentData: paymentData,
+          newPaymentId: paymentRef.id,
+        );
+        if (freshOrder.total - totals.paidTotal > 0.01) {
           throw StateError('La venta aun tiene saldo pendiente.');
         }
         if (!config.appliesToBusinessDate(businessDate)) {
@@ -11892,12 +11934,12 @@ class TacoPosRepository {
           transaction.update(orderRef, {
             'status': 'paid',
             'paymentStatus': 'paid',
-            'paidTotal': freshOrder.total,
-            'pendingTotal': 0.0,
-            ..._orderDiscountSnapshot(
-              discount,
-              freshOrder.total,
+            'paidTotal': totals.paidTotal,
+            'pendingTotal': totals.pendingTotal,
+            ..._orderAggregateSnapshotFromPayments(
+              totals: totals,
               order: freshOrder,
+              discount: discount,
             ),
             'paidAt': FieldValue.serverTimestamp(),
             ..._currentBranchFields,
@@ -12011,12 +12053,12 @@ class TacoPosRepository {
         transaction.update(orderRef, {
           'status': 'paid',
           'paymentStatus': 'paid',
-          'paidTotal': freshOrder.total,
-          'pendingTotal': 0.0,
-          ..._orderDiscountSnapshot(
-            discount,
-            freshOrder.total,
+          'paidTotal': totals.paidTotal,
+          'pendingTotal': totals.pendingTotal,
+          ..._orderAggregateSnapshotFromPayments(
+            totals: totals,
             order: freshOrder,
+            discount: discount,
           ),
           ...folioFields,
           'paidAt': now,
@@ -12216,15 +12258,25 @@ class TacoPosRepository {
   void _closeOrderInBatch(
     WriteBatch batch,
     PosOrder order, {
-    required double paidTotal,
     AppliedDiscountDetails? discount,
+    OrderPaymentReconciliationTotals? reconciliationTotals,
   }) {
+    final totals =
+        reconciliationTotals ??
+        reconcileOrderPayments(
+          orderGrossTotal: order.total,
+          activePayments: const [],
+        );
     batch.update(_ordersRef.doc(order.id), {
       'status': 'paid',
       'paymentStatus': 'paid',
-      'paidTotal': paidTotal,
-      'pendingTotal': 0.0,
-      ..._orderDiscountSnapshot(discount, order.total, order: order),
+      'paidTotal': totals.paidTotal,
+      'pendingTotal': totals.pendingTotal,
+      ..._orderAggregateSnapshotFromPayments(
+        totals: totals,
+        order: order,
+        discount: discount,
+      ),
       'paidAt': FieldValue.serverTimestamp(),
       ..._currentBranchFields,
       'updatedAt': FieldValue.serverTimestamp(),
@@ -12288,7 +12340,7 @@ class TacoPosRepository {
     }
   }
 
-  void _setPayment({
+  Map<String, Object?> _setPayment({
     required WriteBatch batch,
     required DocumentReference<Map<String, dynamic>> paymentRef,
     required PosOrder order,
@@ -12305,24 +12357,23 @@ class TacoPosRepository {
     CashPaymentDetails? cashDetails,
     AppliedDiscountDetails? discount,
   }) {
-    batch.set(
-      paymentRef,
-      _paymentData(
-        order: order,
-        cashSession: cashSession,
-        type: type,
-        method: method,
-        baseAmount: baseAmount,
-        personNumber: personNumber,
-        personName: personName,
-        employeeId: employeeId,
-        employeeName: employeeName,
-        platformId: platformId,
-        platformName: platformName,
-        cashDetails: cashDetails,
-        discount: discount,
-      ),
+    final data = _paymentData(
+      order: order,
+      cashSession: cashSession,
+      type: type,
+      method: method,
+      baseAmount: baseAmount,
+      personNumber: personNumber,
+      personName: personName,
+      employeeId: employeeId,
+      employeeName: employeeName,
+      platformId: platformId,
+      platformName: platformName,
+      cashDetails: cashDetails,
+      discount: discount,
     );
+    batch.set(paymentRef, data);
+    return data;
   }
 
   Map<String, Object?> _paymentData({
@@ -12452,33 +12503,35 @@ class TacoPosRepository {
     };
   }
 
-  Map<String, Object?> _orderDiscountSnapshot(
-    AppliedDiscountDetails? discount,
-    double grossSubtotal, {
-    PosOrder? order,
+  OrderPaymentReconciliationTotals _reconcileOrderPayments({
+    required PosOrder order,
+    required Iterable<Payment> previousActivePayments,
+    Map<String, Object?>? newPaymentData,
+    String? newPaymentId,
   }) {
-    if (discount == null &&
-        order?.discountSource == globalDiscountSource &&
-        order!.explicitDiscount > 0.01) {
-      return {
-        'discountApplied': true,
-        'discountSource': globalDiscountSource,
-        'discountCatalogId': order.discountCatalogId ?? globalDiscountCatalogId,
-        'discountType': order.discountType ?? 'general',
-        'discountName': order.discountName,
-        'discountConcept': order.discountConcept ?? order.discountName,
-        'discountPercent': order.discountPercent ?? 0.0,
-        'discountRate': order.discountRate ?? 0.0,
-        'discountAmount': order.explicitDiscount,
-        'totalDiscountAmount': order.explicitDiscount,
-        'grossSubtotal': order.grossSubtotal ?? order.total,
-        'netTotal':
-            order.netTotal ??
-            (order.grossSubtotal ?? order.total) - order.explicitDiscount,
-      };
-    }
-    final netTotal = discount?.totalAfterDiscount ?? grossSubtotal;
-    if (discount == null || discount.discountAmount <= 0.01) {
+    final entries = <PaymentSettlementInput>[
+      ...previousActivePayments
+          .where((payment) => payment.isActive)
+          .map(PaymentSettlementInput.fromPayment),
+      if (newPaymentData != null)
+        PaymentSettlementInput.fromPaymentData(
+          newPaymentId ?? '',
+          newPaymentData,
+        ),
+    ];
+    return reconcileOrderPayments(
+      orderGrossTotal: order.total,
+      activePayments: entries,
+    );
+  }
+
+  Map<String, Object?> _orderAggregateSnapshotFromPayments({
+    required OrderPaymentReconciliationTotals totals,
+    PosOrder? order,
+    AppliedDiscountDetails? discount,
+  }) {
+    final employee = AppSession.instance.employee;
+    if (!totals.discountApplied) {
       return {
         'discountApplied': false,
         'discountSource': noDiscountSource,
@@ -12487,60 +12540,69 @@ class TacoPosRepository {
         'discountName': null,
         'discountConcept': null,
         'discountPercent': 0.0,
+        'effectiveDiscountPercent': 0.0,
         'discountRate': 0.0,
         'discountAmount': 0.0,
         'totalDiscountAmount': 0.0,
-        'grossSubtotal': grossSubtotal,
-        'netTotal': grossSubtotal,
+        'grossSubtotal': totals.orderGrossTotal,
+        'netTotal': totals.orderGrossTotal,
+        'monetaryPaid': totals.monetaryPaid,
+        'totalLiquidated': totals.totalLiquidated,
       };
     }
-    final employee = AppSession.instance.employee;
-    final isGlobalDiscount =
-        order?.discountSource == globalDiscountSource &&
-        discount.type == (order?.discountType ?? 'general');
-    final snapshotGross = isGlobalDiscount
-        ? order?.grossSubtotal ?? order?.total ?? grossSubtotal
-        : discount.amountBeforeDiscount;
-    final snapshotDiscount = isGlobalDiscount
-        ? order?.explicitDiscount ?? discount.discountAmount
-        : discount.discountAmount;
-    final snapshotNet = isGlobalDiscount
-        ? order?.netTotal ?? snapshotGross - snapshotDiscount
-        : netTotal;
+
+    final type = totals.lastDiscountType?.trim().isNotEmpty == true
+        ? totals.lastDiscountType!.trim()
+        : discount?.type ?? order?.discountType ?? 'mixed';
+    final name = totals.lastDiscountName?.trim().isNotEmpty == true
+        ? totals.lastDiscountName!.trim()
+        : discount?.name ?? order?.discountName ?? 'Descuento';
+    final configuredPercent = totals.lastDiscountPercent > 0
+        ? totals.lastDiscountPercent
+        : discount?.percent ?? order?.discountPercent ?? 0.0;
+    final effectivePercent = totals.effectiveDiscountPercent;
     return {
       'discountApplied': true,
-      'discountSource': isGlobalDiscount ? globalDiscountSource : discount.type,
-      'discountCatalogId': isGlobalDiscount
-          ? order?.discountCatalogId ?? globalDiscountCatalogId
-          : discount.discountAuthorizationRequestId?.trim().isNotEmpty == true
-          ? discount.discountAuthorizationRequestId
-          : discount.type,
-      'discountType': discount.type,
-      'discountName': discount.name,
-      'discountConcept': discount.name,
-      'discountPercent': discount.percent,
-      'discountRate': discount.percent / 100,
-      'discountAmount': snapshotDiscount,
-      'totalDiscountAmount': snapshotDiscount,
-      'grossSubtotal': snapshotGross,
-      'netTotal': snapshotNet,
-      'discountReason': discount.reason,
-      if (!isGlobalDiscount) 'discountAppliedAt': FieldValue.serverTimestamp(),
-      'discountAppliedByEmployeeId': employee?.id ?? '',
-      'discountAppliedByEmployeeName': employee?.name ?? '',
-      'discountAuthorizedByEmployeeId':
-          discount.authorizedByPartnerLinkedEmployeeId ??
-          discount.authorizedByPartnerId ??
-          '',
-      'discountAuthorizedByEmployeeName':
-          discount.authorizedByPartnerLinkedEmployeeName ??
-          discount.authorizedByPartnerName ??
-          '',
-      'lastAppliedDiscountType': discount.type,
-      'lastAppliedDiscountName': discount.name,
-      'lastDiscountReason': discount.reason,
-      'lastDiscountAuthorizationMode': discount.authorizationMode,
-      'lastDiscountAuthorizationStatus': discount.authorizationStatus,
+      'discountSource': type,
+      'discountCatalogId':
+          discount?.discountAuthorizationRequestId?.trim().isNotEmpty == true
+          ? discount!.discountAuthorizationRequestId
+          : order?.discountCatalogId ?? type,
+      'discountType': type,
+      'discountName': name,
+      'discountConcept': name,
+      'discountPercent': configuredPercent > 0
+          ? configuredPercent
+          : effectivePercent,
+      'effectiveDiscountPercent': effectivePercent,
+      'discountRate':
+          (configuredPercent > 0 ? configuredPercent : effectivePercent) / 100,
+      'discountAmount': totals.discountAmount,
+      'totalDiscountAmount': totals.discountAmount,
+      'grossSubtotal': totals.orderGrossTotal,
+      'netTotal': totals.netTotal,
+      'monetaryPaid': totals.monetaryPaid,
+      'totalLiquidated': totals.totalLiquidated,
+      if (discount?.reason.trim().isNotEmpty == true)
+        'discountReason': discount!.reason,
+      if (discount != null) 'discountAppliedAt': FieldValue.serverTimestamp(),
+      if (discount != null) ...{
+        'discountAppliedByEmployeeId': employee?.id ?? '',
+        'discountAppliedByEmployeeName': employee?.name ?? '',
+        'discountAuthorizedByEmployeeId':
+            discount.authorizedByPartnerLinkedEmployeeId ??
+            discount.authorizedByPartnerId ??
+            '',
+        'discountAuthorizedByEmployeeName':
+            discount.authorizedByPartnerLinkedEmployeeName ??
+            discount.authorizedByPartnerName ??
+            '',
+        'lastAppliedDiscountType': discount.type,
+        'lastAppliedDiscountName': discount.name,
+        'lastDiscountReason': discount.reason,
+        'lastDiscountAuthorizationMode': discount.authorizationMode,
+        'lastDiscountAuthorizationStatus': discount.authorizationStatus,
+      },
     };
   }
 
@@ -12686,17 +12748,15 @@ class TacoPosRepository {
     if (!payment.isActive) {
       throw StateError('El pago ya esta cancelado.');
     }
-    final cancelledDiscountAmount = _numberToDouble(
-      paymentDoc.data()?['discountAmount'],
-    );
-
     final paymentsSnapshot = await orderRef.collection('payments').get();
-    final paidTotal = paymentsSnapshot.docs
+    final remainingActivePayments = paymentsSnapshot.docs
         .map(Payment.fromDoc)
         .where((item) => item.isActive && item.id != paymentId)
-        .fold<double>(0, (total, item) => total + item.baseAmount);
-    final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
-    final paymentStatus = paidTotal <= 0.01 ? 'pending' : 'partial';
+        .toList();
+    final totals = _reconcileOrderPayments(
+      order: order,
+      previousActivePayments: remainingActivePayments,
+    );
     final itemsSnapshot = await orderRef.collection('items').get();
     final batch = _db.batch();
 
@@ -12744,11 +12804,10 @@ class TacoPosRepository {
       }
     }
     batch.update(orderRef, {
-      'paymentStatus': paymentStatus,
-      'paidTotal': paidTotal,
-      'pendingTotal': pendingTotal,
-      if (cancelledDiscountAmount > 0)
-        'totalDiscountAmount': FieldValue.increment(-cancelledDiscountAmount),
+      'paymentStatus': totals.paymentStatus,
+      'paidTotal': totals.paidTotal,
+      'pendingTotal': totals.pendingTotal,
+      ..._orderAggregateSnapshotFromPayments(totals: totals, order: order),
       'paidAt': FieldValue.delete(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
@@ -12847,7 +12906,9 @@ class TacoPosRepository {
           payment.cancelledAt != null) {
         throw StateError('Este pago ya fue cancelado.');
       }
-      final cancelledAmount = canonicalPaymentAppliedAmount(payment);
+      final cancelledAmount = PaymentSettlementInput.fromPayment(
+        payment,
+      ).grossAmount;
       if (cancelledAmount <= backofficeCancellationTolerance) {
         throw StateError('Este pago ya no tiene un importe activo.');
       }
@@ -12855,27 +12916,11 @@ class TacoPosRepository {
       final remainingPayments = freshPaymentDocs
           .where((doc) => doc.id != paymentId && doc.exists)
           .map(Payment.fromDoc)
-          .where(
-            (item) => isBackofficeActivePayment(
-              status: item.status,
-              hasCancelledAt: item.cancelledAt != null,
-              appliedAmount: canonicalPaymentAppliedAmount(item),
-            ),
-          )
+          .where((item) => item.isActive)
           .toList();
-      final grossSubtotal = order.grossSubtotal ?? order.total;
-      final savedNet = order.netTotal;
-      final orderNetTotal =
-          savedNet != null && savedNet.isFinite && savedNet >= 0
-          ? savedNet
-          : (grossSubtotal - order.explicitDiscount)
-                .clamp(0, double.infinity)
-                .toDouble();
-      final totals = deriveCustomerPaymentCancellationTotals(
-        orderNetTotal: orderNetTotal,
-        activePaymentAmounts: remainingPayments.map(
-          canonicalPaymentAppliedAmount,
-        ),
+      final totals = _reconcileOrderPayments(
+        order: order,
+        previousActivePayments: remainingPayments,
       );
       final activeItems = freshItemDocs
           .where((doc) => doc.exists)
@@ -12926,6 +12971,7 @@ class TacoPosRepository {
         'paymentStatus': totals.paymentStatus,
         'paidTotal': totals.paidTotal,
         'pendingTotal': totals.pendingTotal,
+        ..._orderAggregateSnapshotFromPayments(totals: totals, order: order),
         if (totals.paymentStatus != 'paid') ...{
           'paidAt': FieldValue.delete(),
           'closedAt': FieldValue.delete(),
@@ -13048,17 +13094,12 @@ class TacoPosRepository {
       final activePayments = freshPaymentDocs
           .where((doc) => doc.exists)
           .map(Payment.fromDoc)
-          .where(
-            (payment) => isBackofficeActivePayment(
-              status: payment.status,
-              hasCancelledAt: payment.cancelledAt != null,
-              appliedAmount: canonicalPaymentAppliedAmount(payment),
-            ),
-          )
+          .where((payment) => payment.isActive)
           .toList();
       final activePaymentsTotal = activePayments.fold<double>(
         0,
-        (total, payment) => total + canonicalPaymentAppliedAmount(payment),
+        (total, payment) =>
+            total + PaymentSettlementInput.fromPayment(payment).grossAmount,
       );
       if (activePaymentsTotal > backofficeCancellationTolerance) {
         throw StateError(

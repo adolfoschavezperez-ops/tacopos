@@ -35,6 +35,9 @@ class SalesAuditResult {
     required this.cashPaymentMismatchCount,
     required this.duplicatePaymentCount,
     required this.auditMode,
+    this.storedOrderDiscount = 0,
+    this.reconstructedPaymentDiscount = 0,
+    this.historicalDiscountDifference = 0,
   });
 
   final List<OrderItem> activeItems;
@@ -53,6 +56,13 @@ class SalesAuditResult {
   final double diffPendingTotal;
   final Map<String, double> discountFields;
   final List<SalesAuditDiscountSource> discountSources;
+  final double storedOrderDiscount;
+  final double reconstructedPaymentDiscount;
+  final double historicalDiscountDifference;
+  bool get hasHistoricalDiscountAggregateMismatch =>
+      storedOrderDiscount > salesAuditMoneyTolerance &&
+      reconstructedPaymentDiscount > salesAuditMoneyTolerance &&
+      historicalDiscountDifference.abs() > salesAuditMoneyTolerance;
   final double? discountPercentNormalized;
   final String discountTypeLabel;
   final String discountName;
@@ -136,6 +146,11 @@ SalesAuditResult auditSalesIntegrity(
     activePayments,
     grossItemsTotal,
   );
+  final storedOrderDiscount = discountResolution.storedOrderDiscount;
+  final reconstructedPaymentDiscount =
+      discountResolution.reconstructedPaymentDiscount;
+  final historicalDiscountDifference =
+      discountResolution.historicalDiscountDifference;
   final monetaryDiscountApplied = discountResolution.amount;
   final netCustomerDue = (grossItemsTotal - monetaryDiscountApplied)
       .clamp(0, double.infinity)
@@ -182,6 +197,22 @@ SalesAuditResult auditSalesIntegrity(
     if (!passed && failMessage.isNotEmpty) fail(code, failMessage);
   }
 
+  final hasStoredAndReconstructedDiscount =
+      storedOrderDiscount > salesAuditMoneyTolerance &&
+      reconstructedPaymentDiscount > salesAuditMoneyTolerance;
+  if (hasStoredAndReconstructedDiscount &&
+      _outsideTolerance(historicalDiscountDifference)) {
+    validation(
+      'Inconsistencia de agregado historico',
+      false,
+      code: 'historical_discount_aggregate',
+      failMessage:
+          'Descuento guardado en orden ${storedOrderDiscount.toStringAsFixed(2)}; '
+          'reconstruido desde pagos ${reconstructedPaymentDiscount.toStringAsFixed(2)}; '
+          'diferencia ${historicalDiscountDifference.toStringAsFixed(2)}.',
+    );
+  }
+
   if (mode == SalesAuditMode.pending) {
     validation(
       'Orden pendiente sin cobro completo',
@@ -226,6 +257,9 @@ SalesAuditResult auditSalesIntegrity(
       cashPaymentMismatchCount: 0,
       duplicatePaymentCount: 0,
       auditMode: mode,
+      storedOrderDiscount: storedOrderDiscount,
+      reconstructedPaymentDiscount: reconstructedPaymentDiscount,
+      historicalDiscountDifference: historicalDiscountDifference,
     );
   }
 
@@ -278,6 +312,9 @@ SalesAuditResult auditSalesIntegrity(
       cashPaymentMismatchCount: 0,
       duplicatePaymentCount: 0,
       auditMode: mode,
+      storedOrderDiscount: storedOrderDiscount,
+      reconstructedPaymentDiscount: reconstructedPaymentDiscount,
+      historicalDiscountDifference: historicalDiscountDifference,
     );
   }
 
@@ -333,6 +370,9 @@ SalesAuditResult auditSalesIntegrity(
       cashPaymentMismatchCount: cashIssues,
       duplicatePaymentCount: duplicateCount,
       auditMode: mode,
+      storedOrderDiscount: storedOrderDiscount,
+      reconstructedPaymentDiscount: reconstructedPaymentDiscount,
+      historicalDiscountDifference: historicalDiscountDifference,
     );
   }
 
@@ -418,6 +458,9 @@ SalesAuditResult auditSalesIntegrity(
     cashPaymentMismatchCount: cashIssues,
     duplicatePaymentCount: duplicateCount,
     auditMode: mode,
+    storedOrderDiscount: storedOrderDiscount,
+    reconstructedPaymentDiscount: reconstructedPaymentDiscount,
+    historicalDiscountDifference: historicalDiscountDifference,
   );
 }
 
@@ -620,6 +663,13 @@ _DiscountResolution _resolveDiscount(
     orderPercent: orderPercent,
     paymentPercent: paymentPercent,
   );
+  final storedOrderDiscount = _storedOrderDiscountAmount(orderMoney);
+  final reconstructedPaymentDiscount = paymentMoney.fold<double>(
+    0,
+    (sum, source) => sum + source.monetaryAmount,
+  );
+  final historicalDiscountDifference =
+      reconstructedPaymentDiscount - storedOrderDiscount;
   final amount = selected.fold<double>(
     0,
     (sum, source) => sum + source.monetaryAmount,
@@ -684,6 +734,9 @@ _DiscountResolution _resolveDiscount(
     beneficiary: selectedBeneficiary,
     authorizedBy: selectedAuthorizedBy,
     sourceFields: selected.map((source) => source.field).join(' | '),
+    storedOrderDiscount: storedOrderDiscount,
+    reconstructedPaymentDiscount: reconstructedPaymentDiscount,
+    historicalDiscountDifference: historicalDiscountDifference,
   );
 }
 
@@ -693,6 +746,7 @@ List<SalesAuditDiscountSource> _selectDiscountSource({
   required List<SalesAuditDiscountSource> orderPercent,
   required List<SalesAuditDiscountSource> paymentPercent,
 }) {
+  if (paymentMoney.isNotEmpty) return paymentMoney;
   const orderPriority = [
     'order.totalDiscountAmount',
     'order.totalDiscount',
@@ -713,10 +767,36 @@ List<SalesAuditDiscountSource> _selectDiscountSource({
     final match = orderMoney.where((source) => source.field == key).toList();
     if (match.isNotEmpty) return match;
   }
-  if (paymentMoney.isNotEmpty) return paymentMoney;
   if (orderPercent.isNotEmpty) return [orderPercent.first];
   if (paymentPercent.isNotEmpty) return paymentPercent;
   return const [];
+}
+
+double _storedOrderDiscountAmount(List<SalesAuditDiscountSource> orderMoney) {
+  const orderPriority = [
+    'order.totalDiscountAmount',
+    'order.totalDiscount',
+    'order.discountTotal',
+    'order.discountAmount',
+    'order.appliedDiscount',
+    'order.employeeDiscount',
+    'order.partnerDiscount',
+    'order.familyDiscount',
+    'order.courtesyAmount',
+    'order.complimentaryAmount',
+    'order.promotionDiscount',
+    'order.promoDiscount',
+    'order.employeeConsumptionDiscount',
+    'order.benefitAmount',
+  ];
+  for (final key in orderPriority) {
+    final match = orderMoney.where((source) => source.field == key).toList();
+    if (match.isNotEmpty) return match.first.monetaryAmount;
+  }
+  return orderMoney.fold<double>(
+    0,
+    (sum, source) => sum + source.monetaryAmount,
+  );
 }
 
 bool _isPercentField(String field) {
@@ -936,6 +1016,9 @@ SalesAuditResult _result({
   required int cashPaymentMismatchCount,
   required int duplicatePaymentCount,
   required SalesAuditMode auditMode,
+  double storedOrderDiscount = 0,
+  double reconstructedPaymentDiscount = 0,
+  double historicalDiscountDifference = 0,
 }) {
   return SalesAuditResult(
     activeItems: activeItems,
@@ -969,6 +1052,9 @@ SalesAuditResult _result({
     cashPaymentMismatchCount: cashPaymentMismatchCount,
     duplicatePaymentCount: duplicatePaymentCount,
     auditMode: auditMode,
+    storedOrderDiscount: storedOrderDiscount,
+    reconstructedPaymentDiscount: reconstructedPaymentDiscount,
+    historicalDiscountDifference: historicalDiscountDifference,
   );
 }
 
@@ -984,6 +1070,9 @@ class _DiscountResolution {
     required this.beneficiary,
     required this.authorizedBy,
     required this.sourceFields,
+    required this.storedOrderDiscount,
+    required this.reconstructedPaymentDiscount,
+    required this.historicalDiscountDifference,
   });
 
   final double amount;
@@ -996,6 +1085,9 @@ class _DiscountResolution {
   final String beneficiary;
   final String authorizedBy;
   final String sourceFields;
+  final double storedOrderDiscount;
+  final double reconstructedPaymentDiscount;
+  final double historicalDiscountDifference;
 }
 
 bool _outsideTolerance(double value) => value.abs() > salesAuditMoneyTolerance;
