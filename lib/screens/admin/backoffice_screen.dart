@@ -3639,7 +3639,7 @@ class _SalesDiscrepancyAuditReportState
       );
       if (!mounted) return;
       setState(() => _future = _loadRows(forceRefresh: true));
-      _showAuditMessage('Totales corregidos correctamente.');
+      _showAuditMessage('Orden reconciliada correctamente.');
     } catch (error) {
       if (!mounted) return;
       _showAuditMessage(error.toString().replaceFirst('Bad state: ', ''));
@@ -3823,7 +3823,7 @@ class _SalesAuditTableState extends State<_SalesAuditTable> {
                                 ? () => widget.onCorrect(row)
                                 : null,
                             icon: const Icon(Icons.build_circle_outlined),
-                            label: const Text('Corregir totales'),
+                            label: const Text('Reconciliar orden'),
                           ),
                         ],
                       ),
@@ -4176,7 +4176,7 @@ class _TotalsCorrectionDialogState extends State<_TotalsCorrectionDialog> {
     final row = widget.row;
     final preview = widget.preview;
     return AlertDialog(
-      title: Text('Corregir totales ${_shortId(row.order.id)}'),
+      title: Text('Reconciliar orden ${_shortId(row.order.id)}'),
       content: SizedBox(
         width: 520,
         child: SingleChildScrollView(
@@ -4195,18 +4195,32 @@ class _TotalsCorrectionDialogState extends State<_TotalsCorrectionDialog> {
                   ],
                   [
                     'Descuento',
+                    _money(preview.previousDiscountAmount),
                     _money(preview.discountAmount),
-                    _money(preview.discountAmount),
+                  ],
+                  [
+                    'Pago monetario',
+                    _money(row.paymentsAppliedTotal),
+                    _money(preview.paymentTotal),
+                  ],
+                  [
+                    'Total liquidado',
+                    _money(
+                      preview.previousNetTotal + preview.previousDiscountAmount,
+                    ),
+                    _money(preview.totalLiquidated),
+                  ],
+                  [
+                    'Diferencia descuento',
+                    _money(
+                      preview.discountAmount - preview.previousDiscountAmount,
+                    ),
+                    r'$0.00',
                   ],
                   [
                     'Total neto',
+                    _money(preview.previousNetTotal),
                     _money(preview.netTotal),
-                    _money(preview.netTotal),
-                  ],
-                  [
-                    'Pagos activos',
-                    _money(preview.paymentTotal),
-                    _money(preview.paymentTotal),
                   ],
                   [
                     'Total orden',
@@ -4279,7 +4293,7 @@ class _TotalsCorrectionDialogState extends State<_TotalsCorrectionDialog> {
               _TotalsCorrectionInput(reason: reason, pin: pin),
             );
           },
-          child: const Text('Confirmar correccion'),
+          child: const Text('Reconciliar'),
         ),
       ],
     );

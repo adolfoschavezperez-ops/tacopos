@@ -94,25 +94,31 @@ OrderPaymentReconciliationTotals reconcileOrderPayments({
   final grossTotal = roundCheckoutMoney(
     orderGrossTotal.clamp(0, double.infinity).toDouble(),
   );
-  var paidTotal = 0.0;
+  var grossCovered = 0.0;
   var monetaryPaid = 0.0;
   var discountAmount = 0.0;
   PaymentSettlementInput? lastDiscount;
   for (final payment in activePayments) {
     final gross = payment.grossAmount.clamp(0, double.infinity).toDouble();
     final discount = payment.discountAmount.clamp(0, gross).toDouble();
-    paidTotal += gross;
+    grossCovered += gross;
     monetaryPaid += payment.monetaryAmount.clamp(0, double.infinity).toDouble();
     discountAmount += discount;
     if (discount > 0.01) {
       lastDiscount = payment;
     }
   }
-  paidTotal = roundCheckoutMoney(paidTotal.clamp(0, grossTotal).toDouble());
+  grossCovered = roundCheckoutMoney(
+    grossCovered.clamp(0, grossTotal).toDouble(),
+  );
   discountAmount = roundCheckoutMoney(
     discountAmount.clamp(0, grossTotal).toDouble(),
   );
   monetaryPaid = roundCheckoutMoney(monetaryPaid);
+  final totalLiquidated = roundCheckoutMoney(
+    (monetaryPaid + discountAmount).clamp(0, grossTotal).toDouble(),
+  );
+  final paidTotal = totalLiquidated > 0 ? totalLiquidated : grossCovered;
   final pendingTotal = roundCheckoutMoney(
     (grossTotal - paidTotal).clamp(0, double.infinity).toDouble(),
   );
