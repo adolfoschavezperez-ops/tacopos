@@ -3905,6 +3905,20 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                       'Descuento monetario',
                       _money(row.explicitDiscount),
                     ),
+                    if (row.hasHistoricalDiscountAggregateMismatch) ...[
+                      _InfoText(
+                        'Descuento guardado en orden',
+                        _money(row.storedOrderDiscount),
+                      ),
+                      _InfoText(
+                        'Descuento reconstruido desde pagos',
+                        _money(row.reconstructedPaymentDiscount),
+                      ),
+                      _InfoText(
+                        'Diferencia historica',
+                        _money(row.historicalDiscountDifference),
+                      ),
+                    ],
                     _InfoText('Descuento %', row.discountPercentText),
                     _InfoText('Tipo descuento', row.discountTypeLabel),
                     _InfoText(
@@ -4284,6 +4298,9 @@ class _SalesAuditRow {
     required this.expectedOrderTotal,
     required this.paymentsAppliedTotal,
     required this.settledTotal,
+    required this.storedOrderDiscount,
+    required this.reconstructedPaymentDiscount,
+    required this.historicalDiscountDifference,
     required this.receivedTotal,
     required this.changeTotal,
     required this.diffItemsOrder,
@@ -4317,6 +4334,9 @@ class _SalesAuditRow {
   final double expectedOrderTotal;
   final double paymentsAppliedTotal;
   final double settledTotal;
+  final double storedOrderDiscount;
+  final double reconstructedPaymentDiscount;
+  final double historicalDiscountDifference;
   final double receivedTotal;
   final double changeTotal;
   final double diffItemsOrder;
@@ -4340,6 +4360,11 @@ class _SalesAuditRow {
   final OrderTotalsCorrectionPreview? correctionPreview;
 
   bool get hasDiscrepancy => discrepancyCodes.isNotEmpty;
+  bool get hasHistoricalDiscountAggregateMismatch =>
+      discrepancyCodes.contains('historical_discount_aggregate') ||
+      (storedOrderDiscount > salesAuditMoneyTolerance &&
+          reconstructedPaymentDiscount > salesAuditMoneyTolerance &&
+          historicalDiscountDifference.abs() > salesAuditMoneyTolerance);
   bool get canCorrectTotals => correctionPreview?.safe == true;
   double get primaryDifference {
     if (diffItemsOrder.abs() > salesAuditMoneyTolerance) return diffItemsOrder;
@@ -4504,6 +4529,9 @@ _SalesAuditRow _buildSalesAuditRow(
     expectedOrderTotal: audit.netCustomerDue,
     paymentsAppliedTotal: audit.moneyPaymentsApplied,
     settledTotal: audit.settledTotal,
+    storedOrderDiscount: audit.storedOrderDiscount,
+    reconstructedPaymentDiscount: audit.reconstructedPaymentDiscount,
+    historicalDiscountDifference: audit.historicalDiscountDifference,
     receivedTotal: audit.receivedTotal,
     changeTotal: audit.changeTotal,
     diffItemsOrder: audit.diffItemsOrder,
