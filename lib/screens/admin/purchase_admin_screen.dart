@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/purchases/purchase_capture_discount.dart';
 import '../../core/purchases/purchases_by_supplier_report.dart';
+import '../../core/purchases/supplier_purchase_history.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/kitchen_stock_item.dart';
 import '../../models/purchase_models.dart';
@@ -325,6 +326,11 @@ class _SuppliersTabState extends State<_SuppliersTab> {
                     children: [
                       _Metric(label: 'Compras', value: purchased),
                       _Metric(label: 'Saldo', value: balance),
+                      OutlinedButton.icon(
+                        onPressed: () => _openSupplierHistory(supplier),
+                        icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                        label: const Text('Compras'),
+                      ),
                       IconButton(
                         tooltip: 'Editar',
                         onPressed: () => _openSupplierDialog(supplier),
@@ -351,6 +357,17 @@ class _SuppliersTabState extends State<_SuppliersTab> {
       context,
       supplier == null ? 'Proveedor creado.' : 'Proveedor actualizado.',
       type: AppSnackBarType.success,
+    );
+  }
+
+  Future<void> _openSupplierHistory(Supplier supplier) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _SupplierPurchaseHistoryDialog(
+        repository: widget.repository,
+        data: widget.data,
+        supplier: supplier,
+      ),
     );
   }
 }
@@ -2157,6 +2174,545 @@ class _SupplierPurchaseDetailCard extends StatelessWidget {
   }
 }
 
+class _SupplierPurchaseHistoryDialog extends StatefulWidget {
+  const _SupplierPurchaseHistoryDialog({
+    required this.repository,
+    required this.data,
+    required this.supplier,
+  });
+
+  final TacoPosRepository repository;
+  final _PurchaseData data;
+  final Supplier supplier;
+
+  @override
+  State<_SupplierPurchaseHistoryDialog> createState() =>
+      _SupplierPurchaseHistoryDialogState();
+}
+
+class _SupplierPurchaseHistoryDialogState
+    extends State<_SupplierPurchaseHistoryDialog> {
+  late DateTime _startDate;
+  late DateTime _endDate;
+  SupplierPurchaseHistory? _history;
+  bool _loading = false;
+  bool _hasConsulted = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final range = defaultSupplierPurchaseHistoryDateRange(DateTime.now());
+    _startDate = range.startDate;
+    _endDate = range.endDate;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(
+            context,
+          ).width.clamp(320, 1180).toDouble(),
+          maxHeight: MediaQuery.sizeOf(context).height * 0.92,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: SectionHeader(
+                      title: widget.supplier.commercialName,
+                      subtitle: 'Datos del proveedor e historial de compras.',
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Cerrar',
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _supplierSummary(),
+              const SizedBox(height: 12),
+              const Text(
+                'Historial de compras',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+              ),
+              const SizedBox(height: 8),
+              _SupplierReportFilters(
+                startDate: _startDate,
+                endDate: _endDate,
+                loading: _loading,
+                onPickStart: () => _pickDate(start: true),
+                onPickEnd: () => _pickDate(start: false),
+                onConsult: _consult,
+              ),
+              const SizedBox(height: 12),
+              Expanded(child: _body()),
+              const SizedBox(height: 12),
+              _historyTotal(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _supplierSummary() {
+    return GlassPanel(
+      padding: const EdgeInsets.all(14),
+      child: Wrap(
+        spacing: 18,
+        runSpacing: 12,
+        children: [
+          _DetailValue(
+            label: 'Datos del proveedor',
+            value: widget.supplier.commercialName,
+          ),
+          _DetailValue(
+            label: 'Razon social',
+            value: widget.supplier.legalName.trim().isEmpty
+                ? '-'
+                : widget.supplier.legalName,
+          ),
+          _DetailValue(
+            label: 'Telefono',
+            value: widget.supplier.phone.trim().isEmpty
+                ? '-'
+                : widget.supplier.phone,
+          ),
+          _DetailValue(
+            label: 'Dia de pago',
+            value: widget.supplier.paymentWeekdayName,
+          ),
+          _DetailValue(
+            label: 'Forma preferida',
+            value: _paymentMethodLabel(widget.supplier.preferredPaymentMethod),
+          ),
+          _DetailValue(
+            label: 'Estado',
+            value: widget.supplier.active ? 'Activo' : 'Inactivo',
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _body() {
+    if (_loading) {
+      return const LoadingPanel(
+        message: 'Consultando compras del proveedor...',
+      );
+    }
+    if (_error != null) {
+      return EmptyState(
+        icon: Icons.error_outline,
+        title: 'No fue posible consultar compras',
+        message: _error!,
+      );
+    }
+    final history = _history;
+    if (!_hasConsulted || history == null) {
+      return const EmptyState(
+        icon: Icons.receipt_long_outlined,
+        title: 'Consulta un rango',
+        message: 'Elige las fechas y presiona Consultar.',
+      );
+    }
+    if (history.purchases.isEmpty) {
+      return const EmptyState(
+        icon: Icons.receipt_long_outlined,
+        title: 'Sin compras',
+        message: 'No hay compras de este proveedor en el periodo.',
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 840;
+        if (compact) {
+          return ListView.separated(
+            itemCount: history.purchases.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 10),
+            itemBuilder: (context, index) => _SupplierHistoryPurchaseCard(
+              purchase: history.purchases[index],
+              onViewDetail: () => _openPurchaseDetail(history.purchases[index]),
+              onEditDates: () => _editDates(history.purchases[index]),
+            ),
+          );
+        }
+        return SingleChildScrollView(
+          child: DataTable(
+            columns: const [
+              DataColumn(label: Text('Fecha compra')),
+              DataColumn(label: Text('Folio')),
+              DataColumn(label: Text('Vencimiento')),
+              DataColumn(label: Text('Estatus')),
+              DataColumn(label: Text('Usuario')),
+              DataColumn(label: Text('Total')),
+              DataColumn(label: Text('Acciones')),
+            ],
+            rows: history.purchases
+                .map(
+                  (purchase) => DataRow(
+                    cells: [
+                      DataCell(Text(_dateLabel(purchase.purchaseDate))),
+                      DataCell(
+                        Text(
+                          purchase.folio.trim().isEmpty
+                              ? 'Sin folio'
+                              : purchase.folio,
+                        ),
+                      ),
+                      DataCell(Text(_dueDateLabel(purchase.dueDate))),
+                      DataCell(Text(_purchaseStatusLabel(purchase.status))),
+                      DataCell(Text(_purchaseUser(purchase))),
+                      DataCell(Text(_money(purchase.total))),
+                      DataCell(
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            TextButton.icon(
+                              onPressed: () => _openPurchaseDetail(purchase),
+                              icon: const Icon(Icons.open_in_new, size: 18),
+                              label: const Text('Ver detalle'),
+                            ),
+                            TextButton.icon(
+                              onPressed:
+                                  canEditSupplierPurchaseDatesFromBackoffice(
+                                    purchase,
+                                  )
+                                  ? () => _editDates(purchase)
+                                  : null,
+                              icon: const Icon(
+                                Icons.edit_calendar_outlined,
+                                size: 18,
+                              ),
+                              label: const Text('Editar fechas'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+                .toList(),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _historyTotal() {
+    final history = _history;
+    return GlassCard(
+      accent: BrandColors.success,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                history == null
+                    ? 'Total comprado al proveedor'
+                    : 'Total comprado al proveedor (${history.purchaseCount} compras)',
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+            MoneyText(
+              value: history?.totalPurchased ?? 0,
+              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickDate({required bool start}) async {
+    final initial = start ? _startDate : _endDate;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (start) {
+        _startDate = _startOfDay(picked);
+      } else {
+        _endDate = _startOfDay(picked);
+      }
+      _error = null;
+    });
+  }
+
+  Future<void> _consult() async {
+    if (_loading) return;
+    final range = PurchasesBySupplierDateRange(
+      startDate: _startDate,
+      endDate: _endDate,
+    );
+    final validation = validatePurchasesBySupplierDateRange(range);
+    if (validation != null) {
+      setState(() {
+        _history = null;
+        _error = validation;
+        _hasConsulted = true;
+      });
+      showAppSnackBar(context, validation, type: AppSnackBarType.warning);
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _error = null;
+      _hasConsulted = true;
+    });
+    try {
+      final purchases = await widget.repository.getSupplierPurchasesForPeriod(
+        startInclusive: range.startInclusive,
+        endExclusive: range.endExclusive,
+      );
+      final history = buildSupplierPurchaseHistory(
+        supplierId: widget.supplier.id,
+        purchases: purchases,
+        range: range,
+      );
+      if (!mounted) return;
+      setState(() {
+        _history = history;
+        _loading = false;
+      });
+    } catch (error, stackTrace) {
+      debugPrint('SUPPLIER_PURCHASE_HISTORY_ERROR $error\n$stackTrace');
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error =
+            'No fue posible consultar las compras del proveedor. Intenta nuevamente.';
+      });
+    }
+  }
+
+  void _openPurchaseDetail(SupplierPurchase purchase) {
+    _showPurchaseDetail(
+      context,
+      repository: widget.repository,
+      purchase: purchase,
+      payments: widget.data.payments,
+      data: widget.data,
+      allowActions: false,
+    );
+  }
+
+  Future<void> _editDates(SupplierPurchase purchase) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _SupplierPurchaseDatesDialog(
+        repository: widget.repository,
+        purchase: purchase,
+      ),
+    );
+    if (!mounted || saved != true) return;
+    showAppSnackBar(
+      context,
+      'Fechas de compra actualizadas.',
+      type: AppSnackBarType.success,
+    );
+    await _consult();
+  }
+}
+
+class _SupplierHistoryPurchaseCard extends StatelessWidget {
+  const _SupplierHistoryPurchaseCard({
+    required this.purchase,
+    required this.onViewDetail,
+    required this.onEditDates,
+  });
+
+  final SupplierPurchase purchase;
+  final VoidCallback onViewDetail;
+  final VoidCallback onEditDates;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassCard(
+      accent: BrandColors.textMuted,
+      child: ListTile(
+        title: Text(
+          purchase.folio.trim().isEmpty ? 'Sin folio' : purchase.folio,
+          style: const TextStyle(fontWeight: FontWeight.w900),
+        ),
+        subtitle: Text(
+          'Compra ${_dateLabel(purchase.purchaseDate)} · '
+          'Vence ${_dueDateLabel(purchase.dueDate)} · '
+          '${_purchaseStatusLabel(purchase.status)} · '
+          '${_purchaseUser(purchase)}',
+        ),
+        trailing: Wrap(
+          spacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            MoneyText(value: purchase.total),
+            TextButton.icon(
+              onPressed: onViewDetail,
+              icon: const Icon(Icons.open_in_new, size: 18),
+              label: const Text('Ver detalle'),
+            ),
+            TextButton.icon(
+              onPressed: canEditSupplierPurchaseDatesFromBackoffice(purchase)
+                  ? onEditDates
+                  : null,
+              icon: const Icon(Icons.edit_calendar_outlined, size: 18),
+              label: const Text('Editar fechas'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SupplierPurchaseDatesDialog extends StatefulWidget {
+  const _SupplierPurchaseDatesDialog({
+    required this.repository,
+    required this.purchase,
+  });
+
+  final TacoPosRepository repository;
+  final SupplierPurchase purchase;
+
+  @override
+  State<_SupplierPurchaseDatesDialog> createState() =>
+      _SupplierPurchaseDatesDialogState();
+}
+
+class _SupplierPurchaseDatesDialogState
+    extends State<_SupplierPurchaseDatesDialog> {
+  late DateTime _purchaseDate;
+  late DateTime _dueDate;
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _purchaseDate = widget.purchase.purchaseDate;
+    _dueDate = widget.purchase.dueDate ?? widget.purchase.purchaseDate;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Editar fechas de compra'),
+      content: SizedBox(
+        width: 540,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _DetailValue(
+              label: 'Proveedor',
+              value: widget.purchase.supplierName,
+            ),
+            const SizedBox(height: 10),
+            _DetailValue(
+              label: 'Folio',
+              value: widget.purchase.folio.trim().isEmpty
+                  ? 'Sin folio'
+                  : widget.purchase.folio,
+            ),
+            const SizedBox(height: 10),
+            _DetailValue(
+              label: 'Estatus',
+              value: _purchaseStatusLabel(widget.purchase.status),
+            ),
+            const SizedBox(height: 14),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : () => _pickDate(purchaseDate: true),
+              icon: const Icon(Icons.event_outlined),
+              label: Text('Fecha de compra: ${_dateLabel(_purchaseDate)}'),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _saving ? null : () => _pickDate(purchaseDate: false),
+              icon: const Icon(Icons.event_available_outlined),
+              label: Text('Fecha de vencimiento: ${_dateLabel(_dueDate)}'),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                style: const TextStyle(
+                  color: BrandColors.danger,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton.icon(
+          onPressed: _saving ? null : _save,
+          icon: const Icon(Icons.save_outlined),
+          label: Text(_saving ? 'Guardando...' : 'Guardar fechas'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickDate({required bool purchaseDate}) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: purchaseDate ? _purchaseDate : _dueDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (purchaseDate) {
+        _purchaseDate = _startOfDay(picked);
+      } else {
+        _dueDate = _startOfDay(picked);
+      }
+      _error = null;
+    });
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await widget.repository.updateSupplierPurchaseBackofficeDates(
+        purchase: widget.purchase,
+        purchaseDate: _purchaseDate,
+        dueDate: _dueDate,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _saving = false;
+        _error = error.toString().replaceFirst('Bad state: ', '');
+      });
+    }
+  }
+}
+
 class _PurchasesByItemReport extends StatelessWidget {
   const _PurchasesByItemReport({
     required this.repository,
@@ -3670,6 +4226,7 @@ void _showPurchaseDetail(
   required SupplierPurchase purchase,
   required List<SupplierPayment> payments,
   required _PurchaseData data,
+  bool allowActions = true,
 }) {
   showDialog<void>(
     context: context,
@@ -3678,6 +4235,7 @@ void _showPurchaseDetail(
       purchase: purchase,
       payments: payments,
       data: data,
+      allowActions: allowActions,
     ),
   );
 }
@@ -3855,12 +4413,14 @@ class _PurchaseDetailDialog extends StatelessWidget {
     required this.purchase,
     required this.payments,
     required this.data,
+    this.allowActions = true,
   });
 
   final TacoPosRepository repository;
   final SupplierPurchase purchase;
   final List<SupplierPayment> payments;
   final _PurchaseData data;
+  final bool allowActions;
 
   @override
   Widget build(BuildContext context) {
@@ -3935,7 +4495,7 @@ class _PurchaseDetailDialog extends StatelessWidget {
         ),
       ),
       actions: [
-        if (!purchase.isCancelled)
+        if (allowActions && !purchase.isCancelled)
           OutlinedButton.icon(
             onPressed: () async {
               final saved = await showDialog<bool>(
@@ -3957,7 +4517,7 @@ class _PurchaseDetailDialog extends StatelessWidget {
             icon: const Icon(Icons.edit_outlined),
             label: const Text('Editar compra'),
           ),
-        if (!purchase.isCancelled)
+        if (allowActions && !purchase.isCancelled)
           OutlinedButton.icon(
             onPressed: () async {
               final changed = await showDialog<bool>(
@@ -3978,7 +4538,7 @@ class _PurchaseDetailDialog extends StatelessWidget {
             icon: const Icon(Icons.event_available_outlined),
             label: const Text('Cambiar vencimiento'),
           ),
-        if (purchase.hasBalance && !purchase.isCancelled)
+        if (allowActions && purchase.hasBalance && !purchase.isCancelled)
           FilledButton.icon(
             onPressed: () async {
               final paid = await showDialog<bool>(

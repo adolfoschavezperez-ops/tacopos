@@ -3199,6 +3199,64 @@ class TacoPosRepository {
     await batch.commit();
   }
 
+  Future<void> updateSupplierPurchaseBackofficeDates({
+    required SupplierPurchase purchase,
+    required DateTime purchaseDate,
+    required DateTime dueDate,
+  }) async {
+    _requirePurchaseAccess(manage: true);
+    final purchaseRef = _supplierPurchasesRef.doc(purchase.id);
+    final purchaseDoc = await purchaseRef.get();
+    if (!purchaseDoc.exists) {
+      throw StateError('No se encontro la compra a proveedor.');
+    }
+    final currentPurchase = SupplierPurchase.fromDoc(purchaseDoc);
+    if (currentPurchase.isCancelled) {
+      throw StateError('No puedes cambiar fechas de una compra cancelada.');
+    }
+    final employee = AppSession.instance.employee;
+    final logRef = _restaurantRef.collection('activityLog').doc();
+    final batch = _db.batch();
+    batch.set(purchaseRef, {
+      'purchaseDate': Timestamp.fromDate(purchaseDate),
+      'dueDate': Timestamp.fromDate(dueDate),
+      'backofficeDatesUpdatedAt': FieldValue.serverTimestamp(),
+      'backofficeDatesUpdatedByEmployeeId': employee?.id ?? '',
+      'backofficeDatesUpdatedByEmployeeName': employee?.name ?? '',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    batch.set(logRef, {
+      'id': logRef.id,
+      ..._currentBranchFields,
+      'type': 'supplier_purchase_backoffice_dates_updated',
+      'actionType': 'supplier_purchase_backoffice_dates_updated',
+      'message':
+          'Se cambiaron fechas de la compra ${currentPurchase.folio} '
+          'del proveedor ${currentPurchase.supplierName} desde Backoffice',
+      'supplierId': currentPurchase.supplierId,
+      'supplierName': currentPurchase.supplierName,
+      'purchaseId': currentPurchase.id,
+      'purchaseFolio': currentPurchase.folio,
+      'previousPurchaseDate': Timestamp.fromDate(currentPurchase.purchaseDate),
+      'newPurchaseDate': Timestamp.fromDate(purchaseDate),
+      'previousDueDate': currentPurchase.dueDate == null
+          ? null
+          : Timestamp.fromDate(currentPurchase.dueDate!),
+      'newDueDate': Timestamp.fromDate(dueDate),
+      'previousStatus': currentPurchase.status,
+      'previousTotal': currentPurchase.total,
+      'previousPaidTotal': currentPurchase.paidTotal,
+      'previousBalance': currentPurchase.balance,
+      'employeeId': employee?.id ?? '',
+      'employeeName': employee?.name ?? '',
+      'timestamp': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+    });
+    await batch.commit();
+    invalidateReportDataCache(branchId: currentPurchase.branchId);
+  }
+
   Future<void> registerSupplierPayment({
     required SupplierPurchase purchase,
     required double amount,
