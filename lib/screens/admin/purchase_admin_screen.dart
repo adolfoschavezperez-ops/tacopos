@@ -1588,6 +1588,7 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
   late DateTime _startDate;
   late DateTime _endDate;
   PurchasesBySupplierReport? _supplierReport;
+  List<SupplierPurchase> _reportPurchases = const [];
   bool _loadingSupplierReport = false;
   bool _hasConsultedSupplierReport = false;
   String? _supplierReportError;
@@ -1671,7 +1672,10 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
         const SizedBox(height: 20),
         _PurchasesByItemReport(
           repository: widget.repository,
-          purchases: widget.data.purchases,
+          purchases: _reportPurchases,
+          loading: _loadingSupplierReport,
+          hasConsulted: _hasConsultedSupplierReport,
+          reportError: _supplierReportError,
         ),
       ],
     );
@@ -1757,6 +1761,7 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
     if (validation != null) {
       setState(() {
         _supplierReport = null;
+        _reportPurchases = const [];
         _supplierReportError = validation;
         _hasConsultedSupplierReport = true;
       });
@@ -1766,6 +1771,7 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
     setState(() {
       _loadingSupplierReport = true;
       _supplierReport = null;
+      _reportPurchases = const [];
       _supplierReportError = null;
       _hasConsultedSupplierReport = true;
     });
@@ -1782,6 +1788,7 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
       if (!mounted) return;
       setState(() {
         _supplierReport = report;
+        _reportPurchases = purchases;
         _loadingSupplierReport = false;
       });
     } catch (error, stackTrace) {
@@ -1789,6 +1796,7 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
       if (!mounted) return;
       setState(() {
         _loadingSupplierReport = false;
+        _reportPurchases = const [];
         _supplierReportError =
             'No fue posible consultar las compras. Intenta nuevamente.';
       });
@@ -2717,16 +2725,81 @@ class _PurchasesByItemReport extends StatelessWidget {
   const _PurchasesByItemReport({
     required this.repository,
     required this.purchases,
+    required this.loading,
+    required this.hasConsulted,
+    required this.reportError,
   });
 
   final TacoPosRepository repository;
   final List<SupplierPurchase> purchases;
+  final bool loading;
+  final bool hasConsulted;
+  final String? reportError;
 
   @override
   Widget build(BuildContext context) {
-    final activePurchases = purchases.where(
-      (purchase) => purchase.status != 'cancelled',
+    final activePurchases = purchases
+        .where(isSupplierPurchaseIncludedInSupplierReport)
+        .toList();
+    const header = _PurchaseHeader(
+      title: 'Compras por insumo',
+      subtitle: 'Agrupado por el insumo compartido con cocina.',
     );
+    if (loading) {
+      return const Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _PurchaseHeader(
+            title: 'Compras por insumo',
+            subtitle: 'Agrupado por el insumo compartido con cocina.',
+          ),
+          SizedBox(height: 12),
+          LoadingPanel(message: 'Consultando compras por insumo...'),
+        ],
+      );
+    }
+    if (reportError != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          header,
+          const SizedBox(height: 12),
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'No fue posible consultar los insumos',
+            message: reportError!,
+          ),
+        ],
+      );
+    }
+    if (!hasConsulted) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          header,
+          const SizedBox(height: 12),
+          const EmptyState(
+            icon: Icons.inventory_2_outlined,
+            title: 'Selecciona un periodo',
+            message: 'Elige las fechas y presiona Consultar.',
+          ),
+        ],
+      );
+    }
+    if (activePurchases.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          header,
+          const SizedBox(height: 12),
+          const EmptyState(
+            icon: Icons.inventory_2_outlined,
+            title: 'Sin compras por insumo',
+            message: 'No se encontraron insumos en el periodo seleccionado.',
+          ),
+        ],
+      );
+    }
     return FutureBuilder<List<SupplierPurchaseItem>>(
       future: repository.getSupplierPurchaseItemsForPurchases(activePurchases),
       builder: (context, snapshot) {
