@@ -199,6 +199,44 @@ void main() {
       expect(report.rows.single.totalPurchased, 100);
     });
 
+    test('compras validas del periodo excluyen historicas y futuras', () {
+      final periodPurchases = supplierPurchasesForReportPeriod(
+        purchases: [
+          _purchase(
+            id: 'july',
+            supplierId: 'a',
+            date: DateTime(2026, 7, 31, 23, 59),
+          ),
+          _purchase(
+            id: 'period',
+            supplierId: 'a',
+            date: DateTime(2026, 8, 6, 23, 59),
+          ),
+          _purchase(id: 'future', supplierId: 'a', date: DateTime(2026, 8, 7)),
+        ],
+        range: _range(),
+      );
+
+      expect(periodPurchases.map((purchase) => purchase.id), ['period']);
+    });
+
+    test('compras validas del periodo excluyen canceladas', () {
+      final periodPurchases = supplierPurchasesForReportPeriod(
+        purchases: [
+          _purchase(id: 'active', supplierId: 'a'),
+          _purchase(id: 'cancelled', supplierId: 'a', status: 'cancelled'),
+          _purchase(
+            id: 'cancelledAt',
+            supplierId: 'a',
+            cancelledAt: DateTime(2026, 8, 2),
+          ),
+        ],
+        range: _range(),
+      );
+
+      expect(periodPurchases.map((purchase) => purchase.id), ['active']);
+    });
+
     test('calcula correctamente el total general', () {
       final report = _report([
         _purchase(id: 'a1', supplierId: 'a', total: 1500),

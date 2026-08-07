@@ -66,15 +66,11 @@ bool supplierPurchaseMatchesDateRange(
       purchaseDate.isBefore(range.endExclusive);
 }
 
-PurchasesBySupplierReport buildPurchasesBySupplierDateReport({
-  required Iterable<Supplier> suppliers,
+List<SupplierPurchase> supplierPurchasesForReportPeriod({
   required Iterable<SupplierPurchase> purchases,
   required PurchasesBySupplierDateRange range,
 }) {
-  final supplierById = {
-    for (final supplier in suppliers) supplier.id: supplier,
-  };
-  final grouped = <String, List<SupplierPurchase>>{};
+  final periodPurchases = <SupplierPurchase>[];
   final seenPurchaseIds = <String>{};
   for (final purchase in purchases) {
     final purchaseKey = purchase.id.trim();
@@ -87,6 +83,24 @@ PurchasesBySupplierReport buildPurchasesBySupplierDateReport({
     if (!supplierPurchaseMatchesDateRange(purchase, range)) {
       continue;
     }
+    periodPurchases.add(purchase);
+  }
+  return periodPurchases;
+}
+
+PurchasesBySupplierReport buildPurchasesBySupplierDateReport({
+  required Iterable<Supplier> suppliers,
+  required Iterable<SupplierPurchase> purchases,
+  required PurchasesBySupplierDateRange range,
+}) {
+  final supplierById = {
+    for (final supplier in suppliers) supplier.id: supplier,
+  };
+  final grouped = <String, List<SupplierPurchase>>{};
+  for (final purchase in supplierPurchasesForReportPeriod(
+    purchases: purchases,
+    range: range,
+  )) {
     grouped.putIfAbsent(purchase.supplierId, () => []).add(purchase);
   }
 
