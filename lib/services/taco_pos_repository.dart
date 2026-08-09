@@ -334,6 +334,9 @@ class OrderTotalsCorrectionPreview {
     required this.discountAmount,
     required this.netTotal,
     required this.paymentTotal,
+    required this.totalLiquidated,
+    required this.previousDiscountAmount,
+    required this.previousNetTotal,
     required this.previousTotal,
     required this.newTotal,
     required this.previousPaidTotal,
@@ -349,6 +352,9 @@ class OrderTotalsCorrectionPreview {
   final double discountAmount;
   final double netTotal;
   final double paymentTotal;
+  final double totalLiquidated;
+  final double previousDiscountAmount;
+  final double previousNetTotal;
   final double previousTotal;
   final double newTotal;
   final double previousPaidTotal;
@@ -11641,43 +11647,71 @@ class TacoPosRepository {
       if (!preview.safe) {
         throw StateError(preview.message);
       }
+      final difference =
+          preview.discountAmount - preview.previousDiscountAmount;
 
       transaction.update(orderRef, {
         'previousTotal': preview.previousTotal,
         'previousPaidTotal': preview.previousPaidTotal,
         'previousPendingTotal': preview.previousPendingTotal,
-        'total': preview.newTotal,
         'grossSubtotal': preview.grossSubtotal,
         'discountApplied': preview.discountAmount > 0.01,
         'discountAmount': preview.discountAmount,
         'totalDiscountAmount': preview.discountAmount,
         'netTotal': preview.netTotal,
+        'monetaryPaid': preview.paymentTotal,
         'paidTotal': preview.newPaidTotal,
         'pendingTotal': preview.newPendingTotal,
+        'totalLiquidated': preview.totalLiquidated,
+        'effectiveDiscountPercent': preview.grossSubtotal <= 0.01
+            ? 0.0
+            : (preview.discountAmount / preview.grossSubtotal) * 100,
         'paymentStatus': 'paid',
-        if (order.status.trim().toLowerCase() != 'paid') 'status': order.status,
-        'totalsCorrectedAt': FieldValue.serverTimestamp(),
-        'totalsCorrectedByEmployeeId': employee?.id ?? '',
-        'totalsCorrectedByEmployeeName': employee?.name ?? '',
-        'totalsCorrectionReason': cleanReason,
+        if (normalizeStatus(order.status) == 'paid') 'status': 'paid',
+        'historicalPaymentReconciledAt': FieldValue.serverTimestamp(),
+        'historicalPaymentReconciledByEmployeeId': employee?.id ?? '',
+        'historicalPaymentReconciledByEmployeeName': employee?.name ?? '',
+        'historicalPaymentReconciliationReason': cleanReason,
         'updatedAt': FieldValue.serverTimestamp(),
       });
       transaction.set(_restaurantRef.collection('activityLog').doc(), {
-        'type': 'order_totals_corrected',
-        'actionType': 'order_totals_corrected',
+        'type': 'historical_payment_reconciliation',
+        'actionType': 'historical_payment_reconciliation',
         'message':
-            'Se corrigieron los totales de la venta ${_shortLogFolio(order.id)}',
+            'Se reconciliaron agregados historicos de la venta ${_shortLogFolio(order.id)}',
         'orderId': orderId,
         'folio': _shortLogFolio(order.id),
+        'previousValues': {
+          'total': preview.previousTotal,
+          'discountAmount': preview.previousDiscountAmount,
+          'netTotal': preview.previousNetTotal,
+          'paidTotal': preview.previousPaidTotal,
+          'pendingTotal': preview.previousPendingTotal,
+        },
+        'newValues': {
+          'grossSubtotal': preview.grossSubtotal,
+          'discountAmount': preview.discountAmount,
+          'totalDiscountAmount': preview.discountAmount,
+          'monetaryPaid': preview.paymentTotal,
+          'paidTotal': preview.newPaidTotal,
+          'pendingTotal': preview.newPendingTotal,
+          'totalLiquidated': preview.totalLiquidated,
+          'netTotal': preview.netTotal,
+        },
+        'difference': difference,
+        'reasonCode': 'historical_payment_reconciliation',
+        'reason': cleanReason,
         'previousTotal': preview.previousTotal,
         'newTotal': preview.newTotal,
         'previousPaidTotal': preview.previousPaidTotal,
         'newPaidTotal': preview.newPaidTotal,
+        'previousDiscountAmount': preview.previousDiscountAmount,
+        'newDiscountAmount': preview.discountAmount,
         'itemSubtotal': preview.grossSubtotal,
         'discountAmount': preview.discountAmount,
         'netTotal': preview.netTotal,
         'paymentTotal': preview.paymentTotal,
-        'reason': cleanReason,
+        'totalLiquidated': preview.totalLiquidated,
         'employeeId': employee?.id ?? '',
         'employeeName': employee?.name ?? '',
         ..._currentBranchFields,
@@ -11708,29 +11742,16 @@ class TacoPosRepository {
     if (grossSubtotal <= 0.02) {
       return _unsafeTotalsPreview(order, 'La orden no tiene items activos.');
     }
-    final activePayments = payments.where(isActivePayment).toList();
-    final cancelledPayments = payments.where(
-      (payment) => !isActivePayment(payment),
+    final activePayments = payments.where(isCanonicalActivePayment).toList();
+    final totals = reconcileOrderPayments(
+      orderGrossTotal: grossSubtotal,
+      activePayments: activePayments.map(PaymentSettlementInput.fromPayment),
     );
-    if (cancelledPayments.isNotEmpty) {
-      return _unsafeTotalsPreview(
-        order,
-        'Existen pagos cancelados; requiere revision manual.',
-      );
-    }
-    final discountAmount = order.explicitDiscount
-        .clamp(0, grossSubtotal)
-        .toDouble();
-    final netTotal = (grossSubtotal - discountAmount)
-        .clamp(0, double.infinity)
-        .toDouble();
-    final paymentTotal = activePayments.fold<double>(
-      0,
-      (runningTotal, payment) =>
-          runningTotal + _paymentNetAppliedAmount(payment),
-    );
-    final expectedPayment = discountAmount > 0.02 ? netTotal : grossSubtotal;
-    if ((paymentTotal - expectedPayment).abs() > 0.02) {
+    final discountAmount = totals.discountAmount;
+    final netTotal = totals.netTotal;
+    final paymentTotal = totals.monetaryPaid;
+    final totalLiquidated = totals.totalLiquidated;
+    if ((totalLiquidated - grossSubtotal).abs() > 0.02) {
       return _unsafeTotalsPreview(
         order,
         'Items y pagos no coinciden para una correccion automatica.',
@@ -11742,8 +11763,17 @@ class TacoPosRepository {
     }
     final newPaidTotal = grossSubtotal;
     final newPendingTotal = 0.0;
+    final previousDiscountAmount = order.explicitDiscount
+        .clamp(0, grossSubtotal)
+        .toDouble();
+    final previousNetTotal =
+        order.netTotal ??
+        (grossSubtotal - previousDiscountAmount)
+            .clamp(0, double.infinity)
+            .toDouble();
     final hasOnlyTotalsIssue =
-        (order.total - grossSubtotal).abs() > 0.02 ||
+        (previousDiscountAmount - discountAmount).abs() > 0.02 ||
+        (previousNetTotal - netTotal).abs() > 0.02 ||
         (order.paidTotal - newPaidTotal).abs() > 0.02 ||
         (order.pendingTotal - newPendingTotal).abs() > 0.02;
     if (!hasOnlyTotalsIssue) {
@@ -11759,8 +11789,11 @@ class TacoPosRepository {
       discountAmount: discountAmount.toDouble(),
       netTotal: netTotal,
       paymentTotal: paymentTotal,
+      totalLiquidated: totalLiquidated,
+      previousDiscountAmount: previousDiscountAmount,
+      previousNetTotal: previousNetTotal,
       previousTotal: order.total,
-      newTotal: grossSubtotal,
+      newTotal: order.total,
       previousPaidTotal: order.paidTotal,
       newPaidTotal: newPaidTotal,
       previousPendingTotal: order.pendingTotal,
@@ -11780,6 +11813,9 @@ class TacoPosRepository {
       discountAmount: 0,
       netTotal: 0,
       paymentTotal: 0,
+      totalLiquidated: 0,
+      previousDiscountAmount: order.explicitDiscount,
+      previousNetTotal: order.netTotal ?? 0,
       previousTotal: order.total,
       newTotal: order.total,
       previousPaidTotal: order.paidTotal,
@@ -11795,18 +11831,6 @@ class TacoPosRepository {
       0,
       (runningTotal, item) => runningTotal + (item.qty * item.unitPrice),
     );
-  }
-
-  double _paymentNetAppliedAmount(Payment payment) {
-    if ((payment.appliedAmount ?? 0) > 0) return payment.appliedAmount!;
-    if (payment.totalAfterDiscount > 0) return payment.totalAfterDiscount;
-    if (payment.chargedAmount > 0) return payment.chargedAmount;
-    if (payment.discountAmount > 0 && payment.baseAmount > 0) {
-      return (payment.baseAmount - payment.discountAmount)
-          .clamp(0, double.infinity)
-          .toDouble();
-    }
-    return payment.baseAmount;
   }
 
   double _explicitOrderDiscountAmount(Map<String, dynamic> data) {

@@ -113,6 +113,119 @@ void main() {
     expect(summary.totalCollected, 0);
   });
 
+  test('orden historica 325 con header 95 reconstruye descuento 230 + 95', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(
+          total: 325,
+          fields: const {
+            'discountAmount': 95,
+            'totalDiscountAmount': 95,
+            'discountPercent': 100,
+          },
+        ),
+        items: [
+          item(total: 230),
+          item(total: 95),
+          item(total: 185, status: 'cancelled'),
+        ],
+        payments: [
+          payment(
+            method: 'employee_consumption',
+            base: 230,
+            charged: 0,
+            discountAmount: 230,
+            applied: 0,
+          ),
+          payment(
+            method: 'employee_consumption',
+            base: 95,
+            charged: 0,
+            discountAmount: 95,
+            applied: 0,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.grossSales, 325);
+    expect(summary.discountTotal, 325);
+    expect(summary.netSales, 0);
+    expect(summary.employeeConsumption, 0);
+    expect(summary.totalCollected, 0);
+    expect(summary.reconciliationDifference, 0);
+  });
+
+  test('no suma descuento de cabecera y descuentos de pagos', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(total: 325, fields: const {'discountAmount': 95}),
+        items: [item(total: 325)],
+        payments: [
+          payment(
+            method: 'employee_consumption',
+            base: 325,
+            charged: 0,
+            discountAmount: 325,
+            applied: 0,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.discountTotal, 325);
+    expect(summary.discountTotal, isNot(420));
+  });
+
+  test('descuento empleado 30 historico ignora header stale', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(
+        total: 100,
+        discountFields: const {'discountAmount': 10},
+        payment: payment(
+          method: 'employee_consumption',
+          base: 100,
+          charged: 70,
+          discountAmount: 30,
+          applied: 70,
+        ),
+      ),
+    ]);
+
+    expect(summary.grossSales, 100);
+    expect(summary.discountTotal, 30);
+    expect(summary.netSales, 70);
+    expect(summary.totalCollected, 70);
+    expect(summary.reconciliationDifference, 0);
+  });
+
+  test('efectivo y tarjeta con descuento liquidan sin diferencia', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(total: 200),
+        items: [item(total: 200)],
+        payments: [
+          payment(method: 'cash', base: 80, charged: 80),
+          payment(method: 'card', base: 50, charged: 50),
+          payment(
+            method: 'employee_consumption',
+            base: 70,
+            charged: 0,
+            discountAmount: 70,
+            applied: 0,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.cashCollected, 80);
+    expect(summary.cardCollected, 50);
+    expect(summary.discountTotal, 70);
+    expect(summary.netSales, 130);
+    expect(summary.totalCollected, 130);
+    expect(summary.reconciliationDifference, 0);
+  });
+
   test('efectivo con cambio: neto 80 recibido 100 cambio 20 cobrado 80', () {
     final summary = buildCanonicalSalesSummary([
       bundle(
@@ -287,6 +400,30 @@ void main() {
     expect(summary.totalCollected, 0);
   });
 
+  test('pago cancelado con descuento no participa', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(total: 100),
+        items: [item(total: 100)],
+        payments: [
+          payment(
+            method: 'employee_consumption',
+            base: 100,
+            charged: 0,
+            discountAmount: 100,
+            applied: 0,
+            status: 'cancelled',
+            cancelledAt: DateTime(2026, 7, 26),
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.discountTotal, 0);
+    expect(summary.totalCollected, 0);
+    expect(summary.hasReconciliationDifference, isTrue);
+  });
+
   test('orden cancelada se conserva pero no cuenta en ventas', () {
     final summary = buildCanonicalSalesSummary([
       SalesOrderBundleInput(
@@ -347,7 +484,7 @@ PosOrder order({
   );
 }
 
-OrderItem item({required double total}) {
+OrderItem item({required double total, String status = 'active'}) {
   return OrderItem(
     id: 'item-$total',
     personNumber: 1,
@@ -362,6 +499,7 @@ OrderItem item({required double total}) {
     sendToKitchen: true,
     kitchenStatus: 'ready',
     paymentStatus: 'paid',
+    status: status,
   );
 }
 

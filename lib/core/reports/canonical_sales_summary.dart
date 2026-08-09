@@ -1,4 +1,5 @@
 import '../cash/operational_business_date.dart';
+import '../orders/order_payment_reconciliation.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
@@ -196,10 +197,14 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
       payment: activePayments.isEmpty ? null : activePayments.first,
       historicalFallback: order.createdAt ?? order.paidAt ?? order.updatedAt,
     );
+    final paymentDiscount = _explicitPaymentsDiscount(activePayments, gross);
+    final orderDiscount = _explicitOrderDiscount(order, gross);
+    final reconciliation = reconcileOrderPayments(
+      orderGrossTotal: gross,
+      activePayments: activePayments.map(PaymentSettlementInput.fromPayment),
+    );
     final discount = _roundMoney(
-      _explicitOrderDiscount(order, gross) ??
-          _explicitPaymentsDiscount(activePayments, gross) ??
-          0,
+      paymentDiscount ?? orderDiscount ?? reconciliation.discountAmount,
     ).clamp(0, gross).toDouble();
     final net = _roundMoney(gross - discount);
     final collected = _roundMoney(
@@ -342,7 +347,9 @@ bool isCanonicalActivePayment(Payment payment) {
         'anulada',
       }.contains(status) &&
       payment.cancelledAt == null &&
-      canonicalPaymentAppliedAmount(payment) > 0;
+      (canonicalPaymentAppliedAmount(payment) > 0 ||
+          payment.discountAmount > 0 ||
+          payment.baseAmount > 0);
 }
 
 double canonicalPaymentAppliedAmount(Payment payment) {
