@@ -3345,6 +3345,8 @@ const _salesAuditDiscrepancyTypes = {
   'pending_total': 'pendingTotal incorrecto',
   'duplicate_payment': 'Pago duplicado',
   'paid_incomplete': 'Orden pagada incompleta',
+  'over_liquidated': 'Sobreliquidacion',
+  'cancellation_after_payment': 'Cancelacion posterior a pago',
   'cancelled_active_payments': 'Orden cancelada con pagos',
   'state_inconsistent': 'Estado inconsistente',
   'negative_total': 'Total negativo',
@@ -3383,6 +3385,7 @@ class _SalesDiscrepancyAuditReportState
     extends State<_SalesDiscrepancyAuditReport> {
   final _queryController = TextEditingController();
   bool _onlyDiscrepancies = true;
+  bool _onlyReconciliationDifference = false;
   String _discrepancyType = 'all';
   String _orderStatus = 'all';
   late Future<List<_SalesAuditRow>> _future;
@@ -3557,6 +3560,12 @@ class _SalesDiscrepancyAuditReportState
             label: const Text('Solo con discrepancias'),
             onSelected: (value) => setState(() => _onlyDiscrepancies = value),
           ),
+          FilterChip(
+            selected: _onlyReconciliationDifference,
+            label: const Text('Ver ordenes con diferencia'),
+            onSelected: (value) =>
+                setState(() => _onlyReconciliationDifference = value),
+          ),
           FilledButton.icon(
             onPressed: () =>
                 setState(() => _future = _loadRows(forceRefresh: true)),
@@ -3581,6 +3590,13 @@ class _SalesDiscrepancyAuditReportState
     final query = _queryController.text.trim().toLowerCase();
     return rows.where((row) {
       if (_onlyDiscrepancies && !row.hasDiscrepancy) return false;
+      if (_onlyReconciliationDifference &&
+          row.diffPaymentsOrder.abs() <= salesAuditMoneyTolerance &&
+          row.diffPaidTotal.abs() <= salesAuditMoneyTolerance &&
+          row.diffPendingTotal.abs() <= salesAuditMoneyTolerance &&
+          row.overLiquidatedTotal <= salesAuditMoneyTolerance) {
+        return false;
+      }
       if (_discrepancyType != 'all' &&
           !row.discrepancyCodes.contains(_discrepancyType)) {
         return false;
@@ -3696,6 +3712,19 @@ class _SalesAuditSummary extends StatelessWidget {
         _SmallMetric(
           'Dif. liquidacion',
           _money(rows.fold(0, (sum, row) => sum + row.diffPaymentsOrder)),
+        ),
+        _SmallMetric(
+          'Diferencia de reconciliacion',
+          _money(
+            rows.fold(
+              0,
+              (sum, row) =>
+                  sum +
+                  row.diffPaymentsOrder +
+                  row.diffPaidTotal +
+                  row.diffPendingTotal,
+            ),
+          ),
         ),
         _SmallMetric(
           'Efectivo inconsistente',
@@ -3948,6 +3977,90 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                     _InfoText('pendingTotal', _money(row.order.pendingTotal)),
                   ],
                 ),
+              ),
+              const SizedBox(height: 12),
+              GlassPanel(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Balance de reconciliacion',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 14,
+                      runSpacing: 10,
+                      children: [
+                        _InfoText(
+                          'Total articulos activos',
+                          _money(row.itemsSubtotal),
+                        ),
+                        _InfoText('Efectivo', _money(row.cashPaid)),
+                        _InfoText('Tarjeta', _money(row.cardPaid)),
+                        _InfoText(
+                          'Otros pagos monetarios',
+                          _money(
+                            row.otherMonetaryPaid +
+                                row.employeeConsumptionMonetary,
+                          ),
+                        ),
+                        _InfoText('Descuentos', _money(row.explicitDiscount)),
+                        _InfoText('Propinas', _money(row.tipTotal)),
+                        _InfoText('Comision tarjeta', _money(row.cardFeeTotal)),
+                        _InfoText('Total liquidado', _money(row.settledTotal)),
+                        _InfoText(
+                          'Saldo esperado',
+                          _money(row.expectedPendingTotal),
+                        ),
+                        _InfoText(
+                          'Saldo guardado',
+                          _money(row.order.pendingTotal),
+                        ),
+                        _InfoText('Diferencia', _money(row.diffPaymentsOrder)),
+                        if (row.overLiquidatedTotal > salesAuditMoneyTolerance)
+                          _InfoText(
+                            'Sobreliquidacion por cancelacion posterior',
+                            _money(row.overLiquidatedTotal),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(row.balanceFormula),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              _DetailTable(
+                title: 'Tipos de discrepancia',
+                headers: const [
+                  'Tipo',
+                  'Esperado',
+                  'Encontrado',
+                  'Diferencia',
+                  'Probable origen',
+                ],
+                rows: row.discrepancies.isEmpty
+                    ? const [
+                        [
+                          'Sin discrepancias',
+                          r'$0.00',
+                          r'$0.00',
+                          r'$0.00',
+                          '-',
+                        ],
+                      ]
+                    : row.discrepancies
+                          .map(
+                            (entry) => [
+                              entry.label,
+                              _money(entry.expected),
+                              _money(entry.found),
+                              _money(entry.difference),
+                              entry.probableOrigin,
+                            ],
+                          )
+                          .toList(),
               ),
               const SizedBox(height: 12),
               _DetailTable(
@@ -4311,7 +4424,15 @@ class _SalesAuditRow {
     required this.explicitDiscount,
     required this.expectedOrderTotal,
     required this.paymentsAppliedTotal,
+    required this.cashPaid,
+    required this.cardPaid,
+    required this.employeeConsumptionMonetary,
+    required this.otherMonetaryPaid,
+    required this.cardFeeTotal,
+    required this.tipTotal,
     required this.settledTotal,
+    required this.expectedPendingTotal,
+    required this.overLiquidatedTotal,
     required this.storedOrderDiscount,
     required this.reconstructedPaymentDiscount,
     required this.historicalDiscountDifference,
@@ -4323,6 +4444,7 @@ class _SalesAuditRow {
     required this.diffPendingTotal,
     required this.cashPaymentMismatchCount,
     required this.discrepancyCodes,
+    required this.discrepancies,
     required this.diagnostics,
     required this.discountFields,
     required this.discountSources,
@@ -4347,7 +4469,15 @@ class _SalesAuditRow {
   final double explicitDiscount;
   final double expectedOrderTotal;
   final double paymentsAppliedTotal;
+  final double cashPaid;
+  final double cardPaid;
+  final double employeeConsumptionMonetary;
+  final double otherMonetaryPaid;
+  final double cardFeeTotal;
+  final double tipTotal;
   final double settledTotal;
+  final double expectedPendingTotal;
+  final double overLiquidatedTotal;
   final double storedOrderDiscount;
   final double reconstructedPaymentDiscount;
   final double historicalDiscountDifference;
@@ -4359,6 +4489,7 @@ class _SalesAuditRow {
   final double diffPendingTotal;
   final int cashPaymentMismatchCount;
   final List<String> discrepancyCodes;
+  final List<SalesAuditDiscrepancy> discrepancies;
   final List<String> diagnostics;
   final Map<String, double> discountFields;
   final List<SalesAuditDiscountSource> discountSources;
@@ -4471,6 +4602,8 @@ class _SalesAuditRow {
       'totalArticulosBruto (${_money(itemsSubtotal)}) - descuentoMonetario (${_money(explicitDiscount)}) = totalNetoCalculado (${_money(expectedOrderTotal)})';
   String get paymentsFormula =>
       'pagoMonetario (${_money(paymentsAppliedTotal)}) + descuentoMonetario (${_money(explicitDiscount)}) = totalLiquidado (${_money(settledTotal)})';
+  String get balanceFormula =>
+      'totalActivo (${_money(itemsSubtotal)}) = pagoMonetario (${_money(paymentsAppliedTotal)}) + descuento (${_money(explicitDiscount)}) + pendiente (${_money(expectedPendingTotal)})';
 }
 
 const _salesAuditCsvHeaders = [
@@ -4542,7 +4675,15 @@ _SalesAuditRow _buildSalesAuditRow(
     explicitDiscount: audit.monetaryDiscountApplied,
     expectedOrderTotal: audit.netCustomerDue,
     paymentsAppliedTotal: audit.moneyPaymentsApplied,
+    cashPaid: audit.cashPaid,
+    cardPaid: audit.cardPaid,
+    employeeConsumptionMonetary: audit.employeeConsumptionMonetary,
+    otherMonetaryPaid: audit.otherMonetaryPaid,
+    cardFeeTotal: audit.cardFeeTotal,
+    tipTotal: audit.tipTotal,
     settledTotal: audit.settledTotal,
+    expectedPendingTotal: audit.expectedPendingTotal,
+    overLiquidatedTotal: audit.overLiquidatedTotal,
     storedOrderDiscount: audit.storedOrderDiscount,
     reconstructedPaymentDiscount: audit.reconstructedPaymentDiscount,
     historicalDiscountDifference: audit.historicalDiscountDifference,
@@ -4554,6 +4695,7 @@ _SalesAuditRow _buildSalesAuditRow(
     diffPendingTotal: audit.diffPendingTotal,
     cashPaymentMismatchCount: audit.cashPaymentMismatchCount,
     discrepancyCodes: audit.failedCodes,
+    discrepancies: audit.discrepancies,
     diagnostics: audit.diagnostics,
     discountFields: audit.discountFields,
     discountSources: audit.discountSources,

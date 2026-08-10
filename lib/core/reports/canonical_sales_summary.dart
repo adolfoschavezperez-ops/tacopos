@@ -352,33 +352,8 @@ bool isCanonicalActivePayment(Payment payment) {
           payment.baseAmount > 0);
 }
 
-double canonicalPaymentAppliedAmount(Payment payment) {
-  if (payment.appliedAmount != null && payment.appliedAmount! >= 0) {
-    return _roundMoney(payment.appliedAmount!);
-  }
-  if (payment.method.trim().toLowerCase() == 'cash' &&
-      payment.cashReceivedAmount != null &&
-      payment.cashChangeAmount != null) {
-    return _roundMoney(
-      (payment.cashReceivedAmount! - payment.cashChangeAmount!).clamp(
-        0,
-        double.infinity,
-      ),
-    );
-  }
-  if (payment.chargedAmount > 0) return _roundMoney(payment.chargedAmount);
-  if (payment.totalAfterDiscount > 0) {
-    return _roundMoney(payment.totalAfterDiscount);
-  }
-  if (payment.discountAmount > 0) {
-    return _roundMoney(
-      (payment.baseAmount - payment.discountAmount)
-          .clamp(0, double.infinity)
-          .toDouble(),
-    );
-  }
-  if (payment.baseAmount > 0) return _roundMoney(payment.baseAmount);
-  return 0;
+double canonicalPaymentAppliedAmount(Payment payment, {double? tipAmount}) {
+  return paymentMonetaryAppliedToSale(payment, tipOverride: tipAmount);
 }
 
 double? _explicitOrderDiscount(PosOrder order, double gross) {

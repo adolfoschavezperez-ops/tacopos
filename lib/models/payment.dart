@@ -27,6 +27,7 @@ class Payment {
     this.businessDate,
     this.cashReceivedAmount,
     this.cashChangeAmount,
+    this.tipAmount = 0,
     this.subtotalBeforeDiscount = 0,
     this.discountAmount = 0,
     this.totalAfterDiscount = 0,
@@ -90,6 +91,7 @@ class Payment {
   final String? businessDate;
   final double? cashReceivedAmount;
   final double? cashChangeAmount;
+  final double tipAmount;
   final double subtotalBeforeDiscount;
   final double discountAmount;
   final double totalAfterDiscount;
@@ -168,6 +170,7 @@ class Payment {
       businessDate: businessDate ?? this.businessDate,
       cashReceivedAmount: cashReceivedAmount,
       cashChangeAmount: cashChangeAmount,
+      tipAmount: tipAmount,
       subtotalBeforeDiscount: subtotalBeforeDiscount,
       discountAmount: discountAmount,
       totalAfterDiscount: totalAfterDiscount,
@@ -253,6 +256,13 @@ class Payment {
       businessDate: data['businessDate'] as String?,
       cashReceivedAmount: (data['cashReceivedAmount'] as num?)?.toDouble(),
       cashChangeAmount: (data['cashChangeAmount'] as num?)?.toDouble(),
+      tipAmount:
+          (data['tipAmount'] as num?)?.toDouble() ??
+          (data['tip'] as num?)?.toDouble() ??
+          (data['tips'] as num?)?.toDouble() ??
+          (data['propina'] as num?)?.toDouble() ??
+          (data['gratuity'] as num?)?.toDouble() ??
+          0,
       subtotalBeforeDiscount:
           (data['subtotalBeforeDiscount'] as num?)?.toDouble() ?? baseAmount,
       discountAmount: (data['discountAmount'] as num?)?.toDouble() ?? 0,

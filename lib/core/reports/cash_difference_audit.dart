@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../../models/cash_session.dart';
 import '../../models/order.dart';
 import '../../models/payment.dart';
+import 'canonical_sales_summary.dart';
 
 class CashDifferenceAuditReport {
   const CashDifferenceAuditReport({
@@ -179,6 +180,7 @@ class CashAuditPaymentRow {
     required this.baseAmount,
     required this.chargedAmount,
     required this.appliedAmount,
+    required this.saleAppliedAmount,
     required this.receivedAmount,
     required this.changeAmount,
     required this.status,
@@ -205,6 +207,7 @@ class CashAuditPaymentRow {
   final double baseAmount;
   final double chargedAmount;
   final double? appliedAmount;
+  final double saleAppliedAmount;
   final double? receivedAmount;
   final double? changeAmount;
   final String status;
@@ -221,7 +224,7 @@ class CashAuditPaymentRow {
   final String orderStatus;
   final double tipAmount;
 
-  double get amountForAudit => appliedAmount ?? chargedAmount;
+  double get amountForAudit => saleAppliedAmount;
   bool get isActive => status == 'active' && cancelledAt == null;
 }
 
@@ -461,6 +464,10 @@ CashAuditPaymentRow _paymentRow(
   final normalized = normalizeCashAuditPaymentMethod(method);
   final active = payment.status == 'active' && payment.cancelledAt == null;
   final included = active && paymentCashSessionId == session.id;
+  final saleAppliedAmount = canonicalPaymentAppliedAmount(
+    payment,
+    tipAmount: input.tipAmount,
+  );
   return CashAuditPaymentRow(
     paymentId: payment.id,
     orderId: input.orderId,
@@ -471,6 +478,7 @@ CashAuditPaymentRow _paymentRow(
     baseAmount: payment.baseAmount,
     chargedAmount: payment.chargedAmount,
     appliedAmount: payment.appliedAmount,
+    saleAppliedAmount: saleAppliedAmount,
     receivedAmount: payment.cashReceivedAmount,
     changeAmount: payment.cashChangeAmount,
     status: payment.status,
@@ -1072,6 +1080,9 @@ void _addPaymentRows(
     'metodo',
     'normalizado',
     'importe',
+    'base venta',
+    'cobrado bruto',
+    'propina',
     'status',
     'createdAt',
     'businessDate',
@@ -1087,6 +1098,9 @@ void _addPaymentRows(
       row.originalMethod,
       row.normalizedMethod,
       _money(row.amountForAudit),
+      _money(row.baseAmount),
+      _money(row.chargedAmount),
+      _money(row.tipAmount),
       row.status,
       row.createdAt?.toIso8601String() ?? '',
       row.businessDate,

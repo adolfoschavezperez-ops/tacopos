@@ -198,6 +198,51 @@ void main() {
 
       expect(report.changeIssues.single.paymentId, 'bad-change');
     });
+
+    test('card fee stays outside sale amount in cash audit payments', () {
+      final report = buildCashDifferenceAuditReport(
+        session: _session(),
+        orders: [_order(id: 'card-fee-order', label: '#104', total: 100)],
+        payments: [
+          _input(
+            _payment(
+              id: 'card-fee-payment',
+              orderId: 'card-fee-order',
+              method: 'card',
+              amount: 100,
+              chargedAmount: 104,
+              cardFee: 4,
+            ),
+          ),
+        ],
+      );
+
+      expect(report.activePayments.single.amountForAudit, 100);
+      expect(report.activeCardPayments, 100);
+      expect(report.orders.single.paymentVsNetDifference, 0);
+    });
+
+    test('tip stays outside sale amount in cash audit payments', () {
+      final report = buildCashDifferenceAuditReport(
+        session: _session(),
+        orders: [_order(id: 'tip-order', label: 'Mesa 9', total: 100)],
+        payments: [
+          _input(
+            _payment(
+              id: 'tip-payment',
+              orderId: 'tip-order',
+              amount: 100,
+              chargedAmount: 120,
+            ),
+            tipAmount: 20,
+          ),
+        ],
+      );
+
+      expect(report.activePayments.single.amountForAudit, 100);
+      expect(report.tipCandidates.single.amount, 20);
+      expect(report.orders.single.paymentVsNetDifference, 0);
+    });
   });
 }
 
@@ -281,6 +326,8 @@ Payment _payment({
   required String orderId,
   String method = 'cash',
   double amount = 100,
+  double? chargedAmount,
+  double cardFee = 0,
   String status = 'active',
   String cashSessionId = 'NkTSfERJPJb0hbRhrStH',
   String businessDate = '2026-07-27',
@@ -299,7 +346,8 @@ Payment _payment({
     baseAmount: amount,
     surchargeRate: 0,
     surchargeAmount: 0,
-    chargedAmount: amount,
+    chargedAmount: chargedAmount ?? amount,
+    cardFeeAbsorbedAmount: cardFee,
     cashSessionId: cashSessionId,
     businessDate: businessDate,
     cashReceivedAmount: received,

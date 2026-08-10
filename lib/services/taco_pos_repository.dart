@@ -8349,21 +8349,31 @@ class TacoPosRepository {
     double employeeConsumption = 0;
 
     for (final payment in payments.where((payment) => payment.isActive)) {
+      final saleApplied = canonicalPaymentAppliedAmount(payment);
+      final tip = payment.tipAmount.clamp(0, double.infinity).toDouble();
       switch (payment.method) {
         case 'cash':
-          cash += payment.chargedAmount;
+          cash += saleApplied + tip;
           break;
         case 'card':
-          cardCharged += payment.chargedAmount;
-          cardBase += payment.baseAmount;
-          cardSurcharge += payment.surchargeAmount;
+          final customerCharged = payment.chargedAmount > 0
+              ? payment.chargedAmount
+              : saleApplied;
+          final terminalAmount =
+              customerCharged +
+              (customerCharged <= saleApplied + 0.02 ? tip : 0.0);
+          cardCharged += terminalAmount;
+          cardBase += saleApplied;
+          cardSurcharge += (terminalAmount - saleApplied - tip)
+              .clamp(0, double.infinity)
+              .toDouble();
           cardFeeAbsorbed += payment.cardFeeAbsorbedAmount;
           break;
         case 'platform_paid':
-          platform += payment.baseAmount;
+          platform += saleApplied;
           break;
         case 'employee_consumption':
-          employeeConsumption += payment.baseAmount;
+          employeeConsumption += saleApplied;
           break;
       }
     }
@@ -13748,28 +13758,26 @@ class TacoPosRepository {
     final orderDoc = await _ordersRef.doc(orderId).get();
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
     final payments = await getOrderPaymentsOnce(orderId);
-    final paidTotal = payments
-        .where((payment) => payment.isActive)
-        .fold<double>(0, (total, payment) => total + payment.baseAmount);
-    final discountAmount = (order?.explicitDiscount ?? 0)
-        .clamp(0, total)
-        .toDouble();
-    final netTotal = (total - discountAmount).clamp(0, double.infinity);
-    final adjustedPaid = paidTotal.clamp(0, netTotal).toDouble();
-    final adjustedPending = (netTotal - adjustedPaid).clamp(0, double.infinity);
+    final totals = reconcileOrderPayments(
+      orderGrossTotal: total,
+      activePayments: payments
+          .where(isCanonicalActivePayment)
+          .map(PaymentSettlementInput.fromPayment),
+    );
 
     await _ordersRef.doc(orderId).update({
       'total': total,
       'grossSubtotal': total,
-      'netTotal': netTotal,
-      'paidTotal': adjustedPaid,
-      'pendingTotal': adjustedPending,
-      'paymentStatus': adjustedPaid <= 0
-          ? 'pending'
-          : adjustedPending <= 0.01
-          ? 'paid'
-          : 'partial',
-      if (order?.status == 'paid' && adjustedPending > 0.01) 'status': 'ready',
+      'netTotal': totals.netTotal,
+      'discountAmount': totals.discountAmount,
+      'totalDiscountAmount': totals.discountAmount,
+      'monetaryPaid': totals.monetaryPaid,
+      'totalLiquidated': totals.totalLiquidated,
+      'paidTotal': totals.paidTotal,
+      'pendingTotal': totals.pendingTotal,
+      'paymentStatus': totals.paymentStatus,
+      if (order?.status == 'paid' && totals.pendingTotal > 0.01)
+        'status': 'ready',
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }

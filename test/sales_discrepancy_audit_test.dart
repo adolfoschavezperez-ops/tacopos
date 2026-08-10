@@ -311,6 +311,391 @@ void main() {
       expect(result.hasDiscrepancy, isTrue);
       expect(result.failedCodes, contains('cash_net'));
     });
+
+    test('simple cash sale reconciles without differences', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [_payment(baseAmount: 100, received: 100, change: 0)],
+      );
+
+      expect(result.cashPaid, 100);
+      expect(result.cardPaid, 0);
+      expect(result.settledTotal, 100);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('simple card sale reconciles as sale amount, not extra income', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [_payment(method: 'card', baseAmount: 100, chargedAmount: 100)],
+      );
+
+      expect(result.cardPaid, 100);
+      expect(result.moneyPaymentsApplied, 100);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('card fee does not inflate sale liquidation', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            method: 'card',
+            baseAmount: 100,
+            chargedAmount: 104,
+            cardFee: 4,
+          ),
+        ],
+      );
+
+      expect(result.cardPaid, 100);
+      expect(result.cardFeeTotal, 4);
+      expect(result.settledTotal, 100);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('cash and card mixed payment reconciles', () {
+      final result = auditSalesIntegrity(
+        _order(total: 200, paidTotal: 200),
+        [_item(total: 200)],
+        [
+          _payment(id: 'cash-1', baseAmount: 80, received: 100, change: 20),
+          _payment(id: 'card-1', method: 'card', baseAmount: 120),
+        ],
+      );
+
+      expect(result.cashPaid, 80);
+      expect(result.cardPaid, 120);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('tip is reported but does not liquidate sale items', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            baseAmount: 100,
+            chargedAmount: 120,
+            received: 120,
+            change: 0,
+            tip: 20,
+          ),
+        ],
+      );
+
+      expect(result.tipTotal, 20);
+      expect(result.moneyPaymentsApplied, 100);
+      expect(result.settledTotal, 100);
+      expect(result.failedCodes, isNot(contains('payments_order')));
+    });
+
+    test('card with tip separates sale and tip', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            method: 'card',
+            baseAmount: 100,
+            chargedAmount: 120,
+            tip: 20,
+          ),
+        ],
+      );
+
+      expect(result.cardPaid, 100);
+      expect(result.tipTotal, 20);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('employee 30 percent discount has net revenue 70', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            baseAmount: 100,
+            chargedAmount: 70,
+            discountAmount: 30,
+            totalAfterDiscount: 70,
+            appliedDiscountPercent: 30,
+            appliedDiscountType: 'employee',
+          ),
+        ],
+      );
+
+      expect(result.moneyPaymentsApplied, 70);
+      expect(result.monetaryDiscountApplied, 30);
+      expect(result.netCustomerDue, 70);
+      expect(result.settledTotal, 100);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('employee free meal 100 percent has zero monetary revenue', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            method: 'employee_consumption',
+            baseAmount: 100,
+            chargedAmount: 0,
+            discountAmount: 100,
+            totalAfterDiscount: 0,
+            appliedDiscountPercent: 100,
+            appliedDiscountType: 'employee_free_meal',
+          ),
+        ],
+      );
+
+      expect(result.moneyPaymentsApplied, 0);
+      expect(result.monetaryDiscountApplied, 100);
+      expect(result.netCustomerDue, 0);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('cash plus discount reconciles', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            baseAmount: 100,
+            chargedAmount: 80,
+            received: 80,
+            change: 0,
+            discountAmount: 20,
+            totalAfterDiscount: 80,
+          ),
+        ],
+      );
+
+      expect(result.cashPaid, 80);
+      expect(result.monetaryDiscountApplied, 20);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('card plus discount reconciles', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            method: 'card',
+            baseAmount: 100,
+            chargedAmount: 75,
+            discountAmount: 25,
+            totalAfterDiscount: 75,
+          ),
+        ],
+      );
+
+      expect(result.cardPaid, 75);
+      expect(result.monetaryDiscountApplied, 25);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('two partial payments keep pending consistent', () {
+      final result = auditSalesIntegrity(
+        _order(
+          status: 'open',
+          paymentStatus: 'partial',
+          total: 300,
+          paidTotal: 200,
+          pendingTotal: 100,
+        ),
+        [_item(total: 300)],
+        [
+          _payment(id: 'p1', baseAmount: 100),
+          _payment(id: 'p2', method: 'card', baseAmount: 100),
+        ],
+      );
+
+      expect(result.settledTotal, 200);
+      expect(result.expectedPendingTotal, 100);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('three partial payments can close an order', () {
+      final result = auditSalesIntegrity(
+        _order(total: 300, paidTotal: 300),
+        [_item(total: 300)],
+        [
+          _payment(id: 'p1', baseAmount: 100),
+          _payment(id: 'p2', method: 'card', baseAmount: 100),
+          _payment(id: 'p3', baseAmount: 100),
+        ],
+      );
+
+      expect(result.moneyPaymentsApplied, 300);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('cancelled payment is excluded from liquidation', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(id: 'active', baseAmount: 100),
+          _payment(id: 'cancelled', baseAmount: 100, status: 'cancelled'),
+        ],
+      );
+
+      expect(result.activePayments.map((payment) => payment.id), ['active']);
+      expect(result.moneyPaymentsApplied, 100);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('cancelled item does not inflate active total', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [
+          _item(id: 'active', total: 100),
+          _item(id: 'cancelled', total: 50, status: 'cancelled'),
+        ],
+        [_payment(baseAmount: 100)],
+      );
+
+      expect(result.grossItemsTotal, 100);
+      expect(result.cancelledItems.length, 1);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('cancellation after payment is shown as over liquidation', () {
+      final result = auditSalesIntegrity(
+        _order(total: 150, paidTotal: 150),
+        [
+          _item(id: 'active', total: 150),
+          _item(id: 'cancelled', total: 50, status: 'cancelled'),
+        ],
+        [_payment(baseAmount: 200, chargedAmount: 200)],
+      );
+
+      expect(result.overLiquidatedTotal, 50);
+      expect(result.failedCodes, contains('cancellation_after_payment'));
+      expect(
+        result.discrepancies
+            .singleWhere((entry) => entry.code == 'cancellation_after_payment')
+            .label,
+        'CANCELLATION_AFTER_PAYMENT',
+      );
+    });
+
+    test('paidTotal represents liquidated amount, not extra money', () {
+      final result = auditSalesIntegrity(
+        _order(total: 100, paidTotal: 100),
+        [_item(total: 100)],
+        [
+          _payment(
+            method: 'card',
+            baseAmount: 100,
+            chargedAmount: 104,
+            cardFee: 4,
+          ),
+        ],
+      );
+
+      expect(result.diffPaidTotal, 0);
+      expect(result.moneyPaymentsApplied, 100);
+    });
+
+    test('payment amount is not treated as money for free meal', () {
+      final payment = _payment(
+        method: 'employee_consumption',
+        baseAmount: 230,
+        chargedAmount: 0,
+        discountAmount: 230,
+        totalAfterDiscount: 0,
+      );
+      final result = auditSalesIntegrity(
+        _order(total: 230, paidTotal: 230),
+        [_item(total: 230)],
+        [payment],
+      );
+
+      expect(payment.amount, 230);
+      expect(result.moneyPaymentsApplied, 0);
+      expect(result.settledTotal, 230);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('header stale is classified but does not create cash difference', () {
+      final result = auditSalesIntegrity(
+        _order(total: 325, paidTotal: 325, explicitDiscount: 95),
+        [_item(total: 325)],
+        [
+          _payment(
+            id: 'free-230',
+            method: 'employee_consumption',
+            baseAmount: 230,
+            chargedAmount: 0,
+            discountAmount: 230,
+            totalAfterDiscount: 0,
+          ),
+          _payment(
+            id: 'free-95',
+            method: 'employee_consumption',
+            baseAmount: 95,
+            chargedAmount: 0,
+            discountAmount: 95,
+            totalAfterDiscount: 0,
+          ),
+        ],
+      );
+
+      expect(result.moneyPaymentsApplied, 0);
+      expect(result.settledTotal, 325);
+      expect(result.failedCodes, contains('historical_discount_aggregate'));
+      expect(result.failedCodes, isNot(contains('payments_order')));
+    });
+
+    test('does not double count header discount and payment discounts', () {
+      final result = auditSalesIntegrity(
+        _order(total: 200, paidTotal: 200, explicitDiscount: 20),
+        [_item(total: 200)],
+        [
+          _payment(
+            baseAmount: 200,
+            chargedAmount: 160,
+            discountAmount: 40,
+            totalAfterDiscount: 160,
+          ),
+        ],
+      );
+
+      expect(result.monetaryDiscountApplied, 40);
+      expect(result.settledTotal, 200);
+      expect(result.hasDiscrepancy, isTrue);
+      expect(result.failedCodes, contains('historical_discount_aggregate'));
+      expect(result.failedCodes, isNot(contains('payments_order')));
+    });
+
+    test(
+      'does not emit NaN or Infinity with invalid numeric-looking inputs',
+      () {
+        final result = auditSalesIntegrity(
+          _order(total: 0, paidTotal: 0),
+          [_item(total: 0)],
+          [_payment(baseAmount: 0, chargedAmount: 0)],
+        );
+
+        for (final value in [
+          result.grossItemsTotal,
+          result.moneyPaymentsApplied,
+          result.monetaryDiscountApplied,
+          result.settledTotal,
+          result.expectedPendingTotal,
+          result.primarySafeDifferenceForTest,
+        ]) {
+          expect(value.isNaN, isFalse);
+          expect(value.isInfinite, isFalse);
+        }
+      },
+    );
   });
 }
 
@@ -394,9 +779,12 @@ Payment _payment({
   double discountAmount = 0,
   double totalAfterDiscount = 0,
   double appliedDiscountPercent = 0,
+  double cardFee = 0,
+  double tip = 0,
   String? appliedDiscountType,
   String? appliedDiscountName,
   String? discountReason,
+  String status = 'active',
   DateTime? createdAt,
 }) {
   return Payment(
@@ -410,14 +798,29 @@ Payment _payment({
     surchargeRate: 0,
     surchargeAmount: 0,
     chargedAmount: chargedAmount ?? baseAmount,
+    cardFeeAbsorbedAmount: cardFee,
     cashReceivedAmount: received,
     cashChangeAmount: change,
+    tipAmount: tip,
     discountAmount: discountAmount,
     totalAfterDiscount: totalAfterDiscount,
     appliedDiscountPercent: appliedDiscountPercent,
     appliedDiscountType: appliedDiscountType,
     appliedDiscountName: appliedDiscountName,
     discountReason: discountReason,
+    status: status,
     createdAt: createdAt,
   );
+}
+
+extension on SalesAuditResult {
+  double get primarySafeDifferenceForTest {
+    if (diffItemsOrder.abs() > salesAuditMoneyTolerance) return diffItemsOrder;
+    if (diffSettlement.abs() > salesAuditMoneyTolerance) return diffSettlement;
+    if (diffPaidTotal.abs() > salesAuditMoneyTolerance) return diffPaidTotal;
+    if (diffPendingTotal.abs() > salesAuditMoneyTolerance) {
+      return diffPendingTotal;
+    }
+    return 0;
+  }
 }
