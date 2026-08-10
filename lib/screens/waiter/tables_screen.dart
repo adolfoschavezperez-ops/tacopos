@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
+import '../../core/visits/visit_classification.dart';
 import '../../models/order.dart';
 import '../../models/pos_table.dart';
 import '../../services/app_session.dart';
@@ -110,7 +111,11 @@ class _TablesScreenState extends State<TablesScreen> {
 
     try {
       VisitSurveyAnswer? visitAnswer;
-      if (!hasOpenOrder) {
+      if (orderNeedsVisitSurvey(
+        isNewOrder: !hasOpenOrder,
+        visitClassification: null,
+        isFirstVisit: null,
+      )) {
         visitAnswer = await showVisitSurveyDialog(context);
         if (visitAnswer == null) {
           return;

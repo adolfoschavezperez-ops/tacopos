@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
+import '../../core/visits/visit_classification.dart';
 import '../../models/order.dart';
 import '../../models/order_platform.dart';
 import '../../services/app_session.dart';
@@ -15,6 +16,7 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import '../../widgets/status_badge.dart';
+import '../../widgets/visit_survey_dialog.dart';
 import 'order_screen.dart';
 
 enum _UnseatedMode { takeout, standing }
@@ -71,7 +73,8 @@ class _UnseatedOrdersScreenState extends State<_UnseatedOrdersScreen> {
   }
 
   Future<void> _newOrder(List<OrderPlatform> platforms) async {
-    if (AppSession.instance.employee?.canTakeOrders != true || _busy) return;
+    final employee = AppSession.instance.employee;
+    if (employee?.canTakeOrders != true || _busy) return;
     final inPerson = findInPersonPlatform(platforms);
     if (_standing && inPerson == null) {
       showAppSnackBar(
@@ -81,22 +84,36 @@ class _UnseatedOrdersScreenState extends State<_UnseatedOrdersScreen> {
       );
       return;
     }
-    final result = await showDialog<_NewUnseatedOrderResult>(
-      context: context,
-      builder: (_) =>
-          _NewUnseatedOrderDialog(mode: widget.mode, platforms: platforms),
-    );
-    if (!mounted || result == null) return;
-
     setState(() => _busy = true);
     try {
+      final result = await showDialog<_NewUnseatedOrderResult>(
+        context: context,
+        builder: (_) =>
+            _NewUnseatedOrderDialog(mode: widget.mode, platforms: platforms),
+      );
+      if (!mounted || result == null) return;
+      VisitSurveyAnswer? visitAnswer;
+      if (orderNeedsVisitSurvey(
+        isNewOrder: true,
+        visitClassification: null,
+        isFirstVisit: null,
+      )) {
+        visitAnswer = await showVisitSurveyDialog(context);
+        if (!mounted || visitAnswer == null) return;
+      }
       final order = _standing
           ? await _repository.createStandingOrder(
               customerName: result.customerName,
+              visitClassification: visitAnswer?.firestoreValue,
+              isFirstVisit: visitAnswer?.isFirstVisit,
+              visitSurveyAnsweredBy: employee?.id,
             )
           : await _repository.createTakeoutOrder(
               platform: result.platform!,
               customerName: result.customerName,
+              visitClassification: visitAnswer?.firestoreValue,
+              isFirstVisit: visitAnswer?.isFirstVisit,
+              visitSurveyAnsweredBy: employee?.id,
             );
       if (!mounted) return;
       await _openOrder(order);
