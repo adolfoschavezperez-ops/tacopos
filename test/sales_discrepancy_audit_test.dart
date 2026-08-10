@@ -230,6 +230,154 @@ void main() {
       expect(result.failedCodes, isNot(contains('pending_total')));
     });
 
+    test('reconstruye free meal con discountAmount historico stale', () {
+      final result = auditSalesIntegrity(
+        _order(
+          total: 174,
+          paidTotal: 174,
+          pendingTotal: 0,
+          explicitDiscount: 94,
+        ),
+        [_item(total: 174)],
+        [
+          _payment(
+            method: 'employee_consumption',
+            baseAmount: 174,
+            chargedAmount: 0,
+            received: 0,
+            change: 0,
+            discountAmount: 94,
+            totalAfterDiscount: 0,
+            appliedDiscountPercent: 100,
+            appliedDiscountType: 'employee_free_meal',
+            appliedDiscountName: 'Comida empleado del dia',
+          ),
+        ],
+      );
+
+      expect(result.storedOrderDiscount, 94);
+      expect(result.reconstructedPaymentDiscount, 174);
+      expect(result.monetaryDiscountApplied, 174);
+      expect(result.discountPercentNormalized, 1);
+      expect(result.moneyPaymentsApplied, 0);
+      expect(result.settledTotal, 174);
+      expect(result.expectedPendingTotal, 0);
+      expect(result.diffSettlement, 0);
+      expect(result.diffPaidTotal, 0);
+      expect(result.diffPendingTotal, 0);
+      expect(result.discountTypeLabel, 'Comida empleado');
+      expect(result.failedCodes, contains('historical_discount_aggregate'));
+      expect(result.failedCodes, isNot(contains('payments_order')));
+    });
+
+    test('cinco free meal historicos suman descuento canonico completo', () {
+      final cases = [
+        (gross: 174.0, stored: 94.0),
+        (gross: 325.0, stored: 95.0),
+        (gross: 168.0, stored: 95.0),
+        (gross: 168.0, stored: 66.0),
+        (gross: 176.0, stored: 88.0),
+      ];
+      final results = [
+        for (final entry in cases)
+          auditSalesIntegrity(
+            _order(
+              total: entry.gross,
+              paidTotal: entry.gross,
+              pendingTotal: 0,
+              explicitDiscount: entry.stored,
+            ),
+            [_item(total: entry.gross)],
+            [
+              _payment(
+                method: 'employee_consumption',
+                baseAmount: entry.gross,
+                chargedAmount: 0,
+                received: 0,
+                change: 0,
+                discountAmount: entry.stored,
+                totalAfterDiscount: 0,
+                appliedDiscountPercent: 100,
+                appliedDiscountType: 'employee_free_meal',
+                appliedDiscountName: 'Comida empleado del dia',
+              ),
+            ],
+          ),
+      ];
+
+      expect(
+        results.fold<double>(0, (sum, result) => sum + result.grossItemsTotal),
+        1011,
+      );
+      expect(
+        results.fold<double>(
+          0,
+          (sum, result) => sum + result.monetaryDiscountApplied,
+        ),
+        1011,
+      );
+      expect(
+        results.fold<double>(
+          0,
+          (sum, result) => sum + result.moneyPaymentsApplied,
+        ),
+        0,
+      );
+      expect(
+        results.fold<double>(0, (sum, result) => sum + result.settledTotal),
+        1011,
+      );
+      expect(
+        results.fold<double>(
+          0,
+          (sum, result) => sum + result.expectedPendingTotal,
+        ),
+        0,
+      );
+      for (final result in results) {
+        expect(result.discountPercentNormalized, 1);
+        expect(result.discountTypeLabel, 'Comida empleado');
+        expect(result.failedCodes, contains('historical_discount_aggregate'));
+        expect(result.failedCodes, isNot(contains('payments_order')));
+        expect(result.failedCodes, isNot(contains('paid_total')));
+        expect(result.failedCodes, isNot(contains('pending_total')));
+      }
+    });
+
+    test('employee 30 permanece en 30 porciento', () {
+      final result = auditSalesIntegrity(
+        _order(
+          total: 100,
+          paidTotal: 100,
+          pendingTotal: 0,
+          explicitDiscount: 30,
+          discountPercent: 30,
+        ),
+        [_item(total: 100)],
+        [
+          _payment(
+            method: 'cash',
+            baseAmount: 100,
+            chargedAmount: 70,
+            received: 70,
+            change: 0,
+            discountAmount: 30,
+            totalAfterDiscount: 70,
+            appliedDiscountPercent: 30,
+            appliedDiscountType: 'employee_30',
+            appliedDiscountName: 'Descuento empleado 30%',
+          ),
+        ],
+      );
+
+      expect(result.monetaryDiscountApplied, 30);
+      expect(result.discountPercentNormalized, 0.3);
+      expect(result.moneyPaymentsApplied, 70);
+      expect(result.settledTotal, 100);
+      expect(result.discountTypeLabel, 'Empleado 30%');
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
     test('maps discount type labels from payment metadata', () {
       final result = auditSalesIntegrity(
         _order(total: 100, paidTotal: 100),

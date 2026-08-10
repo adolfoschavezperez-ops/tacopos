@@ -61,6 +61,34 @@ void main() {
       expect(totals.netTotal, 0);
     });
 
+    test(
+      'free meal con payment historico stale reconstruye descuento total',
+      () {
+        final payment = _payment(
+          id: 'free-stale-174',
+          method: 'employee_consumption',
+          baseAmount: 174,
+          chargedAmount: 0,
+          discountAmount: 94,
+          totalAfterDiscount: 0,
+          appliedDiscountPercent: 100,
+          appliedDiscountType: employeeDailyMealDiscountType,
+          appliedDiscountName: employeeDailyMealDiscountName,
+        );
+        final totals = reconcileOrderPayments(
+          orderGrossTotal: 174,
+          activePayments: [PaymentSettlementInput.fromPayment(payment)],
+        );
+
+        expect(totals.discountAmount, 174);
+        expect(totals.monetaryPaid, 0);
+        expect(totals.totalLiquidated, 174);
+        expect(totals.paidTotal, 174);
+        expect(totals.pendingTotal, 0);
+        expect(totals.effectiveDiscountPercent, 100);
+      },
+    );
+
     test('free meal en cobro parcial conserva saldo pendiente', () {
       final totals = reconcileOrderPayments(
         orderGrossTotal: 325,
@@ -340,9 +368,14 @@ void main() {
 
 Payment _payment({
   required String id,
+  String method = 'employee_consumption',
   required double baseAmount,
   required double chargedAmount,
   required double discountAmount,
+  double? totalAfterDiscount,
+  double appliedDiscountPercent = 0,
+  String? appliedDiscountType,
+  String? appliedDiscountName,
 }) {
   return Payment(
     id: id,
@@ -350,12 +383,15 @@ Payment _payment({
     tableId: 'table',
     tableName: 'Mesa 1',
     type: 'partial',
-    method: 'employee_consumption',
+    method: method,
     baseAmount: baseAmount,
     surchargeRate: 0,
     surchargeAmount: 0,
     chargedAmount: chargedAmount,
     discountAmount: discountAmount,
-    totalAfterDiscount: chargedAmount,
+    totalAfterDiscount: totalAfterDiscount ?? chargedAmount,
+    appliedDiscountPercent: appliedDiscountPercent,
+    appliedDiscountType: appliedDiscountType,
+    appliedDiscountName: appliedDiscountName,
   );
 }

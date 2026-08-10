@@ -682,15 +682,16 @@ _DiscountResolution _resolveDiscount(
   }
 
   for (final payment in activePayments) {
-    if (payment.discountAmount > salesAuditMoneyTolerance) {
+    final paymentDiscount = paymentDiscountAppliedToSale(payment);
+    if (paymentDiscount > salesAuditMoneyTolerance) {
       final field = 'payment.${payment.id}.discountAmount';
-      fields[field] = payment.discountAmount;
+      fields[field] = paymentDiscount;
       paymentMoney.add(
         SalesAuditDiscountSource(
           field: field,
           originalValue: payment.discountAmount,
           kind: 'importe',
-          monetaryAmount: payment.discountAmount,
+          monetaryAmount: paymentDiscount,
           used: false,
           discountTypeLabel: _discountTypeLabel(
             rawType: payment.appliedDiscountType,
@@ -705,7 +706,11 @@ _DiscountResolution _resolveDiscount(
               payment.discountAuthorizedByPartnerName ??
               payment.discountAuthorizedByPartnerLinkedEmployeeName ??
               '',
-          interpretation: 'Importe monetario de descuento del pago.',
+          interpretation:
+              (paymentDiscount - payment.discountAmount).abs() >
+                  salesAuditMoneyTolerance
+              ? 'Importe de descuento reconstruido desde la politica del pago.'
+              : 'Importe monetario de descuento del pago.',
           metadata: _paymentDiscountMetadata(payment),
         ),
       );
@@ -941,6 +946,14 @@ String _discountTypeLabel({
     rawName,
     sourceField,
   ].whereType<String>().join(' ').toLowerCase();
+  if (clean.contains('employee_free_meal') ||
+      clean.contains('free_meal') ||
+      clean.contains('free meal') ||
+      clean.contains('comida empleado') ||
+      clean.contains('comida de empleado')) {
+    return 'Comida empleado';
+  }
+  if (clean.contains('employee_30')) return 'Empleado 30%';
   if (clean.contains('employee')) return 'Empleado';
   if (clean.contains('partner') || clean.contains('socio')) return 'Socio';
   if (clean.contains('family') ||
