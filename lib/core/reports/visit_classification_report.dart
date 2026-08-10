@@ -1,6 +1,7 @@
 import 'package:intl/intl.dart';
 
 import '../../models/order.dart';
+import '../orders/order_types.dart';
 import 'canonical_sales_summary.dart';
 
 const visitClassificationCsvHeaders = [
@@ -178,12 +179,13 @@ VisitClassificationWeeklyReport buildVisitClassificationWeeklyReport({
 }
 
 bool _isEligibleVisitOrder(PosOrder order) {
-  final type = order.orderType.trim().toLowerCase();
-  final isTable = type == 'dine_in' || type == 'table';
+  final type = normalizeOrderType(order.orderType);
+  final isTrackedType =
+      type == 'table' || type == takeoutOrderType || type == standingOrderType;
   final paid =
       order.status.trim().toLowerCase() == 'paid' ||
       order.paymentStatus.trim().toLowerCase() == 'paid';
-  return isTable && paid && !isCanonicalCancelledOrder(order);
+  return isTrackedType && paid && !isCanonicalCancelledOrder(order);
 }
 
 class _VisitBucket {

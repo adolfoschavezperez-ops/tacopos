@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 
+import '../core/visits/visit_classification.dart';
 import '../core/theme/brand_colors.dart';
 
 enum VisitSurveyAnswer {
-  firstTime('first_time', true),
-  returning('returning', false);
+  firstTime(visitClassificationFirstTime, true),
+  returning(visitClassificationReturning, false);
 
   const VisitSurveyAnswer(this.firestoreValue, this.isFirstVisit);
 

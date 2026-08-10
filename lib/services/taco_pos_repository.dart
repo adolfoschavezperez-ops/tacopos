@@ -27,6 +27,7 @@ import '../core/reports/report_data_bundle.dart';
 import '../core/reports/report_performance_tracer.dart';
 import '../core/reports/yield_profit_report.dart';
 import '../core/sales/daily_sale_folio.dart';
+import '../core/visits/visit_classification.dart';
 import '../models/cash_session.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../models/active_session.dart';
@@ -9208,7 +9209,7 @@ class TacoPosRepository {
             visitSurveyAnsweredBy?.trim().isNotEmpty == true
             ? visitSurveyAnsweredBy!.trim()
             : (_auth.currentUser?.uid ?? 'anonymous'),
-        'visitSurveyVersion': 1,
+        'visitSurveyVersion': visitSurveyVersion,
       },
       ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
@@ -9291,6 +9292,9 @@ class TacoPosRepository {
   Future<PosOrder> createTakeoutOrder({
     required OrderPlatform platform,
     String? customerName,
+    String? visitClassification,
+    bool? isFirstVisit,
+    String? visitSurveyAnsweredBy,
   }) async {
     _requireTakeOrders();
     final cashSession = await _requireOpenCashSessionForOrder();
@@ -9317,6 +9321,16 @@ class TacoPosRepository {
       'personNames': {'1': 'Persona 1'},
       'businessDate': businessDateForOpenCashSession(cashSession),
       'cashSessionId': cashSession.id,
+      if (visitClassification != null && isFirstVisit != null) ...{
+        'visitClassification': visitClassification,
+        'isFirstVisit': isFirstVisit,
+        'visitSurveyAnsweredAt': FieldValue.serverTimestamp(),
+        'visitSurveyAnsweredBy':
+            visitSurveyAnsweredBy?.trim().isNotEmpty == true
+            ? visitSurveyAnsweredBy!.trim()
+            : (_auth.currentUser?.uid ?? 'anonymous'),
+        'visitSurveyVersion': visitSurveyVersion,
+      },
       ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
@@ -9335,7 +9349,12 @@ class TacoPosRepository {
     return order;
   }
 
-  Future<PosOrder> createStandingOrder({required String customerName}) async {
+  Future<PosOrder> createStandingOrder({
+    required String customerName,
+    String? visitClassification,
+    bool? isFirstVisit,
+    String? visitSurveyAnsweredBy,
+  }) async {
     _requireTakeOrders();
     final cleanCustomer = requireCustomerName(
       customerName,
@@ -9368,6 +9387,16 @@ class TacoPosRepository {
       'personNames': {'1': cleanCustomer},
       'businessDate': businessDateForOpenCashSession(cashSession),
       'cashSessionId': cashSession.id,
+      if (visitClassification != null && isFirstVisit != null) ...{
+        'visitClassification': visitClassification,
+        'isFirstVisit': isFirstVisit,
+        'visitSurveyAnsweredAt': FieldValue.serverTimestamp(),
+        'visitSurveyAnsweredBy':
+            visitSurveyAnsweredBy?.trim().isNotEmpty == true
+            ? visitSurveyAnsweredBy!.trim()
+            : (_auth.currentUser?.uid ?? 'anonymous'),
+        'visitSurveyVersion': visitSurveyVersion,
+      },
       ..._currentBranchFields,
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),

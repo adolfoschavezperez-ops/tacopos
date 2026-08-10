@@ -44,33 +44,88 @@ void main() {
       expect(report.rows.last.unknown, 1);
     });
 
-    test('excludes takeout, open and cancelled orders', () {
+    test(
+      'includes table, takeout and standing but excludes open/cancelled',
+      () {
+        final report = buildVisitClassificationWeeklyReport(
+          startBusinessDate: '2026-07-06',
+          endBusinessDate: '2026-07-12',
+          orders: [
+            _order(id: 'table', visitClassification: 'first_time'),
+            _order(
+              id: 'takeout',
+              orderType: 'takeout',
+              visitClassification: 'first_time',
+            ),
+            _order(
+              id: 'standing',
+              orderType: 'standing',
+              visitClassification: 'returning',
+            ),
+            _order(
+              id: 'open',
+              status: 'open',
+              paymentStatus: 'pending',
+              visitClassification: 'first_time',
+            ),
+            _order(
+              id: 'cancelled',
+              status: 'cancelled',
+              visitClassification: 'first_time',
+            ),
+          ],
+        );
+
+        expect(report.firstTimeTotal, 2);
+        expect(report.returningTotal, 1);
+        expect(report.classifiedTotal, 3);
+        expect(report.rows.single.firstTimePercent, closeTo(2 / 3, 0.0001));
+      },
+    );
+
+    test('general percentage uses table, takeout and standing together', () {
       final report = buildVisitClassificationWeeklyReport(
         startBusinessDate: '2026-07-06',
         endBusinessDate: '2026-07-12',
         orders: [
-          _order(id: 'table', visitClassification: 'first_time'),
           _order(
-            id: 'takeout',
+            id: 'table-first',
+            orderType: 'dine_in',
+            visitClassification: 'first_time',
+          ),
+          _order(
+            id: 'takeout-first',
             orderType: 'takeout',
             visitClassification: 'first_time',
           ),
           _order(
-            id: 'open',
-            status: 'open',
-            paymentStatus: 'pending',
+            id: 'standing-first',
+            orderType: 'standing',
             visitClassification: 'first_time',
           ),
           _order(
-            id: 'cancelled',
-            status: 'cancelled',
-            visitClassification: 'first_time',
+            id: 'table-returning',
+            orderType: 'table',
+            visitClassification: 'returning',
+          ),
+          _order(
+            id: 'takeout-returning',
+            orderType: 'para_llevar',
+            visitClassification: 'returning',
+          ),
+          _order(
+            id: 'standing-returning',
+            orderType: 'parados_sin_mesa',
+            visitClassification: 'returning',
           ),
         ],
       );
 
-      expect(report.firstTimeTotal, 1);
-      expect(report.classifiedTotal, 1);
+      expect(report.firstTimeTotal, 3);
+      expect(report.returningTotal, 3);
+      expect(report.classifiedTotal, 6);
+      expect(report.rows.single.firstTimePercent, 0.5);
+      expect(report.rows.single.csvRow[9], '50.0%');
     });
 
     test('calculates changes, percentages, averages and csv rows', () {
