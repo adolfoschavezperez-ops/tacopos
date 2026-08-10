@@ -1,4 +1,5 @@
 import '../../models/payment.dart';
+import 'employee_benefit_checkout.dart';
 import 'global_discount_checkout.dart';
 
 class PaymentSettlementInput {
@@ -16,12 +17,13 @@ class PaymentSettlementInput {
   });
 
   factory PaymentSettlementInput.fromPayment(Payment payment) {
+    final discountAmount = paymentDiscountAppliedToSale(payment);
     return PaymentSettlementInput(
       id: payment.id,
       method: payment.method,
       grossAmount: payment.baseAmount,
       monetaryAmount: paymentMonetaryAppliedToSale(payment),
-      discountAmount: paymentDiscountAppliedToSale(payment),
+      discountAmount: discountAmount,
       cardFeeAmount: payment.cardFeeAbsorbedAmount > 0
           ? payment.cardFeeAbsorbedAmount
           : payment.surchargeAmount,
@@ -232,6 +234,7 @@ double paymentMonetaryAppliedToSale(Payment payment, {double? tipOverride}) {
 }
 
 double paymentRecordedSaleAmount(Payment payment, {double? tipOverride}) {
+  if (_isFreeMealPayment(payment)) return 0;
   final tip = (tipOverride ?? payment.tipAmount)
       .clamp(0, double.infinity)
       .toDouble();
@@ -266,6 +269,11 @@ double paymentRecordedSaleAmount(Payment payment, {double? tipOverride}) {
 }
 
 double paymentDiscountAppliedToSale(Payment payment) {
+  if (_isFreeMealPayment(payment) && payment.baseAmount > 0) {
+    return roundCheckoutMoney(
+      payment.baseAmount.clamp(0, double.infinity).toDouble(),
+    );
+  }
   final explicit = payment.discountAmount.clamp(0, double.infinity).toDouble();
   if (explicit > 0) return roundCheckoutMoney(explicit);
   final percent = payment.appliedDiscountPercent > 0
@@ -283,6 +291,7 @@ double _paymentDataMonetaryAppliedToSale(
   required double grossAmount,
   required double discountAmount,
 }) {
+  if (_isFreeMealPaymentData(data)) return 0;
   final applied = _readMoney(data['appliedAmount']);
   if (applied >= 0 && data.containsKey('appliedAmount')) {
     return roundCheckoutMoney(applied);
@@ -312,6 +321,9 @@ double _paymentDataDiscountAppliedToSale(
   Map<String, Object?> data, {
   required double grossAmount,
 }) {
+  if (_isFreeMealPaymentData(data) && grossAmount > 0) {
+    return roundCheckoutMoney(grossAmount.clamp(0, double.infinity).toDouble());
+  }
   final explicit = _readMoney(data['discountAmount']);
   if (explicit > 0) return roundCheckoutMoney(explicit);
   final percent = _readMoney(data['appliedDiscountPercent']) > 0
@@ -322,6 +334,37 @@ double _paymentDataDiscountAppliedToSale(
   return roundCheckoutMoney(
     (grossAmount * normalized).clamp(0, grossAmount).toDouble(),
   );
+}
+
+bool _isFreeMealPayment(Payment payment) {
+  final clean = [
+    payment.appliedDiscountType,
+    payment.appliedDiscountName,
+    payment.discountSource,
+    payment.discountCatalogId,
+    payment.discountName,
+  ].whereType<String>().join(' ').trim().toLowerCase();
+  return clean.contains(employeeDailyMealDiscountType) ||
+      clean.contains('free_meal') ||
+      clean.contains('free meal') ||
+      clean.contains('comida empleado') ||
+      clean.contains('comida de empleado');
+}
+
+bool _isFreeMealPaymentData(Map<String, Object?> data) {
+  final clean = [
+    data['appliedDiscountType'],
+    data['appliedDiscountName'],
+    data['discountSource'],
+    data['discountCatalogId'],
+    data['discountName'],
+  ].whereType<Object>().map((value) => value.toString()).join(' ');
+  final normalized = clean.trim().toLowerCase();
+  return normalized.contains(employeeDailyMealDiscountType) ||
+      normalized.contains('free_meal') ||
+      normalized.contains('free meal') ||
+      normalized.contains('comida empleado') ||
+      normalized.contains('comida de empleado');
 }
 
 double _readMoney(Object? value) {
