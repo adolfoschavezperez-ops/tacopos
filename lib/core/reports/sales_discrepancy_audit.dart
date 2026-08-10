@@ -1,3 +1,4 @@
+import '../orders/order_payment_reconciliation.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
@@ -13,7 +14,15 @@ class SalesAuditResult {
     required this.monetaryDiscountApplied,
     required this.netCustomerDue,
     required this.moneyPaymentsApplied,
+    required this.cashPaid,
+    required this.cardPaid,
+    required this.employeeConsumptionMonetary,
+    required this.otherMonetaryPaid,
+    required this.cardFeeTotal,
+    required this.tipTotal,
     required this.settledTotal,
+    required this.expectedPendingTotal,
+    required this.overLiquidatedTotal,
     required this.receivedTotal,
     required this.changeTotal,
     required this.diffItemsOrder,
@@ -30,6 +39,7 @@ class SalesAuditResult {
     required this.discountAuthorizedBy,
     required this.discountSourceFields,
     required this.failedCodes,
+    required this.discrepancies,
     required this.diagnostics,
     required this.validations,
     required this.cashPaymentMismatchCount,
@@ -47,7 +57,15 @@ class SalesAuditResult {
   final double monetaryDiscountApplied;
   final double netCustomerDue;
   final double moneyPaymentsApplied;
+  final double cashPaid;
+  final double cardPaid;
+  final double employeeConsumptionMonetary;
+  final double otherMonetaryPaid;
+  final double cardFeeTotal;
+  final double tipTotal;
   final double settledTotal;
+  final double expectedPendingTotal;
+  final double overLiquidatedTotal;
   final double receivedTotal;
   final double changeTotal;
   final double diffItemsOrder;
@@ -71,6 +89,7 @@ class SalesAuditResult {
   final String discountAuthorizedBy;
   final String discountSourceFields;
   final List<String> failedCodes;
+  final List<SalesAuditDiscrepancy> discrepancies;
   final List<String> diagnostics;
   final List<SalesAuditValidation> validations;
   final int cashPaymentMismatchCount;
@@ -78,6 +97,24 @@ class SalesAuditResult {
   final SalesAuditMode auditMode;
 
   bool get hasDiscrepancy => failedCodes.isNotEmpty;
+}
+
+class SalesAuditDiscrepancy {
+  const SalesAuditDiscrepancy({
+    required this.code,
+    required this.label,
+    required this.expected,
+    required this.found,
+    required this.difference,
+    required this.probableOrigin,
+  });
+
+  final String code;
+  final String label;
+  final double expected;
+  final double found;
+  final double difference;
+  final String probableOrigin;
 }
 
 class SalesAuditValidation {
@@ -171,16 +208,46 @@ SalesAuditResult auditSalesIntegrity(
   final expectedPending = (grossItemsTotal - settledTotal)
       .clamp(0, double.infinity)
       .toDouble();
+  final overLiquidatedTotal = (settledTotal - grossItemsTotal)
+      .clamp(0, double.infinity)
+      .toDouble();
   final diffItemsOrder = order.total - grossItemsTotal;
   final diffSettlement = settledTotal - grossItemsTotal;
   final diffPaidTotal = order.paidTotal - settledTotal;
   final diffPendingTotal = order.pendingTotal - expectedPending;
   final codes = <String>[];
+  final discrepancies = <SalesAuditDiscrepancy>[];
   final diagnostics = <String>[];
   final validations = <SalesAuditValidation>[];
 
-  void fail(String code, String message) {
+  void fail(
+    String code,
+    String message, {
+    double expected = 0,
+    double found = 0,
+    String probableOrigin = '',
+  }) {
     if (!codes.contains(code)) codes.add(code);
+    final difference = found - expected;
+    if (!discrepancies.any(
+      (entry) =>
+          entry.code == code &&
+          (entry.expected - expected).abs() <= salesAuditMoneyTolerance &&
+          (entry.found - found).abs() <= salesAuditMoneyTolerance,
+    )) {
+      discrepancies.add(
+        SalesAuditDiscrepancy(
+          code: code,
+          label: _discrepancyLabel(code),
+          expected: expected,
+          found: found,
+          difference: difference,
+          probableOrigin: probableOrigin.isEmpty
+              ? _probableOriginFor(code)
+              : probableOrigin,
+        ),
+      );
+    }
     diagnostics.add(message);
   }
 
@@ -194,7 +261,16 @@ SalesAuditResult auditSalesIntegrity(
     validations.add(
       SalesAuditValidation(label: label, passed: passed, detail: detail),
     );
-    if (!passed && failMessage.isNotEmpty) fail(code, failMessage);
+    if (!passed && failMessage.isNotEmpty) {
+      final (expected, found) = _expectedFoundForCode(
+        code,
+        order: order,
+        grossItemsTotal: grossItemsTotal,
+        settledTotal: settledTotal,
+        expectedPending: expectedPending,
+      );
+      fail(code, failMessage, expected: expected, found: found);
+    }
   }
 
   final hasStoredAndReconstructedDiscount =
@@ -202,14 +278,21 @@ SalesAuditResult auditSalesIntegrity(
       reconstructedPaymentDiscount > salesAuditMoneyTolerance;
   if (hasStoredAndReconstructedDiscount &&
       _outsideTolerance(historicalDiscountDifference)) {
-    validation(
-      'Inconsistencia de agregado historico',
-      false,
-      code: 'historical_discount_aggregate',
-      failMessage:
-          'Descuento guardado en orden ${storedOrderDiscount.toStringAsFixed(2)}; '
+    validations.add(
+      const SalesAuditValidation(
+        label: 'Inconsistencia de agregado historico',
+        passed: false,
+      ),
+    );
+    fail(
+      'historical_discount_aggregate',
+      'Descuento guardado en orden ${storedOrderDiscount.toStringAsFixed(2)}; '
           'reconstruido desde pagos ${reconstructedPaymentDiscount.toStringAsFixed(2)}; '
           'diferencia ${historicalDiscountDifference.toStringAsFixed(2)}.',
+      expected: reconstructedPaymentDiscount,
+      found: storedOrderDiscount,
+      probableOrigin:
+          'Cabecera historica de descuento quedo stale; los pagos conservan el descuento correcto.',
     );
   }
 
@@ -252,6 +335,7 @@ SalesAuditResult auditSalesIntegrity(
       discountAuthorizedBy: discountResolution.authorizedBy,
       discountSourceFields: discountResolution.sourceFields,
       failedCodes: codes,
+      discrepancies: discrepancies,
       diagnostics: diagnostics,
       validations: validations,
       cashPaymentMismatchCount: 0,
@@ -307,6 +391,7 @@ SalesAuditResult auditSalesIntegrity(
       discountAuthorizedBy: discountResolution.authorizedBy,
       discountSourceFields: discountResolution.sourceFields,
       failedCodes: codes,
+      discrepancies: discrepancies,
       diagnostics: diagnostics,
       validations: validations,
       cashPaymentMismatchCount: 0,
@@ -365,6 +450,7 @@ SalesAuditResult auditSalesIntegrity(
       discountAuthorizedBy: discountResolution.authorizedBy,
       discountSourceFields: discountResolution.sourceFields,
       failedCodes: codes,
+      discrepancies: discrepancies,
       diagnostics: diagnostics,
       validations: validations,
       cashPaymentMismatchCount: cashIssues,
@@ -427,6 +513,23 @@ SalesAuditResult auditSalesIntegrity(
   );
   final cashIssues = _validateCashPayments(activePayments, fail, validations);
   final duplicateCount = _detectDuplicatePayments(activePayments, fail);
+  if (overLiquidatedTotal > salesAuditMoneyTolerance) {
+    final activePaymentGross = activePayments.fold<double>(
+      0,
+      (sum, payment) => sum + payment.baseAmount,
+    );
+    fail(
+      activePaymentGross > grossItemsTotal + salesAuditMoneyTolerance
+          ? 'cancellation_after_payment'
+          : 'over_liquidated',
+      'Sobreliquidacion detectada por ${overLiquidatedTotal.toStringAsFixed(2)}.',
+      expected: grossItemsTotal,
+      found: settledTotal,
+      probableOrigin: activePaymentGross > grossItemsTotal
+          ? 'Pago previo mayor al total activo; posible cancelacion posterior sin reversa equivalente.'
+          : 'Pagos monetarios y descuentos superan el total activo.',
+    );
+  }
 
   return _result(
     activeItems: activeItems,
@@ -453,6 +556,7 @@ SalesAuditResult auditSalesIntegrity(
     discountAuthorizedBy: discountResolution.authorizedBy,
     discountSourceFields: discountResolution.sourceFields,
     failedCodes: codes,
+    discrepancies: discrepancies,
     diagnostics: diagnostics,
     validations: validations,
     cashPaymentMismatchCount: cashIssues,
@@ -476,23 +580,7 @@ bool isSalesAuditActivePayment(Payment payment) {
 }
 
 double salesAuditMoneyPaymentAmount(Payment payment) {
-  if ((payment.appliedAmount ?? 0) > salesAuditMoneyTolerance) {
-    return payment.appliedAmount!;
-  }
-  if (payment.totalAfterDiscount > salesAuditMoneyTolerance) {
-    return payment.totalAfterDiscount;
-  }
-  if (payment.chargedAmount > salesAuditMoneyTolerance) {
-    return payment.chargedAmount;
-  }
-  if (payment.discountAmount > salesAuditMoneyTolerance &&
-      payment.baseAmount > salesAuditMoneyTolerance) {
-    return (payment.baseAmount - payment.discountAmount)
-        .clamp(0, double.infinity)
-        .toDouble();
-  }
-  if (payment.baseAmount > salesAuditMoneyTolerance) return payment.baseAmount;
-  return 0;
+  return paymentMonetaryAppliedToSale(payment);
 }
 
 SalesAuditMode _auditModeFor(PosOrder order) {
@@ -1011,6 +1099,7 @@ SalesAuditResult _result({
   required String discountAuthorizedBy,
   required String discountSourceFields,
   required List<String> failedCodes,
+  required List<SalesAuditDiscrepancy> discrepancies,
   required List<String> diagnostics,
   required List<SalesAuditValidation> validations,
   required int cashPaymentMismatchCount,
@@ -1020,6 +1109,16 @@ SalesAuditResult _result({
   double reconstructedPaymentDiscount = 0,
   double historicalDiscountDifference = 0,
 }) {
+  final reconciliation = reconcileOrderPayments(
+    orderGrossTotal: grossItemsTotal,
+    activePayments: activePayments.map(PaymentSettlementInput.fromPayment),
+  );
+  final expectedPendingTotal = (grossItemsTotal - settledTotal)
+      .clamp(0, double.infinity)
+      .toDouble();
+  final overLiquidatedTotal = (settledTotal - grossItemsTotal)
+      .clamp(0, double.infinity)
+      .toDouble();
   return SalesAuditResult(
     activeItems: activeItems,
     cancelledItems: cancelledItems,
@@ -1028,7 +1127,15 @@ SalesAuditResult _result({
     monetaryDiscountApplied: monetaryDiscountApplied,
     netCustomerDue: netCustomerDue,
     moneyPaymentsApplied: moneyPaymentsApplied,
+    cashPaid: reconciliation.cashPaid,
+    cardPaid: reconciliation.cardPaid,
+    employeeConsumptionMonetary: reconciliation.employeeConsumptionMonetary,
+    otherMonetaryPaid: reconciliation.otherMonetaryPaid,
+    cardFeeTotal: reconciliation.cardFeeTotal,
+    tipTotal: reconciliation.tipTotal,
     settledTotal: settledTotal,
+    expectedPendingTotal: expectedPendingTotal,
+    overLiquidatedTotal: overLiquidatedTotal,
     receivedTotal: receivedTotal,
     changeTotal: changeTotal,
     diffItemsOrder: diffItemsOrder,
@@ -1045,6 +1152,7 @@ SalesAuditResult _result({
     discountAuthorizedBy: discountAuthorizedBy,
     discountSourceFields: discountSourceFields,
     failedCodes: failedCodes,
+    discrepancies: discrepancies,
     diagnostics: diagnostics.isEmpty
         ? const ['Sin discrepancias.']
         : diagnostics,
@@ -1093,3 +1201,72 @@ class _DiscountResolution {
 bool _outsideTolerance(double value) => value.abs() > salesAuditMoneyTolerance;
 
 String _normalize(String value) => value.trim().toLowerCase();
+
+(double, double) _expectedFoundForCode(
+  String code, {
+  required PosOrder order,
+  required double grossItemsTotal,
+  required double settledTotal,
+  required double expectedPending,
+}) {
+  return switch (code) {
+    'items_order' => (grossItemsTotal, order.total),
+    'payments_order' => (grossItemsTotal, settledTotal),
+    'paid_total' => (settledTotal, order.paidTotal),
+    'pending_total' => (expectedPending, order.pendingTotal),
+    'paid_incomplete' => (grossItemsTotal, settledTotal),
+    'negative_total' => (0, order.total),
+    _ => (0, 0),
+  };
+}
+
+String _discrepancyLabel(String code) {
+  return switch (code) {
+    'historical_discount_aggregate' => 'HEADER_STALE',
+    'items_order' => 'ACTIVE_ITEMS_VS_GROSS',
+    'discount_inconsistent' => 'DISCOUNT_MISSING_OR_STALE',
+    'payments_order' => 'LIQUIDATED_VS_GROSS',
+    'cash_net' => 'CASH_RECEIVED_CHANGE_MISMATCH',
+    'paid_total' => 'PAID_TOTAL_VS_LIQUIDATED',
+    'pending_total' => 'PENDING_TOTAL_MISMATCH',
+    'duplicate_payment' => 'DUPLICATE_PAYMENT',
+    'paid_incomplete' => 'PAID_ORDER_INCOMPLETE',
+    'cancelled_active_payments' => 'CANCELLED_ORDER_ACTIVE_PAYMENTS',
+    'state_inconsistent' => 'STATE_INCONSISTENT',
+    'negative_total' => 'NEGATIVE_TOTAL',
+    'over_liquidated' => 'OVER_LIQUIDATED',
+    'cancellation_after_payment' => 'CANCELLATION_AFTER_PAYMENT',
+    _ => 'OTHER',
+  };
+}
+
+String _probableOriginFor(String code) {
+  return switch (code) {
+    'historical_discount_aggregate' =>
+      'Agregado historico de descuento en orden no coincide con pagos.',
+    'items_order' =>
+      'El total guardado de la orden no coincide con items activos.',
+    'discount_inconsistent' =>
+      'Descuento no registrado o agregado de cabecera obsoleto.',
+    'payments_order' =>
+      'Pago monetario mas descuento no liquida el total activo.',
+    'cash_net' =>
+      'Efectivo recibido menos cambio no coincide con monto aplicado.',
+    'paid_total' =>
+      'paidTotal debe representar importe liquidado aplicado a la orden.',
+    'pending_total' =>
+      'pendingTotal no coincide con total activo menos liquidado.',
+    'duplicate_payment' => 'Pagos activos similares en una ventana corta.',
+    'paid_incomplete' =>
+      'La orden esta marcada pagada sin liquidacion completa.',
+    'cancelled_active_payments' =>
+      'La orden fue cancelada pero conserva pagos activos.',
+    'state_inconsistent' => 'Estado operativo y saldos no coinciden.',
+    'negative_total' => 'Total guardado negativo.',
+    'over_liquidated' =>
+      'Pagos y descuentos superan el total activo de articulos.',
+    'cancellation_after_payment' =>
+      'Cancelacion posterior al cobro sin reversa equivalente.',
+    _ => 'Requiere revision manual.',
+  };
+}
