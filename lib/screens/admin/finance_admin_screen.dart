@@ -51,7 +51,7 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
     final canOpenDashboard =
         kIsWeb && canViewFinanceDashboard(AppSession.instance.employee);
     return DefaultTabController(
-      length: canOpenDashboard ? 7 : 6,
+      length: canOpenDashboard ? 6 : 5,
       initialIndex: canOpenDashboard ? 1 : 0,
       child: Column(
         children: [
@@ -241,10 +241,6 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                                           _CashFlowTab(
                                                             summary: summary,
                                                           ),
-                                                          WeeklyFinanceComparisonView(
-                                                            repository:
-                                                                _repository,
-                                                          ),
                                                           _PartnerContributionsTab(
                                                             repository:
                                                                 _repository,
@@ -258,6 +254,8 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                                                 .supplierPayments,
                                                           ),
                                                           _FinanceReportsTab(
+                                                            repository:
+                                                                _repository,
                                                             summary: summary,
                                                           ),
                                                         ],
@@ -382,7 +380,6 @@ class FinanceNavigationTabs extends StatelessWidget {
           ),
         const Tab(text: 'Estado financiero'),
         const Tab(text: 'Flujo de efectivo'),
-        const Tab(text: 'Comparativo semanal'),
         const Tab(text: 'Aportaciones de socios'),
         const Tab(text: 'Pagos a proveedores'),
         const Tab(text: 'Reportes'),
@@ -1016,8 +1013,9 @@ class _SupplierPaymentsFinanceTab extends StatelessWidget {
 }
 
 class _FinanceReportsTab extends StatelessWidget {
-  const _FinanceReportsTab({required this.summary});
+  const _FinanceReportsTab({required this.repository, required this.summary});
 
+  final TacoPosRepository repository;
   final _FinanceSummary summary;
 
   @override
@@ -1036,6 +1034,13 @@ class _FinanceReportsTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
+        WeeklyFinanceComparisonView(
+          repository: repository,
+          padding: EdgeInsets.zero,
+          physics: const NeverScrollableScrollPhysics(),
+          shrinkWrap: true,
+        ),
+        const SizedBox(height: 16),
         _ReportGroup(title: 'Compras por proveedor', rows: purchasesBySupplier),
         const SizedBox(height: 16),
         _ReportGroup(title: 'Pagos por proveedor', rows: paymentsBySupplier),

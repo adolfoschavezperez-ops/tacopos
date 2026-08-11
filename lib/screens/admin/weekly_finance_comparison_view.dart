@@ -9,9 +9,18 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 
 class WeeklyFinanceComparisonView extends StatefulWidget {
-  const WeeklyFinanceComparisonView({super.key, required this.repository});
+  const WeeklyFinanceComparisonView({
+    super.key,
+    required this.repository,
+    this.padding = const EdgeInsets.all(18),
+    this.physics,
+    this.shrinkWrap = false,
+  });
 
   final TacoPosRepository repository;
+  final EdgeInsetsGeometry padding;
+  final ScrollPhysics? physics;
+  final bool shrinkWrap;
 
   @override
   State<WeeklyFinanceComparisonView> createState() =>
@@ -81,7 +90,9 @@ class _WeeklyFinanceComparisonViewState
           );
         }
         return ListView(
-          padding: const EdgeInsets.all(18),
+          padding: widget.padding,
+          physics: widget.physics,
+          shrinkWrap: widget.shrinkWrap,
           children: [
             _Header(report: report, onRefresh: _refresh),
             const SizedBox(height: 14),
