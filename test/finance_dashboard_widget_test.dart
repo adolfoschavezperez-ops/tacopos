@@ -67,13 +67,13 @@ void main() {
       await tester.pump();
 
       expect(find.text('VENTA'), findsOneWidget);
-      expect(find.text('COBRADO'), findsOneWidget);
+      expect(find.text('INGRESO REAL'), findsOneWidget);
       expect(find.text('GASTOS'), findsOneWidget);
       expect(find.text('FACTURAS PROVEEDOR'), findsOneWidget);
       expect(find.text('PAGADO'), findsOneWidget);
       expect(find.text('RESUMEN'), findsOneWidget);
       expect(find.text('Total venta neta'), findsNWidgets(2));
-      expect(find.text('Total cobrado'), findsOneWidget);
+      expect(find.text('Total ingreso real'), findsOneWidget);
       expect(find.text('Total gastos'), findsOneWidget);
       expect(find.text('Total facturado'), findsWidgets);
       expect(find.text('Total pagado'), findsWidgets);
