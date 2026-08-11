@@ -466,9 +466,9 @@ class _KpiGrid extends StatelessWidget {
         () => _showSalesDialog(context, bundle),
       ),
       _KpiData(
-        'COBRADO',
+        'INGRESO REAL',
         bundle.realCollected,
-        'cobro real aplicado',
+        'cortes cerrados',
         Icons.paid_outlined,
         _FinanceColors.lightGreen,
         () => _showPaymentsDialog(context, bundle),
@@ -758,7 +758,7 @@ class _DetailGrid extends StatelessWidget {
         title: 'DETALLE DE COBROS (CAJA)',
         accent: _FinanceColors.lightGreen,
         lines: [
-          const _DetailLineData.section('COBROS APLICADOS'),
+          const _DetailLineData.section('INGRESO REAL DE CORTES CERRADOS'),
           ...collectionsBreakdown.visibleEntries.map(
             (entry) => _DetailLineData.value(
               entry.label,
@@ -772,14 +772,19 @@ class _DetailGrid extends StatelessWidget {
                   : null,
             ),
           ),
-          _DetailLineData.total('Total cobrado', bundle.realCollected),
+          _DetailLineData.total('Total ingreso real', bundle.realCollected),
+          const _DetailLineData.section('COMPARACION CONTRA ESPERADO'),
+          _DetailLineData.value(
+            'Monetario esperado',
+            bundle.expectedMonetaryIncome,
+          ),
           const _DetailLineData.section('AJUSTES DE CAJA'),
           _DetailLineData.value('Comisiones de tarjeta', bundle.cardFees),
           _DetailLineData.value('Faltantes en cortes', bundle.cashShortages),
           _DetailLineData.value('Sobrantes en cortes', bundle.cashOverages),
           if (!collectionsBreakdown.isValid) const _DetailLineData.warning(),
         ],
-        note: 'Los ajustes de caja no forman parte del total cobrado.',
+        note: 'El fondo inicial no forma parte del ingreso real.',
         onTap: () => _showPaymentsDialog(context, bundle),
       ),
       _DetailCard(
@@ -1090,7 +1095,7 @@ class _SummaryColumn extends StatelessWidget {
             tooltip:
                 'Resultado considerando el total facturado por proveedores, sin importar cuanto se ha pagado.',
             lines: [
-              _MetricLineData('Venta neta', bundle.netSales),
+              _MetricLineData('Ingreso real', bundle.realCollected),
               _MetricLineData('Gastos', -bundle.paidExpenses),
               _MetricLineData(
                 'Facturas proveedor',
@@ -1099,7 +1104,7 @@ class _SummaryColumn extends StatelessWidget {
             ],
             total: bundle.generalResult,
             formula:
-                '${_money(bundle.netSales)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierInvoicesTotal)}',
+                '${_money(bundle.realCollected)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierInvoicesTotal)}',
           ),
           const SizedBox(height: 10),
           _SummaryCard(
@@ -1413,20 +1418,20 @@ class _TablesGrid extends StatelessWidget {
       ),
     );
     return _FinanceTable(
-      title: 'DETALLE DE COBROS (CAJA)',
+      title: 'DETALLE DE INGRESOS REALES (CORTES)',
       accent: _FinanceColors.lightGreen,
       columns: const [
         'Fecha operativa',
         'Efectivo',
         'Tarjeta',
-        'Otros',
+        'Plataforma / otros',
         'Comisiones',
         'Faltante',
         'Sobrante',
-        'Cobrado real',
+        'Ingreso real',
       ],
       rows: rows,
-      emptyMessage: 'No hay cobros en este periodo.',
+      emptyMessage: 'No hay cortes cerrados en este periodo.',
     );
   }
 

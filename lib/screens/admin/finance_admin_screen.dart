@@ -451,7 +451,11 @@ class _FinanceSummary {
         return _dateInRange(contribution.date, data.startDate, data.endDate);
       }).toList(),
       cashSessions = data.cashSessions
-          .where(_isClosedCashSessionForFinance)
+          .where(financeCashSessionCountsAsClosed)
+          .toList(),
+      cashCutSummaries = data.cashSessions
+          .where(financeCashSessionCountsAsClosed)
+          .map(buildFinanceCashCutSummary)
           .toList(),
       withdrawals = data.withdrawals
           .where(
@@ -482,6 +486,7 @@ class _FinanceSummary {
   final List<SupplierPayment> supplierPayments;
   final List<PartnerContribution> contributions;
   final List<CashSession> cashSessions;
+  final List<FinanceCashCutSummary> cashCutSummaries;
   final List<CashWithdrawalRequest> withdrawals;
   final List<SupplierPurchase> pendingPurchases;
   final CanonicalSalesSummary salesSummary;
@@ -491,15 +496,26 @@ class _FinanceSummary {
   double get discountsApplied => salesSummary.discountTotal;
   double get ventaNeta => salesSummary.netSales;
   double get ventaCobradaBruta => salesSummary.netSales;
-  double get cashCollected => salesSummary.cashCollected;
-  double get cardCollected => salesSummary.cardCollected;
-  double get cardCommission => cardCollected * 0.035 * 1.16;
+  double get expectedMonetaryIncome =>
+      cashCutSummaries.fold(0, (sum, row) => sum + row.expectedMonetaryIncome);
+  double get realIncome =>
+      cashCollected + cardCollected + platformCollected + otherCollected;
+  double get cashCollected =>
+      cashCutSummaries.fold(0, (sum, row) => sum + row.cashReceived);
+  double get cardCollected =>
+      cashCutSummaries.fold(0, (sum, row) => sum + row.cardReceived);
+  double get cardCommission =>
+      cashCutSummaries.fold(0, (sum, row) => sum + row.cardFeeAbsorbed);
   double get cardNetCollected => cardCollected - cardCommission;
   double get cashSessionShortages =>
-      cashSessions.fold(0, (sum, session) => sum + session.shortageAmount);
-  double get ventaNetaDisponible =>
-      ventaNeta - cardCommission - cashSessionShortages;
-  double get platformCollected => salesSummary.platformCollected;
+      cashCutSummaries.fold(0, (sum, row) => sum + row.shortage);
+  double get cashSessionOverages =>
+      cashCutSummaries.fold(0, (sum, row) => sum + row.overage);
+  double get ventaNetaDisponible => realIncome - cardCommission;
+  double get platformCollected =>
+      cashCutSummaries.fold(0, (sum, row) => sum + row.platformReceived);
+  double get otherCollected =>
+      cashCutSummaries.fold(0, (sum, row) => sum + row.otherReceived);
   double get employeeConsumption => salesSummary.employeeConsumption;
   double get registeredPurchases =>
       purchases.fold(0, (sum, purchase) => sum + purchase.total);
@@ -726,10 +742,10 @@ class _FinancialStateTab extends StatelessWidget {
         ? 'Se descontaron gastos/retiros aprobados por ${_money(summary.cashWithdrawals)} del resultado.'
         : null;
     final cardCommissionText = summary.cardCommission > 0
-        ? 'Se descontaron comisiones de tarjeta por ${_money(summary.cardCommission)} de la venta disponible.'
+        ? 'Se descontaron comisiones de tarjeta por ${_money(summary.cardCommission)} del ingreso real disponible.'
         : null;
     final shortageText = summary.cashSessionShortages > 0
-        ? 'Se descontaron faltantes de cortes por ${_money(summary.cashSessionShortages)} de la venta disponible.'
+        ? 'Se detectaron faltantes de cortes por ${_money(summary.cashSessionShortages)}. El ingreso real ya refleja esa diferencia.'
         : null;
     final alertColor = summary.totalAportacionesSocios > 0
         ? BrandColors.info
@@ -739,8 +755,8 @@ class _FinancialStateTab extends StatelessWidget {
     final alertText = summary.totalAportacionesSocios > 0
         ? 'Se registraron pagos con aportacion de socios por ${_money(summary.totalAportacionesSocios)}.'
         : summary.missingFromSales > 0
-        ? 'Con la venta actual no alcanza para cubrir los pagos. Faltan ${_money(summary.missingFromSales)}.'
-        : 'La venta del periodo cubre los pagos registrados.';
+        ? 'Con el ingreso real confirmado no alcanza para cubrir los pagos. Faltan ${_money(summary.missingFromSales)}.'
+        : 'El ingreso real confirmado cubre los pagos registrados.';
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
@@ -795,9 +811,12 @@ class _FinancialStateTab extends StatelessWidget {
             _Kpi('Venta bruta', summary.ventaBruta),
             _Kpi('Descuentos aplicados', summary.discountsApplied),
             _Kpi('Venta neta', summary.ventaNeta),
+            _Kpi('Ingreso real de cortes', summary.realIncome),
+            _Kpi('Monetario esperado', summary.expectedMonetaryIncome),
             _Kpi('Comisiones de tarjeta', summary.cardCommission),
             _Kpi('Faltantes de cortes', summary.cashSessionShortages),
-            _Kpi('Venta neta disponible', summary.ventaNetaDisponible),
+            _Kpi('Sobrantes de cortes', summary.cashSessionOverages),
+            _Kpi('Ingreso real disponible', summary.ventaNetaDisponible),
             _Kpi('Compras registradas', summary.registeredPurchases),
             _Kpi(
               'Pagos proveedores desde venta',
@@ -836,14 +855,16 @@ class _CashFlowTab extends StatelessWidget {
             _Kpi('Venta bruta', summary.ventaBruta),
             _Kpi('Descuentos aplicados', summary.discountsApplied),
             _Kpi('Venta neta', summary.ventaNeta),
-            _Kpi('Efectivo cobrado', summary.cashCollected),
-            _Kpi('Tarjeta cobrada real', summary.cardCollected),
+            _Kpi('Ingreso real de cortes', summary.realIncome),
+            _Kpi('Efectivo real', summary.cashCollected),
+            _Kpi('Tarjeta real', summary.cardCollected),
             _Kpi('Comisiones de tarjeta', summary.cardCommission),
             _Kpi('Tarjeta neta', summary.cardNetCollected),
-            _Kpi('Plataforma cobrada', summary.platformCollected),
+            _Kpi('Plataforma confirmada', summary.platformCollected),
             _Kpi('Consumo empleado', summary.employeeConsumption),
             _Kpi('Faltantes de cortes', summary.cashSessionShortages),
-            _Kpi('Venta neta disponible', summary.ventaNetaDisponible),
+            _Kpi('Sobrantes de cortes', summary.cashSessionOverages),
+            _Kpi('Ingreso real disponible', summary.ventaNetaDisponible),
             _Kpi('Pagos en efectivo', summary.cashSupplierPayments),
             _Kpi('Pagos por transferencia', summary.transferSupplierPayments),
             _Kpi(
@@ -1033,9 +1054,12 @@ class _FinanceReportsTab extends StatelessWidget {
             'Venta bruta': summary.ventaBruta,
             'Descuentos aplicados': summary.discountsApplied,
             'Venta neta': summary.ventaNeta,
+            'Ingreso real de cortes': summary.realIncome,
+            'Monetario esperado': summary.expectedMonetaryIncome,
             'Comisiones de tarjeta': summary.cardCommission,
             'Faltantes de cortes': summary.cashSessionShortages,
-            'Venta neta disponible': summary.ventaNetaDisponible,
+            'Sobrantes de cortes': summary.cashSessionOverages,
+            'Ingreso real disponible': summary.ventaNetaDisponible,
             'Aportaciones socios': summary.totalAportacionesSocios,
             'Pagos proveedor desde venta': summary.supplierPaymentsFromSales,
             'Pagos proveedor con socios': summary.partnerSupplierPayments,
@@ -1064,9 +1088,10 @@ class _ResultSplit extends StatelessWidget {
         runSpacing: 12,
         children: [
           _MiniMetric('Resultado operativo', summary.estimatedResult),
-          _MiniMetric('Venta neta disponible', summary.ventaNetaDisponible),
+          _MiniMetric('Ingreso real disponible', summary.ventaNetaDisponible),
           _MiniMetric('Comisiones tarjeta', summary.cardCommission),
           _MiniMetric('Faltantes cortes', summary.cashSessionShortages),
+          _MiniMetric('Sobrantes cortes', summary.cashSessionOverages),
           _MiniMetric(
             'Pagos proveedor desde venta',
             summary.supplierPaymentsFromSales,
@@ -1553,38 +1578,12 @@ Map<String, double> _groupContributionsByPartner(
 
 Map<String, double> _groupCashFlowByDay(_FinanceSummary summary) {
   final result = <String, double>{};
-  final salesByOrderId = {
-    for (final row in summary.salesSummary.orderRows) row.order.id: row,
-  };
-  for (final row in summary.salesSummary.orderRows) {
-    final date = row.businessDate;
+  for (final cashCut in summary.cashCutSummaries) {
+    final date = cashCut.businessDate;
     result.update(
       date,
-      (value) => value + row.netSales,
-      ifAbsent: () => row.netSales,
-    );
-  }
-  for (final payment in summary.customerPayments.where(
-    (payment) => payment.method == 'card',
-  )) {
-    final order = salesByOrderId[payment.orderId];
-    final date =
-        order?.businessDate ??
-        payment.businessDate ??
-        _dayKey(payment.createdAt);
-    final commission = payment.chargedAmount * 0.035 * 1.16;
-    result.update(
-      date,
-      (value) => value - commission,
-      ifAbsent: () => -commission,
-    );
-  }
-  for (final session in summary.cashSessions) {
-    final date = session.businessDate;
-    result.update(
-      date,
-      (value) => value - session.shortageAmount,
-      ifAbsent: () => -session.shortageAmount,
+      (value) => value + cashCut.actualReceived - cashCut.cardFeeAbsorbed,
+      ifAbsent: () => cashCut.actualReceived - cashCut.cardFeeAbsorbed,
     );
   }
   for (final payment in summary.supplierPayments) {
@@ -1638,14 +1637,6 @@ Map<String, double> _groupPendingBySupplier(List<SupplierPurchase> purchases) {
 bool _isApprovedWithdrawal(CashWithdrawalRequest request) {
   final status = request.status.trim().toLowerCase();
   return const {'approved', 'aprobado', 'aprobada'}.contains(status);
-}
-
-bool _isClosedCashSessionForFinance(CashSession session) {
-  final status = session.status.trim().toLowerCase();
-  if (const {'cancelled', 'canceled', 'replaced', 'voided'}.contains(status)) {
-    return false;
-  }
-  return status == 'closed' || session.closedAt != null;
 }
 
 bool _isPartnerSupplierPayment(SupplierPayment payment) {

@@ -55,7 +55,10 @@ void _summarySheet(
   _header(sheet, ['Indicador', 'Importe']);
   _moneyRows(sheet, [
     ('Venta', bundle.netSales),
-    ('Cobrado', bundle.realCollected),
+    ('Ingreso real de cortes', bundle.realCollected),
+    ('Monetario esperado', bundle.expectedMonetaryIncome),
+    ('Faltantes de cortes', bundle.cashShortages),
+    ('Sobrantes de cortes', bundle.cashOverages),
     ('Gastos', bundle.paidExpenses),
     ('Facturas proveedor', bundle.supplierInvoicesTotal),
     ('Pagado', bundle.supplierPaidTotal),
@@ -111,40 +114,67 @@ void _salesSheet(Sheet sheet, FinanceDashboardBundle bundle) {
 }
 
 void _collectionsSheet(Sheet sheet, FinanceDashboardBundle bundle) {
-  _title(sheet, 'COBROS');
+  _title(sheet, 'INGRESOS REALES DE CORTES');
   _header(sheet, [
     'Fecha operativa',
-    'Orden',
-    'Pago',
-    'Metodo',
-    'Importe aplicado',
+    'Corte',
+    'Efectivo real',
+    'Tarjeta real',
+    'Plataforma / otros',
+    'Ingreso real',
+    'Monetario esperado',
+    'Faltante',
+    'Sobrante',
+    'Fondo inicial',
+    'Retiros aprobados',
     'Comision tarjeta',
-    'Registrado',
+    'Cerro',
     'Estatus',
   ]);
-  for (final row in bundle.customerPayments) {
+  for (final row in bundle.cashCutSummaries) {
     _append(
       sheet,
       [
         row.businessDate,
-        row.order.id,
-        row.payment.id,
-        financePaymentMethodLabel(row.payment.method),
-        row.amount,
-        row.payment.cardFeeAbsorbedAmount,
-        row.payment.employeeName ?? row.payment.createdBy ?? '',
-        row.payment.status,
+        row.session.id,
+        row.cashReceived,
+        row.cardReceived,
+        row.platformReceived + row.otherReceived,
+        row.actualReceived,
+        row.expectedMonetaryIncome,
+        row.shortage,
+        row.overage,
+        row.openingFloat,
+        row.approvedWithdrawals,
+        row.cardFeeAbsorbed,
+        row.session.closedByEmployeeName ?? '',
+        row.session.status,
       ],
-      moneyColumns: const {4, 5},
+      moneyColumns: const {2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
     );
   }
   _append(
     sheet,
-    ['TOTAL', '', '', '', bundle.realCollected, bundle.cardFees, '', ''],
-    moneyColumns: const {4, 5},
+    [
+      'TOTAL',
+      bundle.cashCutSummaries.length,
+      bundle.cashCollected,
+      bundle.cardCollected,
+      bundle.platformCollected + bundle.otherCollected,
+      bundle.realCollected,
+      bundle.expectedMonetaryIncome,
+      bundle.cashShortages,
+      bundle.cashOverages,
+      '',
+      '',
+      bundle.cardFees,
+      '',
+      '',
+    ],
+    moneyColumns: const {2, 3, 4, 5, 6, 7, 8, 11},
     total: true,
   );
-  _widths(sheet, [18, 24, 24, 22, 20, 20, 24, 16]);
+  _widths(sheet, [18, 24, 18, 18, 22, 18, 22, 18, 18, 18, 18, 18, 24, 16]);
 }
 
 void _expensesSheet(Sheet sheet, FinanceDashboardBundle bundle) {

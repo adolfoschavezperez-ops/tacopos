@@ -5,6 +5,7 @@ import 'package:tacopos/core/reports/canonical_sales_summary.dart';
 import 'package:tacopos/core/reports/finance_dashboard.dart';
 import 'package:tacopos/core/reports/finance_dashboard_excel.dart';
 import 'package:excel/excel.dart';
+import 'package:tacopos/models/cash_session.dart';
 import 'package:tacopos/models/cash_withdrawal_request.dart';
 import 'package:tacopos/models/employee.dart';
 import 'package:tacopos/models/order.dart';
@@ -55,7 +56,7 @@ void main() {
     expect(dashboard.netSales, 800);
   });
 
-  test('cobrado usa aplicado, descarta cancelado y no suma cambio', () {
+  test('ingreso real usa cortes cerrados y no pagos aplicados', () {
     final order = _order('collections', businessDate: '2026-07-12');
     final cash = _payment(
       'cash',
@@ -87,7 +88,16 @@ void main() {
         paymentsByOrder: {
           order.id: [cash, card, cancelled],
         },
-        cashSessions: const [],
+        cashSessions: [
+          _cashSession(
+            id: 'cut-3950',
+            openingCashAmount: 1000,
+            countedCashAmount: 2950,
+            terminalReportedAmount: 2000,
+            expectedCashAmount: 3000,
+            expectedCardChargedAmount: 2000,
+          ),
+        ],
         withdrawals: const [],
         purchases: const [],
         supplierPayments: const [],
@@ -95,9 +105,11 @@ void main() {
       ),
     );
 
-    expect(dashboard.cashCollected, 500);
-    expect(dashboard.cardCollected, 300);
-    expect(dashboard.realCollected, 800);
+    expect(dashboard.cashCollected, 1950);
+    expect(dashboard.cardCollected, 2000);
+    expect(dashboard.realCollected, 3950);
+    expect(dashboard.expectedMonetaryIncome, 4000);
+    expect(dashboard.cashShortages, 50);
   });
 
   test('resta solo gastos aprobados y separa pendientes y cancelados', () {
@@ -164,7 +176,14 @@ void main() {
         paymentsByOrder: {
           order.id: [payment],
         },
-        cashSessions: const [],
+        cashSessions: [
+          _cashSession(
+            id: 'cut-summary',
+            countedCashAmount: 0,
+            terminalReportedAmount: 9000,
+            expectedCardChargedAmount: 9000,
+          ),
+        ],
         withdrawals: [_expense('approved', 1000)],
         purchases: [_purchase(total: 4000, paid: 3000, balance: 1000)],
         supplierPayments: [_supplierPayment(amount: 3000)],
@@ -172,7 +191,7 @@ void main() {
       ),
     );
 
-    expect(dashboard.generalResult, 5000);
+    expect(dashboard.generalResult, 4000);
     expect(dashboard.collectionsResult, 5000);
     expect(dashboard.finalResult, 4000);
   });
@@ -364,7 +383,14 @@ void main() {
             activeOrder.id: [latePayment],
             cancelledOrder.id: [cancelledPayment],
           },
-          cashSessions: const [],
+          cashSessions: [
+            _cashSession(
+              id: 'cut-late',
+              businessDate: '2026-07-26',
+              countedCashAmount: 200,
+              expectedCashAmount: 200,
+            ),
+          ],
           withdrawals: const [],
           purchases: [
             _purchase(total: 400, paid: 0, balance: 0, status: 'cancelled'),
@@ -384,6 +410,216 @@ void main() {
       expect(dashboard.supplierPaidTotal, 0);
     },
   );
+
+  test('corte exacto no genera diferencia', () {
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'exact',
+            openingCashAmount: 1000,
+            countedCashAmount: 3000,
+            terminalReportedAmount: 2000,
+            expectedCashAmount: 3000,
+            expectedCardChargedAmount: 2000,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.realCollected, 4000);
+    expect(dashboard.expectedMonetaryIncome, 4000);
+    expect(dashboard.cashShortages, 0);
+    expect(dashboard.cashOverages, 0);
+  });
+
+  test('sobrante de corte aumenta ingreso real sin limitarlo a venta', () {
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'over',
+            openingCashAmount: 1000,
+            countedCashAmount: 3020,
+            terminalReportedAmount: 2000,
+            expectedCashAmount: 3000,
+            expectedCardChargedAmount: 2000,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.realCollected, 4020);
+    expect(dashboard.cashOverages, 20);
+    expect(dashboard.cashShortages, 0);
+  });
+
+  test('fondo no cuenta como ingreso ni se resta dos veces con retiros', () {
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'float',
+            openingCashAmount: 1000,
+            approvedWithdrawalsTotal: 100,
+            countedCashAmount: 2900,
+            terminalReportedAmount: 0,
+            expectedCashAmount: 2900,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.cashCollected, 1900);
+    expect(dashboard.expectedMonetaryIncome, 2000);
+    expect(dashboard.cashShortages, 100);
+  });
+
+  test('dia sin corte conserva venta pero no confirma ingreso financiero', () {
+    final order = _order('no-cut', businessDate: '2026-07-12');
+    final payment = _payment('no-cut-payment', order.id, amount: 4000);
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order,
+        items: [_item(4000)],
+        payments: [payment],
+      ),
+    ]);
+
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: summary,
+        paymentsByOrder: {
+          order.id: [payment],
+        },
+        cashSessions: const [],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.netSales, 4000);
+    expect(dashboard.realCollected, 0);
+    expect(dashboard.collectionsByDay.single.realCollected, 0);
+  });
+
+  test('varios cortes cerrados del dia se suman y abiertos se excluyen', () {
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'morning',
+            openingCashAmount: 500,
+            countedCashAmount: 1500,
+            terminalReportedAmount: 1000,
+            expectedCashAmount: 1500,
+            expectedCardChargedAmount: 1000,
+          ),
+          _cashSession(
+            id: 'night',
+            openingCashAmount: 500,
+            countedCashAmount: 2500,
+            terminalReportedAmount: 2000,
+            expectedCashAmount: 2500,
+            expectedCardChargedAmount: 2000,
+          ),
+          _cashSession(
+            id: 'open',
+            status: 'open',
+            countedCashAmount: 999,
+            terminalReportedAmount: 999,
+          ),
+          _cashSession(
+            id: 'cancelled',
+            status: 'cancelled',
+            countedCashAmount: 999,
+            terminalReportedAmount: 999,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.cashCutSummaries, hasLength(2));
+    expect(dashboard.cashCollected, 3000);
+    expect(dashboard.cardCollected, 3000);
+    expect(dashboard.realCollected, 6000);
+  });
+
+  test('descuentos y comida de empleado no incrementan ingreso monetario', () {
+    final order = _order('discounts', businessDate: '2026-07-12');
+    final cash = _payment('cash-discount', order.id, amount: 4000);
+    final employeeMeal = _payment(
+      'meal',
+      order.id,
+      amount: 100,
+      method: 'employee_consumption',
+    );
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order,
+        items: [_item(4100)],
+        payments: [cash, employeeMeal],
+      ),
+    ]);
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: summary,
+        paymentsByOrder: {
+          order.id: [cash, employeeMeal],
+        },
+        cashSessions: [
+          _cashSession(
+            id: 'meal-cut',
+            countedCashAmount: 4000,
+            expectedCashAmount: 4000,
+            expectedEmployeeConsumptionAmount: 100,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.grossSales, 4100);
+    expect(dashboard.realCollected, 4000);
+    expect(dashboard.expectedMonetaryIncome, 4000);
+    expect(dashboard.employeeConsumption, 100);
+    expect(dashboard.cashShortages, 0);
+  });
 
   test('cache comparte cargas simultaneas e invalida solo la clave', () async {
     final cache = FinanceDashboardCache();
@@ -582,6 +818,52 @@ CashWithdrawalRequest _expense(
     requestedByEmployeeName: 'Empleado',
     status: status,
     source: source,
+  );
+}
+
+CashSession _cashSession({
+  required String id,
+  String businessDate = '2026-07-12',
+  String status = 'closed',
+  double openingCashAmount = 0,
+  double countedCashAmount = 0,
+  double terminalReportedAmount = 0,
+  double expectedCashAmount = 0,
+  double expectedCardChargedAmount = 0,
+  double expectedPlatformAmount = 0,
+  double expectedEmployeeConsumptionAmount = 0,
+  double approvedWithdrawalsTotal = 0,
+}) {
+  final netDifference =
+      (countedCashAmount + terminalReportedAmount) -
+      (expectedCashAmount + expectedCardChargedAmount);
+  return CashSession(
+    id: id,
+    businessDate: businessDate,
+    status: status,
+    openingCashAmount: openingCashAmount,
+    openedByEmployeeId: 'employee',
+    openedByEmployeeName: 'Empleado',
+    countedCashAmount: countedCashAmount,
+    terminalReportedAmount: terminalReportedAmount,
+    expectedCashAmount: expectedCashAmount,
+    expectedCardChargedAmount: expectedCardChargedAmount,
+    expectedCardBaseAmount: expectedCardChargedAmount,
+    expectedCardSurchargeAmount: 0,
+    expectedCardFeeAbsorbedAmount: 0,
+    expectedPlatformAmount: expectedPlatformAmount,
+    expectedEmployeeConsumptionAmount: expectedEmployeeConsumptionAmount,
+    totalExpectedRealMoney: expectedCashAmount + expectedCardChargedAmount,
+    totalCountedRealMoney: countedCashAmount + terminalReportedAmount,
+    cashDifference: countedCashAmount - expectedCashAmount,
+    cardDifference: terminalReportedAmount - expectedCardChargedAmount,
+    netDifference: netDifference,
+    shortageAmount: netDifference < 0 ? netDifference.abs() : 0,
+    overAmount: netDifference > 0 ? netDifference : 0,
+    approvedWithdrawalsTotal: approvedWithdrawalsTotal,
+    pendingWithdrawalsTotal: 0,
+    withdrawalRequestCount: 0,
+    notes: '',
   );
 }
 

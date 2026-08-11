@@ -209,6 +209,7 @@ class FinanceDashboardBundle {
     required this.salesOrders,
     required this.customerPayments,
     required this.cashSessions,
+    required this.cashCutSummaries,
     required this.expenses,
     required this.purchases,
     required this.supplierPayments,
@@ -227,6 +228,7 @@ class FinanceDashboardBundle {
   final List<CanonicalOrderSalesRow> salesOrders;
   final List<FinanceCustomerPayment> customerPayments;
   final List<CashSession> cashSessions;
+  final List<FinanceCashCutSummary> cashCutSummaries;
   final List<CashWithdrawalRequest> expenses;
   final List<SupplierPurchase> purchases;
   final List<SupplierPayment> supplierPayments;
@@ -256,35 +258,36 @@ class FinanceDashboardBundle {
   );
   double get netSales => _money(grossSales - discounts);
 
-  double get cashCollected => _paymentTotal('cash');
-  double get cardCollected => _paymentTotal('card');
-  double get platformCollected => _paymentTotal('platform_paid');
+  double get expectedMonetaryIncome => _money(
+    cashCutSummaries.fold<double>(
+      0,
+      (sum, row) => sum + row.expectedMonetaryIncome,
+    ),
+  );
+  double get cashCollected => _money(
+    cashCutSummaries.fold<double>(0, (sum, row) => sum + row.cashReceived),
+  );
+  double get cardCollected => _money(
+    cashCutSummaries.fold<double>(0, (sum, row) => sum + row.cardReceived),
+  );
+  double get platformCollected => _money(
+    cashCutSummaries.fold<double>(0, (sum, row) => sum + row.platformReceived),
+  );
   double get otherCollected => _money(
-    customerPayments
-        .where(
-          (row) => !const {
-            'cash',
-            'card',
-            'platform_paid',
-            'employee_consumption',
-          }.contains(row.payment.method.trim().toLowerCase()),
-        )
-        .fold<double>(0, (sum, row) => sum + row.amount),
+    cashCutSummaries.fold<double>(0, (sum, row) => sum + row.otherReceived),
   );
   double get realCollected => _money(
     cashCollected + cardCollected + platformCollected + otherCollected,
   );
   double get employeeConsumption => _paymentTotal('employee_consumption');
   double get cardFees => _money(
-    customerPayments
-        .where((row) => row.payment.method.trim().toLowerCase() == 'card')
-        .fold<double>(0, (sum, row) => sum + row.payment.cardFeeAbsorbedAmount),
+    cashCutSummaries.fold<double>(0, (sum, row) => sum + row.cardFeeAbsorbed),
   );
   double get cashShortages => _money(
-    cashSessions.fold<double>(0, (sum, row) => sum + row.shortageAmount),
+    cashCutSummaries.fold<double>(0, (sum, row) => sum + row.shortage),
   );
   double get cashOverages =>
-      _money(cashSessions.fold<double>(0, (sum, row) => sum + row.overAmount));
+      _money(cashCutSummaries.fold<double>(0, (sum, row) => sum + row.overage));
 
   List<CashWithdrawalRequest> get approvedExpenses => expenses
       .where((row) => financeExpenseStatus(row) == FinanceExpenseStatus.paid)
@@ -306,7 +309,7 @@ class FinanceDashboardBundle {
   );
 
   double get generalResult =>
-      _money(netSales - paidExpenses - supplierInvoicesTotal);
+      _money(realCollected - paidExpenses - supplierInvoicesTotal);
   double get collectionsResult =>
       _money(realCollected - paidExpenses - supplierPaidTotal);
   double get finalResult => _money(
@@ -350,6 +353,7 @@ class FinanceDashboardBundle {
       salesOrders: salesOrders,
       customerPayments: customerPayments,
       cashSessions: cashSessions,
+      cashCutSummaries: cashCutSummaries,
       expenses: expenses,
       purchases: purchases,
       supplierPayments: supplierPayments,
@@ -368,6 +372,82 @@ class FinanceDashboardBundle {
     customerPayments
         .where((row) => row.payment.method.trim().toLowerCase() == method)
         .fold<double>(0, (sum, row) => sum + row.amount),
+  );
+}
+
+class FinanceCashCutSummary {
+  const FinanceCashCutSummary({
+    required this.session,
+    required this.businessDate,
+    required this.expectedCashIncome,
+    required this.expectedCardIncome,
+    required this.expectedPlatformIncome,
+    required this.expectedOtherIncome,
+    required this.cashReceived,
+    required this.cardReceived,
+    required this.platformReceived,
+    required this.otherReceived,
+    required this.cardFeeAbsorbed,
+    required this.openingFloat,
+    required this.approvedWithdrawals,
+  });
+
+  final CashSession session;
+  final String businessDate;
+  final double expectedCashIncome;
+  final double expectedCardIncome;
+  final double expectedPlatformIncome;
+  final double expectedOtherIncome;
+  final double cashReceived;
+  final double cardReceived;
+  final double platformReceived;
+  final double otherReceived;
+  final double cardFeeAbsorbed;
+  final double openingFloat;
+  final double approvedWithdrawals;
+
+  double get expectedMonetaryIncome => _money(
+    expectedCashIncome +
+        expectedCardIncome +
+        expectedPlatformIncome +
+        expectedOtherIncome,
+  );
+  double get actualReceived =>
+      _money(cashReceived + cardReceived + platformReceived + otherReceived);
+  double get difference => _money(actualReceived - expectedMonetaryIncome);
+  double get shortage => difference < 0 ? _money(difference.abs()) : 0;
+  double get overage => difference > 0 ? difference : 0;
+}
+
+bool financeCashSessionCountsAsClosed(CashSession session) {
+  final status = _token(session.status);
+  if (_cancelledToken(status)) return false;
+  return status == 'closed' || session.closedAt != null;
+}
+
+FinanceCashCutSummary buildFinanceCashCutSummary(CashSession session) {
+  final expectedCashIncome = _money(
+    session.expectedCashAmount -
+        session.openingCashAmount +
+        session.approvedWithdrawalsTotal,
+  );
+  final cashReceived = _money(
+    session.countedCashAmount - session.openingCashAmount,
+  );
+  return FinanceCashCutSummary(
+    session: session,
+    businessDate: session.businessDate,
+    expectedCashIncome: expectedCashIncome,
+    expectedCardIncome: _money(session.expectedCardChargedAmount),
+    expectedPlatformIncome: _money(session.expectedPlatformAmount),
+    expectedOtherIncome: 0,
+    cashReceived: cashReceived,
+    cardReceived: _money(session.terminalReportedAmount),
+    platformReceived: _money(session.expectedPlatformAmount),
+    otherReceived: 0,
+    cardFeeAbsorbed: _money(session.expectedCardFeeAbsorbedAmount),
+    openingFloat: _money(session.openingCashAmount),
+    approvedWithdrawals: _money(session.approvedWithdrawalsTotal),
   );
 }
 
@@ -550,8 +630,12 @@ FinanceDashboardBundle buildFinanceDashboard(
   final cashSessions = input.cashSessions
       .where(
         (row) =>
-            _inRange(row.businessDate, key) && !_cancelledToken(row.status),
+            _inRange(row.businessDate, key) &&
+            financeCashSessionCountsAsClosed(row),
       )
+      .toList(growable: false);
+  final cashCutSummaries = cashSessions
+      .map(buildFinanceCashCutSummary)
       .toList(growable: false);
   final expenses =
       input.withdrawals
@@ -593,12 +677,13 @@ FinanceDashboardBundle buildFinanceDashboard(
     salesOrders: salesOrders,
     customerPayments: customerPayments,
     cashSessions: cashSessions,
+    cashCutSummaries: cashCutSummaries,
     expenses: expenses,
     purchases: purchases,
     supplierPayments: supplierPayments,
     suppliers: input.suppliers,
     salesByDay: _salesByDay(salesOrders),
-    collectionsByDay: _collectionsByDay(customerPayments, cashSessions),
+    collectionsByDay: _collectionsByDay(customerPayments, cashCutSummaries),
     supplierRows: _supplierRows(purchases, supplierPayments),
     firestoreQueries: firestoreQueries,
     loadedAt: loadedAt ?? DateTime.now(),
@@ -639,35 +724,26 @@ List<FinanceSalesDayRow> _salesByDay(List<CanonicalOrderSalesRow> orders) {
 
 List<FinanceCollectionsDayRow> _collectionsByDay(
   List<FinanceCustomerPayment> payments,
-  List<CashSession> sessions,
+  List<FinanceCashCutSummary> cashCuts,
 ) {
   final dates = {
     ...payments.map((row) => row.businessDate),
-    ...sessions.map((row) => row.businessDate),
+    ...cashCuts.map((row) => row.businessDate),
   };
   final result = <FinanceCollectionsDayRow>[];
   for (final date in dates) {
-    final dailyPayments = payments
-        .where((row) => row.businessDate == date)
-        .toList(growable: false);
-    final dailySessions = sessions.where((row) => row.businessDate == date);
-    double byMethod(String method) => _money(
-      dailyPayments
-          .where((row) => row.payment.method.trim().toLowerCase() == method)
-          .fold<double>(0, (sum, row) => sum + row.amount),
+    final dailyCashCuts = cashCuts.where((row) => row.businessDate == date);
+    final cash = _money(
+      dailyCashCuts.fold<double>(0, (sum, row) => sum + row.cashReceived),
     );
-    final cash = byMethod('cash');
-    final card = byMethod('card');
+    final card = _money(
+      dailyCashCuts.fold<double>(0, (sum, row) => sum + row.cardReceived),
+    );
     final other = _money(
-      dailyPayments
-          .where(
-            (row) => !const {
-              'cash',
-              'card',
-              'employee_consumption',
-            }.contains(row.payment.method.trim().toLowerCase()),
-          )
-          .fold<double>(0, (sum, row) => sum + row.amount),
+      dailyCashCuts.fold<double>(
+        0,
+        (sum, row) => sum + row.platformReceived + row.otherReceived,
+      ),
     );
     result.add(
       FinanceCollectionsDayRow(
@@ -676,18 +752,16 @@ List<FinanceCollectionsDayRow> _collectionsByDay(
         card: card,
         other: other,
         cardFees: _money(
-          dailyPayments
-              .where((row) => row.payment.method.trim().toLowerCase() == 'card')
-              .fold<double>(
-                0,
-                (sum, row) => sum + row.payment.cardFeeAbsorbedAmount,
-              ),
+          dailyCashCuts.fold<double>(
+            0,
+            (sum, row) => sum + row.cardFeeAbsorbed,
+          ),
         ),
         shortage: _money(
-          dailySessions.fold<double>(0, (sum, row) => sum + row.shortageAmount),
+          dailyCashCuts.fold<double>(0, (sum, row) => sum + row.shortage),
         ),
         overage: _money(
-          dailySessions.fold<double>(0, (sum, row) => sum + row.overAmount),
+          dailyCashCuts.fold<double>(0, (sum, row) => sum + row.overage),
         ),
         realCollected: _money(cash + card + other),
       ),
