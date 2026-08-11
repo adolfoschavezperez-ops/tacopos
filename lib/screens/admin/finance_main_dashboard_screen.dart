@@ -471,7 +471,7 @@ class _KpiGrid extends StatelessWidget {
         'cortes cerrados',
         Icons.paid_outlined,
         _FinanceColors.lightGreen,
-        () => _showPaymentsDialog(context, bundle),
+        () => _showDailyCashCutDetailDialog(context, bundle),
       ),
       _KpiData(
         'GASTOS',
@@ -785,7 +785,7 @@ class _DetailGrid extends StatelessWidget {
           if (!collectionsBreakdown.isValid) const _DetailLineData.warning(),
         ],
         note: 'El fondo inicial no forma parte del ingreso real.',
-        onTap: () => _showPaymentsDialog(context, bundle),
+        onTap: () => _showDailyCashCutDetailDialog(context, bundle),
       ),
       _DetailCard(
         title: 'DETALLE DE GASTOS',
@@ -1370,30 +1370,34 @@ class _TablesGrid extends StatelessWidget {
   }
 
   Widget _collectionsTable(BuildContext context) {
-    final rows = bundle.collectionsByDay
+    final dailyDetails = bundle.cashCutDailyDetails;
+    final total = bundle.cashCutPeriodTotal;
+    final rows = dailyDetails
         .map(
           (row) => _TableRowData(
             sortValues: [
               row.businessDate,
-              row.cash,
-              row.card,
-              row.other,
-              row.cardFees,
+              row.cashCounted,
+              row.cashExpensesPaid,
+              row.cashOperationalBeforeExpenses,
+              row.cardReceived,
+              row.otherReceived,
               row.shortage,
               row.overage,
-              row.realCollected,
+              row.actualIncome,
             ],
             cells: [
               Text(_displayDate(row.businessDate)),
-              Text(_money(row.cash)),
-              Text(_money(row.card)),
-              Text(_money(row.other)),
-              Text(_money(row.cardFees)),
+              Text(_money(row.cashCounted)),
+              Text(_money(row.cashExpensesPaid)),
+              Text(_money(row.cashOperationalBeforeExpenses)),
+              Text(_money(row.cardReceived)),
+              Text(_money(row.otherReceived)),
               Text(_money(row.shortage)),
               Text(_money(row.overage)),
-              Text(_money(row.realCollected)),
+              Text(_money(row.actualIncome)),
             ],
-            onTap: () => _showPaymentsDialog(
+            onTap: () => _showDailyCashCutDetailDialog(
               context,
               bundle,
               businessDate: row.businessDate,
@@ -1407,13 +1411,14 @@ class _TablesGrid extends StatelessWidget {
         sortValues: const ['', 0, 0, 0, 0, 0, 0, 0],
         cells: [
           _totalText('TOTAL'),
-          _totalText(_money(bundle.cashCollected)),
-          _totalText(_money(bundle.cardCollected)),
-          _totalText(_money(bundle.platformCollected + bundle.otherCollected)),
-          _totalText(_money(bundle.cardFees)),
-          _totalText(_money(bundle.cashShortages)),
-          _totalText(_money(bundle.cashOverages)),
-          _totalText(_money(bundle.realCollected)),
+          _totalText(_money(total.cashCounted)),
+          _totalText(_money(total.cashExpensesPaid)),
+          _totalText(_money(total.cashOperationalBeforeExpenses)),
+          _totalText(_money(total.cardReceived)),
+          _totalText(_money(total.otherReceived)),
+          _totalText(_money(total.shortage)),
+          _totalText(_money(total.overage)),
+          _totalText(_money(total.actualIncome)),
         ],
       ),
     );
@@ -1422,10 +1427,11 @@ class _TablesGrid extends StatelessWidget {
       accent: _FinanceColors.lightGreen,
       columns: const [
         'Fecha operativa',
-        'Efectivo',
+        'Efectivo contado',
+        'Gastos caja',
+        'Efectivo antes gastos',
         'Tarjeta',
         'Plataforma / otros',
-        'Comisiones',
         'Faltante',
         'Sobrante',
         'Ingreso real',
@@ -1963,6 +1969,83 @@ Future<void> _showPaymentsDialog(
   return _showRowsDialog(context, 'Detalle de cobros', rows);
 }
 
+Future<void> _showDailyCashCutDetailDialog(
+  BuildContext context,
+  FinanceDashboardBundle bundle, {
+  String? businessDate,
+}) {
+  final days = bundle.cashCutDailyDetails
+      .where((row) => businessDate == null || row.businessDate == businessDate)
+      .toList(growable: false);
+  final total = buildFinanceCashCutPeriodTotal(days);
+  return showDialog<void>(
+    context: context,
+    builder: (context) => Dialog(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 980, maxHeight: 720),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.paid_outlined,
+                    color: _FinanceColors.lightGreen,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      businessDate == null
+                          ? 'Ingreso real por dia'
+                          : 'Ingreso real del dia',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Cerrar',
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+              Text(
+                businessDate == null
+                    ? 'Periodo ${_displayDate(bundle.key.startBusinessDate)} al ${_displayDate(bundle.key.endBusinessDate)}'
+                    : _displayDate(businessDate),
+                style: const TextStyle(
+                  color: _FinanceColors.muted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: days.isEmpty
+                    ? const Center(
+                        child: Text(
+                          'No hay cortes cerrados en el periodo seleccionado.',
+                        ),
+                      )
+                    : ListView.separated(
+                        itemCount: days.length,
+                        separatorBuilder: (_, _) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) =>
+                            _DailyCashCutCard(day: days[index], bundle: bundle),
+                      ),
+              ),
+              if (days.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                _DailyCashCutTotal(total: total, dashboardTotal: bundle),
+              ],
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 Future<void> _showOtherCustomerPaymentMethods(
   BuildContext context,
   FinanceDashboardBundle bundle,
@@ -2361,6 +2444,275 @@ Future<void> _showRowsDialog(
       ),
     ),
   );
+}
+
+class _DailyCashCutCard extends StatelessWidget {
+  const _DailyCashCutCard({required this.day, required this.bundle});
+
+  final FinanceCashCutDailyDetail day;
+  final FinanceDashboardBundle bundle;
+
+  @override
+  Widget build(BuildContext context) {
+    final users = day.closedByNames.isEmpty
+        ? 'Sin usuario de cierre'
+        : day.closedByNames.join(', ');
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: _FinanceColors.panelHigh,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _FinanceColors.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              spacing: 10,
+              runSpacing: 6,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  _displayDate(day.businessDate),
+                  style: const TextStyle(
+                    color: _FinanceColors.text,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                Text(
+                  '${day.cutCount} ${day.cutCount == 1 ? 'corte' : 'cortes'} · $users',
+                  style: const TextStyle(
+                    color: _FinanceColors.muted,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 12,
+              runSpacing: 10,
+              children: [
+                _CashCutMetric(
+                  'Efectivo contado',
+                  day.cashCounted,
+                  helper: 'Sin fondo inicial',
+                ),
+                _CashCutMetric(
+                  'Gastos pagados desde caja',
+                  day.cashExpensesPaid,
+                ),
+                _CashCutMetric(
+                  'Efectivo antes de gastos',
+                  day.cashOperationalBeforeExpenses,
+                  accent: _FinanceColors.lightGreen,
+                ),
+                _CashCutMetric('Tarjeta', day.cardReceived),
+                _CashCutMetric('Otros monetarios', day.otherReceived),
+                _CashCutMetric(
+                  'Ingreso real del dia',
+                  day.actualIncome,
+                  accent: _FinanceColors.lightGreen,
+                ),
+                _CashCutMetric(
+                  'Monetario esperado',
+                  day.expectedMonetaryIncome,
+                ),
+                _CashCutMetric(
+                  'Faltante',
+                  day.shortage,
+                  accent: day.shortage > 0
+                      ? _FinanceColors.red
+                      : _FinanceColors.muted,
+                ),
+                _CashCutMetric(
+                  'Sobrante',
+                  day.overage,
+                  accent: day.overage > 0
+                      ? _FinanceColors.green
+                      : _FinanceColors.muted,
+                ),
+              ],
+            ),
+            if (day.cuts.length > 1) ...[
+              const SizedBox(height: 8),
+              Theme(
+                data: Theme.of(
+                  context,
+                ).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: EdgeInsets.zero,
+                  iconColor: _FinanceColors.lightGreen,
+                  collapsedIconColor: _FinanceColors.muted,
+                  title: const Text(
+                    'Ver cortes del dia',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  children: [
+                    for (final cut in day.cuts)
+                      _CashCutLine(
+                        title:
+                            'Corte ${cut.session.id} · ${cut.session.closedByEmployeeName ?? cut.session.openedByEmployeeName}',
+                        subtitle:
+                            'Efectivo contado ${_money(cut.cashCountedLessOpening)} · Gastos caja ${_money(cut.approvedWithdrawals)} · '
+                            'Efectivo antes gastos ${_money(cut.cashOperationalBeforeExpenses)} · Tarjeta ${_money(cut.cardReceived)}',
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: () => _showPaymentsDialog(
+                  context,
+                  bundle,
+                  businessDate: day.businessDate,
+                ),
+                icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                label: const Text('Ver cobros del dia'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DailyCashCutTotal extends StatelessWidget {
+  const _DailyCashCutTotal({required this.total, required this.dashboardTotal});
+
+  final FinanceCashCutDailyDetail total;
+  final FinanceDashboardBundle dashboardTotal;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: _FinanceColors.panel,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: _FinanceColors.lightGreen.withValues(alpha: 0.55),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'TOTAL DEL PERIODO',
+              style: TextStyle(
+                color: _FinanceColors.lightGreen,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 12,
+              runSpacing: 10,
+              children: [
+                _CashCutMetric('Efectivo contado', total.cashCounted),
+                _CashCutMetric('Gastos desde caja', total.cashExpensesPaid),
+                _CashCutMetric(
+                  'Efectivo antes de gastos',
+                  total.cashOperationalBeforeExpenses,
+                ),
+                _CashCutMetric('Tarjeta', total.cardReceived),
+                _CashCutMetric('Otros', total.otherReceived),
+                _CashCutMetric(
+                  'Ingreso real',
+                  total.actualIncome,
+                  accent: _FinanceColors.lightGreen,
+                ),
+                _CashCutMetric('Faltantes', total.shortage),
+                _CashCutMetric('Sobrantes', total.overage),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Coincide con dashboard: ${_money(dashboardTotal.realCollected)}',
+              style: const TextStyle(
+                color: _FinanceColors.muted,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CashCutMetric extends StatelessWidget {
+  const _CashCutMetric(
+    this.label,
+    this.value, {
+    this.helper,
+    this.accent = _FinanceColors.text,
+  });
+
+  final String label;
+  final double value;
+  final String? helper;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 190,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(
+              color: _FinanceColors.muted,
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            _money(value),
+            style: TextStyle(
+              color: accent,
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          if (helper != null)
+            Text(
+              helper!,
+              style: const TextStyle(color: _FinanceColors.muted, fontSize: 11),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashCutLine extends StatelessWidget {
+  const _CashCutLine({required this.title, required this.subtitle});
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      dense: true,
+      contentPadding: EdgeInsets.zero,
+      title: Text(title),
+      subtitle: Text(subtitle),
+    );
+  }
 }
 
 class _DialogRow {
