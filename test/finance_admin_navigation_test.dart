@@ -23,7 +23,7 @@ void main() {
             theme: AppTheme.dark(),
             home: Scaffold(
               body: DefaultTabController(
-                length: 6,
+                length: 7,
                 initialIndex: 1,
                 child: Builder(
                   builder: (context) {
@@ -44,6 +44,7 @@ void main() {
                               SizedBox.shrink(),
                               SizedBox.shrink(),
                               SizedBox.shrink(),
+                              SizedBox.shrink(),
                             ],
                           ),
                         ),
@@ -58,10 +59,19 @@ void main() {
         await tester.pump();
 
         expect(find.text('Dashboard principal'), findsOneWidget);
+        expect(find.text('Comparativo semanal'), findsOneWidget);
         expect(find.byIcon(Icons.dashboard_outlined), findsOneWidget);
         expect(
           tester.getCenter(find.text('Dashboard principal')).dx,
           lessThan(tester.getCenter(find.text('Estado financiero')).dx),
+        );
+        expect(
+          tester.getCenter(find.text('Flujo de efectivo')).dx,
+          lessThan(tester.getCenter(find.text('Comparativo semanal')).dx),
+        );
+        expect(
+          tester.getCenter(find.text('Comparativo semanal')).dx,
+          lessThan(tester.getCenter(find.text('Aportaciones de socios')).dx),
         );
         expect(tester.takeException(), isNull, reason: 'Resolucion $size');
       }
@@ -86,7 +96,7 @@ void main() {
         theme: AppTheme.dark(),
         home: Scaffold(
           body: DefaultTabController(
-            length: 5,
+            length: 6,
             child: FinanceNavigationTabs(
               canOpenDashboard: false,
               onOpenDashboard: () {},
