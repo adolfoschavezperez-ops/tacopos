@@ -288,6 +288,10 @@ class FinanceDashboardBundle {
   );
   double get cashOverages =>
       _money(cashCutSummaries.fold<double>(0, (sum, row) => sum + row.overage));
+  List<FinanceCashCutDailyDetail> get cashCutDailyDetails =>
+      buildFinanceCashCutDailyDetails(cashCutSummaries);
+  FinanceCashCutDailyDetail get cashCutPeriodTotal =>
+      buildFinanceCashCutPeriodTotal(cashCutDailyDetails);
 
   List<CashWithdrawalRequest> get approvedExpenses => expenses
       .where((row) => financeExpenseStatus(row) == FinanceExpenseStatus.paid)
@@ -417,6 +421,9 @@ class FinanceCashCutSummary {
   double get difference => _money(actualReceived - expectedMonetaryIncome);
   double get shortage => difference < 0 ? _money(difference.abs()) : 0;
   double get overage => difference > 0 ? difference : 0;
+  double get cashCountedLessOpening =>
+      _money(session.countedCashAmount - openingFloat);
+  double get cashOperationalBeforeExpenses => cashReceived;
 }
 
 bool financeCashSessionCountsAsClosed(CashSession session) {
@@ -450,6 +457,144 @@ FinanceCashCutSummary buildFinanceCashCutSummary(CashSession session) {
     cardFeeAbsorbed: _money(session.expectedCardFeeAbsorbedAmount),
     openingFloat: _money(session.openingCashAmount),
     approvedWithdrawals: _money(session.approvedWithdrawalsTotal),
+  );
+}
+
+class FinanceCashCutDailyDetail {
+  const FinanceCashCutDailyDetail({
+    required this.businessDate,
+    required this.cashCounted,
+    required this.cashExpensesPaid,
+    required this.cashOperationalBeforeExpenses,
+    required this.cardReceived,
+    required this.otherReceived,
+    required this.actualIncome,
+    required this.expectedMonetaryIncome,
+    required this.shortage,
+    required this.overage,
+    required this.cutCount,
+    required this.closedByNames,
+    required this.cuts,
+  });
+
+  final String businessDate;
+  final double cashCounted;
+  final double cashExpensesPaid;
+  final double cashOperationalBeforeExpenses;
+  final double cardReceived;
+  final double otherReceived;
+  final double actualIncome;
+  final double expectedMonetaryIncome;
+  final double shortage;
+  final double overage;
+  final int cutCount;
+  final List<String> closedByNames;
+  final List<FinanceCashCutSummary> cuts;
+}
+
+List<FinanceCashCutDailyDetail> buildFinanceCashCutDailyDetails(
+  Iterable<FinanceCashCutSummary> summaries,
+) {
+  final groups = <String, List<FinanceCashCutSummary>>{};
+  for (final summary in summaries) {
+    groups.putIfAbsent(summary.businessDate, () => []).add(summary);
+  }
+  final result = groups.entries.map((entry) {
+    final rows = entry.value;
+    rows.sort((a, b) {
+      final aDate = a.session.closedAt ?? DateTime(1970);
+      final bDate = b.session.closedAt ?? DateTime(1970);
+      return aDate.compareTo(bDate);
+    });
+    final names = <String>{};
+    for (final row in rows) {
+      final closedBy = row.session.closedByEmployeeName?.trim();
+      if (closedBy != null && closedBy.isNotEmpty) {
+        names.add(closedBy);
+        continue;
+      }
+      final openedBy = row.session.openedByEmployeeName.trim();
+      if (openedBy.isNotEmpty) names.add(openedBy);
+    }
+    final cashCounted = _money(
+      rows.fold<double>(0, (sum, row) => sum + row.cashCountedLessOpening),
+    );
+    final cashExpensesPaid = _money(
+      rows.fold<double>(0, (sum, row) => sum + row.approvedWithdrawals),
+    );
+    final cashOperational = _money(
+      rows.fold<double>(
+        0,
+        (sum, row) => sum + row.cashOperationalBeforeExpenses,
+      ),
+    );
+    final card = _money(
+      rows.fold<double>(0, (sum, row) => sum + row.cardReceived),
+    );
+    final other = _money(
+      rows.fold<double>(
+        0,
+        (sum, row) => sum + row.platformReceived + row.otherReceived,
+      ),
+    );
+    final actualIncome = _money(cashOperational + card + other);
+    return FinanceCashCutDailyDetail(
+      businessDate: entry.key,
+      cashCounted: cashCounted,
+      cashExpensesPaid: cashExpensesPaid,
+      cashOperationalBeforeExpenses: cashOperational,
+      cardReceived: card,
+      otherReceived: other,
+      actualIncome: actualIncome,
+      expectedMonetaryIncome: _money(
+        rows.fold<double>(0, (sum, row) => sum + row.expectedMonetaryIncome),
+      ),
+      shortage: _money(rows.fold<double>(0, (sum, row) => sum + row.shortage)),
+      overage: _money(rows.fold<double>(0, (sum, row) => sum + row.overage)),
+      cutCount: rows.length,
+      closedByNames: names.toList(growable: false)..sort(),
+      cuts: List.unmodifiable(rows),
+    );
+  }).toList();
+  result.sort((a, b) => a.businessDate.compareTo(b.businessDate));
+  return result;
+}
+
+FinanceCashCutDailyDetail buildFinanceCashCutPeriodTotal(
+  Iterable<FinanceCashCutDailyDetail> days,
+) {
+  final rows = days.toList(growable: false);
+  return FinanceCashCutDailyDetail(
+    businessDate: 'TOTAL',
+    cashCounted: _money(
+      rows.fold<double>(0, (sum, row) => sum + row.cashCounted),
+    ),
+    cashExpensesPaid: _money(
+      rows.fold<double>(0, (sum, row) => sum + row.cashExpensesPaid),
+    ),
+    cashOperationalBeforeExpenses: _money(
+      rows.fold<double>(
+        0,
+        (sum, row) => sum + row.cashOperationalBeforeExpenses,
+      ),
+    ),
+    cardReceived: _money(
+      rows.fold<double>(0, (sum, row) => sum + row.cardReceived),
+    ),
+    otherReceived: _money(
+      rows.fold<double>(0, (sum, row) => sum + row.otherReceived),
+    ),
+    actualIncome: _money(
+      rows.fold<double>(0, (sum, row) => sum + row.actualIncome),
+    ),
+    expectedMonetaryIncome: _money(
+      rows.fold<double>(0, (sum, row) => sum + row.expectedMonetaryIncome),
+    ),
+    shortage: _money(rows.fold<double>(0, (sum, row) => sum + row.shortage)),
+    overage: _money(rows.fold<double>(0, (sum, row) => sum + row.overage)),
+    cutCount: rows.fold<int>(0, (sum, row) => sum + row.cutCount),
+    closedByNames: const [],
+    cuts: const [],
   );
 }
 

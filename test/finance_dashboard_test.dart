@@ -112,6 +112,223 @@ void main() {
     expect(dashboard.cashShortages, 50);
   });
 
+  test('detalle diario reconstruye efectivo de gastos pagados desde caja', () {
+    const augustKey = FinanceDashboardKey(
+      restaurantId: 'restaurant',
+      branchId: 'branch',
+      startBusinessDate: '2026-08-01',
+      endBusinessDate: '2026-08-31',
+    );
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: augustKey,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'cut-2026-08-05',
+            businessDate: '2026-08-05',
+            countedCashAmount: 2999,
+            terminalReportedAmount: 2500,
+            expectedCashAmount: 3049,
+            expectedCardChargedAmount: 2500,
+            approvedWithdrawalsTotal: 500,
+          ),
+        ],
+        withdrawals: [
+          _expense(
+            'approved',
+            500,
+            businessDate: '2026-08-05',
+            cashSessionId: 'cut-2026-08-05',
+          ),
+        ],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    final day = dashboard.cashCutDailyDetails.single;
+    expect(day.businessDate, '2026-08-05');
+    expect(day.cashCounted, 2999);
+    expect(day.cashExpensesPaid, 500);
+    expect(day.cashOperationalBeforeExpenses, 3499);
+    expect(day.cardReceived, 2500);
+    expect(day.otherReceived, 0);
+    expect(day.actualIncome, 5999);
+    expect(day.expectedMonetaryIncome, 6049);
+    expect(day.shortage, 50);
+    expect(day.overage, 0);
+    expect(dashboard.cashCollected, 3499);
+    expect(dashboard.realCollected, 5999);
+    expect(dashboard.generalResult, 5499);
+  });
+
+  test('gastos que no salen de caja no reconstruyen efectivo operativo', () {
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'cut-no-cash-expense',
+            countedCashAmount: 3500,
+            terminalReportedAmount: 2500,
+            expectedCashAmount: 3500,
+            expectedCardChargedAmount: 2500,
+          ),
+        ],
+        withdrawals: [
+          _expense('approved', 500, source: 'supplier_payment'),
+          _expense('approved', 700, source: 'cash_transfer'),
+        ],
+        purchases: const [],
+        supplierPayments: [
+          _supplierPayment(amount: 500, method: 'card'),
+          _supplierPayment(amount: 700, method: 'transfer'),
+        ],
+        suppliers: const [],
+      ),
+    );
+
+    final day = dashboard.cashCutDailyDetails.single;
+    expect(day.cashCounted, 3500);
+    expect(day.cashExpensesPaid, 0);
+    expect(day.cashOperationalBeforeExpenses, 3500);
+    expect(day.actualIncome, 6000);
+    expect(dashboard.paidExpenses, 0);
+  });
+
+  test('fondo inicial no cuenta como ingreso ni se resta dos veces', () {
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'cut-with-opening',
+            openingCashAmount: 1000,
+            countedCashAmount: 3999,
+            terminalReportedAmount: 2500,
+            expectedCashAmount: 4049,
+            expectedCardChargedAmount: 2500,
+            approvedWithdrawalsTotal: 500,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    final day = dashboard.cashCutDailyDetails.single;
+    expect(day.cashCounted, 2999);
+    expect(day.cashExpensesPaid, 500);
+    expect(day.cashOperationalBeforeExpenses, 3499);
+    expect(day.actualIncome, 5999);
+    expect(day.expectedMonetaryIncome, 6049);
+    expect(day.shortage, 50);
+  });
+
+  test('detalle diario agrupa varios cortes y ordena fechas ascendente', () {
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'cut-newer',
+            businessDate: '2026-07-13',
+            countedCashAmount: 300,
+            expectedCashAmount: 300,
+          ),
+          _cashSession(
+            id: 'cut-1',
+            countedCashAmount: 1000,
+            terminalReportedAmount: 800,
+            expectedCashAmount: 900,
+            expectedCardChargedAmount: 800,
+            approvedWithdrawalsTotal: 100,
+            closedByEmployeeName: 'Ana',
+          ),
+          _cashSession(
+            id: 'cut-2',
+            countedCashAmount: 1500,
+            terminalReportedAmount: 1200,
+            expectedCashAmount: 1300,
+            expectedCardChargedAmount: 1200,
+            approvedWithdrawalsTotal: 200,
+            closedByEmployeeName: 'Luis',
+          ),
+          _cashSession(id: 'cut-open', status: 'open', countedCashAmount: 9999),
+          _cashSession(
+            id: 'cut-cancelled',
+            status: 'cancelled',
+            countedCashAmount: 9999,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    final days = dashboard.cashCutDailyDetails;
+    expect(days.map((row) => row.businessDate), ['2026-07-12', '2026-07-13']);
+    final grouped = days.first;
+    expect(grouped.cutCount, 2);
+    expect(grouped.cashCounted, 2500);
+    expect(grouped.cashExpensesPaid, 300);
+    expect(grouped.cashOperationalBeforeExpenses, 2800);
+    expect(grouped.cardReceived, 2000);
+    expect(grouped.actualIncome, 4800);
+    expect(grouped.closedByNames, ['Ana', 'Luis']);
+  });
+
+  test('total del periodo coincide con suma diaria y dashboard', () {
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'cut-a',
+            businessDate: '2026-07-12',
+            countedCashAmount: 100,
+            terminalReportedAmount: 200,
+            expectedCashAmount: 100,
+            expectedCardChargedAmount: 200,
+          ),
+          _cashSession(
+            id: 'cut-b',
+            businessDate: '2026-07-13',
+            countedCashAmount: 300,
+            terminalReportedAmount: 400,
+            expectedCashAmount: 300,
+            expectedCardChargedAmount: 400,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    final total = dashboard.cashCutPeriodTotal;
+    expect(total.actualIncome, 1000);
+    expect(total.actualIncome, dashboard.realCollected);
+    expect(total.cashOperationalBeforeExpenses, dashboard.cashCollected);
+    expect(total.cardReceived, dashboard.cardCollected);
+  });
+
   test('resta solo gastos aprobados y separa pendientes y cancelados', () {
     final dashboard = buildFinanceDashboard(
       FinanceDashboardInput(
@@ -807,11 +1024,13 @@ CashWithdrawalRequest _expense(
   String status,
   double amount, {
   String source = '',
+  String businessDate = '2026-07-12',
+  String cashSessionId = 'cash',
 }) {
   return CashWithdrawalRequest(
     id: '$status-$amount',
-    cashSessionId: 'cash',
-    businessDate: '2026-07-12',
+    cashSessionId: cashSessionId,
+    businessDate: businessDate,
     amount: amount,
     reason: status,
     requestedByEmployeeId: 'employee',
@@ -833,6 +1052,7 @@ CashSession _cashSession({
   double expectedPlatformAmount = 0,
   double expectedEmployeeConsumptionAmount = 0,
   double approvedWithdrawalsTotal = 0,
+  String? closedByEmployeeName,
 }) {
   final netDifference =
       (countedCashAmount + terminalReportedAmount) -
@@ -844,6 +1064,8 @@ CashSession _cashSession({
     openingCashAmount: openingCashAmount,
     openedByEmployeeId: 'employee',
     openedByEmployeeName: 'Empleado',
+    closedByEmployeeId: closedByEmployeeName == null ? null : 'closer',
+    closedByEmployeeName: closedByEmployeeName,
     countedCashAmount: countedCashAmount,
     terminalReportedAmount: terminalReportedAmount,
     expectedCashAmount: expectedCashAmount,
@@ -892,6 +1114,7 @@ SupplierPurchase _purchase({
 SupplierPayment _supplierPayment({
   required double amount,
   String status = 'active',
+  String method = 'transfer',
 }) {
   return SupplierPayment(
     id: 'supplier-payment-$amount-$status',
@@ -902,7 +1125,7 @@ SupplierPayment _supplierPayment({
     paymentDate: DateTime(2026, 7, 12),
     businessDate: '2026-07-12',
     amount: amount,
-    method: 'transfer',
+    method: method,
     status: status,
   );
 }
