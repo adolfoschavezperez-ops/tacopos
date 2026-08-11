@@ -19,6 +19,7 @@ import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import '../../services/app_session.dart';
 import 'finance_main_dashboard_screen.dart';
+import 'weekly_finance_comparison_view.dart';
 
 class FinanceAdminScreen extends StatefulWidget {
   const FinanceAdminScreen({super.key});
@@ -50,7 +51,7 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
     final canOpenDashboard =
         kIsWeb && canViewFinanceDashboard(AppSession.instance.employee);
     return DefaultTabController(
-      length: canOpenDashboard ? 6 : 5,
+      length: canOpenDashboard ? 7 : 6,
       initialIndex: canOpenDashboard ? 1 : 0,
       child: Column(
         children: [
@@ -240,6 +241,10 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
                                                           _CashFlowTab(
                                                             summary: summary,
                                                           ),
+                                                          WeeklyFinanceComparisonView(
+                                                            repository:
+                                                                _repository,
+                                                          ),
                                                           _PartnerContributionsTab(
                                                             repository:
                                                                 _repository,
@@ -377,6 +382,7 @@ class FinanceNavigationTabs extends StatelessWidget {
           ),
         const Tab(text: 'Estado financiero'),
         const Tab(text: 'Flujo de efectivo'),
+        const Tab(text: 'Comparativo semanal'),
         const Tab(text: 'Aportaciones de socios'),
         const Tab(text: 'Pagos a proveedores'),
         const Tab(text: 'Reportes'),
