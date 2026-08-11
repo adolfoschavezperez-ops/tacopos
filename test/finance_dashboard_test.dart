@@ -491,9 +491,9 @@ void main() {
       ),
     );
 
-    expect(dashboard.cashCollected, 1900);
+    expect(dashboard.cashCollected, 2000);
     expect(dashboard.expectedMonetaryIncome, 2000);
-    expect(dashboard.cashShortages, 100);
+    expect(dashboard.cashShortages, 0);
   });
 
   test('dia sin corte conserva venta pero no confirma ingreso financiero', () {

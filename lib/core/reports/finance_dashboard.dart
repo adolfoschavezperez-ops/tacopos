@@ -432,7 +432,9 @@ FinanceCashCutSummary buildFinanceCashCutSummary(CashSession session) {
         session.approvedWithdrawalsTotal,
   );
   final cashReceived = _money(
-    session.countedCashAmount - session.openingCashAmount,
+    session.countedCashAmount -
+        session.openingCashAmount +
+        session.approvedWithdrawalsTotal,
   );
   return FinanceCashCutSummary(
     session: session,
