@@ -124,6 +124,26 @@ void main() {
       expect(pendingKitchenItemsCount([previous, extra]), 1);
     });
 
+    test('F2b pending con marcador de envio no recibe orden extra', () {
+      final previous = _item(
+        id: 'legacy-pending-sent',
+        kitchenStatus: 'pending',
+        kitchenBatchId: 'batch-initial',
+        sentToKitchenAt: DateTime(2026, 7, 29),
+      );
+      final extra = _item(
+        id: 'new-extra',
+        kitchenStatus: 'pending',
+        kitchenBatchId: null,
+      );
+
+      expect(itemWasSentToKitchen(previous), isTrue);
+      expect(itemCanBeSentToKitchenBatch(previous), isFalse);
+      expect(itemCanBeSentToKitchenBatch(extra), isTrue);
+      expect(awaitingKitchenSendItemsCount([previous, extra]), 1);
+      expect(pendingKitchenItemsCount([previous, extra]), 1);
+    });
+
     test('F3 reintento no considera enviados anteriores', () {
       final sent = _item(
         kitchenStatus: 'sent',

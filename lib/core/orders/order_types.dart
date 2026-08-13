@@ -142,3 +142,48 @@ TableJoinDecision evaluateTableJoinSelection(Iterable<PosTable> tables) {
     message: '',
   );
 }
+
+class ChangeTableDecision {
+  const ChangeTableDecision({required this.allowed, required this.message});
+
+  final bool allowed;
+  final String message;
+}
+
+ChangeTableDecision evaluateChangeTableDestination({
+  required PosOrder order,
+  required PosTable destination,
+}) {
+  if (isTakeoutOrder(order)) {
+    return const ChangeTableDecision(
+      allowed: false,
+      message: 'Cambiar mesa no aplica para pedidos Para llevar.',
+    );
+  }
+  if (!isDineInOrder(order) && !isStandingOrder(order)) {
+    return const ChangeTableDecision(
+      allowed: false,
+      message: 'La orden no se puede mover a una mesa.',
+    );
+  }
+  if (!destination.active || !destination.isPhysicalTable) {
+    return const ChangeTableDecision(
+      allowed: false,
+      message: 'Selecciona una mesa fisica activa.',
+    );
+  }
+  final destinationOrderId = destination.currentOrderId?.trim() ?? '';
+  if (destination.status != 'available' || destinationOrderId.isNotEmpty) {
+    return const ChangeTableDecision(
+      allowed: false,
+      message: 'Selecciona una mesa libre.',
+    );
+  }
+  if (order.linkedTableIds.contains(destination.id)) {
+    return const ChangeTableDecision(
+      allowed: false,
+      message: 'La orden ya esta en esa mesa.',
+    );
+  }
+  return const ChangeTableDecision(allowed: true, message: '');
+}

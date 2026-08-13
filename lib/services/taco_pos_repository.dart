@@ -62,6 +62,7 @@ export '../core/orders/order_activity.dart'
         isGhostOrder,
         isPartialCancellationWithActiveItems,
         awaitingKitchenSendItemsCount,
+        itemWasSentToKitchen,
         hasPendingKitchenItems,
         hasItemsAwaitingKitchenSend,
         itemCanBeSentToKitchenBatch,
@@ -9865,7 +9866,7 @@ class TacoPosRepository {
       if (item.productId == productId &&
           item.personNumber == personNumber &&
           item.appliedPlatformId == appliedPlatformId &&
-          item.kitchenStatus == 'pending' &&
+          itemIsAwaitingKitchenSend(item) &&
           item.paymentStatus == 'pending') {
         return item;
       }
@@ -10469,6 +10470,11 @@ class TacoPosRepository {
           itemsToSend.add(doc);
         }
       }
+      _logKitchenSendDiagnostic(
+        orderId: order.id,
+        items: allItems,
+        pendingItemIds: itemsToSend.map((doc) => doc.id).toList(),
+      );
       if (itemsToSend.isEmpty) {
         return _KitchenSendTransactionResult(order: order, sentCount: 0);
       }
@@ -10549,6 +10555,188 @@ class TacoPosRepository {
       endBusinessDate: result.order.businessDate,
     );
     return result.sentCount;
+  }
+
+  void _logKitchenSendDiagnostic({
+    required String orderId,
+    required List<OrderItem> items,
+    required List<String> pendingItemIds,
+  }) {
+    final activeItems = items.where(isActiveOrderItem).toList();
+    final requiresKitchen = activeItems.where(itemRequiresKitchen).toList();
+    final alreadySent = requiresKitchen.where(itemWasSentToKitchen).toList();
+    final pendingIds = pendingItemIds.toSet();
+    final itemDetails = items
+        .map(
+          (item) =>
+              '${item.id}{status=${item.status}, kitchenStatus=${item.kitchenStatus}, '
+              'paymentStatus=${item.paymentStatus}, sendToKitchen=${item.sendToKitchen}, '
+              'sentAt=${item.sentToKitchenAt?.toIso8601String() ?? '-'}, '
+              'batch=${item.kitchenBatchId ?? '-'}, '
+              'pending=${pendingIds.contains(item.id)}}',
+        )
+        .join('; ');
+    developer.log(
+      '[TacoPOS][sendKitchen.diagnostic] orderId=$orderId '
+      'activeItems=${activeItems.length} requiresKitchen=${requiresKitchen.length} '
+      'alreadySent=${alreadySent.length} pendingDetected=${pendingItemIds.length} '
+      'pendingItemIds=${pendingItemIds.join(',')} items=[$itemDetails]',
+    );
+  }
+
+  Future<PosOrder> changeOrderTable({
+    required String orderId,
+    required String destinationTableId,
+  }) async {
+    _requireTakeOrders();
+    final cleanOrderId = orderId.trim();
+    final cleanDestinationId = destinationTableId.trim();
+    if (cleanOrderId.isEmpty || cleanDestinationId.isEmpty) {
+      throw ArgumentError('Selecciona una orden y una mesa destino.');
+    }
+
+    final orderRef = _ordersRef.doc(cleanOrderId);
+    final destinationRef = _tablesRef.doc(cleanDestinationId);
+    final employee = AppSession.instance.employee;
+
+    await _db.runTransaction((transaction) async {
+      final orderDoc = await transaction.get(orderRef);
+      final destinationDoc = await transaction.get(destinationRef);
+      if (!orderDoc.exists) {
+        throw StateError('La orden ya no existe.');
+      }
+      if (!destinationDoc.exists) {
+        throw StateError('La mesa destino ya no existe.');
+      }
+
+      final order = PosOrder.fromDoc(orderDoc);
+      final destination = PosTable.fromDoc(destinationDoc);
+      if (!isActiveOrderState(order)) {
+        throw StateError('Solo se pueden mover ordenes abiertas.');
+      }
+      final decision = evaluateChangeTableDestination(
+        order: order,
+        destination: destination,
+      );
+      if (!decision.allowed) {
+        throw StateError(decision.message);
+      }
+      if (!_matchesCurrentBranch(order.branchId) ||
+          !_matchesCurrentBranch(destination.branchId)) {
+        throw StateError(
+          'La orden y la mesa deben pertenecer a esta sucursal.',
+        );
+      }
+
+      final sourceRefs = orderUsesPhysicalTables(order)
+          ? order.linkedTableIds
+                .where((id) => id.trim().isNotEmpty)
+                .map((id) => _tablesRef.doc(id))
+                .toList(growable: false)
+          : const <DocumentReference<Map<String, dynamic>>>[];
+      final sourceDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final ref in sourceRefs) {
+        sourceDocs.add(await transaction.get(ref));
+      }
+      for (final doc in sourceDocs) {
+        if (!doc.exists) continue;
+        final sourceTable = PosTable.fromDoc(doc);
+        if (sourceTable.currentOrderId?.trim() != order.id) {
+          throw StateError(
+            'La mesa origen cambio de orden. Actualiza e intenta de nuevo.',
+          );
+        }
+      }
+
+      final sourceType = isStandingOrder(order) ? 'standing' : 'table';
+      final sourceTableIds = order.linkedTableIds;
+      final sourceTableNames = order.tableNames.isNotEmpty
+          ? order.tableNames
+          : [if (order.tableName.trim().isNotEmpty) order.tableName];
+      final destinationName = destination.name;
+      final now = FieldValue.serverTimestamp();
+
+      transaction.update(orderRef, {
+        'tableId': destination.id,
+        'tableName': destinationName,
+        'orderType': dineInOrderType,
+        'isTableGroup': false,
+        'primaryTableId': destination.id,
+        'primaryTableName': destinationName,
+        'tableIds': [destination.id],
+        'tableNames': [destinationName],
+        'tableGroupLabel': FieldValue.delete(),
+        'platformId': isStandingOrder(order)
+            ? FieldValue.delete()
+            : order.platformId,
+        'platformName': isStandingOrder(order)
+            ? FieldValue.delete()
+            : order.platformName,
+        'previousOrderType': order.orderType,
+        'previousTableId': order.tableId,
+        'previousTableName': order.displayName,
+        'changedTableAt': now,
+        ..._employeeAuditFields(prefix: 'changedTableBy'),
+        'updatedAt': now,
+      });
+
+      for (final doc in sourceDocs) {
+        transaction.set(doc.reference, {
+          'status': 'available',
+          'currentOrderId': null,
+          'currentOrderStatus': null,
+          'tableGroupId': null,
+          'tableGroupLabel': null,
+          'groupPrimaryTableId': null,
+          'occupiedAt': null,
+          ..._currentBranchFields,
+          'updatedAt': now,
+        }, SetOptions(merge: true));
+      }
+
+      transaction.set(destinationRef, {
+        'status': 'occupied',
+        'currentOrderId': order.id,
+        'currentOrderStatus': order.status,
+        'tableGroupId': null,
+        'tableGroupLabel': null,
+        'groupPrimaryTableId': null,
+        'occupiedAt': destination.occupiedAt == null
+            ? now
+            : Timestamp.fromDate(destination.occupiedAt!),
+        ..._currentBranchFields,
+        'updatedAt': now,
+      }, SetOptions(merge: true));
+
+      transaction.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': 'change_table',
+        'actionType': 'CHANGE_TABLE',
+        'orderId': order.id,
+        'folio': _shortLogFolio(order.id),
+        'sourceType': sourceType,
+        'sourceTableId': order.tableId,
+        'sourceTableName': order.displayName,
+        'sourceTableIds': sourceTableIds,
+        'sourceTableNames': sourceTableNames,
+        'destinationType': 'table',
+        'destinationTableId': destination.id,
+        'destinationTableName': destinationName,
+        ..._currentBranchFields,
+        'businessDate': _businessDateForOrder(order) ?? _currentBusinessDate(),
+        'employeeId': employee?.id ?? '',
+        'employeeName': employee?.name ?? '',
+        'timestamp': now,
+        'createdAt': now,
+      });
+    });
+
+    final updatedOrder = PosOrder.fromDoc(await orderRef.get());
+    invalidateReportDataCache(
+      branchId: updatedOrder.branchId,
+      startBusinessDate: updatedOrder.businessDate,
+      endBusinessDate: updatedOrder.businessDate,
+    );
+    return updatedOrder;
   }
 
   Future<void> updateKitchenStatus({
