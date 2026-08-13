@@ -4,6 +4,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../core/visits/visit_classification.dart';
 import '../../models/order.dart';
+import '../../models/order_item.dart';
 import '../../models/pos_table.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
@@ -209,6 +210,129 @@ class _TablesScreenState extends State<TablesScreen> {
       _selectingTables = !_selectingTables;
       _selectedTableIds.clear();
     });
+  }
+
+  Future<void> _changeTableFromBoard({
+    required List<PosTable> tables,
+    required List<PosOrder> orders,
+  }) async {
+    if (_opening) return;
+    final origin = await showDialog<_TableMoveOrigin>(
+      context: context,
+      builder: (context) => _ChangeTableOriginDialog(
+        origins: _tableMoveOrigins(tables: tables, orders: orders),
+      ),
+    );
+    if (!mounted || origin == null) return;
+
+    final destination = await showDialog<PosTable>(
+      context: context,
+      builder: (context) =>
+          _ChangeTableDestinationDialog(order: origin.order, tables: tables),
+    );
+    if (!mounted || destination == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cambiar mesa'),
+        content: Text(
+          'Mover ${origin.label} a ${destination.name}? '
+          'La orden, folio, productos, cocina y pagos se conservaran.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.swap_horiz),
+            label: const Text('Cambiar mesa'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+
+    setState(() => _opening = true);
+    try {
+      final moved = await _repository.changeOrderTable(
+        orderId: origin.order.id,
+        destinationTableId: destination.id,
+      );
+      if (!mounted) return;
+      LivePresenceService.instance.update(
+        currentTableId: moved.tableId,
+        currentTableName: moved.displayName,
+        currentOrderId: moved.id,
+        currentAction: 'Orden cambiada de mesa',
+      );
+      showAppSnackBar(
+        context,
+        'Orden movida a ${moved.displayName}.',
+        type: AppSnackBarType.success,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        'No se pudo cambiar la mesa: $error',
+        type: AppSnackBarType.error,
+      );
+    } finally {
+      if (mounted) setState(() => _opening = false);
+    }
+  }
+
+  List<_TableMoveOrigin> _tableMoveOrigins({
+    required List<PosTable> tables,
+    required List<PosOrder> orders,
+  }) {
+    final ordersById = {for (final order in orders) order.id: order};
+    final seenOrderIds = <String>{};
+    final origins = <_TableMoveOrigin>[];
+    for (final table in tables.where((table) => table.isPhysicalTable)) {
+      final orderId = table.currentOrderId?.trim() ?? '';
+      if (orderId.isEmpty || !seenOrderIds.add(orderId)) continue;
+      final order = ordersById[orderId];
+      if (order == null || !isActiveOrderState(order)) continue;
+      if (!isDineInOrder(order) && !isStandingOrder(order)) continue;
+      origins.add(
+        _TableMoveOrigin(
+          order: order,
+          label: order.displayName,
+          subtitle: table.tableGroupLabel ?? table.name,
+        ),
+      );
+    }
+
+    final standing =
+        orders
+            .where(
+              (order) => isStandingOrder(order) && isActiveOrderState(order),
+            )
+            .toList()
+          ..sort((a, b) {
+            final dateCompare =
+                (a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0))
+                    .compareTo(
+                      b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+                    );
+            if (dateCompare != 0) return dateCompare;
+            return a.id.compareTo(b.id);
+          });
+    for (final order in standing) {
+      if (!seenOrderIds.add(order.id)) continue;
+      origins.add(
+        _TableMoveOrigin(
+          order: order,
+          label: order.displayName,
+          subtitle: 'Parados sin mesa',
+        ),
+      );
+    }
+    return origins;
   }
 
   Future<void> _manageTableGroup(
@@ -450,21 +574,36 @@ class _TablesScreenState extends State<TablesScreen> {
                                         )
                                         .toList();
                               final order = ordersById[orderId];
-                              return _TableCard(
-                                table: table,
-                                takeoutCount: takeoutCount,
-                                compact: compact,
-                                order: order,
-                                groupTables: groupTables,
-                                selecting: _selectingTables,
-                                selected: _selectedTableIds.contains(table.id),
-                                onTap: () => _openTable(table),
-                                onManageGroup:
-                                    order?.isTableGroup == true &&
-                                        !_selectingTables
-                                    ? () =>
-                                          _manageTableGroup(order!, groupTables)
-                                    : null,
+                              return StreamBuilder<List<OrderItem>>(
+                                stream: order == null
+                                    ? null
+                                    : _repository.watchOrderItems(order.id),
+                                initialData: const [],
+                                builder: (context, itemsSnapshot) {
+                                  return _TableCard(
+                                    table: table,
+                                    takeoutCount: takeoutCount,
+                                    compact: compact,
+                                    order: order,
+                                    orderItems:
+                                        itemsSnapshot.data ??
+                                        const <OrderItem>[],
+                                    groupTables: groupTables,
+                                    selecting: _selectingTables,
+                                    selected: _selectedTableIds.contains(
+                                      table.id,
+                                    ),
+                                    onTap: () => _openTable(table),
+                                    onManageGroup:
+                                        order?.isTableGroup == true &&
+                                            !_selectingTables
+                                        ? () => _manageTableGroup(
+                                            order!,
+                                            groupTables,
+                                          )
+                                        : null,
+                                  );
+                                },
                               );
                             },
                           ),
@@ -500,13 +639,26 @@ class _TablesScreenState extends State<TablesScreen> {
                               ],
                             )
                           else
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: FilledButton.tonalIcon(
-                                onPressed: _toggleTableSelectionMode,
-                                icon: const Icon(Icons.table_restaurant),
-                                label: const Text('Juntar mesas'),
-                              ),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                FilledButton.tonalIcon(
+                                  onPressed: _toggleTableSelectionMode,
+                                  icon: const Icon(Icons.table_restaurant),
+                                  label: const Text('Juntar mesas'),
+                                ),
+                                const SizedBox(width: 8),
+                                OutlinedButton.icon(
+                                  onPressed: !_opening
+                                      ? () => _changeTableFromBoard(
+                                          tables: physicalTables,
+                                          orders: orders,
+                                        )
+                                      : null,
+                                  icon: const Icon(Icons.swap_horiz),
+                                  label: const Text('Cambiar mesa'),
+                                ),
+                              ],
                             ),
                         ],
                       ],
@@ -567,12 +719,106 @@ class _NoTablesForBranch extends StatelessWidget {
   }
 }
 
+class _TableMoveOrigin {
+  const _TableMoveOrigin({
+    required this.order,
+    required this.label,
+    required this.subtitle,
+  });
+
+  final PosOrder order;
+  final String label;
+  final String subtitle;
+}
+
+class _ChangeTableOriginDialog extends StatelessWidget {
+  const _ChangeTableOriginDialog({required this.origins});
+
+  final List<_TableMoveOrigin> origins;
+
+  @override
+  Widget build(BuildContext context) {
+    return SimpleDialog(
+      title: const Text('Origen'),
+      children: [
+        if (origins.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 8, 24, 18),
+            child: Text('No hay ordenes activas para cambiar de mesa.'),
+          )
+        else
+          ...origins.map(
+            (origin) => SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, origin),
+              child: ListTile(
+                leading: const Icon(Icons.receipt_long_outlined),
+                title: Text(origin.label),
+                subtitle: Text(origin.subtitle),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ChangeTableDestinationDialog extends StatelessWidget {
+  const _ChangeTableDestinationDialog({
+    required this.order,
+    required this.tables,
+  });
+
+  final PosOrder order;
+  final List<PosTable> tables;
+
+  @override
+  Widget build(BuildContext context) {
+    final available =
+        tables
+            .where(
+              (table) => evaluateChangeTableDestination(
+                order: order,
+                destination: table,
+              ).allowed,
+            )
+            .toList()
+          ..sort((a, b) {
+            final sortCompare = a.sortOrder.compareTo(b.sortOrder);
+            if (sortCompare != 0) return sortCompare;
+            return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+          });
+
+    return SimpleDialog(
+      title: const Text('Destino'),
+      children: [
+        if (available.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(24, 8, 24, 18),
+            child: Text('No hay mesas libres disponibles.'),
+          )
+        else
+          ...available.map(
+            (table) => SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, table),
+              child: ListTile(
+                leading: const Icon(Icons.table_restaurant_outlined),
+                title: Text(table.name),
+                subtitle: const Text('Disponible'),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class _TableCard extends StatelessWidget {
   const _TableCard({
     required this.table,
     required this.takeoutCount,
     required this.compact,
     required this.order,
+    required this.orderItems,
     required this.groupTables,
     required this.selecting,
     required this.selected,
@@ -584,6 +830,7 @@ class _TableCard extends StatelessWidget {
   final int takeoutCount;
   final bool compact;
   final PosOrder? order;
+  final List<OrderItem> orderItems;
   final List<PosTable> groupTables;
   final bool selecting;
   final bool selected;
@@ -593,10 +840,13 @@ class _TableCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isTakeout = isTakeoutEntryTableType(table.type);
-    final status = tableStatusStyle(isTakeout ? 'available' : table.status);
-    final hasOrder =
-        !isTakeout &&
-        (table.currentOrderId != null || table.status != 'available');
+    final derivedStatus = waiterTableStatusKey(
+      table: table,
+      order: order,
+      items: orderItems,
+    );
+    final status = tableStatusStyle(isTakeout ? 'available' : derivedStatus);
+    final hasOrder = !isTakeout && derivedStatus != 'available';
     final takeoutActive = isTakeout && takeoutCount > 0;
     final accent = isTakeout ? BrandColors.accentOrange : status.color;
     final elapsedMinutes = order?.createdAt == null
@@ -665,7 +915,7 @@ class _TableCard extends StatelessWidget {
                       : hasOrder
                       ? groupTables.length > 1
                             ? groupDetail
-                            : 'Orden abierta'
+                            : status.label
                       : 'Lista para tomar orden',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
