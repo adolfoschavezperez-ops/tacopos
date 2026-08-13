@@ -16,12 +16,16 @@ class BrandedScaffold extends StatelessWidget {
     required this.body,
     this.actions,
     this.bottomNavigationBar,
+    this.showOperationDate = true,
+    this.showSessionAction = true,
   });
 
   final String title;
   final Widget body;
   final List<Widget>? actions;
   final Widget? bottomNavigationBar;
+  final bool showOperationDate;
+  final bool showSessionAction;
 
   @override
   Widget build(BuildContext context) {
@@ -73,8 +77,9 @@ class BrandedScaffold extends StatelessWidget {
                 ],
               ),
               actions: [
-                if (!compact) _OperationDateBadge(compact: compact),
-                _SessionBadge(compact: compact),
+                if (showOperationDate && !compact)
+                  _OperationDateBadge(compact: compact),
+                if (showSessionAction) _SessionBadge(compact: compact),
                 if (!compact) _ConnectionStatusBadge(compact: compact),
                 if (actions != null) ...actions!,
               ],

@@ -55,6 +55,7 @@ export '../core/orders/order_activity.dart'
     show
         isActiveCustomerPayment,
         isActiveOrderItem,
+        isActiveOrderState,
         activeOrderItems,
         activeOrderItemsTotal,
         hasActiveOrderItems,
@@ -74,6 +75,7 @@ export '../core/orders/order_activity.dart'
         isOperationalOrderActive,
         shouldKeepTableOccupiedForOrder,
         isStandingOrderVisibleInLiveViewer;
+export '../core/orders/table_operational_status.dart';
 export '../core/orders/order_types.dart';
 
 double _numberToDouble(Object? value) {
