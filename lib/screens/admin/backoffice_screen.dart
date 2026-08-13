@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/backoffice/backoffice_version.dart';
 import '../../core/orders/backoffice_sales_cancellation.dart';
 import '../../core/reports/canonical_sales_summary.dart';
 import '../../core/reports/discounts_by_day_report.dart';
@@ -118,6 +119,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
   _ReportKind _reportKind = _ReportKind.products;
   bool _navCollapsed = false;
   bool _reportsExpanded = false;
+  int _refreshToken = 0;
 
   @override
   void initState() {
@@ -240,6 +242,8 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                 onToday: _today,
                 onWeek: _week,
                 onMonth: _month,
+                refreshToken: _refreshToken,
+                onRefreshReports: _refreshReports,
                 onOpenDiscountsReport: () => setState(() {
                   _section = _BackofficeSection.reports;
                   _reportKind = _ReportKind.discountsByDay;
@@ -300,6 +304,15 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
         ),
       ),
     );
+  }
+
+  void _refreshReports() {
+    _repository.invalidateReportDataCache(
+      branchId: AppSession.instance.currentBranchId,
+      startBusinessDate: _startBusinessDate,
+      endBusinessDate: _endBusinessDate,
+    );
+    setState(() => _refreshToken++);
   }
 }
 
@@ -377,6 +390,16 @@ class _SideNav extends StatelessWidget {
                 onPressed: AppSession.instance.signOut,
                 icon: const Icon(Icons.logout),
                 label: const Text('Salir'),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                BackofficeVersion.label,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: BrandColors.textMuted,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ] else
               IconButton(
@@ -593,9 +616,25 @@ class _MobileTopBar extends StatelessWidget {
             Row(
               children: [
                 const Expanded(
-                  child: Text(
-                    'TacoPOS Backoffice',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'TacoPOS Backoffice',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        BackofficeVersion.label,
+                        style: TextStyle(
+                          color: BrandColors.textMuted,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 IconButton(
@@ -799,6 +838,8 @@ class _BackofficeBody extends StatelessWidget {
     required this.onToday,
     required this.onWeek,
     required this.onMonth,
+    required this.refreshToken,
+    required this.onRefreshReports,
     required this.onOpenDiscountsReport,
     required this.onOpenYieldReport,
     required this.onSalesDataChanged,
@@ -814,6 +855,8 @@ class _BackofficeBody extends StatelessWidget {
   final VoidCallback onToday;
   final VoidCallback onWeek;
   final VoidCallback onMonth;
+  final int refreshToken;
+  final VoidCallback onRefreshReports;
   final VoidCallback onOpenDiscountsReport;
   final VoidCallback onOpenYieldReport;
   final VoidCallback onSalesDataChanged;
@@ -917,6 +960,7 @@ class _BackofficeBody extends StatelessWidget {
                   onToday: onToday,
                   onWeek: onWeek,
                   onMonth: onMonth,
+                  onRefresh: onRefreshReports,
                 ),
               ],
             ),
@@ -941,6 +985,9 @@ class _BackofficeBody extends StatelessWidget {
         (section == _BackofficeSection.reports &&
             _reportNeedsCanonicalItems(reportKind));
     return FutureBuilder<ReportDataBundle>(
+      key: ValueKey(
+        'report-${section.name}-${reportKind.name}-$startBusinessDate-$endBusinessDate-$includeItems-$refreshToken',
+      ),
       future: repository.getReportDataBundle(
         startBusinessDate: startBusinessDate,
         endBusinessDate: endBusinessDate,
@@ -985,9 +1032,18 @@ class _BackofficeBody extends StatelessWidget {
                 onToday: onToday,
                 onWeek: onWeek,
                 onMonth: onMonth,
+                onRefresh: onRefreshReports,
               ),
               const SizedBox(height: 18),
             ],
+            _ReportFreshnessBar(
+              reportData: reportData,
+              diagnostics: kDebugMode
+                  ? repository.reportDataDiagnostics()
+                  : null,
+              onRefresh: onRefreshReports,
+            ),
+            const SizedBox(height: 14),
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 180),
               switchInCurve: Curves.easeOutCubic,
@@ -5150,6 +5206,7 @@ class _GlobalFilters extends StatelessWidget {
     required this.onToday,
     required this.onWeek,
     required this.onMonth,
+    this.onRefresh,
   });
 
   final String startBusinessDate;
@@ -5159,6 +5216,7 @@ class _GlobalFilters extends StatelessWidget {
   final VoidCallback onToday;
   final VoidCallback onWeek;
   final VoidCallback onMonth;
+  final VoidCallback? onRefresh;
 
   @override
   Widget build(BuildContext context) {
@@ -5188,7 +5246,78 @@ class _GlobalFilters extends StatelessWidget {
           TextButton(onPressed: onToday, child: const Text('Hoy')),
           TextButton(onPressed: onWeek, child: const Text('Esta semana')),
           TextButton(onPressed: onMonth, child: const Text('Este mes')),
+          if (onRefresh != null)
+            OutlinedButton.icon(
+              onPressed: onRefresh,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Actualizar'),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+class _ReportFreshnessBar extends StatelessWidget {
+  const _ReportFreshnessBar({
+    required this.reportData,
+    required this.onRefresh,
+    this.diagnostics,
+  });
+
+  final ReportDataBundle reportData;
+  final VoidCallback onRefresh;
+  final BackofficeReportDiagnostics? diagnostics;
+
+  @override
+  Widget build(BuildContext context) {
+    final loadedAt = reportData.loadedAt;
+    final freshness = loadedAt == null
+        ? 'Actualizado: cache de sesion'
+        : reportData.hasLiveData
+        ? 'Actualizado hoy: ${DateFormat('HH:mm:ss').format(loadedAt)}'
+        : 'Actualizado: ${DateFormat('HH:mm:ss').format(loadedAt)}';
+    final cacheText = reportData.cacheHits > 0
+        ? 'cache ${reportData.cacheHits}/${reportData.cacheHits + reportData.cacheMisses}'
+        : reportData.sharedInFlight
+        ? 'solicitud compartida'
+        : 'consulta inicial';
+    final tooltip = diagnostics == null
+        ? '$freshness · $cacheText'
+        : [
+            freshness,
+            cacheText,
+            'queries=${diagnostics!.firestoreQueries}',
+            'docs=${diagnostics!.documentsReceived}',
+            'hits=${diagnostics!.cacheHits}',
+            'misses=${diagnostics!.cacheMisses}',
+            'inFlight=${diagnostics!.inFlightReused}',
+            'datasets=${diagnostics!.datasetsReused}',
+          ].join('\n');
+
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Tooltip(
+        message: tooltip,
+        child: Wrap(
+          spacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              '$freshness · $cacheText',
+              style: const TextStyle(
+                color: BrandColors.textMuted,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Actualizar',
+              onPressed: onRefresh,
+              icon: const Icon(Icons.refresh, size: 18),
+            ),
+          ],
+        ),
       ),
     );
   }

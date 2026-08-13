@@ -4742,6 +4742,10 @@ class TacoPosRepository {
     );
   }
 
+  BackofficeReportDiagnostics reportDataDiagnostics() {
+    return _reportDataRepository.diagnosticsSnapshot();
+  }
+
   void invalidateFinanceDashboardCache({
     required String branchId,
     required String startBusinessDate,
@@ -4937,10 +4941,21 @@ class TacoPosRepository {
       endBusinessDate: endBusinessDate,
       cacheKey: key.value,
     );
-    final result = await _reportDataRepository.load(
+    final result = await _reportDataRepository.loadRange(
       key: key,
       forceRefresh: forceRefresh,
-      loader: () => _loadReportDataBundle(key, tracer),
+      dayLoader: (dayKey) => _loadReportDataBundle(
+        dayKey,
+        dayKey == key
+            ? tracer
+            : ReportPerformanceTracer(
+                reportName: '$reportName:day',
+                branchId: effectiveBranchId,
+                startBusinessDate: dayKey.startBusinessDate,
+                endBusinessDate: dayKey.endBusinessDate,
+                cacheKey: dayKey.value,
+              ),
+      ),
     );
     final bundle = result.bundle;
     if (result.fromCache || result.sharedInFlight) {
