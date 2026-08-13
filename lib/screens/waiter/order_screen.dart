@@ -8,6 +8,7 @@ import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
+import '../../models/pos_table.dart';
 import '../../models/product.dart';
 import '../../models/product_category.dart';
 import '../../services/app_session.dart';
@@ -504,6 +505,79 @@ class _OrderScreenState extends State<OrderScreen> {
     }
   }
 
+  Future<void> _changeTable(PosOrder order) async {
+    if (_busy) return;
+    if (isTakeoutOrder(order)) {
+      _showMessage('Cambiar mesa no aplica para pedidos Para llevar.');
+      return;
+    }
+    if (!isDineInOrder(order) && !isStandingOrder(order)) {
+      _showMessage('Esta orden no se puede mover a una mesa.');
+      return;
+    }
+
+    final destination = await showDialog<PosTable>(
+      context: context,
+      builder: (_) => _ChangeTableDialog(
+        order: order,
+        tablesStream: _repository.watchTables(),
+      ),
+    );
+    if (!mounted || destination == null) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cambiar mesa'),
+        content: Text(
+          'Mover ${order.displayName} a ${destination.name}? '
+          'La orden, folio, productos, cocina y pagos se conservaran.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.swap_horiz),
+            label: const Text('Cambiar mesa'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+
+    setState(() => _busy = true);
+    try {
+      final moved = await _repository.changeOrderTable(
+        orderId: order.id,
+        destinationTableId: destination.id,
+      );
+      if (!mounted) return;
+      LivePresenceService.instance.update(
+        currentTableId: moved.tableId,
+        currentTableName: moved.displayName,
+        currentOrderId: moved.id,
+        currentAction: 'Orden cambiada de mesa',
+      );
+      showAppSnackBar(
+        context,
+        'Orden movida a ${moved.displayName}.',
+        type: AppSnackBarType.success,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        'No se pudo cambiar la mesa: $error',
+        type: AppSnackBarType.error,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   void _showMessage(String message) {
     showAppSnackBar(context, message);
   }
@@ -537,6 +611,9 @@ class _OrderScreenState extends State<OrderScreen> {
                   onSendToKitchen: _sendToKitchen,
                   onOpenPayment: _openPayment,
                   onBlockedPayment: _showKitchenPendingDialog,
+                  onChangeTable: order == null
+                      ? null
+                      : () => _changeTable(order),
                   onCloseEmptyOrder: _closeEmptyOrder,
                   onCancelOrder: _cancelOrder,
                   canTakeOrders: canTakeOrders,
@@ -1054,6 +1131,77 @@ class _ItemsLoadIssue extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ChangeTableDialog extends StatelessWidget {
+  const _ChangeTableDialog({required this.order, required this.tablesStream});
+
+  final PosOrder order;
+  final Stream<List<PosTable>> tablesStream;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Cambiar mesa'),
+      contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+      content: SizedBox(
+        width: 420,
+        child: StreamBuilder<List<PosTable>>(
+          stream: tablesStream,
+          builder: (context, snapshot) {
+            if (snapshot.hasError) {
+              return Text('No se pudieron cargar mesas: ${snapshot.error}');
+            }
+            if (!snapshot.hasData) {
+              return const SizedBox(
+                height: 96,
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            final available =
+                snapshot.data!
+                    .where(
+                      (table) => evaluateChangeTableDestination(
+                        order: order,
+                        destination: table,
+                      ).allowed,
+                    )
+                    .toList()
+                  ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+            if (available.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 18),
+                child: Text('No hay mesas libres disponibles.'),
+              );
+            }
+            return ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 360),
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: available.length,
+                separatorBuilder: (_, _) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final table = available[index];
+                  return ListTile(
+                    leading: const Icon(Icons.table_restaurant_outlined),
+                    title: Text(table.name),
+                    subtitle: const Text('Libre'),
+                    onTap: () => Navigator.pop(context, table),
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar'),
+        ),
+      ],
     );
   }
 }
@@ -1622,6 +1770,7 @@ class _TopOrderActions extends StatelessWidget {
     required this.onSendToKitchen,
     required this.onOpenPayment,
     required this.onBlockedPayment,
+    required this.onChangeTable,
     required this.onCloseEmptyOrder,
     required this.onCancelOrder,
     required this.canTakeOrders,
@@ -1636,6 +1785,7 @@ class _TopOrderActions extends StatelessWidget {
   final VoidCallback onSendToKitchen;
   final VoidCallback onOpenPayment;
   final VoidCallback onBlockedPayment;
+  final VoidCallback? onChangeTable;
   final VoidCallback onCloseEmptyOrder;
   final VoidCallback onCancelOrder;
   final bool canTakeOrders;
@@ -1647,25 +1797,14 @@ class _TopOrderActions extends StatelessWidget {
     final size = MediaQuery.sizeOf(context);
     final compact = size.width < 650 || size.height < 750;
     final currentOrder = order;
-    final pendingKitchenCount = items
-        .where(
-          (item) =>
-              isActiveOrderItem(item) &&
-              itemRequiresKitchen(item) &&
-              normalizeStatus(item.kitchenStatus) == 'pending',
-        )
-        .length;
-    final hadKitchenSend = items.any(
-      (item) =>
-          !item.isCancelled &&
-          item.sendToKitchen &&
-          [
-            'sent',
-            'cooking',
-            'ready',
-          ].contains(normalizeStatus(item.kitchenStatus)),
-    );
+    final pendingKitchenCount = awaitingKitchenSendItemsCount(items);
+    final hadKitchenSend = items.any(itemWasSentToKitchen);
     final canSend = canTakeOrders && !busy && pendingKitchenCount > 0;
+    final canChangeTable =
+        canTakeOrders &&
+        !busy &&
+        currentOrder != null &&
+        (isDineInOrder(currentOrder) || isStandingOrder(currentOrder));
     final sendLabel = pendingKitchenCount == 0
         ? 'Cocina al dia'
         : hadKitchenSend
@@ -1747,6 +1886,16 @@ class _TopOrderActions extends StatelessWidget {
                 ),
               ),
             Tooltip(
+              message: canChangeTable
+                  ? 'Cambiar mesa'
+                  : 'Cambiar mesa no disponible',
+              child: _CompactHeaderAction(
+                onPressed: canChangeTable ? onChangeTable : null,
+                icon: const Icon(Icons.swap_horiz),
+                label: 'Mesa',
+              ),
+            ),
+            Tooltip(
               message: chargeLabel,
               child: _CompactHeaderAction(
                 onPressed: !canAttemptCharge
@@ -1800,6 +1949,12 @@ class _TopOrderActions extends StatelessWidget {
               label: const Text('Cancelar ticket'),
             ),
           ],
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: canChangeTable ? onChangeTable : null,
+            icon: const Icon(Icons.swap_horiz),
+            label: const Text('Cambiar mesa'),
+          ),
           const SizedBox(width: 8),
           Tooltip(
             message: chargeLabel,

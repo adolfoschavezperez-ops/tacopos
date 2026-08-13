@@ -303,6 +303,90 @@ void main() {
       expect(summary.openTakeoutCount, 0);
     });
   });
+
+  group('change table rules', () {
+    test('mesa puede moverse solo a mesa libre', () {
+      final order = _order(
+        id: 'table-order',
+        orderType: dineInOrderType,
+        status: 'sent',
+        paymentStatus: 'pending',
+        pendingTotal: 200,
+        tableIds: const ['mesa_1'],
+        tableNames: const ['Mesa 1'],
+      );
+
+      final decision = evaluateChangeTableDestination(
+        order: order,
+        destination: _table(id: 'mesa_5', name: 'Mesa 5'),
+      );
+
+      expect(decision.allowed, isTrue);
+    });
+
+    test('mesa ocupada no es destino de cambio de mesa', () {
+      final order = _order(
+        id: 'table-order',
+        orderType: dineInOrderType,
+        status: 'sent',
+        paymentStatus: 'pending',
+        pendingTotal: 200,
+        tableIds: const ['mesa_1'],
+      );
+
+      final decision = evaluateChangeTableDestination(
+        order: order,
+        destination: _table(
+          id: 'mesa_5',
+          name: 'Mesa 5',
+          currentOrderId: 'other-order',
+        ),
+      );
+
+      expect(decision.allowed, isFalse);
+      expect(decision.message, 'Selecciona una mesa libre.');
+    });
+
+    test('parados sin mesa puede moverse a mesa libre', () {
+      final order = _order(
+        id: 'standing-order',
+        orderType: standingOrderType,
+        status: 'open',
+        paymentStatus: 'pending',
+        pendingTotal: 120,
+        customerName: 'Juan',
+      );
+
+      final decision = evaluateChangeTableDestination(
+        order: order,
+        destination: _table(id: 'mesa_3', name: 'Mesa 3'),
+      );
+
+      expect(decision.allowed, isTrue);
+    });
+
+    test('para llevar no puede cambiarse a mesa en este flujo', () {
+      final order = _order(
+        id: 'takeout-order',
+        orderType: takeoutOrderType,
+        status: 'open',
+        paymentStatus: 'pending',
+        pendingTotal: 120,
+        customerName: 'Ana',
+      );
+
+      final decision = evaluateChangeTableDestination(
+        order: order,
+        destination: _table(id: 'mesa_3', name: 'Mesa 3'),
+      );
+
+      expect(decision.allowed, isFalse);
+      expect(
+        decision.message,
+        'Cambiar mesa no aplica para pedidos Para llevar.',
+      );
+    });
+  });
 }
 
 PosOrder _order({

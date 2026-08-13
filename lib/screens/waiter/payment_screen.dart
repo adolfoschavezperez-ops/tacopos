@@ -1467,17 +1467,52 @@ class _PartialPaymentSheetState extends State<_PartialPaymentSheet> {
   }
 }
 
-class _CashInlinePanel extends StatelessWidget {
+class _CashInlinePanel extends StatefulWidget {
   const _CashInlinePanel({required this.total, required this.controller});
 
   final double total;
   final TextEditingController controller;
 
   @override
+  State<_CashInlinePanel> createState() => _CashInlinePanelState();
+}
+
+class _CashInlinePanelState extends State<_CashInlinePanel> {
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode();
+    _focusNode.addListener(_selectAllOnFocus);
+  }
+
+  @override
+  void dispose() {
+    _focusNode.removeListener(_selectAllOnFocus);
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _selectAllOnFocus() {
+    if (_focusNode.hasFocus) {
+      _selectAll();
+    }
+  }
+
+  void _selectAll() {
+    widget.controller.selection = TextSelection(
+      baseOffset: 0,
+      extentOffset: widget.controller.text.length,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final received =
-        double.tryParse(controller.text.trim().replaceAll(',', '.')) ?? 0;
-    final change = (received - total).clamp(0, double.infinity);
+        double.tryParse(widget.controller.text.trim().replaceAll(',', '.')) ??
+        0;
+    final change = (received - widget.total).clamp(0, double.infinity);
     final compact = MediaQuery.sizeOf(context).width < 650;
 
     return DecoratedBox(
@@ -1503,7 +1538,7 @@ class _CashInlinePanel extends StatelessWidget {
                   ),
                 ),
                 MoneyText(
-                  value: total,
+                  value: widget.total,
                   style: TextStyle(
                     color: BrandColors.accentYellow,
                     fontSize: compact ? 22 : 28,
@@ -1514,7 +1549,9 @@ class _CashInlinePanel extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             TextField(
-              controller: controller,
+              controller: widget.controller,
+              focusNode: _focusNode,
+              onTap: _selectAll,
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
@@ -2777,6 +2814,12 @@ class _CashPaymentDialogState extends State<_CashPaymentDialog> {
                   controller: _receivedController,
                   focusNode: _receivedFocusNode,
                   autofocus: true,
+                  onTap: () {
+                    _receivedController.selection = TextSelection(
+                      baseOffset: 0,
+                      extentOffset: _receivedController.text.length,
+                    );
+                  },
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
