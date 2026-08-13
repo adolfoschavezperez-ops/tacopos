@@ -4,6 +4,7 @@ import '../../models/pos_table.dart';
 import 'order_activity.dart';
 
 const tableStatusAvailable = 'available';
+const tableStatusPendingSend = 'pending';
 const tableStatusInKitchen = 'sent';
 const tableStatusPreparing = 'cooking';
 const tableStatusReadyToCharge = 'ready';
@@ -25,12 +26,13 @@ String waiterTableStatusKey({
       .where(itemRequiresKitchen)
       .toList(growable: false);
 
+  if (kitchenItems.any(itemIsAwaitingKitchenSend)) {
+    return tableStatusPendingSend;
+  }
   if (kitchenItems.any(_itemIsPreparing)) {
     return tableStatusPreparing;
   }
-  if (kitchenItems.any(
-    (item) => itemIsAwaitingKitchenSend(item) || isKitchenPendingItem(item),
-  )) {
+  if (kitchenItems.any(isKitchenPendingItem)) {
     return tableStatusInKitchen;
   }
   if (kitchenItems.isNotEmpty &&
