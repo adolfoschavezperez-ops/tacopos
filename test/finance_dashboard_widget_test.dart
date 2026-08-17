@@ -78,21 +78,23 @@ void main() {
       expect(find.text('Total gastos'), findsOneWidget);
       expect(find.text('Total facturado'), findsWidgets);
       expect(find.text('Total pagado'), findsWidgets);
-      expect(find.text('Otros gastos'), findsOneWidget);
-      expect(find.text('Otros proveedores'), findsOneWidget);
+      expect(find.text('Otros gastos'), findsNothing);
+      expect(find.text('Otros proveedores'), findsNothing);
+      expect(find.text('Gasto 1'), findsWidgets);
+      expect(find.text('Gasto 5'), findsWidgets);
+      expect(find.text('Proveedor 1'), findsWidgets);
+      expect(find.text('Proveedor 5'), findsWidgets);
       expect(find.text('Otros métodos'), findsOneWidget);
       expect(tester.takeException(), isNull, reason: 'Resolucion $size');
     }
 
-    await tester.ensureVisible(find.text('Otros gastos'));
-    await tester.tap(find.text('Otros gastos'));
+    final gasto = find.text('Gasto 5').first;
+    await tester.ensureVisible(gasto);
+    await tester.tap(gasto);
     await tester.pumpAndSettle();
-    expect(
-      find.textContaining('Periodo 01/07/2026 al 31/07/2026'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('Sucursal'), findsWidgets);
-    expect(find.text('Subtotal'), findsOneWidget);
+    expect(find.text('Detalle del gasto'), findsOneWidget);
+    expect(find.text('Concepto'), findsWidgets);
+    expect(find.text(r'$500.00'), findsWidgets);
     await tester.tap(find.byTooltip('Cerrar'));
     await tester.pumpAndSettle();
 

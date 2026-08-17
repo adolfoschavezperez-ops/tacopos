@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:intl/intl.dart';
 
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
@@ -51,6 +52,149 @@ class FinanceReconciledBreakdown<T> {
   final bool isValid;
 
   bool get hasOther => hiddenEntries.isNotEmpty && otherTotal > 0.005;
+}
+
+List<FinanceBreakdownEntry<CashWithdrawalRequest>>
+financeExpenseBreakdownEntries(FinanceDashboardBundle bundle) {
+  final entries = bundle.approvedExpenses
+      .map(
+        (row) => FinanceBreakdownEntry(
+          label: row.reason,
+          amount: row.amount,
+          source: row,
+        ),
+      )
+      .where((entry) => entry.amount.abs() > 0.005)
+      .toList();
+  entries.sort((a, b) {
+    final byAmount = b.amount.compareTo(a.amount);
+    if (byAmount != 0) return byAmount;
+    final byLabel = a.label.toLowerCase().compareTo(b.label.toLowerCase());
+    if (byLabel != 0) return byLabel;
+    return a.source.id.compareTo(b.source.id);
+  });
+  return List.unmodifiable(entries);
+}
+
+List<FinanceBreakdownEntry<FinanceSupplierRow>>
+financeSupplierInvoiceBreakdownEntries(FinanceDashboardBundle bundle) {
+  final entries = bundle.supplierRows
+      .where((row) => row.invoiced > 0.005)
+      .map(
+        (row) => FinanceBreakdownEntry(
+          label: row.supplierName,
+          amount: row.invoiced,
+          source: row,
+        ),
+      )
+      .toList();
+  entries.sort((a, b) {
+    final byAmount = b.amount.compareTo(a.amount);
+    if (byAmount != 0) return byAmount;
+    final byLabel = a.label.toLowerCase().compareTo(b.label.toLowerCase());
+    if (byLabel != 0) return byLabel;
+    return a.source.supplierId.compareTo(b.source.supplierId);
+  });
+  return List.unmodifiable(entries);
+}
+
+bool financePeriodIsFullWeek(FinanceDashboardKey key) {
+  final start = DateTime.tryParse(key.startBusinessDate);
+  final end = DateTime.tryParse(key.endBusinessDate);
+  if (start == null || end == null) return false;
+  return start.weekday == DateTime.monday &&
+      end.weekday == DateTime.sunday &&
+      end.difference(start).inDays == 6;
+}
+
+String financePeriodSummaryTitle(FinanceDashboardKey key) {
+  return financePeriodIsFullWeek(key)
+      ? 'Resumen semanal'
+      : 'Resumen financiero';
+}
+
+String financeSummaryImageFileName({
+  required FinanceDashboardBundle bundle,
+  required String branchName,
+}) {
+  final branch = _summaryFileToken(
+    branchName.isEmpty ? bundle.key.branchId : branchName,
+  );
+  final start = _summaryFileDate(bundle.key.startBusinessDate);
+  final end = _summaryFileDate(bundle.key.endBusinessDate);
+  return 'Resumen-Financiero-$branch-$start-al-$end.png';
+}
+
+String financeWhatsappSummaryText({
+  required FinanceDashboardBundle bundle,
+  required String restaurantName,
+  required String branchName,
+  DateTime? generatedAt,
+}) {
+  final title = financePeriodSummaryTitle(bundle.key);
+  final period =
+      '${_summaryDisplayDate(bundle.key.startBusinessDate)} - ${_summaryDisplayDate(bundle.key.endBusinessDate)}';
+  final expenses = financeExpenseBreakdownEntries(bundle);
+  final suppliers = financeSupplierInvoiceBreakdownEntries(bundle);
+  final generated = generatedAt == null
+      ? null
+      : DateFormat('dd/MM/yyyy HH:mm').format(generatedAt);
+  final lines = <String>[
+    restaurantName.toUpperCase(),
+    branchName.toUpperCase(),
+    title,
+    period,
+    if (generated != null) 'Generado: $generated',
+    '',
+    'VENTAS',
+    'Venta bruta: ${_summaryMoney(bundle.grossSales)}',
+    'Descuentos: ${_summaryMoney(bundle.discounts)}',
+    'Venta neta: ${_summaryMoney(bundle.netSales)}',
+    'Ordenes: ${bundle.salesOrders.length}',
+    'Ticket promedio: ${_summaryMoney(_safeAverage(bundle.netSales, bundle.salesOrders.length))}',
+    '',
+    'INGRESOS REALES',
+    'Efectivo: ${_summaryMoney(bundle.cashCollected)}',
+    'Tarjeta neta: ${_summaryMoney(bundle.cardCollected)}',
+    if ((bundle.platformCollected + bundle.otherCollected).abs() > 0.005)
+      'Otros / plataforma: ${_summaryMoney(bundle.platformCollected + bundle.otherCollected)}',
+    'Ingreso real: ${_summaryMoney(bundle.realCollected)}',
+    'Tarjeta bruta: ${_summaryMoney(bundle.cardGrossCollected)}',
+    'Comisiones de tarjeta: ${_summaryMoney(bundle.cardFees)}',
+    '',
+    'AJUSTES DE CAJA',
+    'Monetario esperado bruto: ${_summaryMoney(bundle.expectedMonetaryGrossIncome)}',
+    'Comision tarjeta: ${_summaryMoney(bundle.cardFees)}',
+    'Monetario esperado neto: ${_summaryMoney(bundle.expectedMonetaryIncome)}',
+    'Faltantes: ${_summaryMoney(bundle.cashShortages)}',
+    'Sobrantes: ${_summaryMoney(bundle.cashOverages)}',
+    '',
+    'GASTOS',
+    for (final entry in expenses)
+      '${entry.label}: ${_summaryMoney(entry.amount)}',
+    'Total gastos: ${_summaryMoney(bundle.paidExpenses)}',
+    '',
+    'FACTURAS DE PROVEEDORES',
+    for (final entry in suppliers)
+      '${entry.label}: ${_summaryMoney(entry.amount)}',
+    'Total facturado: ${_summaryMoney(bundle.supplierInvoicesTotal)}',
+    '',
+    'PAGOS A PROVEEDORES',
+    for (final entry in _supplierPaymentSummaryEntries(bundle))
+      '${entry.key}: ${_summaryMoney(entry.value)}',
+    'Total pagado: ${_summaryMoney(bundle.supplierPaidTotal)}',
+    '',
+    'FACTURAS PENDIENTES',
+    _summaryMoney(bundle.pendingSupplierInvoices),
+    '',
+    'RESUMEN FINAL',
+    'Ingreso real: ${_summaryMoney(bundle.realCollected)}',
+    'Gastos: -${_summaryMoney(bundle.paidExpenses)}',
+    'Pagado a proveedores: -${_summaryMoney(bundle.supplierPaidTotal)}',
+    'Facturas pendientes: ${_summaryMoney(bundle.pendingSupplierInvoices)}',
+    'Resultado: ${_summaryMoney(bundle.finalResult)}',
+  ];
+  return lines.join('\n');
 }
 
 FinanceReconciledBreakdown<T> buildReconciledBreakdown<T>({
@@ -116,6 +260,76 @@ FinanceReconciledBreakdown<T> buildReconciledBreakdown<T>({
         otherTotal >= -financeRoundingTolerance &&
         (normalizedExpected - reconciledTotal).abs() <= financeMoneyTolerance,
   );
+}
+
+List<MapEntry<String, double>> _supplierPaymentSummaryEntries(
+  FinanceDashboardBundle bundle,
+) {
+  final entries = bundle.supplierPaymentsByMethod.entries
+      .map(
+        (entry) =>
+            MapEntry(financeSupplierPaymentMethodLabel(entry.key), entry.value),
+      )
+      .where((entry) => entry.value.abs() > 0.005)
+      .toList();
+  entries.sort((a, b) {
+    final byAmount = b.value.compareTo(a.value);
+    if (byAmount != 0) return byAmount;
+    return a.key.toLowerCase().compareTo(b.key.toLowerCase());
+  });
+  return List.unmodifiable(entries);
+}
+
+String financePaymentMethodLabel(String method) {
+  return switch (method.trim().toLowerCase()) {
+    'cash' => 'Efectivo',
+    'card' => 'Tarjeta',
+    'platform_paid' => 'Pagado en plataforma',
+    'employee_consumption' => 'Consumo empleado',
+    'transfer' => 'Transferencia',
+    _ => method.trim().isEmpty ? 'Otro' : method,
+  };
+}
+
+String financeSupplierPaymentMethodLabel(String method) {
+  return switch (method.trim().toLowerCase()) {
+    'cash' => 'Efectivo',
+    'transfer' => 'Transferencia',
+    'partner_contribution' => 'Aportacion de socios',
+    'card' => 'Tarjeta',
+    _ => method.trim().isEmpty ? 'Otro' : method,
+  };
+}
+
+double _safeAverage(double total, int count) {
+  if (count <= 0) return 0;
+  return _money(total / count);
+}
+
+String _summaryDisplayDate(String value) {
+  final date = DateTime.tryParse(value);
+  if (date == null) return value;
+  return DateFormat('dd/MM/yyyy').format(date);
+}
+
+String _summaryFileDate(String value) {
+  final date = DateTime.tryParse(value);
+  if (date == null) return value.replaceAll(RegExp(r'[^0-9A-Za-z]+'), '-');
+  return DateFormat('dd-MM-yyyy').format(date);
+}
+
+String _summaryFileToken(String value) {
+  final token = value
+      .trim()
+      .replaceAll(RegExp(r'[^0-9A-Za-z]+'), '-')
+      .replaceAll(RegExp(r'-+'), '-')
+      .replaceAll(RegExp(r'^-|-$'), '');
+  return token.isEmpty ? 'Sucursal' : token;
+}
+
+String _summaryMoney(double value) {
+  final formatter = NumberFormat.currency(locale: 'es_MX', symbol: r'$');
+  return formatter.format(_money(value));
 }
 
 void logFinanceDashboardReconciliation<T>(

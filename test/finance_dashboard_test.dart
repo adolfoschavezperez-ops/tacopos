@@ -205,6 +205,287 @@ void main() {
     expect(collectionsText, contains('Tarjeta neta'));
   });
 
+  test(
+    'desglose completo de gastos muestra todos sin otros y ordena por monto',
+    () {
+      for (final count in [1, 5, 20]) {
+        final dashboard = buildFinanceDashboard(
+          FinanceDashboardInput(
+            key: key,
+            salesSummary: _emptySales,
+            paymentsByOrder: const {},
+            cashSessions: const [],
+            withdrawals: [
+              for (var index = 0; index < count; index++)
+                _expense(
+                  'approved',
+                  (count - index) * 10,
+                  reason: 'Gasto ${index + 1}',
+                ),
+            ],
+            purchases: const [],
+            supplierPayments: const [],
+            suppliers: const [],
+          ),
+        );
+
+        final entries = financeExpenseBreakdownEntries(dashboard);
+        final breakdown = buildReconciledBreakdown(
+          entries: entries,
+          expectedTotal: dashboard.paidExpenses,
+          visibleLimit: entries.length,
+        );
+
+        expect(entries, hasLength(count));
+        expect(breakdown.visibleEntries, hasLength(count));
+        expect(breakdown.hasOther, isFalse);
+        expect(
+          breakdown.visibleEntries.map((entry) => entry.label),
+          isNot(contains('Otros gastos')),
+        );
+        expect(breakdown.reconciledTotal, dashboard.paidExpenses);
+        expect(
+          entries.map((entry) => entry.amount),
+          orderedEquals(
+            entries.map((entry) => entry.amount).toList()
+              ..sort((a, b) => b.compareTo(a)),
+          ),
+        );
+      }
+    },
+  );
+
+  test(
+    'desglose completo de proveedores muestra todos sin otros y ordena monto',
+    () {
+      for (final count in [1, 5, 20]) {
+        final dashboard = buildFinanceDashboard(
+          FinanceDashboardInput(
+            key: key,
+            salesSummary: _emptySales,
+            paymentsByOrder: const {},
+            cashSessions: const [],
+            withdrawals: const [],
+            purchases: [
+              for (var index = 0; index < count; index++)
+                _purchase(
+                  total: (count - index) * 100,
+                  paid: 0,
+                  balance: (count - index) * 100,
+                  supplierId: 'supplier-$index',
+                  supplierName: 'Proveedor ${index + 1}',
+                ),
+            ],
+            supplierPayments: const [],
+            suppliers: const [],
+          ),
+        );
+
+        final entries = financeSupplierInvoiceBreakdownEntries(dashboard);
+        final breakdown = buildReconciledBreakdown(
+          entries: entries,
+          expectedTotal: dashboard.supplierInvoicesTotal,
+          visibleLimit: entries.length,
+        );
+
+        expect(entries, hasLength(count));
+        expect(breakdown.visibleEntries, hasLength(count));
+        expect(breakdown.hasOther, isFalse);
+        expect(
+          breakdown.visibleEntries.map((entry) => entry.label),
+          isNot(contains('Otros proveedores')),
+        );
+        expect(breakdown.reconciledTotal, dashboard.supplierInvoicesTotal);
+        expect(
+          entries.map((entry) => entry.amount),
+          orderedEquals(
+            entries.map((entry) => entry.amount).toList()
+              ..sort((a, b) => b.compareTo(a)),
+          ),
+        );
+      }
+    },
+  );
+
+  test('resumen compartible usa rango, sucursal y valores netos actuales', () {
+    const weeklyKey = FinanceDashboardKey(
+      restaurantId: 'restaurant',
+      branchId: 'aviacion',
+      startBusinessDate: '2026-08-10',
+      endBusinessDate: '2026-08-16',
+    );
+    final order = _order('summary-share', businessDate: '2026-08-10');
+    final payment = _payment(
+      'summary-share-payment',
+      order.id,
+      amount: 26332.80,
+      method: 'card',
+    );
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order,
+        items: [_item(26332.80)],
+        payments: [payment],
+      ),
+    ]);
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: weeklyKey,
+        salesSummary: summary,
+        paymentsByOrder: {
+          order.id: [payment],
+        },
+        cashSessions: [
+          _cashSession(
+            id: 'cut-share-shortage',
+            businessDate: '2026-08-10',
+            countedCashAmount: 10000,
+            terminalReportedAmount: 6021.70,
+            expectedCashAmount: 10752.90,
+            expectedCardChargedAmount: 6021.70,
+            expectedCardFeeAbsorbedAmount: 238,
+          ),
+          _cashSession(
+            id: 'cut-share-overage',
+            businessDate: '2026-08-11',
+            countedCashAmount: 9577,
+            expectedCashAmount: 9165.20,
+          ),
+        ],
+        withdrawals: [
+          _expense(
+            'approved',
+            630,
+            reason: 'Refresco',
+            businessDate: '2026-08-10',
+          ),
+          _expense(
+            'approved',
+            315,
+            reason: 'refresco',
+            businessDate: '2026-08-10',
+          ),
+          _expense(
+            'approved',
+            300,
+            reason: 'Brenda',
+            businessDate: '2026-08-11',
+          ),
+          _expense(
+            'approved',
+            200,
+            reason: 'traslado puesto',
+            businessDate: '2026-08-12',
+          ),
+          _expense(
+            'approved',
+            150,
+            reason: 'hielo',
+            businessDate: '2026-08-13',
+          ),
+          _expense(
+            'approved',
+            120,
+            reason: 'garrafon',
+            businessDate: '2026-08-14',
+          ),
+          _expense(
+            'approved',
+            300,
+            reason: 'cinta aislante',
+            businessDate: '2026-08-15',
+          ),
+        ],
+        purchases: [
+          _purchase(
+            total: 11742.70,
+            paid: 11742.70,
+            balance: 0,
+            supplierId: 'omar',
+            supplierName: 'Carniceria Omar',
+            businessDate: '2026-08-10',
+          ),
+          _purchase(
+            total: 5100,
+            paid: 5100,
+            balance: 0,
+            supplierId: 'ricardo',
+            supplierName: 'Ricardo Bernal',
+            businessDate: '2026-08-11',
+          ),
+          _purchase(
+            total: 2421,
+            paid: 2421,
+            balance: 0,
+            supplierId: 'rafa',
+            supplierName: 'Rafa Verdura',
+            businessDate: '2026-08-12',
+          ),
+          _purchase(
+            total: 6494.66,
+            paid: 6494.66,
+            balance: 0,
+            supplierId: 'varios',
+            supplierName: 'Varios',
+            businessDate: '2026-08-13',
+          ),
+        ],
+        supplierPayments: [
+          _supplierPayment(
+            amount: 15758.36,
+            method: 'cash',
+            businessDate: '2026-08-14',
+          ),
+          _supplierPayment(
+            amount: 10000,
+            method: 'transfer',
+            businessDate: '2026-08-15',
+          ),
+        ],
+        suppliers: const [],
+      ),
+    );
+
+    final text = financeWhatsappSummaryText(
+      bundle: dashboard,
+      restaurantName: "Los Padrino's Tacos",
+      branchName: 'Aviacion',
+      generatedAt: DateTime(2026, 8, 17, 14, 30),
+    );
+
+    expect(financePeriodSummaryTitle(weeklyKey), 'Resumen semanal');
+    expect(text, contains("LOS PADRINO'S TACOS"));
+    expect(text, contains('AVIACION'));
+    expect(text, contains('10/08/2026 - 16/08/2026'));
+    expect(text, contains('Venta neta: \$26,332.80'));
+    expect(text, contains('Efectivo: \$19,577.00'));
+    expect(text, contains('Tarjeta neta: \$5,783.70'));
+    expect(text, contains('Ingreso real: \$25,360.70'));
+    expect(text, contains('Comisiones de tarjeta: \$238.00'));
+    expect(text, contains('Total gastos: \$2,015.00'));
+    expect(text, contains('Total facturado: \$25,758.36'));
+    expect(text, contains('Total pagado: \$25,758.36'));
+    expect(text, contains('FACTURAS PENDIENTES\n\$0.00'));
+    expect(text, contains('Resultado: -\$2,412.66'));
+    expect(text, isNot(contains('Otros gastos')));
+    expect(text, isNot(contains('Otros proveedores')));
+    expect(
+      financeSummaryImageFileName(bundle: dashboard, branchName: 'Aviacion'),
+      'Resumen-Financiero-Aviacion-10-08-2026-al-16-08-2026.png',
+    );
+  });
+
+  test('rango no semanal usa titulo resumen financiero', () {
+    const customKey = FinanceDashboardKey(
+      restaurantId: 'restaurant',
+      branchId: 'branch',
+      startBusinessDate: '2026-08-01',
+      endBusinessDate: '2026-08-15',
+    );
+
+    expect(financePeriodSummaryTitle(customKey), 'Resumen financiero');
+  });
+
   test('detalle diario reconstruye efectivo de gastos pagados desde caja', () {
     const augustKey = FinanceDashboardKey(
       restaurantId: 'restaurant',
@@ -1119,13 +1400,14 @@ CashWithdrawalRequest _expense(
   String source = '',
   String businessDate = '2026-07-12',
   String cashSessionId = 'cash',
+  String? reason,
 }) {
   return CashWithdrawalRequest(
-    id: '$status-$amount',
+    id: '$status-$amount-${reason ?? status}',
     cashSessionId: cashSessionId,
     businessDate: businessDate,
     amount: amount,
-    reason: status,
+    reason: reason ?? status,
     requestedByEmployeeId: 'employee',
     requestedByEmployeeName: 'Empleado',
     status: status,
@@ -1198,13 +1480,16 @@ SupplierPurchase _purchase({
   required double paid,
   required double balance,
   String status = 'partial',
+  String supplierId = 'supplier',
+  String supplierName = 'Proveedor',
+  String businessDate = '2026-07-12',
 }) {
   return SupplierPurchase(
-    id: 'purchase-$total-$status',
-    supplierId: 'supplier',
-    supplierName: 'Proveedor',
+    id: 'purchase-$supplierId-$total-$status',
+    supplierId: supplierId,
+    supplierName: supplierName,
     purchaseDate: DateTime(2026, 7, 12),
-    businessDate: '2026-07-12',
+    businessDate: businessDate,
     folio: 'F-1',
     documentType: 'invoice',
     status: status,
@@ -1219,6 +1504,7 @@ SupplierPayment _supplierPayment({
   required double amount,
   String status = 'active',
   String method = 'transfer',
+  String businessDate = '2026-07-12',
 }) {
   return SupplierPayment(
     id: 'supplier-payment-$amount-$status',
@@ -1227,7 +1513,7 @@ SupplierPayment _supplierPayment({
     purchaseId: 'purchase',
     purchaseFolio: 'F-1',
     paymentDate: DateTime(2026, 7, 12),
-    businessDate: '2026-07-12',
+    businessDate: businessDate,
     amount: amount,
     method: method,
     status: status,

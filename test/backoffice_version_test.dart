@@ -4,9 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/backoffice/backoffice_version.dart';
 
 void main() {
-  test('Backoffice version source returns 1.0.1', () {
-    expect(BackofficeVersion.version, '1.0.1');
-    expect(BackofficeVersion.label, 'Backoffice v1.0.1');
+  test('Backoffice version source returns 1.0.2', () {
+    expect(BackofficeVersion.version, '1.0.2');
+    expect(BackofficeVersion.label, 'Backoffice v1.0.2');
   });
 
   test('Backoffice UI shows version from the shared source', () {
@@ -15,7 +15,7 @@ void main() {
     ).readAsStringSync();
 
     expect(source, contains('BackofficeVersion.label'));
-    expect(source, isNot(contains("'Backoffice v1.0.1'")));
+    expect(source, isNot(contains("'Backoffice v1.0.2'")));
   });
 
   test('Login web version shows Backoffice source instead of update code', () {
