@@ -69,7 +69,9 @@ void _summarySheet(
     ('Facturas pendientes', bundle.pendingSupplierInvoices),
     ('Resumen general', bundle.generalResult),
     ('Resumen de cobros', bundle.collectionsResult),
-    ('Resumen final', bundle.finalResult),
+    ('Resultado operativo', bundle.operatingResult),
+    ('Aportacion de socios', bundle.partnerContributions),
+    ('Saldo final', bundle.finalBalance),
   ]);
   _widths(sheet, [28, 24]);
 }

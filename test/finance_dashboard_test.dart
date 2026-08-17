@@ -470,7 +470,9 @@ void main() {
     expect(text, contains('Total facturado: \$25,758.36'));
     expect(text, contains('Total pagado: \$25,758.36'));
     expect(text, contains('FACTURAS PENDIENTES\n\$0.00'));
-    expect(text, contains('Resultado: -\$2,412.66'));
+    expect(text, contains('Resultado operativo: -\$2,412.66'));
+    expect(text, contains('Aportacion de socios: \$0.00'));
+    expect(text, contains('Saldo final: -\$2,412.66'));
     expect(text, isNot(contains('Otros gastos')));
     expect(text, isNot(contains('Otros proveedores')));
     expect(
@@ -837,7 +839,14 @@ void main() {
         paymentsByOrder: const {},
         cashSessions: [session],
         withdrawals: withdrawals,
-        purchases: const [],
+        purchases: [
+          _purchase(
+            total: 25758.36,
+            paid: 25758.36,
+            balance: 0,
+            businessDate: '2026-08-15',
+          ),
+        ],
         supplierPayments: [
           _supplierPayment(
             amount: 25758.36,
@@ -1104,7 +1113,7 @@ void main() {
     expect(dashboard.supplierRows.single.balance, 400);
   });
 
-  test('aplica exactamente las tres formulas financieras', () {
+  test('aplica formulas de resultado operativo y saldo final', () {
     final order = _order('summary', businessDate: '2026-07-12');
     final payment = _payment('summary-payment', order.id, amount: 9000);
     final summary = buildCanonicalSalesSummary([
@@ -1131,14 +1140,115 @@ void main() {
         ],
         withdrawals: [_expense('approved', 1000)],
         purchases: [_purchase(total: 4000, paid: 3000, balance: 1000)],
-        supplierPayments: [_supplierPayment(amount: 3000)],
+        supplierPayments: [
+          _supplierPayment(amount: 3000),
+          _supplierPayment(amount: 500, method: 'partner_contribution'),
+        ],
         suppliers: const [],
       ),
     );
 
     expect(dashboard.generalResult, 4000);
-    expect(dashboard.collectionsResult, 5000);
-    expect(dashboard.finalResult, 4000);
+    expect(dashboard.operatingResult, 4000);
+    expect(dashboard.partnerContributions, 500);
+    expect(dashboard.finalBalance, 4500);
+    expect(dashboard.finalResult, 4500);
+    expect(dashboard.collectionsResult, 4500);
+  });
+
+  test('fixture real separa aporte de socios del ingreso y saldo final', () {
+    const augustKey = FinanceDashboardKey(
+      restaurantId: 'restaurant',
+      branchId: 'branch',
+      startBusinessDate: '2026-08-10',
+      endBusinessDate: '2026-08-16',
+    );
+
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: augustKey,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'cut-real-final',
+            businessDate: '2026-08-15',
+            countedCashAmount: 19541,
+            terminalReportedAmount: 6021.70,
+            expectedCashAmount: 19816.10,
+            expectedCardChargedAmount: 6021.70,
+            expectedCardFeeAbsorbedAmount: 238.47,
+            approvedWithdrawalsTotal: 36,
+            shortageAmount: 686.90,
+            overAmount: 411.80,
+          ),
+        ],
+        withdrawals: [
+          _expense(
+            'approved',
+            2081,
+            businessDate: '2026-08-15',
+            cashSessionId: 'expenses',
+          ),
+        ],
+        purchases: [
+          _purchase(
+            total: 25758.36,
+            paid: 25758.36,
+            balance: 0,
+            businessDate: '2026-08-15',
+          ),
+        ],
+        supplierPayments: [
+          _supplierPayment(
+            amount: 17952.36,
+            method: 'cash',
+            businessDate: '2026-08-15',
+          ),
+          _supplierPayment(
+            amount: 5376,
+            method: 'transfer',
+            businessDate: '2026-08-15',
+          ),
+          _supplierPayment(
+            amount: 2430,
+            method: 'partner_contribution',
+            businessDate: '2026-08-15',
+          ),
+        ],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.cashCollected, 19577);
+    expect(dashboard.cardGrossCollected, 6021.70);
+    expect(dashboard.cardFees, 238.47);
+    expect(dashboard.cardCollected, 5783.23);
+    expect(dashboard.realCollected, 25360.23);
+    expect(dashboard.paidExpenses, 2081);
+    expect(dashboard.supplierInvoicesTotal, 25758.36);
+    expect(dashboard.supplierPaidTotal, 25758.36);
+    expect(dashboard.partnerContributions, 2430);
+    expect(dashboard.operatingResult, -2479.13);
+    expect(dashboard.finalBalance, -49.13);
+    final requiredCollectedForZeroBalance =
+        dashboard.supplierInvoicesTotal +
+        dashboard.paidExpenses -
+        dashboard.partnerContributions;
+    expect(requiredCollectedForZeroBalance, 25409.36);
+    expect(requiredCollectedForZeroBalance - 25324.23, closeTo(85.13, 0.001));
+    expect(
+      (requiredCollectedForZeroBalance - dashboard.realCollected).abs(),
+      closeTo(49.13, 0.001),
+    );
+    expect(
+      36 + (requiredCollectedForZeroBalance - dashboard.realCollected).abs(),
+      closeTo(85.13, 0.001),
+    );
+    expect(dashboard.cashShortages, 686.90);
+    expect(dashboard.cashOverages, 411.80);
+    expect(dashboard.expectedMonetaryGrossIncome, 25873.80);
+    expect(dashboard.expectedMonetaryIncome, 25635.33);
   });
 
   test('concilia gastos visibles, otros y total del KPI', () {

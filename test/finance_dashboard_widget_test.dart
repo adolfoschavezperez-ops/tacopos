@@ -182,8 +182,7 @@ void main() {
     final formulaBundle = _summaryBundle(
       real: 25360.70,
       expenses: 2015,
-      supplierPaid: 25758.36,
-      pendingInvoices: 0,
+      pendingInvoices: 25758.36,
     );
     expect(
       formulaBundle.finalResult,
@@ -309,7 +308,7 @@ void _expectShareFinalStyle(
   expect(_containerBorderColor(section), color);
 
   final resultText = tester.widget<Text>(
-    find.byKey(const ValueKey('finance-share-value-RESULTADO')),
+    find.byKey(const ValueKey('finance-share-value-SALDO FINAL')),
   );
   expect(resultText.data, value);
   expect(resultText.style?.color, color);

@@ -1151,23 +1151,22 @@ class _SummaryColumn extends StatelessWidget {
           _SummaryCard(
             title: '3. RESUMEN FINAL',
             tooltip:
-                'Resultado disponible despues de considerar tambien los saldos pendientes con proveedores.',
+                'Resultado operativo menos facturas del periodo y saldo final despues de aportaciones de socios.',
             lines: [
               _MetricLineData('Cobrado real', bundle.realCollected),
               _MetricLineData('Gastos', -bundle.paidExpenses),
               _MetricLineData(
-                'Pagado a proveedores',
-                -bundle.supplierPaidTotal,
+                'Facturas proveedor',
+                -bundle.supplierInvoicesTotal,
               ),
-              _MetricLineData(
-                'Facturas pendientes',
-                -bundle.pendingSupplierInvoices,
-              ),
+              _MetricLineData('Resultado operativo', bundle.operatingResult),
+              _MetricLineData('Aportacion socios', bundle.partnerContributions),
             ],
-            total: bundle.finalResult,
-            accentColor: financeFinalResultColor(bundle.finalResult),
+            total: bundle.finalBalance,
+            totalLabel: 'Saldo final',
+            accentColor: financeFinalResultColor(bundle.finalBalance),
             formula:
-                '${_money(bundle.realCollected)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierPaidTotal)} - ${_money(bundle.pendingSupplierInvoices)}',
+                '${_money(bundle.realCollected)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierInvoicesTotal)} + ${_money(bundle.partnerContributions)}',
           ),
           const SizedBox(height: 18),
           Text(
@@ -1205,6 +1204,7 @@ class _SummaryCard extends StatelessWidget {
     required this.lines,
     required this.total,
     required this.formula,
+    this.totalLabel = 'Total',
     this.accentColor,
   });
 
@@ -1213,6 +1213,7 @@ class _SummaryCard extends StatelessWidget {
   final List<_MetricLineData> lines;
   final double total;
   final String formula;
+  final String totalLabel;
   final Color? accentColor;
 
   @override
@@ -1266,10 +1267,10 @@ class _SummaryCard extends StatelessWidget {
             const Divider(color: _FinanceColors.border),
             Row(
               children: [
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Total',
-                    style: TextStyle(
+                    totalLabel,
+                    style: const TextStyle(
                       color: _FinanceColors.text,
                       fontWeight: FontWeight.w700,
                     ),
@@ -2762,7 +2763,8 @@ class _ShareFinalSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final accentColor = financeFinalResultColor(bundle.finalResult);
+    final operatingColor = financeFinalResultColor(bundle.operatingResult);
+    final accentColor = financeFinalResultColor(bundle.finalBalance);
     return Container(
       key: const ValueKey('finance-share-final-section'),
       margin: const EdgeInsets.only(top: 8),
@@ -2787,17 +2789,23 @@ class _ShareFinalSection extends StatelessWidget {
           _ShareValueLine(label: 'Ingreso real', value: bundle.realCollected),
           _ShareValueLine(label: 'Gastos', value: -bundle.paidExpenses),
           _ShareValueLine(
-            label: 'Pagado a proveedores',
-            value: -bundle.supplierPaidTotal,
-          ),
-          _ShareValueLine(
-            label: 'Facturas pendientes',
-            value: bundle.pendingSupplierInvoices,
+            label: 'Facturas de proveedor',
+            value: -bundle.supplierInvoicesTotal,
           ),
           const Divider(color: _FinanceColors.border),
           _ShareValueLine(
-            label: 'RESULTADO',
-            value: bundle.finalResult,
+            label: 'RESULTADO OPERATIVO',
+            value: bundle.operatingResult,
+            strong: true,
+            valueColor: operatingColor,
+          ),
+          _ShareValueLine(
+            label: 'Aportacion de socios',
+            value: bundle.partnerContributions,
+          ),
+          _ShareValueLine(
+            label: 'SALDO FINAL',
+            value: bundle.finalBalance,
             strong: true,
             valueColor: accentColor,
           ),
