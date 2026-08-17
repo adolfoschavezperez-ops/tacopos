@@ -1,7 +1,7 @@
 class BackofficeVersion {
   const BackofficeVersion._();
 
-  static const String version = '1.0.3';
+  static const String version = '1.0.4';
   static const String label = 'Backoffice v$version';
 
   // Versioning convention:

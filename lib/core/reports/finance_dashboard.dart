@@ -698,8 +698,8 @@ class FinanceCashCutSummary {
   double get actualReceived =>
       _money(cashReceived + cardReceived + platformReceived + otherReceived);
   double get difference => _money(actualReceived - expectedMonetaryIncome);
-  double get shortage => difference < 0 ? _money(difference.abs()) : 0;
-  double get overage => difference > 0 ? difference : 0;
+  double get shortage => _money(session.shortageAmount);
+  double get overage => _money(session.overAmount);
   double get cashCountedLessOpening =>
       _money(session.countedCashAmount - openingFloat);
   double get cashOperationalBeforeExpenses => cashReceived;
@@ -722,7 +722,7 @@ FinanceCashCutSummary buildFinanceCashCutSummary(
   final expectedCashIncome = _money(
     session.expectedCashAmount -
         session.openingCashAmount +
-        reflectedWithdrawals,
+        session.approvedWithdrawalsTotal,
   );
   final cashReceived = _money(
     session.countedCashAmount -
@@ -767,13 +767,13 @@ double financeCashWithdrawalsReflectedInCount(
       .toList(growable: false);
   if (related.isEmpty) return snapshot;
 
-  final reflected = related
+  final notReflected = related
       .where(
         (request) =>
-            financeCashExpenseWasAlreadyReflectedInCount(request, session),
+            !financeCashExpenseWasAlreadyReflectedInCount(request, session),
       )
       .fold<double>(0, (sum, request) => sum + request.amount);
-  return _money(reflected.clamp(0, snapshot));
+  return _money((snapshot - notReflected).clamp(0, snapshot));
 }
 
 bool financeCashExpenseWasAlreadyReflectedInCount(
@@ -784,42 +784,113 @@ bool financeCashExpenseWasAlreadyReflectedInCount(
     return false;
   }
   if (request.cashSessionId.trim() != session.id.trim()) return false;
-  if (!_financeCashExpenseSourceCanAffectDrawer(request)) return false;
+  if (_financeCashExpenseIsExplicitlyNonDrawer(request)) return false;
 
-  final closedAt = session.closedAt;
+  final openedAt = session.openedAt;
   final eventAt =
       request.approvedAt ??
       request.authorizedAt ??
       request.requestedAt ??
       request.createdAt;
-  if (closedAt != null && eventAt != null && eventAt.isAfter(closedAt)) {
-    return false;
-  }
-  final openedAt = session.openedAt;
   if (openedAt != null && eventAt != null && eventAt.isBefore(openedAt)) {
     return false;
   }
   return true;
 }
 
-bool _financeCashExpenseSourceCanAffectDrawer(CashWithdrawalRequest request) {
-  if (request.isHistorical) return false;
+bool _financeCashExpenseIsExplicitlyNonDrawer(CashWithdrawalRequest request) {
+  if (request.isHistorical) return true;
   final source = _token('${request.source} ${request.sourceName}');
-  if (source.isEmpty) return true;
-  if (source.contains('historical') ||
+  if (source.isEmpty) return false;
+  return source.contains('historical') ||
       source.contains('admin') ||
       source.contains('transfer') ||
       source.contains('card') ||
       source.contains('tarjeta') ||
       source.contains('extern') ||
       source.contains('partner') ||
-      source.contains('aportacion')) {
-    return false;
-  }
-  return source.contains('cash') ||
-      source.contains('caja') ||
-      source.contains('drawer') ||
-      source.contains('efectivo');
+      source.contains('aportacion');
+}
+
+@visibleForTesting
+List<FinanceCashExpenseReconciliationTrace>
+financeCashExpenseReconciliationTrace(
+  CashSession session,
+  Iterable<CashWithdrawalRequest> withdrawals,
+) {
+  return withdrawals
+      .where((request) => request.cashSessionId.trim() == session.id.trim())
+      .map((request) {
+        final includedBeforeV103 =
+            request.isApproved && request.amount > financeMoneyTolerance;
+        final explicitlyNonDrawer = _financeCashExpenseIsExplicitlyNonDrawer(
+          request,
+        );
+        final includedNow = financeCashExpenseWasAlreadyReflectedInCount(
+          request,
+          session,
+        );
+        final reason = !request.isApproved
+            ? 'status_not_approved'
+            : request.amount <= financeMoneyTolerance
+            ? 'non_positive_amount'
+            : explicitlyNonDrawer
+            ? 'explicit_non_cash_drawer'
+            : includedNow
+            ? 'session_snapshot_cash_drawer'
+            : 'not_reflected';
+        return FinanceCashExpenseReconciliationTrace(
+          expenseId: request.id,
+          businessDate: request.businessDate,
+          concept: request.reason,
+          amount: _money(request.amount),
+          createdAt: request.createdAt,
+          paidAt: request.approvedAt ?? request.authorizedAt,
+          paymentMethod: request.sourceName,
+          paymentSource: request.source,
+          cashSessionId: request.cashSessionId,
+          cutId: session.id,
+          status: request.status,
+          includedBeforeV103: includedBeforeV103,
+          includedNow: includedNow,
+          reason: reason,
+        );
+      })
+      .toList(growable: false);
+}
+
+class FinanceCashExpenseReconciliationTrace {
+  const FinanceCashExpenseReconciliationTrace({
+    required this.expenseId,
+    required this.businessDate,
+    required this.concept,
+    required this.amount,
+    required this.createdAt,
+    required this.paidAt,
+    required this.paymentMethod,
+    required this.paymentSource,
+    required this.cashSessionId,
+    required this.cutId,
+    required this.status,
+    required this.includedBeforeV103,
+    required this.includedNow,
+    required this.reason,
+  });
+
+  final String expenseId;
+  final String businessDate;
+  final String concept;
+  final double amount;
+  final DateTime? createdAt;
+  final DateTime? paidAt;
+  final String paymentMethod;
+  final String paymentSource;
+  final String cashSessionId;
+  final String cutId;
+  final String status;
+  final bool includedBeforeV103;
+  final bool includedNow;
+  final String reason;
 }
 
 double financeNetCardReceived({
