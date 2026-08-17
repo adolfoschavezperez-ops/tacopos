@@ -1165,6 +1165,7 @@ class _SummaryColumn extends StatelessWidget {
               ),
             ],
             total: bundle.finalResult,
+            accentColor: financeFinalResultColor(bundle.finalResult),
             formula:
                 '${_money(bundle.realCollected)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierPaidTotal)} - ${_money(bundle.pendingSupplierInvoices)}',
           ),
@@ -1204,6 +1205,7 @@ class _SummaryCard extends StatelessWidget {
     required this.lines,
     required this.total,
     required this.formula,
+    this.accentColor,
   });
 
   final String title;
@@ -1211,26 +1213,27 @@ class _SummaryCard extends StatelessWidget {
   final List<_MetricLineData> lines;
   final double total;
   final String formula;
+  final Color? accentColor;
 
   @override
   Widget build(BuildContext context) {
-    final totalColor = total > financeMoneyTolerance
-        ? _FinanceColors.green
-        : total < -financeMoneyTolerance
-        ? _FinanceColors.red
-        : _FinanceColors.muted;
+    final totalColor = financeFinalResultColor(total);
     return Tooltip(
       message: tooltip,
       child: Container(
+        key: ValueKey('finance-summary-card-$title'),
         padding: const EdgeInsets.all(12),
-        decoration: _panelDecoration(fill: _FinanceColors.panelHigh),
+        decoration: _panelDecoration(
+          fill: _FinanceColors.panelHigh,
+          borderColor: accentColor,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
               title,
-              style: const TextStyle(
-                color: _FinanceColors.amber,
+              style: TextStyle(
+                color: accentColor ?? _FinanceColors.amber,
                 fontWeight: FontWeight.w800,
                 fontSize: 12,
               ),
@@ -1274,6 +1277,7 @@ class _SummaryCard extends StatelessWidget {
                 ),
                 Text(
                   _money(total),
+                  key: ValueKey('finance-summary-total-$title'),
                   style: TextStyle(
                     color: totalColor,
                     fontWeight: FontWeight.w800,
@@ -2758,21 +2762,23 @@ class _ShareFinalSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accentColor = financeFinalResultColor(bundle.finalResult);
     return Container(
+      key: const ValueKey('finance-share-final-section'),
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
         color: _FinanceColors.panelHigh,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: _FinanceColors.lightGreen),
+        border: Border.all(color: accentColor),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
+          Text(
             'RESUMEN FINAL',
             style: TextStyle(
-              color: _FinanceColors.lightGreen,
+              color: accentColor,
               fontSize: 13,
               fontWeight: FontWeight.w900,
             ),
@@ -2793,7 +2799,7 @@ class _ShareFinalSection extends StatelessWidget {
             label: 'RESULTADO',
             value: bundle.finalResult,
             strong: true,
-            valueColor: financeFinalResultColor(bundle.finalResult),
+            valueColor: accentColor,
           ),
         ],
       ),

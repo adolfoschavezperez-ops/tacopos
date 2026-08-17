@@ -164,9 +164,11 @@ void main() {
     expect(find.text(r'$5,999.00'), findsWidgets);
   });
 
-  testWidgets('resultado final compartible colorea por signo', (tester) async {
+  testWidgets('resumen final colorea importe y recuadro por signo', (
+    tester,
+  ) async {
     tester.view
-      ..physicalSize = const Size(900, 1600)
+      ..physicalSize = const Size(1600, 1800)
       ..devicePixelRatio = 1;
     addTearDown(() {
       tester.view.resetPhysicalSize();
@@ -188,27 +190,72 @@ void main() {
       closeTo(25360.70 - 2015 - 25758.36, 0.001),
     );
 
-    await _pumpShareSummary(tester, _summaryBundle(real: 100, expenses: 150));
-    var resultText = tester.widget<Text>(
-      find.byKey(const ValueKey('finance-share-value-RESULTADO')),
+    final negativeBundle = _summaryBundle(real: 100, expenses: 150);
+    await _pumpDashboardContent(tester, negativeBundle);
+    _expectSummaryFinalStyle(
+      tester,
+      color: const Color(0xFFE36565),
+      value: r'-$50.00',
     );
-    expect(resultText.data, r'-$50.00');
-    expect(resultText.style?.color, const Color(0xFFE36565));
+    await _pumpShareSummary(tester, negativeBundle);
+    _expectShareFinalStyle(
+      tester,
+      color: const Color(0xFFE36565),
+      value: r'-$50.00',
+    );
 
-    await _pumpShareSummary(tester, _summaryBundle(real: 3500));
-    resultText = tester.widget<Text>(
-      find.byKey(const ValueKey('finance-share-value-RESULTADO')),
+    final positiveBundle = _summaryBundle(real: 3500);
+    await _pumpDashboardContent(tester, positiveBundle);
+    _expectSummaryFinalStyle(
+      tester,
+      color: const Color(0xFF55B845),
+      value: r'$3,500.00',
     );
-    expect(resultText.data, r'$3,500.00');
-    expect(resultText.style?.color, const Color(0xFF55B845));
+    await _pumpShareSummary(tester, positiveBundle);
+    _expectShareFinalStyle(
+      tester,
+      color: const Color(0xFF55B845),
+      value: r'$3,500.00',
+    );
 
-    await _pumpShareSummary(tester, _summaryBundle());
-    resultText = tester.widget<Text>(
-      find.byKey(const ValueKey('finance-share-value-RESULTADO')),
+    final zeroBundle = _summaryBundle();
+    await _pumpDashboardContent(tester, zeroBundle);
+    _expectSummaryFinalStyle(
+      tester,
+      color: const Color(0xFFA2A6AA),
+      value: r'$0.00',
     );
-    expect(resultText.data, r'$0.00');
-    expect(resultText.style?.color, const Color(0xFFA2A6AA));
+    await _pumpShareSummary(tester, zeroBundle);
+    _expectShareFinalStyle(
+      tester,
+      color: const Color(0xFFA2A6AA),
+      value: r'$0.00',
+    );
   });
+}
+
+Future<void> _pumpDashboardContent(
+  WidgetTester tester,
+  FinanceDashboardBundle bundle,
+) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: AppTheme.dark(),
+      home: Scaffold(
+        backgroundColor: const Color(0xFF090A0B),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(18),
+          child: FinanceDashboardContent(
+            bundle: bundle,
+            repository: null,
+            refreshing: false,
+            onRefresh: () {},
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pump();
 }
 
 Future<void> _pumpShareSummary(
@@ -232,6 +279,46 @@ Future<void> _pumpShareSummary(
     ),
   );
   await tester.pump();
+}
+
+void _expectSummaryFinalStyle(
+  WidgetTester tester, {
+  required Color color,
+  required String value,
+}) {
+  final card = tester.widget<Container>(
+    find.byKey(const ValueKey('finance-summary-card-3. RESUMEN FINAL')),
+  );
+  expect(_containerBorderColor(card), color);
+
+  final resultText = tester.widget<Text>(
+    find.byKey(const ValueKey('finance-summary-total-3. RESUMEN FINAL')),
+  );
+  expect(resultText.data, value);
+  expect(resultText.style?.color, color);
+}
+
+void _expectShareFinalStyle(
+  WidgetTester tester, {
+  required Color color,
+  required String value,
+}) {
+  final section = tester.widget<Container>(
+    find.byKey(const ValueKey('finance-share-final-section')),
+  );
+  expect(_containerBorderColor(section), color);
+
+  final resultText = tester.widget<Text>(
+    find.byKey(const ValueKey('finance-share-value-RESULTADO')),
+  );
+  expect(resultText.data, value);
+  expect(resultText.style?.color, color);
+}
+
+Color _containerBorderColor(Container container) {
+  final decoration = container.decoration! as BoxDecoration;
+  final border = decoration.border! as Border;
+  return border.top.color;
 }
 
 FinanceDashboardBundle _summaryBundle({
