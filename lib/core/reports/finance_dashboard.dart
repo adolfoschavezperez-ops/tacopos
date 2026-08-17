@@ -222,9 +222,10 @@ String financeWhatsappSummaryText({
     'RESUMEN FINAL',
     'Ingreso real: ${_summaryMoney(bundle.realCollected)}',
     'Gastos: -${_summaryMoney(bundle.paidExpenses)}',
-    'Pagado a proveedores: -${_summaryMoney(bundle.supplierPaidTotal)}',
-    'Facturas pendientes: ${_summaryMoney(bundle.pendingSupplierInvoices)}',
-    'Resultado: ${_summaryMoney(bundle.finalResult)}',
+    'Facturas de proveedor: -${_summaryMoney(bundle.supplierInvoicesTotal)}',
+    'Resultado operativo: ${_summaryMoney(bundle.operatingResult)}',
+    'Aportacion de socios: ${_summaryMoney(bundle.partnerContributions)}',
+    'Saldo final: ${_summaryMoney(bundle.finalBalance)}',
   ];
   return lines.join('\n');
 }
@@ -576,17 +577,22 @@ class FinanceDashboardBundle {
       _money(purchases.fold<double>(0, (sum, row) => sum + row.total));
   double get supplierPaidTotal =>
       _money(supplierPayments.fold<double>(0, (sum, row) => sum + row.amount));
+  double get partnerContributions => _money(
+    supplierPayments
+        .where((row) => financeSupplierPaymentIsPartnerContribution(row.method))
+        .fold<double>(0, (sum, row) => sum + row.amount),
+  );
   double get pendingSupplierInvoices => _money(
     purchases.fold<double>(0, (sum, row) => sum + financePurchaseBalance(row)),
   );
 
-  double get generalResult =>
+  double get operatingResult =>
       _money(realCollected - paidExpenses - supplierInvoicesTotal);
+  double get finalBalance => _money(operatingResult + partnerContributions);
+  double get generalResult => operatingResult;
   double get collectionsResult =>
       _money(realCollected - paidExpenses - supplierPaidTotal);
-  double get finalResult => _money(
-    realCollected - paidExpenses - supplierPaidTotal - pendingSupplierInvoices,
-  );
+  double get finalResult => finalBalance;
 
   Map<String, double> get customerPaymentsByMethod {
     final result = <String, double>{};
@@ -1166,6 +1172,19 @@ bool isFinanceOperatingExpense(CashWithdrawalRequest request) {
     'transferencia_interna',
     'transferencia interna',
   }.contains(source);
+}
+
+bool financeSupplierPaymentIsPartnerContribution(String method) {
+  return const {
+    'partner_contribution',
+    'partner contribution',
+    'partner_cash',
+    'partner cash',
+    'partner_transfer',
+    'partner transfer',
+    'aportacion_socio',
+    'aportacion socio',
+  }.contains(_token(method));
 }
 
 String financePurchaseBusinessDate(SupplierPurchase purchase) {
