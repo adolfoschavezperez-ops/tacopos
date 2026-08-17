@@ -452,27 +452,6 @@ void _widths(Sheet sheet, List<double> widths) {
   }
 }
 
-String financePaymentMethodLabel(String method) {
-  return switch (method.trim().toLowerCase()) {
-    'cash' => 'Efectivo',
-    'card' => 'Tarjeta',
-    'platform_paid' => 'Pagado en plataforma',
-    'employee_consumption' => 'Consumo empleado',
-    'transfer' => 'Transferencia',
-    _ => method.trim().isEmpty ? 'Otro' : method,
-  };
-}
-
-String financeSupplierPaymentMethodLabel(String method) {
-  return switch (method.trim().toLowerCase()) {
-    'cash' => 'Efectivo',
-    'transfer' => 'Transferencia',
-    'partner_contribution' => 'Aportacion de socios',
-    'card' => 'Tarjeta',
-    _ => method.trim().isEmpty ? 'Otro' : method,
-  };
-}
-
 String financeExpenseStatusLabel(FinanceExpenseStatus status) {
   return switch (status) {
     FinanceExpenseStatus.paid => 'Pagado',

@@ -13,5 +13,5 @@ Future<String> exportBinaryFile({
     ..download = fileName
     ..click();
   html.Url.revokeObjectUrl(url);
-  return 'Archivo Excel descargado.';
+  return 'Archivo descargado.';
 }

@@ -1,5 +1,9 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/constants/app_constants.dart';
@@ -167,6 +171,17 @@ class _FinanceMainDashboardScreenState
     }
   }
 
+  Future<void> _showPeriodSummary(FinanceDashboardBundle bundle) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => _FinancePeriodSummaryDialog(
+        bundle: bundle,
+        restaurantName: AppSession.instance.currentRestaurantName,
+        branchName: AppSession.instance.currentBranchName,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!_hasAccess) {
@@ -210,6 +225,9 @@ class _FinanceMainDashboardScreenState
                             onExport: snapshot.data == null
                                 ? null
                                 : () => _export(snapshot.data!),
+                            onSummary: snapshot.data == null
+                                ? null
+                                : () => _showPeriodSummary(snapshot.data!),
                           ),
                           const SizedBox(height: 14),
                           if (snapshot.connectionState ==
@@ -254,6 +272,7 @@ class _DashboardHeader extends StatelessWidget {
     required this.onPickRange,
     required this.onPreset,
     required this.onExport,
+    required this.onSummary,
   });
 
   final DateTime startDate;
@@ -264,6 +283,7 @@ class _DashboardHeader extends StatelessWidget {
   final VoidCallback onPickRange;
   final ValueChanged<_DatePreset> onPreset;
   final VoidCallback? onExport;
+  final VoidCallback? onSummary;
 
   @override
   Widget build(BuildContext context) {
@@ -383,6 +403,11 @@ class _DashboardHeader extends StatelessWidget {
                 ),
             ],
           ),
+        ),
+        OutlinedButton.icon(
+          onPressed: onSummary,
+          icon: const Icon(Icons.summarize_outlined, size: 18),
+          label: const Text('Resumen del periodo'),
         ),
         FilledButton.icon(
           onPressed: exporting ? null : onExport,
@@ -676,31 +701,20 @@ class _DetailGrid extends StatelessWidget {
       visibleLimit: 3,
       sortDescending: false,
     );
+    final expenseEntries = financeExpenseBreakdownEntries(bundle);
+    final supplierInvoiceEntries = financeSupplierInvoiceBreakdownEntries(
+      bundle,
+    );
     final expensesBreakdown = buildReconciledBreakdown<CashWithdrawalRequest>(
-      entries: bundle.approvedExpenses
-          .map(
-            (row) => FinanceBreakdownEntry(
-              label: row.reason,
-              amount: row.amount,
-              source: row,
-            ),
-          )
-          .toList(),
+      entries: expenseEntries,
       expectedTotal: bundle.paidExpenses,
+      visibleLimit: expenseEntries.length,
     );
     final supplierInvoicesBreakdown =
         buildReconciledBreakdown<FinanceSupplierRow>(
-          entries: bundle.supplierRows
-              .where((row) => row.invoiced > 0.005)
-              .map(
-                (row) => FinanceBreakdownEntry(
-                  label: row.supplierName,
-                  amount: row.invoiced,
-                  source: row,
-                ),
-              )
-              .toList(),
+          entries: supplierInvoiceEntries,
           expectedTotal: bundle.supplierInvoicesTotal,
+          visibleLimit: supplierInvoiceEntries.length,
         );
     final supplierPaymentsBreakdown = buildReconciledBreakdown<String>(
       entries: bundle.supplierPaymentsByMethod.entries
@@ -797,15 +811,12 @@ class _DetailGrid extends StatelessWidget {
         accent: _FinanceColors.amber,
         lines: [
           ...expensesBreakdown.visibleEntries.map(
-            (entry) => _DetailLineData.value(entry.label, entry.amount),
-          ),
-          if (expensesBreakdown.hasOther)
-            _DetailLineData.value(
-              'Otros gastos',
-              expensesBreakdown.otherTotal,
-              onTap: () =>
-                  _showOtherExpensesDialog(context, bundle, expensesBreakdown),
+            (entry) => _DetailLineData.value(
+              entry.label,
+              entry.amount,
+              onTap: () => _showExpenseDetail(context, entry.source),
             ),
+          ),
           _DetailLineData.total('Total gastos', bundle.paidExpenses),
           if (!expensesBreakdown.isValid) const _DetailLineData.warning(),
         ],
@@ -817,19 +828,18 @@ class _DetailGrid extends StatelessWidget {
         accent: _FinanceColors.blue,
         lines: [
           ...supplierInvoicesBreakdown.visibleEntries.map(
-            (entry) => _DetailLineData.value(entry.label, entry.amount),
-          ),
-          if (supplierInvoicesBreakdown.hasOther)
-            _DetailLineData.value(
-              'Otros proveedores',
-              supplierInvoicesBreakdown.otherTotal,
-              onTap: () => _showOtherSuppliersDialog(
-                context,
-                bundle,
-                supplierInvoicesBreakdown,
-                repository,
-              ),
+            (entry) => _DetailLineData.value(
+              entry.label,
+              entry.amount,
+              onTap: repository == null
+                  ? null
+                  : () => _showSupplierRowDetail(
+                      context,
+                      entry.source,
+                      repository!,
+                    ),
             ),
+          ),
           _DetailLineData.total(
             'Total facturado',
             bundle.supplierInvoicesTotal,
@@ -868,22 +878,21 @@ class _DetailGrid extends StatelessWidget {
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 1050
+        final width = constraints.maxWidth;
+        final columns = width >= 1350
             ? 5
-            : constraints.maxWidth >= 700
+            : width >= 1050
             ? 3
+            : width >= 700
+            ? 2
             : 1;
-        return GridView.builder(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: cards.length,
-          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: columns,
-            crossAxisSpacing: 10,
-            mainAxisSpacing: 10,
-            mainAxisExtent: 340,
-          ),
-          itemBuilder: (context, index) => cards[index],
+        final cardWidth = (width - (10 * (columns - 1))) / columns;
+        return Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            for (final card in cards) SizedBox(width: cardWidth, child: card),
+          ],
         );
       },
     );
@@ -949,22 +958,18 @@ class _DetailCard extends StatelessWidget {
         children: [
           _PanelTitle(title: title, color: accent),
           const Divider(height: 14, color: _FinanceColors.border),
-          Expanded(
-            child: lines.isEmpty
-                ? const Center(
-                    child: Text(
-                      'Sin movimientos en este periodo.',
-                      style: TextStyle(color: _FinanceColors.muted),
-                    ),
-                  )
-                : ListView.separated(
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: lines.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 4),
-                    itemBuilder: (context, index) =>
-                        _DetailLine(line: lines[index], accent: accent),
-                  ),
-          ),
+          if (lines.isEmpty)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 26),
+              child: Center(
+                child: Text(
+                  'Sin movimientos en este periodo.',
+                  style: TextStyle(color: _FinanceColors.muted),
+                ),
+              ),
+            )
+          else
+            ..._separatedDetailLines(lines, accent),
           const Divider(height: 8, color: _FinanceColors.border),
           InkWell(
             onTap: onTap,
@@ -1072,6 +1077,15 @@ class _DetailLine extends StatelessWidget {
     if (line.onTap == null) return content;
     return InkWell(onTap: line.onTap, child: content);
   }
+}
+
+List<Widget> _separatedDetailLines(List<_DetailLineData> lines, Color accent) {
+  final widgets = <Widget>[];
+  for (var index = 0; index < lines.length; index++) {
+    if (index > 0) widgets.add(const SizedBox(height: 4));
+    widgets.add(_DetailLine(line: lines[index], accent: accent));
+  }
+  return widgets;
 }
 
 class _SummaryColumn extends StatelessWidget {
@@ -2106,27 +2120,6 @@ Future<void> _showExpensesDialog(
   );
 }
 
-Future<void> _showOtherExpensesDialog(
-  BuildContext context,
-  FinanceDashboardBundle bundle,
-  FinanceReconciledBreakdown<CashWithdrawalRequest> breakdown,
-) {
-  return _showReconciledRowsDialog(
-    context,
-    title: 'Otros gastos',
-    bundle: bundle,
-    rows: breakdown.hiddenEntries
-        .map(
-          (entry) => _DialogRow(
-            '${_displayDate(entry.source.businessDate)} · ${entry.source.reason}',
-            '${_money(entry.amount)} · ${entry.source.requestedByEmployeeName}',
-          ),
-        )
-        .toList(),
-    subtotal: breakdown.otherTotal,
-  );
-}
-
 Future<void> _showExpenseDetail(
   BuildContext context,
   CashWithdrawalRequest row,
@@ -2162,34 +2155,6 @@ Future<void> _showSupplierDialog(
           ),
         )
         .toList(),
-  );
-}
-
-Future<void> _showOtherSuppliersDialog(
-  BuildContext context,
-  FinanceDashboardBundle bundle,
-  FinanceReconciledBreakdown<FinanceSupplierRow> breakdown,
-  TacoPosRepository? repository,
-) {
-  return _showReconciledRowsDialog(
-    context,
-    title: 'Otros proveedores',
-    bundle: bundle,
-    rows: breakdown.hiddenEntries
-        .map(
-          (entry) => _DialogRow(
-            entry.source.supplierName,
-            '${entry.source.documents} documentos · Facturado ${_money(entry.amount)}',
-            onTap: repository == null
-                ? null
-                : () {
-                    Navigator.of(context).pop();
-                    _showSupplierRowDetail(context, entry.source, repository);
-                  },
-          ),
-        )
-        .toList(),
-    subtotal: breakdown.otherTotal,
   );
 }
 
@@ -2457,6 +2422,483 @@ Future<void> _showRowsDialog(
       ),
     ),
   );
+}
+
+class _FinancePeriodSummaryDialog extends StatefulWidget {
+  const _FinancePeriodSummaryDialog({
+    required this.bundle,
+    required this.restaurantName,
+    required this.branchName,
+  });
+
+  final FinanceDashboardBundle bundle;
+  final String restaurantName;
+  final String branchName;
+
+  @override
+  State<_FinancePeriodSummaryDialog> createState() =>
+      _FinancePeriodSummaryDialogState();
+}
+
+class _FinancePeriodSummaryDialogState
+    extends State<_FinancePeriodSummaryDialog> {
+  final _summaryKey = GlobalKey();
+  late final DateTime _generatedAt;
+  bool _downloading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _generatedAt = DateTime.now();
+  }
+
+  Future<void> _copySummary() async {
+    final text = financeWhatsappSummaryText(
+      bundle: widget.bundle,
+      restaurantName: widget.restaurantName,
+      branchName: widget.branchName,
+      generatedAt: _generatedAt,
+    );
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) showAppSnackBar(context, 'Resumen copiado.');
+  }
+
+  Future<void> _downloadImage() async {
+    if (_downloading) return;
+    setState(() => _downloading = true);
+    try {
+      await WidgetsBinding.instance.endOfFrame;
+      final boundary =
+          _summaryKey.currentContext?.findRenderObject()
+              as RenderRepaintBoundary?;
+      if (boundary == null) {
+        throw StateError('No se pudo preparar el resumen para imagen.');
+      }
+      final image = await boundary.toImage(pixelRatio: 2.6);
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) {
+        throw StateError('No se pudo generar el PNG.');
+      }
+      final bytes = data.buffer.asUint8List();
+      await exportBinaryFile(
+        fileName: financeSummaryImageFileName(
+          bundle: widget.bundle,
+          branchName: widget.branchName,
+        ),
+        bytes: bytes,
+        mimeType: 'image/png',
+      );
+      if (mounted) showAppSnackBar(context, 'Imagen descargada.');
+    } catch (error) {
+      if (mounted) {
+        showAppSnackBar(
+          context,
+          'No se pudo descargar la imagen: $error',
+          type: AppSnackBarType.error,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: _FinanceColors.background,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 760, maxHeight: 900),
+        child: Column(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(14),
+                child: Center(
+                  child: RepaintBoundary(
+                    key: _summaryKey,
+                    child: _FinanceShareSummary(
+                      bundle: widget.bundle,
+                      restaurantName: widget.restaurantName,
+                      branchName: widget.branchName,
+                      generatedAt: _generatedAt,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const Divider(height: 1, color: _FinanceColors.border),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 8,
+                alignment: WrapAlignment.end,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _copySummary,
+                    icon: const Icon(Icons.copy_outlined, size: 18),
+                    label: const Text('Copiar resumen'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: _downloading ? null : _downloadImage,
+                    icon: _downloading
+                        ? const SizedBox.square(
+                            dimension: 17,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.image_outlined, size: 18),
+                    label: Text(
+                      _downloading ? 'Generando...' : 'Descargar imagen',
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cerrar'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FinanceShareSummary extends StatelessWidget {
+  const _FinanceShareSummary({
+    required this.bundle,
+    required this.restaurantName,
+    required this.branchName,
+    required this.generatedAt,
+  });
+
+  final FinanceDashboardBundle bundle;
+  final String restaurantName;
+  final String branchName;
+  final DateTime generatedAt;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = financePeriodSummaryTitle(bundle.key).toUpperCase();
+    final period =
+        '${_displayDate(bundle.key.startBusinessDate)} - ${_displayDate(bundle.key.endBusinessDate)}';
+    final otherIncome = bundle.platformCollected + bundle.otherCollected;
+    final ticketAverage = bundle.salesOrders.isEmpty
+        ? 0.0
+        : bundle.netSales / bundle.salesOrders.length;
+    return Container(
+      width: 520,
+      color: _FinanceColors.background,
+      padding: const EdgeInsets.all(22),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Image.asset(AppConstants.logoAsset, width: 54, height: 54),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      restaurantName.toUpperCase(),
+                      style: const TextStyle(
+                        color: _FinanceColors.text,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    Text(
+                      branchName.toUpperCase(),
+                      style: const TextStyle(
+                        color: _FinanceColors.amber,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            style: const TextStyle(
+              color: _FinanceColors.text,
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            '$period\nGenerado: ${DateFormat('dd/MM/yyyy HH:mm').format(generatedAt)}',
+            style: const TextStyle(
+              color: _FinanceColors.muted,
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 16),
+          _ShareSection(
+            title: 'VENTAS',
+            rows: [
+              _ShareRow('Venta bruta', bundle.grossSales),
+              _ShareRow('Descuentos', -bundle.discounts),
+              _ShareRow('Venta neta', bundle.netSales, strong: true),
+              _ShareRow.count('Ordenes', bundle.salesOrders.length),
+              _ShareRow('Ticket promedio', ticketAverage),
+            ],
+          ),
+          _ShareSection(
+            title: 'INGRESOS REALES',
+            rows: [
+              _ShareRow('Efectivo', bundle.cashCollected),
+              _ShareRow('Tarjeta neta', bundle.cardCollected),
+              if (otherIncome.abs() > 0.005)
+                _ShareRow('Otros / plataforma', otherIncome),
+              _ShareRow(
+                'Total ingreso real',
+                bundle.realCollected,
+                strong: true,
+              ),
+              _ShareRow('Tarjeta bruta', bundle.cardGrossCollected),
+              _ShareRow('Comisiones de tarjeta', bundle.cardFees),
+            ],
+          ),
+          _ShareSection(
+            title: 'AJUSTES DE CAJA',
+            rows: [
+              _ShareRow(
+                'Monetario esperado bruto',
+                bundle.expectedMonetaryGrossIncome,
+              ),
+              _ShareRow('Comision tarjeta', bundle.cardFees),
+              _ShareRow(
+                'Monetario esperado neto',
+                bundle.expectedMonetaryIncome,
+              ),
+              _ShareRow('Faltantes', bundle.cashShortages),
+              _ShareRow('Sobrantes', bundle.cashOverages),
+            ],
+          ),
+          _ShareSection(
+            title: 'GASTOS',
+            rows: [
+              for (final entry in financeExpenseBreakdownEntries(bundle))
+                _ShareRow(entry.label, entry.amount),
+              _ShareRow('TOTAL GASTOS', bundle.paidExpenses, strong: true),
+            ],
+          ),
+          _ShareSection(
+            title: 'FACTURAS DE PROVEEDORES',
+            rows: [
+              for (final entry in financeSupplierInvoiceBreakdownEntries(
+                bundle,
+              ))
+                _ShareRow(entry.label, entry.amount),
+              _ShareRow(
+                'TOTAL FACTURADO',
+                bundle.supplierInvoicesTotal,
+                strong: true,
+              ),
+            ],
+          ),
+          _ShareSection(
+            title: 'PAGOS A PROVEEDORES',
+            rows: [
+              for (final entry in _supplierPaymentRows(bundle))
+                _ShareRow(entry.key, entry.value),
+              _ShareRow('Total pagado', bundle.supplierPaidTotal, strong: true),
+            ],
+          ),
+          _ShareSection(
+            title: 'FACTURAS PENDIENTES',
+            rows: [_ShareRow('Pendiente', bundle.pendingSupplierInvoices)],
+          ),
+          _ShareFinalSection(bundle: bundle),
+        ],
+      ),
+    );
+  }
+}
+
+class _ShareFinalSection extends StatelessWidget {
+  const _ShareFinalSection({required this.bundle});
+
+  final FinanceDashboardBundle bundle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: _FinanceColors.panelHigh,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _FinanceColors.lightGreen),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'RESUMEN FINAL',
+            style: TextStyle(
+              color: _FinanceColors.lightGreen,
+              fontSize: 13,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _ShareValueLine(label: 'Ingreso real', value: bundle.realCollected),
+          _ShareValueLine(label: 'Gastos', value: -bundle.paidExpenses),
+          _ShareValueLine(
+            label: 'Pagado a proveedores',
+            value: -bundle.supplierPaidTotal,
+          ),
+          _ShareValueLine(
+            label: 'Facturas pendientes',
+            value: bundle.pendingSupplierInvoices,
+          ),
+          const Divider(color: _FinanceColors.border),
+          _ShareValueLine(
+            label: 'RESULTADO',
+            value: bundle.finalResult,
+            strong: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ShareSection extends StatelessWidget {
+  const _ShareSection({required this.title, required this.rows});
+
+  final String title;
+  final List<_ShareRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 9),
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: _FinanceColors.panel,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: _FinanceColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: _FinanceColors.amber,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 7),
+          if (rows.isEmpty)
+            const Text(
+              'Sin movimientos',
+              style: TextStyle(color: _FinanceColors.muted, fontSize: 11),
+            )
+          else
+            for (final row in rows)
+              _ShareValueLine(
+                label: row.label,
+                value: row.value,
+                textValue: row.textValue,
+                strong: row.strong,
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ShareRow {
+  const _ShareRow(this.label, this.value, {this.strong = false})
+    : textValue = null;
+
+  const _ShareRow.count(this.label, int value)
+    : value = 0,
+      textValue = '$value',
+      strong = false;
+
+  final String label;
+  final double value;
+  final String? textValue;
+  final bool strong;
+}
+
+class _ShareValueLine extends StatelessWidget {
+  const _ShareValueLine({
+    required this.label,
+    required this.value,
+    this.textValue,
+    this.strong = false,
+  });
+
+  final String label;
+  final double value;
+  final String? textValue;
+  final bool strong;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = strong ? _FinanceColors.text : _FinanceColors.muted;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: strong ? FontWeight.w800 : FontWeight.w500,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            textValue ?? _money(value),
+            style: TextStyle(
+              color: strong ? _FinanceColors.lightGreen : _FinanceColors.text,
+              fontSize: 12,
+              fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+List<MapEntry<String, double>> _supplierPaymentRows(
+  FinanceDashboardBundle bundle,
+) {
+  final rows = bundle.supplierPaymentsByMethod.entries
+      .map(
+        (entry) =>
+            MapEntry(financeSupplierPaymentMethodLabel(entry.key), entry.value),
+      )
+      .where((entry) => entry.value.abs() > 0.005)
+      .toList();
+  rows.sort((a, b) {
+    final byAmount = b.value.compareTo(a.value);
+    if (byAmount != 0) return byAmount;
+    return a.key.toLowerCase().compareTo(b.key.toLowerCase());
+  });
+  return rows;
 }
 
 class _DailyCashCutCard extends StatelessWidget {
