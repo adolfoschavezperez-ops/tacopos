@@ -579,6 +579,253 @@ void main() {
     expect(dashboard.paidExpenses, 0);
   });
 
+  test('gasto historico posterior al corte no aumenta efectivo', () {
+    final closedAt = DateTime(2026, 8, 15, 23, 59);
+    final createdAfterClose = DateTime(2026, 8, 17, 10);
+    const augustKey = FinanceDashboardKey(
+      restaurantId: 'restaurant',
+      branchId: 'branch',
+      startBusinessDate: '2026-08-15',
+      endBusinessDate: '2026-08-15',
+    );
+
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: augustKey,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'cut-2026-08-15',
+            businessDate: '2026-08-15',
+            countedCashAmount: 3000,
+            expectedCashAmount: 2934,
+            approvedWithdrawalsTotal: 66,
+            closedAt: closedAt,
+          ),
+        ],
+        withdrawals: [
+          _expense(
+            'approved',
+            66,
+            businessDate: '2026-08-15',
+            cashSessionId: 'cut-2026-08-15',
+            source: 'historical_admin',
+            reason: 'cuenta mal cobrada',
+            createdAt: createdAfterClose,
+            requestedAt: createdAfterClose,
+            approvedAt: createdAfterClose,
+            isHistorical: true,
+          ),
+        ],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    final day = dashboard.cashCutDailyDetails.single;
+    expect(day.cashCounted, 3000);
+    expect(day.cashExpensesPaid, 0);
+    expect(day.cashOperationalBeforeExpenses, 3000);
+    expect(dashboard.cashCollected, 3000);
+    expect(dashboard.paidExpenses, 66);
+    expect(dashboard.finalResult, 2934);
+  });
+
+  test(
+    'gasto real de caja antes del cierre reconstruye efectivo una sola vez',
+    () {
+      final closedAt = DateTime(2026, 8, 15, 23, 59);
+      final approvedAt = DateTime(2026, 8, 15, 18);
+      const augustKey = FinanceDashboardKey(
+        restaurantId: 'restaurant',
+        branchId: 'branch',
+        startBusinessDate: '2026-08-15',
+        endBusinessDate: '2026-08-15',
+      );
+
+      final dashboard = buildFinanceDashboard(
+        FinanceDashboardInput(
+          key: augustKey,
+          salesSummary: _emptySales,
+          paymentsByOrder: const {},
+          cashSessions: [
+            _cashSession(
+              id: 'cut-real-cash',
+              businessDate: '2026-08-15',
+              countedCashAmount: 3000,
+              expectedCashAmount: 3000,
+              approvedWithdrawalsTotal: 500,
+              closedAt: closedAt,
+            ),
+          ],
+          withdrawals: [
+            _expense(
+              'approved',
+              500,
+              businessDate: '2026-08-15',
+              cashSessionId: 'cut-real-cash',
+              source: 'cash_drawer',
+              createdAt: approvedAt,
+              requestedAt: approvedAt,
+              approvedAt: approvedAt,
+            ),
+          ],
+          purchases: const [],
+          supplierPayments: const [],
+          suppliers: const [],
+        ),
+      );
+
+      final day = dashboard.cashCutDailyDetails.single;
+      expect(day.cashExpensesPaid, 500);
+      expect(day.cashOperationalBeforeExpenses, 3500);
+      expect(dashboard.cashCollected, 3500);
+      expect(dashboard.paidExpenses, 500);
+      expect(dashboard.finalResult, 3000);
+    },
+  );
+
+  test(
+    'transferencia tarjeta otra sesion y post cierre no reconstruyen caja',
+    () {
+      final closedAt = DateTime(2026, 8, 15, 23, 59);
+      final beforeClose = DateTime(2026, 8, 15, 18);
+      final afterClose = DateTime(2026, 8, 16, 1);
+      const augustKey = FinanceDashboardKey(
+        restaurantId: 'restaurant',
+        branchId: 'branch',
+        startBusinessDate: '2026-08-15',
+        endBusinessDate: '2026-08-15',
+      );
+
+      final dashboard = buildFinanceDashboard(
+        FinanceDashboardInput(
+          key: augustKey,
+          salesSummary: _emptySales,
+          paymentsByOrder: const {},
+          cashSessions: [
+            _cashSession(
+              id: 'cut-non-cash',
+              businessDate: '2026-08-15',
+              countedCashAmount: 3500,
+              expectedCashAmount: 2600,
+              approvedWithdrawalsTotal: 900,
+              closedAt: closedAt,
+            ),
+          ],
+          withdrawals: [
+            _expense(
+              'approved',
+              300,
+              businessDate: '2026-08-15',
+              cashSessionId: 'cut-non-cash',
+              source: 'transfer',
+              approvedAt: beforeClose,
+            ),
+            _expense(
+              'approved',
+              200,
+              businessDate: '2026-08-15',
+              cashSessionId: 'cut-non-cash',
+              source: 'card',
+              approvedAt: beforeClose,
+            ),
+            _expense(
+              'approved',
+              250,
+              businessDate: '2026-08-15',
+              cashSessionId: 'other-cut',
+              source: 'cash_drawer',
+              approvedAt: beforeClose,
+            ),
+            _expense(
+              'approved',
+              150,
+              businessDate: '2026-08-15',
+              cashSessionId: 'cut-non-cash',
+              source: 'cash_drawer',
+              approvedAt: afterClose,
+            ),
+          ],
+          purchases: const [],
+          supplierPayments: const [],
+          suppliers: const [],
+        ),
+      );
+
+      final day = dashboard.cashCutDailyDetails.single;
+      expect(day.cashExpensesPaid, 0);
+      expect(day.cashOperationalBeforeExpenses, 3500);
+      expect(dashboard.paidExpenses, 900);
+      expect(dashboard.finalResult, 2600);
+    },
+  );
+
+  test('varios cortes no duplican gasto por misma fecha operativa', () {
+    final firstClosedAt = DateTime(2026, 8, 15, 18);
+    final secondClosedAt = DateTime(2026, 8, 16, 0, 30);
+    final approvedAt = DateTime(2026, 8, 15, 20);
+    const augustKey = FinanceDashboardKey(
+      restaurantId: 'restaurant',
+      branchId: 'branch',
+      startBusinessDate: '2026-08-15',
+      endBusinessDate: '2026-08-15',
+    );
+
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: augustKey,
+        salesSummary: _emptySales,
+        paymentsByOrder: const {},
+        cashSessions: [
+          _cashSession(
+            id: 'cut-a',
+            businessDate: '2026-08-15',
+            countedCashAmount: 1000,
+            expectedCashAmount: 1000,
+            closedAt: firstClosedAt,
+          ),
+          _cashSession(
+            id: 'cut-b',
+            businessDate: '2026-08-15',
+            countedCashAmount: 1500,
+            expectedCashAmount: 1300,
+            approvedWithdrawalsTotal: 200,
+            closedAt: secondClosedAt,
+          ),
+        ],
+        withdrawals: [
+          _expense(
+            'approved',
+            200,
+            businessDate: '2026-08-15',
+            cashSessionId: 'cut-b',
+            source: 'cash_drawer',
+            approvedAt: approvedAt,
+          ),
+        ],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    final cuts = dashboard.cashCutDailyDetails.single.cuts;
+    expect(
+      cuts.singleWhere((row) => row.session.id == 'cut-a').approvedWithdrawals,
+      0,
+    );
+    expect(
+      cuts.singleWhere((row) => row.session.id == 'cut-b').approvedWithdrawals,
+      200,
+    );
+    expect(dashboard.cashCollected, 2700);
+    expect(dashboard.paidExpenses, 200);
+    expect(dashboard.finalResult, 2500);
+  });
+
   test('fondo inicial no cuenta como ingreso ni se resta dos veces', () {
     final dashboard = buildFinanceDashboard(
       FinanceDashboardInput(
@@ -1405,6 +1652,11 @@ CashWithdrawalRequest _expense(
   String businessDate = '2026-07-12',
   String cashSessionId = 'cash',
   String? reason,
+  DateTime? requestedAt,
+  DateTime? createdAt,
+  DateTime? authorizedAt,
+  DateTime? approvedAt,
+  bool isHistorical = false,
 }) {
   return CashWithdrawalRequest(
     id: '$status-$amount-${reason ?? status}',
@@ -1414,8 +1666,13 @@ CashWithdrawalRequest _expense(
     reason: reason ?? status,
     requestedByEmployeeId: 'employee',
     requestedByEmployeeName: 'Empleado',
+    requestedAt: requestedAt,
+    createdAt: createdAt,
     status: status,
+    authorizedAt: authorizedAt,
+    approvedAt: approvedAt,
     source: source,
+    isHistorical: isHistorical,
   );
 }
 
@@ -1432,6 +1689,8 @@ CashSession _cashSession({
   double expectedPlatformAmount = 0,
   double expectedEmployeeConsumptionAmount = 0,
   double approvedWithdrawalsTotal = 0,
+  DateTime? openedAt,
+  DateTime? closedAt,
   String? closedByEmployeeName,
 }) {
   final netDifference =
@@ -1446,8 +1705,10 @@ CashSession _cashSession({
     businessDate: businessDate,
     status: status,
     openingCashAmount: openingCashAmount,
+    openedAt: openedAt,
     openedByEmployeeId: 'employee',
     openedByEmployeeName: 'Empleado',
+    closedAt: closedAt,
     closedByEmployeeId: closedByEmployeeName == null ? null : 'closer',
     closedByEmployeeName: closedByEmployeeName,
     countedCashAmount: countedCashAmount,

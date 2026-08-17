@@ -453,13 +453,6 @@ class _FinanceSummary {
         }
         return _dateInRange(contribution.date, data.startDate, data.endDate);
       }).toList(),
-      cashSessions = data.cashSessions
-          .where(financeCashSessionCountsAsClosed)
-          .toList(),
-      cashCutSummaries = data.cashSessions
-          .where(financeCashSessionCountsAsClosed)
-          .map(buildFinanceCashCutSummary)
-          .toList(),
       withdrawals = data.withdrawals
           .where(
             (request) =>
@@ -469,6 +462,18 @@ class _FinanceSummary {
                   data.startBusinessDate,
                   data.endBusinessDate,
                 ),
+          )
+          .toList(),
+      cashSessions = data.cashSessions
+          .where(financeCashSessionCountsAsClosed)
+          .toList(),
+      cashCutSummaries = data.cashSessions
+          .where(financeCashSessionCountsAsClosed)
+          .map(
+            (session) => buildFinanceCashCutSummary(
+              session,
+              withdrawals: data.withdrawals,
+            ),
           )
           .toList(),
       pendingPurchases = data.purchases.where((purchase) {

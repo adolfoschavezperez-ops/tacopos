@@ -13,6 +13,7 @@ class CashWithdrawalRequest {
     required this.requestedByEmployeeName,
     required this.status,
     this.requestedAt,
+    this.createdAt,
     this.authorizedByEmployeeId,
     this.authorizedByEmployeeName,
     this.authorizedAt,
@@ -41,6 +42,7 @@ class CashWithdrawalRequest {
   final String requestedByEmployeeId;
   final String requestedByEmployeeName;
   final DateTime? requestedAt;
+  final DateTime? createdAt;
   final String status;
   final String? authorizedByEmployeeId;
   final String? authorizedByEmployeeName;
@@ -79,6 +81,7 @@ class CashWithdrawalRequest {
       requestedByEmployeeId: data['requestedByEmployeeId'] as String? ?? '',
       requestedByEmployeeName: data['requestedByEmployeeName'] as String? ?? '',
       requestedAt: _toDate(data['requestedAt']),
+      createdAt: _toDate(data['createdAt']),
       status: data['status'] as String? ?? 'pending',
       authorizedByEmployeeId: data['authorizedByEmployeeId'] as String?,
       authorizedByEmployeeName: data['authorizedByEmployeeName'] as String?,
