@@ -711,16 +711,23 @@ bool financeCashSessionCountsAsClosed(CashSession session) {
   return status == 'closed' || session.closedAt != null;
 }
 
-FinanceCashCutSummary buildFinanceCashCutSummary(CashSession session) {
+FinanceCashCutSummary buildFinanceCashCutSummary(
+  CashSession session, {
+  Iterable<CashWithdrawalRequest> withdrawals = const [],
+}) {
+  final reflectedWithdrawals = financeCashWithdrawalsReflectedInCount(
+    session,
+    withdrawals,
+  );
   final expectedCashIncome = _money(
     session.expectedCashAmount -
         session.openingCashAmount +
-        session.approvedWithdrawalsTotal,
+        reflectedWithdrawals,
   );
   final cashReceived = _money(
     session.countedCashAmount -
         session.openingCashAmount +
-        session.approvedWithdrawalsTotal,
+        reflectedWithdrawals,
   );
   final cardFeeAbsorbed = _money(session.expectedCardFeeAbsorbedAmount);
   final expectedCardNet = financeNetCardReceived(
@@ -744,8 +751,75 @@ FinanceCashCutSummary buildFinanceCashCutSummary(CashSession session) {
     otherReceived: 0,
     cardFeeAbsorbed: cardFeeAbsorbed,
     openingFloat: _money(session.openingCashAmount),
-    approvedWithdrawals: _money(session.approvedWithdrawalsTotal),
+    approvedWithdrawals: reflectedWithdrawals,
   );
+}
+
+double financeCashWithdrawalsReflectedInCount(
+  CashSession session,
+  Iterable<CashWithdrawalRequest> withdrawals,
+) {
+  final snapshot = _money(session.approvedWithdrawalsTotal);
+  if (snapshot <= financeMoneyTolerance) return 0;
+
+  final related = withdrawals
+      .where((request) => request.cashSessionId.trim() == session.id.trim())
+      .toList(growable: false);
+  if (related.isEmpty) return snapshot;
+
+  final reflected = related
+      .where(
+        (request) =>
+            financeCashExpenseWasAlreadyReflectedInCount(request, session),
+      )
+      .fold<double>(0, (sum, request) => sum + request.amount);
+  return _money(reflected.clamp(0, snapshot));
+}
+
+bool financeCashExpenseWasAlreadyReflectedInCount(
+  CashWithdrawalRequest request,
+  CashSession session,
+) {
+  if (!request.isApproved || request.amount <= financeMoneyTolerance) {
+    return false;
+  }
+  if (request.cashSessionId.trim() != session.id.trim()) return false;
+  if (!_financeCashExpenseSourceCanAffectDrawer(request)) return false;
+
+  final closedAt = session.closedAt;
+  final eventAt =
+      request.approvedAt ??
+      request.authorizedAt ??
+      request.requestedAt ??
+      request.createdAt;
+  if (closedAt != null && eventAt != null && eventAt.isAfter(closedAt)) {
+    return false;
+  }
+  final openedAt = session.openedAt;
+  if (openedAt != null && eventAt != null && eventAt.isBefore(openedAt)) {
+    return false;
+  }
+  return true;
+}
+
+bool _financeCashExpenseSourceCanAffectDrawer(CashWithdrawalRequest request) {
+  if (request.isHistorical) return false;
+  final source = _token('${request.source} ${request.sourceName}');
+  if (source.isEmpty) return true;
+  if (source.contains('historical') ||
+      source.contains('admin') ||
+      source.contains('transfer') ||
+      source.contains('card') ||
+      source.contains('tarjeta') ||
+      source.contains('extern') ||
+      source.contains('partner') ||
+      source.contains('aportacion')) {
+    return false;
+  }
+  return source.contains('cash') ||
+      source.contains('caja') ||
+      source.contains('drawer') ||
+      source.contains('efectivo');
 }
 
 double financeNetCardReceived({
@@ -1092,9 +1166,6 @@ FinanceDashboardBundle buildFinanceDashboard(
             financeCashSessionCountsAsClosed(row),
       )
       .toList(growable: false);
-  final cashCutSummaries = cashSessions
-      .map(buildFinanceCashCutSummary)
-      .toList(growable: false);
   final expenses =
       input.withdrawals
           .where(
@@ -1108,6 +1179,11 @@ FinanceDashboardBundle buildFinanceDashboard(
             a.requestedAt ?? DateTime(1970),
           ),
         );
+  final cashCutSummaries = cashSessions
+      .map(
+        (session) => buildFinanceCashCutSummary(session, withdrawals: expenses),
+      )
+      .toList(growable: false);
   final purchases =
       input.purchases
           .where(
