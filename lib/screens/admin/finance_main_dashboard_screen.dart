@@ -705,11 +705,12 @@ class _DetailGrid extends StatelessWidget {
     final supplierInvoiceEntries = financeSupplierInvoiceBreakdownEntries(
       bundle,
     );
-    final expensesBreakdown = buildReconciledBreakdown<CashWithdrawalRequest>(
-      entries: expenseEntries,
-      expectedTotal: bundle.paidExpenses,
-      visibleLimit: expenseEntries.length,
-    );
+    final expensesBreakdown =
+        buildReconciledBreakdown<FinanceExpenseConceptGroup>(
+          entries: expenseEntries,
+          expectedTotal: bundle.paidExpenses,
+          visibleLimit: expenseEntries.length,
+        );
     final supplierInvoicesBreakdown =
         buildReconciledBreakdown<FinanceSupplierRow>(
           entries: supplierInvoiceEntries,
@@ -814,7 +815,7 @@ class _DetailGrid extends StatelessWidget {
             (entry) => _DetailLineData.value(
               entry.label,
               entry.amount,
-              onTap: () => _showExpenseDetail(context, entry.source),
+              onTap: () => _showExpenseGroupDetail(context, entry.source),
             ),
           ),
           _DetailLineData.total('Total gastos', bundle.paidExpenses),
@@ -1075,7 +1076,11 @@ class _DetailLine extends StatelessWidget {
       ),
     );
     if (line.onTap == null) return content;
-    return InkWell(onTap: line.onTap, child: content);
+    return InkWell(
+      key: ValueKey('finance-detail-line-${line.label}'),
+      onTap: line.onTap,
+      child: content,
+    );
   }
 }
 
@@ -2131,6 +2136,26 @@ Future<void> _showExpenseDetail(
     _DialogRow('Estatus', financeExpenseStatusLabel(financeExpenseStatus(row))),
     _DialogRow('Registro', row.requestedByEmployeeName),
   ]);
+}
+
+Future<void> _showExpenseGroupDetail(
+  BuildContext context,
+  FinanceExpenseConceptGroup group,
+) {
+  return _showRowsDialog(
+    context,
+    'Detalle de ${group.label}',
+    group.movements
+        .map(
+          (row) => _DialogRow(
+            '${_displayDate(row.businessDate)} · ${row.reason}',
+            '${_money(row.amount)} · ${financeExpenseStatusLabel(financeExpenseStatus(row))} · ${row.requestedByEmployeeName}',
+            onTap: () => _showExpenseDetail(context, row),
+          ),
+        )
+        .toList(),
+    subtotal: group.amount,
+  );
 }
 
 Future<void> _showSupplierDialog(

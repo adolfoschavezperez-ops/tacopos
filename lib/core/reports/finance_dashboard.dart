@@ -54,24 +54,56 @@ class FinanceReconciledBreakdown<T> {
   bool get hasOther => hiddenEntries.isNotEmpty && otherTotal > 0.005;
 }
 
-List<FinanceBreakdownEntry<CashWithdrawalRequest>>
+class FinanceExpenseConceptGroup {
+  const FinanceExpenseConceptGroup({
+    required this.key,
+    required this.label,
+    required this.amount,
+    required this.movements,
+  });
+
+  final String key;
+  final String label;
+  final double amount;
+  final List<CashWithdrawalRequest> movements;
+}
+
+List<FinanceBreakdownEntry<FinanceExpenseConceptGroup>>
 financeExpenseBreakdownEntries(FinanceDashboardBundle bundle) {
-  final entries = bundle.approvedExpenses
-      .map(
-        (row) => FinanceBreakdownEntry(
-          label: row.reason,
-          amount: row.amount,
-          source: row,
-        ),
-      )
-      .where((entry) => entry.amount.abs() > 0.005)
-      .toList();
+  final groups = <String, List<CashWithdrawalRequest>>{};
+  for (final row in bundle.approvedExpenses) {
+    if (row.amount.abs() <= 0.005) continue;
+    final key = _expenseConceptKey(row.reason);
+    groups.putIfAbsent(key, () => []).add(row);
+  }
+  final entries = groups.entries.map((entry) {
+    final movements = entry.value.toList(growable: false)
+      ..sort((a, b) {
+        final byDate = a.businessDate.compareTo(b.businessDate);
+        if (byDate != 0) return byDate;
+        return a.id.compareTo(b.id);
+      });
+    final amount = _money(
+      movements.fold<double>(0, (sum, row) => sum + row.amount),
+    );
+    final group = FinanceExpenseConceptGroup(
+      key: entry.key,
+      label: _expenseConceptLabel(entry.key),
+      amount: amount,
+      movements: List.unmodifiable(movements),
+    );
+    return FinanceBreakdownEntry(
+      label: group.label,
+      amount: group.amount,
+      source: group,
+    );
+  }).toList();
   entries.sort((a, b) {
     final byAmount = b.amount.compareTo(a.amount);
     if (byAmount != 0) return byAmount;
     final byLabel = a.label.toLowerCase().compareTo(b.label.toLowerCase());
     if (byLabel != 0) return byLabel;
-    return a.source.id.compareTo(b.source.id);
+    return a.source.key.compareTo(b.source.key);
   });
   return List.unmodifiable(entries);
 }
@@ -195,6 +227,19 @@ String financeWhatsappSummaryText({
     'Resultado: ${_summaryMoney(bundle.finalResult)}',
   ];
   return lines.join('\n');
+}
+
+String _expenseConceptKey(String value) {
+  final normalized = value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();
+  return normalized.isEmpty ? 'sin concepto' : normalized;
+}
+
+String _expenseConceptLabel(String key) {
+  return key
+      .split(' ')
+      .where((word) => word.isNotEmpty)
+      .map((word) => '${word[0].toUpperCase()}${word.substring(1)}')
+      .join(' ');
 }
 
 FinanceReconciledBreakdown<T> buildReconciledBreakdown<T>({

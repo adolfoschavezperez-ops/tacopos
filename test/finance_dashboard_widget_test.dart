@@ -88,12 +88,12 @@ void main() {
       expect(tester.takeException(), isNull, reason: 'Resolucion $size');
     }
 
-    final gasto = find.text('Gasto 5').first;
+    final gasto = find.byKey(const ValueKey('finance-detail-line-Gasto 5'));
     await tester.ensureVisible(gasto);
     await tester.tap(gasto);
     await tester.pumpAndSettle();
-    expect(find.text('Detalle del gasto'), findsOneWidget);
-    expect(find.text('Concepto'), findsWidgets);
+    expect(find.text('Detalle de Gasto 5'), findsOneWidget);
+    expect(find.text('Subtotal'), findsOneWidget);
     expect(find.text(r'$500.00'), findsWidgets);
     await tester.tap(find.byTooltip('Cerrar'));
     await tester.pumpAndSettle();

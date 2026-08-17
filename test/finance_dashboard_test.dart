@@ -206,52 +206,54 @@ void main() {
   });
 
   test(
-    'desglose completo de gastos muestra todos sin otros y ordena por monto',
+    'desglose de gastos agrupa conceptos iguales y conserva movimientos',
     () {
-      for (final count in [1, 5, 20]) {
-        final dashboard = buildFinanceDashboard(
-          FinanceDashboardInput(
-            key: key,
-            salesSummary: _emptySales,
-            paymentsByOrder: const {},
-            cashSessions: const [],
-            withdrawals: [
-              for (var index = 0; index < count; index++)
-                _expense(
-                  'approved',
-                  (count - index) * 10,
-                  reason: 'Gasto ${index + 1}',
-                ),
-            ],
-            purchases: const [],
-            supplierPayments: const [],
-            suppliers: const [],
-          ),
-        );
+      final dashboard = buildFinanceDashboard(
+        FinanceDashboardInput(
+          key: key,
+          salesSummary: _emptySales,
+          paymentsByOrder: const {},
+          cashSessions: const [],
+          withdrawals: [
+            _expense('approved', 630, reason: 'Refresco'),
+            _expense('approved', 315, reason: ' refresco  '),
+            _expense('approved', 40, reason: 'Hielo'),
+            _expense('approved', 40, reason: 'hielo'),
+            _expense('approved', 38, reason: ' HIELO '),
+            _expense('approved', 38, reason: 'hielo  '),
+            _expense('approved', 38, reason: 'hielo'),
+            _expense('approved', 20, reason: 'Refresco personal'),
+            _expense('approved', 10, reason: 'Refresco   personal'),
+          ],
+          purchases: const [],
+          supplierPayments: const [],
+          suppliers: const [],
+        ),
+      );
 
-        final entries = financeExpenseBreakdownEntries(dashboard);
-        final breakdown = buildReconciledBreakdown(
-          entries: entries,
-          expectedTotal: dashboard.paidExpenses,
-          visibleLimit: entries.length,
-        );
+      final entries = financeExpenseBreakdownEntries(dashboard);
+      final breakdown = buildReconciledBreakdown(
+        entries: entries,
+        expectedTotal: dashboard.paidExpenses,
+        visibleLimit: entries.length,
+      );
+      final byLabel = {for (final entry in entries) entry.label: entry};
 
-        expect(entries, hasLength(count));
-        expect(breakdown.visibleEntries, hasLength(count));
-        expect(breakdown.hasOther, isFalse);
-        expect(
-          breakdown.visibleEntries.map((entry) => entry.label),
-          isNot(contains('Otros gastos')),
-        );
-        expect(breakdown.reconciledTotal, dashboard.paidExpenses);
-        expect(
-          entries.map((entry) => entry.amount),
-          orderedEquals(
-            entries.map((entry) => entry.amount).toList()
-              ..sort((a, b) => b.compareTo(a)),
-          ),
-        );
-      }
+      expect(entries.map((entry) => entry.label), [
+        'Refresco',
+        'Hielo',
+        'Refresco Personal',
+      ]);
+      expect(byLabel['Refresco']!.amount, 945);
+      expect(byLabel['Hielo']!.amount, 194);
+      expect(byLabel['Refresco Personal']!.amount, 30);
+      expect(byLabel['Refresco']!.source.movements, hasLength(2));
+      expect(byLabel['Hielo']!.source.movements, hasLength(5));
+      expect(byLabel['Refresco Personal']!.source.movements, hasLength(2));
+      expect(dashboard.approvedExpenses, hasLength(9));
+      expect(dashboard.paidExpenses, 1169);
+      expect(breakdown.reconciledTotal, dashboard.paidExpenses);
+      expect(breakdown.hasOther, isFalse);
     },
   );
 
@@ -462,6 +464,8 @@ void main() {
     expect(text, contains('Tarjeta neta: \$5,783.70'));
     expect(text, contains('Ingreso real: \$25,360.70'));
     expect(text, contains('Comisiones de tarjeta: \$238.00'));
+    expect(text, contains('Refresco: \$945.00'));
+    expect(text, isNot(contains('refresco: \$315.00')));
     expect(text, contains('Total gastos: \$2,015.00'));
     expect(text, contains('Total facturado: \$25,758.36'));
     expect(text, contains('Total pagado: \$25,758.36'));
