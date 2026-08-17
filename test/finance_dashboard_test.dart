@@ -112,6 +112,99 @@ void main() {
     expect(dashboard.cashShortages, 50);
   });
 
+  test('tarjeta de cortes se muestra neta de comision sin tocar venta', () {
+    final order = _order('net-card-fixture', businessDate: '2026-07-12');
+    final payment = _payment(
+      'net-card-payment',
+      order.id,
+      amount: 26332.80,
+      method: 'card',
+    );
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order,
+        items: [_item(26332.80)],
+        payments: [payment],
+      ),
+    ]);
+
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: key,
+        salesSummary: summary,
+        paymentsByOrder: {
+          order.id: [payment],
+        },
+        cashSessions: [
+          _cashSession(
+            id: 'cut-shortage',
+            countedCashAmount: 10000,
+            terminalReportedAmount: 6021.70,
+            expectedCashAmount: 10752.90,
+            expectedCardChargedAmount: 6021.70,
+            expectedCardFeeAbsorbedAmount: 238,
+          ),
+          _cashSession(
+            id: 'cut-overage',
+            countedCashAmount: 9577,
+            expectedCashAmount: 9165.20,
+          ),
+        ],
+        withdrawals: [_expense('approved', 100)],
+        purchases: [_purchase(total: 500, paid: 100, balance: 400)],
+        supplierPayments: [_supplierPayment(amount: 100)],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.netSales, 26332.80);
+    expect(dashboard.cashCollected, 19577);
+    expect(dashboard.cardGrossCollected, 6021.70);
+    expect(dashboard.cardFees, 238);
+    expect(dashboard.cardCollected, 5783.70);
+    expect(dashboard.realCollected, 25360.70);
+    expect(dashboard.expectedMonetaryGrossIncome, 25939.80);
+    expect(dashboard.expectedMonetaryIncome, 25701.80);
+    expect(dashboard.cashShortages, 752.90);
+    expect(dashboard.cashOverages, 411.80);
+    expect(
+      dashboard.expectedMonetaryIncome - dashboard.realCollected,
+      closeTo(341.10, 0.001),
+    );
+    expect(dashboard.paidExpenses, 100);
+    expect(dashboard.supplierInvoicesTotal, 500);
+    expect(dashboard.supplierPaidTotal, 100);
+    expect(dashboard.pendingSupplierInvoices, 400);
+
+    final day = dashboard.cashCutDailyDetails.single;
+    expect(day.cardGrossReceived, 6021.70);
+    expect(day.cardFees, 238);
+    expect(day.cardReceived, 5783.70);
+    expect(day.actualIncome, 25360.70);
+
+    final bytes = buildFinanceDashboardWorkbook(
+      bundle: dashboard,
+      restaurantName: 'Los Padrinos',
+      branchName: 'Aviacion',
+      generatedAt: DateTime(2026, 7, 27, 12),
+    );
+    final workbook = Excel.decodeBytes(bytes);
+    final summaryText = workbook.tables['Resumen']!.rows
+        .expand((row) => row)
+        .map((cell) => cell?.value?.toString() ?? '')
+        .join(' ');
+    final collectionsText = workbook.tables['Cobros']!.rows
+        .expand((row) => row)
+        .map((cell) => cell?.value?.toString() ?? '')
+        .join(' ');
+
+    expect(summaryText, contains('Tarjeta neta de cortes'));
+    expect(summaryText, contains('Monetario esperado neto'));
+    expect(collectionsText, contains('Tarjeta bruta'));
+    expect(collectionsText, contains('Comision tarjeta'));
+    expect(collectionsText, contains('Tarjeta neta'));
+  });
+
   test('detalle diario reconstruye efectivo de gastos pagados desde caja', () {
     const augustKey = FinanceDashboardKey(
       restaurantId: 'restaurant',
@@ -1049,14 +1142,19 @@ CashSession _cashSession({
   double terminalReportedAmount = 0,
   double expectedCashAmount = 0,
   double expectedCardChargedAmount = 0,
+  double expectedCardFeeAbsorbedAmount = 0,
   double expectedPlatformAmount = 0,
   double expectedEmployeeConsumptionAmount = 0,
   double approvedWithdrawalsTotal = 0,
   String? closedByEmployeeName,
 }) {
   final netDifference =
-      (countedCashAmount + terminalReportedAmount) -
-      (expectedCashAmount + expectedCardChargedAmount);
+      (countedCashAmount +
+          terminalReportedAmount -
+          expectedCardFeeAbsorbedAmount) -
+      (expectedCashAmount +
+          expectedCardChargedAmount -
+          expectedCardFeeAbsorbedAmount);
   return CashSession(
     id: id,
     businessDate: businessDate,
@@ -1072,11 +1170,17 @@ CashSession _cashSession({
     expectedCardChargedAmount: expectedCardChargedAmount,
     expectedCardBaseAmount: expectedCardChargedAmount,
     expectedCardSurchargeAmount: 0,
-    expectedCardFeeAbsorbedAmount: 0,
+    expectedCardFeeAbsorbedAmount: expectedCardFeeAbsorbedAmount,
     expectedPlatformAmount: expectedPlatformAmount,
     expectedEmployeeConsumptionAmount: expectedEmployeeConsumptionAmount,
-    totalExpectedRealMoney: expectedCashAmount + expectedCardChargedAmount,
-    totalCountedRealMoney: countedCashAmount + terminalReportedAmount,
+    totalExpectedRealMoney:
+        expectedCashAmount +
+        expectedCardChargedAmount -
+        expectedCardFeeAbsorbedAmount,
+    totalCountedRealMoney:
+        countedCashAmount +
+        terminalReportedAmount -
+        expectedCardFeeAbsorbedAmount,
     cashDifference: countedCashAmount - expectedCashAmount,
     cardDifference: terminalReportedAmount - expectedCardChargedAmount,
     netDifference: netDifference,

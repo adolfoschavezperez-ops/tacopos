@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
+import '../core/backoffice/backoffice_version.dart';
 import '../core/constants/app_constants.dart';
 import '../core/theme/brand_colors.dart';
 import '../models/branch.dart';
@@ -332,22 +333,30 @@ class _LoginVersionStatus extends StatelessWidget {
     final result = updateScope?.result;
     final versionName = result?.currentVersionName.trim();
     final versionCode = result?.currentVersionCode ?? 0;
-    final displayVersion = versionName == null || versionName.isEmpty
-        ? 'desconocida'
-        : '$versionName ($versionCode)';
-    final status = _status(result);
+    final displayVersion = kIsWeb
+        ? BackofficeVersion.label
+        : (versionName == null || versionName.isEmpty
+              ? 'Version desconocida'
+              : 'Version $versionName ($versionCode)');
+    final status = kIsWeb
+        ? const _VersionStatusView(
+            icon: Icons.check_circle_outline,
+            label: 'Backoffice actualizado',
+            color: BrandColors.success,
+          )
+        : _status(result);
     return Material(
       color: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
-        onTap: updateScope?.onStatusTap,
+        onTap: kIsWeb ? null : updateScope?.onStatusTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                'TacoPOS · Version $displayVersion',
+                kIsWeb ? displayVersion : 'TacoPOS · $displayVersion',
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: BrandColors.textMuted,

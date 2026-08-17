@@ -264,11 +264,20 @@ class FinanceDashboardBundle {
       (sum, row) => sum + row.expectedMonetaryIncome,
     ),
   );
+  double get expectedMonetaryGrossIncome => _money(
+    cashCutSummaries.fold<double>(
+      0,
+      (sum, row) => sum + row.expectedMonetaryGrossIncome,
+    ),
+  );
   double get cashCollected => _money(
     cashCutSummaries.fold<double>(0, (sum, row) => sum + row.cashReceived),
   );
   double get cardCollected => _money(
     cashCutSummaries.fold<double>(0, (sum, row) => sum + row.cardReceived),
+  );
+  double get cardGrossCollected => _money(
+    cashCutSummaries.fold<double>(0, (sum, row) => sum + row.cardGrossReceived),
   );
   double get platformCollected => _money(
     cashCutSummaries.fold<double>(0, (sum, row) => sum + row.platformReceived),
@@ -416,6 +425,17 @@ class FinanceCashCutSummary {
         expectedPlatformIncome +
         expectedOtherIncome,
   );
+  double get expectedCardGrossIncome =>
+      _money(session.expectedCardChargedAmount);
+  double get expectedCardNetIncome => expectedCardIncome;
+  double get expectedMonetaryGrossIncome => _money(
+    expectedCashIncome +
+        expectedCardGrossIncome +
+        expectedPlatformIncome +
+        expectedOtherIncome,
+  );
+  double get cardGrossReceived => _money(session.terminalReportedAmount);
+  double get cardNetReceived => cardReceived;
   double get actualReceived =>
       _money(cashReceived + cardReceived + platformReceived + otherReceived);
   double get difference => _money(actualReceived - expectedMonetaryIncome);
@@ -443,21 +463,37 @@ FinanceCashCutSummary buildFinanceCashCutSummary(CashSession session) {
         session.openingCashAmount +
         session.approvedWithdrawalsTotal,
   );
+  final cardFeeAbsorbed = _money(session.expectedCardFeeAbsorbedAmount);
+  final expectedCardNet = financeNetCardReceived(
+    cardGross: session.expectedCardChargedAmount,
+    cardFee: cardFeeAbsorbed,
+  );
+  final cardNetReceived = financeNetCardReceived(
+    cardGross: session.terminalReportedAmount,
+    cardFee: cardFeeAbsorbed,
+  );
   return FinanceCashCutSummary(
     session: session,
     businessDate: session.businessDate,
     expectedCashIncome: expectedCashIncome,
-    expectedCardIncome: _money(session.expectedCardChargedAmount),
+    expectedCardIncome: expectedCardNet,
     expectedPlatformIncome: _money(session.expectedPlatformAmount),
     expectedOtherIncome: 0,
     cashReceived: cashReceived,
-    cardReceived: _money(session.terminalReportedAmount),
+    cardReceived: cardNetReceived,
     platformReceived: _money(session.expectedPlatformAmount),
     otherReceived: 0,
-    cardFeeAbsorbed: _money(session.expectedCardFeeAbsorbedAmount),
+    cardFeeAbsorbed: cardFeeAbsorbed,
     openingFloat: _money(session.openingCashAmount),
     approvedWithdrawals: _money(session.approvedWithdrawalsTotal),
   );
+}
+
+double financeNetCardReceived({
+  required double cardGross,
+  required double cardFee,
+}) {
+  return _money(cardGross - cardFee);
 }
 
 class FinanceCashCutDailyDetail {
@@ -467,6 +503,8 @@ class FinanceCashCutDailyDetail {
     required this.cashExpensesPaid,
     required this.cashOperationalBeforeExpenses,
     required this.cardReceived,
+    required this.cardGrossReceived,
+    required this.cardFees,
     required this.otherReceived,
     required this.actualIncome,
     required this.expectedMonetaryIncome,
@@ -482,6 +520,8 @@ class FinanceCashCutDailyDetail {
   final double cashExpensesPaid;
   final double cashOperationalBeforeExpenses;
   final double cardReceived;
+  final double cardGrossReceived;
+  final double cardFees;
   final double otherReceived;
   final double actualIncome;
   final double expectedMonetaryIncome;
@@ -531,6 +571,12 @@ List<FinanceCashCutDailyDetail> buildFinanceCashCutDailyDetails(
     final card = _money(
       rows.fold<double>(0, (sum, row) => sum + row.cardReceived),
     );
+    final cardGross = _money(
+      rows.fold<double>(0, (sum, row) => sum + row.cardGrossReceived),
+    );
+    final cardFees = _money(
+      rows.fold<double>(0, (sum, row) => sum + row.cardFeeAbsorbed),
+    );
     final other = _money(
       rows.fold<double>(
         0,
@@ -544,6 +590,8 @@ List<FinanceCashCutDailyDetail> buildFinanceCashCutDailyDetails(
       cashExpensesPaid: cashExpensesPaid,
       cashOperationalBeforeExpenses: cashOperational,
       cardReceived: card,
+      cardGrossReceived: cardGross,
+      cardFees: cardFees,
       otherReceived: other,
       actualIncome: actualIncome,
       expectedMonetaryIncome: _money(
@@ -581,6 +629,10 @@ FinanceCashCutDailyDetail buildFinanceCashCutPeriodTotal(
     cardReceived: _money(
       rows.fold<double>(0, (sum, row) => sum + row.cardReceived),
     ),
+    cardGrossReceived: _money(
+      rows.fold<double>(0, (sum, row) => sum + row.cardGrossReceived),
+    ),
+    cardFees: _money(rows.fold<double>(0, (sum, row) => sum + row.cardFees)),
     otherReceived: _money(
       rows.fold<double>(0, (sum, row) => sum + row.otherReceived),
     ),
