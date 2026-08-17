@@ -163,13 +163,141 @@ void main() {
     expect(find.text(r'$3,499.00'), findsWidgets);
     expect(find.text(r'$5,999.00'), findsWidgets);
   });
+
+  testWidgets('resultado final compartible colorea por signo', (tester) async {
+    tester.view
+      ..physicalSize = const Size(900, 1600)
+      ..devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    expect(financeFinalResultColor(-2412.66), const Color(0xFFE36565));
+    expect(financeFinalResultColor(3500), const Color(0xFF55B845));
+    expect(financeFinalResultColor(0), const Color(0xFFA2A6AA));
+
+    final formulaBundle = _summaryBundle(
+      real: 25360.70,
+      expenses: 2015,
+      supplierPaid: 25758.36,
+      pendingInvoices: 0,
+    );
+    expect(
+      formulaBundle.finalResult,
+      closeTo(25360.70 - 2015 - 25758.36, 0.001),
+    );
+
+    await _pumpShareSummary(tester, _summaryBundle(real: 100, expenses: 150));
+    var resultText = tester.widget<Text>(
+      find.byKey(const ValueKey('finance-share-value-RESULTADO')),
+    );
+    expect(resultText.data, r'-$50.00');
+    expect(resultText.style?.color, const Color(0xFFE36565));
+
+    await _pumpShareSummary(tester, _summaryBundle(real: 3500));
+    resultText = tester.widget<Text>(
+      find.byKey(const ValueKey('finance-share-value-RESULTADO')),
+    );
+    expect(resultText.data, r'$3,500.00');
+    expect(resultText.style?.color, const Color(0xFF55B845));
+
+    await _pumpShareSummary(tester, _summaryBundle());
+    resultText = tester.widget<Text>(
+      find.byKey(const ValueKey('finance-share-value-RESULTADO')),
+    );
+    expect(resultText.data, r'$0.00');
+    expect(resultText.style?.color, const Color(0xFFA2A6AA));
+  });
 }
 
-CashWithdrawalRequest _expense(int index, double amount) {
+Future<void> _pumpShareSummary(
+  WidgetTester tester,
+  FinanceDashboardBundle bundle,
+) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: AppTheme.dark(),
+      home: Scaffold(
+        backgroundColor: const Color(0xFF090A0B),
+        body: RepaintBoundary(
+          child: financeShareSummaryForTest(
+            bundle: bundle,
+            restaurantName: "Los Padrino's Tacos",
+            branchName: 'Aviacion',
+            generatedAt: DateTime(2026, 8, 17, 14, 30),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pump();
+}
+
+FinanceDashboardBundle _summaryBundle({
+  double real = 0,
+  double expenses = 0,
+  double supplierPaid = 0,
+  double pendingInvoices = 0,
+}) {
+  return buildFinanceDashboard(
+    FinanceDashboardInput(
+      key: const FinanceDashboardKey(
+        restaurantId: 'restaurant',
+        branchId: 'branch',
+        startBusinessDate: '2026-08-10',
+        endBusinessDate: '2026-08-16',
+      ),
+      salesSummary: buildCanonicalSalesSummary(const []),
+      paymentsByOrder: const {},
+      cashSessions: real == 0
+          ? const []
+          : [
+              _cashSession(
+                id: 'summary-result-cut',
+                businessDate: '2026-08-10',
+                countedCashAmount: real,
+                expectedCashAmount: real,
+              ),
+            ],
+      withdrawals: expenses == 0
+          ? const []
+          : [_expense(1, expenses, businessDate: '2026-08-10')],
+      purchases: pendingInvoices == 0
+          ? const []
+          : [
+              _purchase(
+                1,
+                pendingInvoices,
+                businessDate: '2026-08-10',
+                purchaseDate: DateTime(2026, 8, 10),
+              ),
+            ],
+      supplierPayments: supplierPaid == 0
+          ? const []
+          : [
+              _supplierPayment(
+                1,
+                supplierPaid,
+                'cash',
+                businessDate: '2026-08-10',
+                paymentDate: DateTime(2026, 8, 10),
+              ),
+            ],
+      suppliers: const [],
+    ),
+  );
+}
+
+CashWithdrawalRequest _expense(
+  int index,
+  double amount, {
+  String businessDate = '2026-07-12',
+}) {
   return CashWithdrawalRequest(
     id: 'expense-$index',
     cashSessionId: 'cash',
-    businessDate: '2026-07-12',
+    businessDate: businessDate,
     amount: amount,
     reason: 'Gasto $index',
     requestedByEmployeeId: 'employee',
@@ -223,13 +351,18 @@ CashSession _cashSession({
   );
 }
 
-SupplierPurchase _purchase(int index, double total) {
+SupplierPurchase _purchase(
+  int index,
+  double total, {
+  String businessDate = '2026-07-12',
+  DateTime? purchaseDate,
+}) {
   return SupplierPurchase(
     id: 'purchase-$index',
     supplierId: 'supplier-$index',
     supplierName: 'Proveedor $index',
-    purchaseDate: DateTime(2026, 7, 12),
-    businessDate: '2026-07-12',
+    purchaseDate: purchaseDate ?? DateTime(2026, 7, 12),
+    businessDate: businessDate,
     folio: 'F-$index',
     documentType: 'invoice',
     status: 'pending',
@@ -240,15 +373,21 @@ SupplierPurchase _purchase(int index, double total) {
   );
 }
 
-SupplierPayment _supplierPayment(int index, double amount, String method) {
+SupplierPayment _supplierPayment(
+  int index,
+  double amount,
+  String method, {
+  String businessDate = '2026-07-12',
+  DateTime? paymentDate,
+}) {
   return SupplierPayment(
     id: 'payment-$index',
     supplierId: 'supplier-$index',
     supplierName: 'Proveedor $index',
     purchaseId: 'purchase-$index',
     purchaseFolio: 'F-$index',
-    paymentDate: DateTime(2026, 7, 12),
-    businessDate: '2026-07-12',
+    paymentDate: paymentDate ?? DateTime(2026, 7, 12),
+    businessDate: businessDate,
     amount: amount,
     method: method,
     status: 'active',

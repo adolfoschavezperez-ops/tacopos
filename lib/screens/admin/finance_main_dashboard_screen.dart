@@ -2793,6 +2793,7 @@ class _ShareFinalSection extends StatelessWidget {
             label: 'RESULTADO',
             value: bundle.finalResult,
             strong: true,
+            valueColor: financeFinalResultColor(bundle.finalResult),
           ),
         ],
       ),
@@ -2868,12 +2869,14 @@ class _ShareValueLine extends StatelessWidget {
     required this.value,
     this.textValue,
     this.strong = false,
+    this.valueColor,
   });
 
   final String label;
   final double value;
   final String? textValue;
   final bool strong;
+  final Color? valueColor;
 
   @override
   Widget build(BuildContext context) {
@@ -2896,8 +2899,11 @@ class _ShareValueLine extends StatelessWidget {
           const SizedBox(width: 10),
           Text(
             textValue ?? _money(value),
+            key: ValueKey('finance-share-value-$label'),
             style: TextStyle(
-              color: strong ? _FinanceColors.lightGreen : _FinanceColors.text,
+              color:
+                  valueColor ??
+                  (strong ? _FinanceColors.lightGreen : _FinanceColors.text),
               fontSize: 12,
               fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
             ),
@@ -2906,6 +2912,28 @@ class _ShareValueLine extends StatelessWidget {
       ),
     );
   }
+}
+
+@visibleForTesting
+Color financeFinalResultColor(double value) {
+  if (value > financeMoneyTolerance) return _FinanceColors.green;
+  if (value < -financeMoneyTolerance) return _FinanceColors.red;
+  return _FinanceColors.muted;
+}
+
+@visibleForTesting
+Widget financeShareSummaryForTest({
+  required FinanceDashboardBundle bundle,
+  required String restaurantName,
+  required String branchName,
+  required DateTime generatedAt,
+}) {
+  return _FinanceShareSummary(
+    bundle: bundle,
+    restaurantName: restaurantName,
+    branchName: branchName,
+    generatedAt: generatedAt,
+  );
 }
 
 List<MapEntry<String, double>> _supplierPaymentRows(
