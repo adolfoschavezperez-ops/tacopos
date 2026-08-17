@@ -662,7 +662,7 @@ class _DetailGrid extends StatelessWidget {
           source: 'cash',
         ),
         FinanceBreakdownEntry(
-          label: 'Tarjeta',
+          label: 'Tarjeta neta',
           amount: bundle.cardCollected,
           source: 'card',
         ),
@@ -775,7 +775,11 @@ class _DetailGrid extends StatelessWidget {
           _DetailLineData.total('Total ingreso real', bundle.realCollected),
           const _DetailLineData.section('COMPARACION CONTRA ESPERADO'),
           _DetailLineData.value(
-            'Monetario esperado',
+            'Monetario esperado bruto',
+            bundle.expectedMonetaryGrossIncome,
+          ),
+          _DetailLineData.value(
+            'Monetario esperado neto',
             bundle.expectedMonetaryIncome,
           ),
           const _DetailLineData.section('AJUSTES DE CAJA'),
@@ -784,7 +788,8 @@ class _DetailGrid extends StatelessWidget {
           _DetailLineData.value('Sobrantes en cortes', bundle.cashOverages),
           if (!collectionsBreakdown.isValid) const _DetailLineData.warning(),
         ],
-        note: 'El fondo inicial no forma parte del ingreso real.',
+        note:
+            'El fondo inicial no forma parte del ingreso real. Tarjeta se muestra neta de comisiones.',
         onTap: () => _showDailyCashCutDetailDialog(context, bundle),
       ),
       _DetailCard(
@@ -1380,6 +1385,8 @@ class _TablesGrid extends StatelessWidget {
               row.cashCounted,
               row.cashExpensesPaid,
               row.cashOperationalBeforeExpenses,
+              row.cardGrossReceived,
+              row.cardFees,
               row.cardReceived,
               row.otherReceived,
               row.shortage,
@@ -1391,6 +1398,8 @@ class _TablesGrid extends StatelessWidget {
               Text(_money(row.cashCounted)),
               Text(_money(row.cashExpensesPaid)),
               Text(_money(row.cashOperationalBeforeExpenses)),
+              Text(_money(row.cardGrossReceived)),
+              Text(_money(row.cardFees)),
               Text(_money(row.cardReceived)),
               Text(_money(row.otherReceived)),
               Text(_money(row.shortage)),
@@ -1408,12 +1417,14 @@ class _TablesGrid extends StatelessWidget {
     rows.add(
       _TableRowData(
         isTotal: true,
-        sortValues: const ['', 0, 0, 0, 0, 0, 0, 0],
+        sortValues: const ['', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         cells: [
           _totalText('TOTAL'),
           _totalText(_money(total.cashCounted)),
           _totalText(_money(total.cashExpensesPaid)),
           _totalText(_money(total.cashOperationalBeforeExpenses)),
+          _totalText(_money(total.cardGrossReceived)),
+          _totalText(_money(total.cardFees)),
           _totalText(_money(total.cardReceived)),
           _totalText(_money(total.otherReceived)),
           _totalText(_money(total.shortage)),
@@ -1430,7 +1441,9 @@ class _TablesGrid extends StatelessWidget {
         'Efectivo contado',
         'Gastos caja',
         'Efectivo antes gastos',
-        'Tarjeta',
+        'Tarjeta bruta',
+        'Comision',
+        'Tarjeta neta',
         'Plataforma / otros',
         'Faltante',
         'Sobrante',
@@ -2510,7 +2523,13 @@ class _DailyCashCutCard extends StatelessWidget {
                   day.cashOperationalBeforeExpenses,
                   accent: _FinanceColors.lightGreen,
                 ),
-                _CashCutMetric('Tarjeta', day.cardReceived),
+                _CashCutMetric('Tarjeta bruta', day.cardGrossReceived),
+                _CashCutMetric('Comision tarjeta', day.cardFees),
+                _CashCutMetric(
+                  'Tarjeta neta',
+                  day.cardReceived,
+                  helper: 'Despues de comision',
+                ),
                 _CashCutMetric('Otros monetarios', day.otherReceived),
                 _CashCutMetric(
                   'Ingreso real del dia',
@@ -2518,7 +2537,7 @@ class _DailyCashCutCard extends StatelessWidget {
                   accent: _FinanceColors.lightGreen,
                 ),
                 _CashCutMetric(
-                  'Monetario esperado',
+                  'Monetario esperado neto',
                   day.expectedMonetaryIncome,
                 ),
                 _CashCutMetric(
@@ -2559,7 +2578,7 @@ class _DailyCashCutCard extends StatelessWidget {
                             'Corte ${cut.session.id} · ${cut.session.closedByEmployeeName ?? cut.session.openedByEmployeeName}',
                         subtitle:
                             'Efectivo contado ${_money(cut.cashCountedLessOpening)} · Gastos caja ${_money(cut.approvedWithdrawals)} · '
-                            'Efectivo antes gastos ${_money(cut.cashOperationalBeforeExpenses)} · Tarjeta ${_money(cut.cardReceived)}',
+                            'Efectivo antes gastos ${_money(cut.cashOperationalBeforeExpenses)} - Tarjeta bruta ${_money(cut.cardGrossReceived)} - Comision ${_money(cut.cardFeeAbsorbed)} - Tarjeta neta ${_money(cut.cardReceived)}',
                       ),
                   ],
                 ),
@@ -2624,7 +2643,13 @@ class _DailyCashCutTotal extends StatelessWidget {
                   'Efectivo antes de gastos',
                   total.cashOperationalBeforeExpenses,
                 ),
-                _CashCutMetric('Tarjeta', total.cardReceived),
+                _CashCutMetric('Tarjeta bruta', total.cardGrossReceived),
+                _CashCutMetric('Comision tarjeta', total.cardFees),
+                _CashCutMetric(
+                  'Tarjeta neta',
+                  total.cardReceived,
+                  helper: 'Despues de comision',
+                ),
                 _CashCutMetric('Otros', total.otherReceived),
                 _CashCutMetric(
                   'Ingreso real',
