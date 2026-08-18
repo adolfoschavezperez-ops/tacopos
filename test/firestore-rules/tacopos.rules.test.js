@@ -6,6 +6,7 @@ const {
   initializeTestEnvironment,
 } = require('@firebase/rules-unit-testing');
 const {
+  collection,
   collectionGroup,
   deleteDoc,
   doc,
@@ -49,6 +50,10 @@ function authedDb(uid = 'anon-user') {
 
 function anonDb() {
   return testEnv.unauthenticatedContext().firestore();
+}
+
+function adminDb(uid = 'admin-uid') {
+  return testEnv.authenticatedContext(uid).firestore();
 }
 
 function counterPath() {
@@ -107,6 +112,75 @@ async function seed(path, data) {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await setDoc(doc(context.firestore(), path), data);
   });
+}
+
+async function seedAdmin(uid = 'admin-uid', restaurantId = RESTAURANT_ID) {
+  await seed(`restaurants/${restaurantId}/authUsers/${uid}`, {
+    active: true,
+    isSuperAdmin: true,
+    permissions: {
+      canViewAdmin: true,
+      canAuthorizeCashWithdrawals: true,
+    },
+  });
+}
+
+function appUpdatesPath(restaurantId = RESTAURANT_ID) {
+  return `restaurants/${restaurantId}/settings/appUpdates`;
+}
+
+function expenseSettingsPath(restaurantId = RESTAURANT_ID) {
+  return `restaurants/${restaurantId}/settings/expensePolicies`;
+}
+
+function devicePath(deviceId = 'device-uid', restaurantId = RESTAURANT_ID) {
+  return `restaurants/${restaurantId}/devices/${deviceId}`;
+}
+
+function policyPath(policyId = 'hielo', restaurantId = RESTAURANT_ID) {
+  return `restaurants/${restaurantId}/expensePolicies/${policyId}`;
+}
+
+function usagePath(usageId = 'usage-1', restaurantId = RESTAURANT_ID) {
+  return `restaurants/${restaurantId}/expensePolicyUsage/${usageId}`;
+}
+
+function policyData(overrides = {}) {
+  return {
+    restaurantId: RESTAURANT_ID,
+    branchId: BRANCH_ID,
+    name: 'Hielo',
+    code: 'hielo',
+    active: true,
+    autoApproveEnabled: false,
+    maxAmountPerTransaction: 45,
+    maxAmountPerPeriod: 45,
+    maxUsesPerPeriod: 1,
+    frequencyType: 'daily',
+    policyVersion: 1,
+    ...overrides,
+  };
+}
+
+function deviceData(deviceId = 'device-uid', overrides = {}) {
+  return {
+    deviceId,
+    deviceName: 'Caja',
+    branchId: BRANCH_ID,
+    branchName: 'Aviacion',
+    role: 'Caja',
+    platform: 'android',
+    appVersionName: '1.5.0',
+    appVersionCode: 16,
+    availableVersionCode: 16,
+    lastSeenAt: new Date('2026-08-18T10:00:00.000Z'),
+    lastUpdateCheckAt: new Date('2026-08-18T10:00:00.000Z'),
+    employeeId: 'cashier',
+    employeeName: 'Caja',
+    updateStatus: 'upToDate',
+    updatedAt: new Date('2026-08-18T10:00:00.000Z'),
+    ...overrides,
+  };
 }
 
 describe('TacoPOS Firestore production guard rails', () => {
@@ -536,6 +610,207 @@ describe('TacoPOS Firestore production guard rails', () => {
         restaurantId: RESTAURANT_ID,
         branchId: BRANCH_ID,
         status: 'open',
+      }),
+    );
+  });
+
+  it('admin autorizado puede leer y actualizar appUpdates', async () => {
+    await seedAdmin();
+    await seed(appUpdatesPath(), {
+      active: true,
+      minimumVersionCode: 15,
+      recommendedVersionCode: 16,
+    });
+
+    const db = adminDb();
+    await assertSucceeds(getDoc(doc(db, appUpdatesPath())));
+    await assertSucceeds(
+      updateDoc(doc(db, appUpdatesPath()), {
+        recommendedVersionCode: 17,
+      }),
+    );
+  });
+
+  it('usuario operativo puede leer appUpdates para comprobar version', async () => {
+    await seed(appUpdatesPath(), {
+      active: true,
+      minimumVersionCode: 15,
+      recommendedVersionCode: 16,
+    });
+
+    await assertSucceeds(getDoc(doc(authedDb('tablet-uid'), appUpdatesPath())));
+  });
+
+  it('usuario no autorizado no puede modificar appUpdates', async () => {
+    await seed(appUpdatesPath(), {
+      active: true,
+      minimumVersionCode: 15,
+      recommendedVersionCode: 16,
+    });
+
+    await assertFails(
+      updateDoc(doc(authedDb('tablet-uid'), appUpdatesPath()), {
+        recommendedVersionCode: 99,
+      }),
+    );
+  });
+
+  it('backoffice puede listar dispositivos y tablet puede actualizar solo su heartbeat', async () => {
+    await seedAdmin();
+    await seed(devicePath('device-uid'), deviceData('device-uid'));
+
+    await assertSucceeds(getDocs(collection(adminDb(), `restaurants/${RESTAURANT_ID}/devices`)));
+    await assertSucceeds(
+      updateDoc(doc(authedDb('device-uid'), devicePath('device-uid')), {
+        appVersionCode: 16,
+        updateStatus: 'upToDate',
+        lastSeenAt: new Date('2026-08-18T11:00:00.000Z'),
+        updatedAt: new Date('2026-08-18T11:00:00.000Z'),
+      }),
+    );
+  });
+
+  it('usuario no autorizado no puede modificar dispositivos sensibles', async () => {
+    await seed(devicePath('device-uid'), {
+      ...deviceData('device-uid'),
+      rolloutGroup: 'pilot',
+    });
+
+    await assertFails(
+      updateDoc(doc(authedDb('device-uid'), devicePath('device-uid')), {
+        rolloutGroup: 'all',
+      }),
+    );
+    await assertFails(
+      updateDoc(doc(authedDb('other-device'), devicePath('device-uid')), {
+        updateStatus: 'upToDate',
+      }),
+    );
+  });
+
+  it('admin puede listar crear editar y activar politicas de gasto', async () => {
+    await seedAdmin();
+    const db = adminDb();
+
+    await assertSucceeds(getDocs(collection(db, `restaurants/${RESTAURANT_ID}/expensePolicies`)));
+    await assertSucceeds(setDoc(doc(db, policyPath('hielo')), policyData()));
+    await assertSucceeds(
+      updateDoc(doc(db, policyPath('hielo')), {
+        maxAmountPerTransaction: 55,
+        active: false,
+      }),
+    );
+  });
+
+  it('admin puede leer settings de politicas y consultar usage', async () => {
+    await seedAdmin();
+    await seed(expenseSettingsPath(), { expensePoliciesEnabled: false });
+    await seed(usagePath(), {
+      policyId: 'hielo',
+      branchId: BRANCH_ID,
+      periodKey: '2026-08-18',
+      amountUsed: 40,
+      usesUsed: 1,
+      expenseIds: ['expense-1'],
+    });
+
+    const db = adminDb();
+    await assertSucceeds(getDoc(doc(db, expenseSettingsPath())));
+    await assertSucceeds(getDocs(collection(db, `restaurants/${RESTAURANT_ID}/expensePolicyUsage`)));
+  });
+
+  it('usuario operativo no puede crear editar politicas ni modificar limites', async () => {
+    await seed(policyPath('hielo'), policyData());
+    const db = authedDb('waiter-uid');
+
+    await assertFails(setDoc(doc(db, policyPath('garrafon')), policyData({ code: 'garrafon' })));
+    await assertFails(
+      updateDoc(doc(db, policyPath('hielo')), {
+        maxAmountPerTransaction: 500,
+      }),
+    );
+  });
+
+  it('usuario operativo no puede modificar usage arbitrariamente', async () => {
+    await seed(usagePath(), {
+      policyId: 'hielo',
+      branchId: BRANCH_ID,
+      periodKey: '2026-08-18',
+      amountUsed: 40,
+      usesUsed: 1,
+      expenseIds: ['expense-1'],
+    });
+
+    await assertFails(
+      updateDoc(doc(authedDb('waiter-uid'), usagePath()), {
+        amountUsed: 0,
+        usesUsed: 0,
+      }),
+    );
+  });
+
+  it('usuario no autorizado no puede autoaprobar gasto por escritura directa', async () => {
+    await seed(`restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/expense-1`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      cashSessionId: 'cash-1',
+      businessDate: BUSINESS_DATE,
+      amount: 40,
+      reason: 'Hielo',
+      status: 'pending',
+    });
+
+    await assertFails(
+      updateDoc(doc(authedDb('waiter-uid'), `restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/expense-1`), {
+        status: 'approved',
+        autoApproved: true,
+        policySnapshot: { policyId: 'hielo', policyVersion: 1 },
+      }),
+    );
+  });
+
+  it('mantiene orders payments cuts y expenses existentes protegidos', async () => {
+    const db = authedDb('cashier-1');
+    await assertSucceeds(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/orders/order-rules`), {
+        restaurantId: RESTAURANT_ID,
+        branchId: BRANCH_ID,
+        status: 'open',
+      }),
+    );
+    await assertSucceeds(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/orders/order-rules/payments/payment-1`), {
+        restaurantId: RESTAURANT_ID,
+        branchId: BRANCH_ID,
+        status: 'active',
+      }),
+    );
+    await assertSucceeds(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/cashSessions/cash-rules`), {
+        restaurantId: RESTAURANT_ID,
+        branchId: BRANCH_ID,
+        status: 'open',
+      }),
+    );
+    await assertSucceeds(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/expense-rules`), {
+        restaurantId: RESTAURANT_ID,
+        branchId: BRANCH_ID,
+        status: 'pending',
+      }),
+    );
+  });
+
+  it('no permite acceso cross-restaurant para admin de otro restaurante', async () => {
+    await seedAdmin('admin-uid', RESTAURANT_ID);
+    await seed(policyPath('hielo', 'otro-restaurante'), policyData({
+      restaurantId: 'otro-restaurante',
+      branchId: BRANCH_ID,
+    }));
+
+    await assertFails(
+      updateDoc(doc(adminDb('admin-uid'), policyPath('hielo', 'otro-restaurante')), {
+        maxAmountPerTransaction: 100,
       }),
     );
   });
