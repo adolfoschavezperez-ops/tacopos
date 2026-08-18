@@ -784,6 +784,7 @@ double financeCashWithdrawalsReflectedInCount(
 ) {
   final snapshot = _money(session.approvedWithdrawalsTotal);
   if (snapshot <= financeMoneyTolerance) return 0;
+  if (financeCashSessionCountsAsClosed(session)) return snapshot;
 
   final related = withdrawals
       .where((request) => request.cashSessionId.trim() == session.id.trim())

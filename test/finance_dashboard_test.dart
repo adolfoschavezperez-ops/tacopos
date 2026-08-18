@@ -624,8 +624,8 @@ void main() {
             id: 'cut-2026-08-15',
             businessDate: '2026-08-15',
             countedCashAmount: 3000,
-            expectedCashAmount: 2934,
-            approvedWithdrawalsTotal: 66,
+            expectedCashAmount: 3000,
+            approvedWithdrawalsTotal: 0,
             closedAt: closedAt,
           ),
         ],
@@ -779,10 +779,10 @@ void main() {
     );
 
     final day = dashboard.cashCutDailyDetails.single;
-    expect(day.cashExpensesPaid, 150);
-    expect(day.cashOperationalBeforeExpenses, 3650);
+    expect(day.cashExpensesPaid, 650);
+    expect(day.cashOperationalBeforeExpenses, 4150);
     expect(dashboard.paidExpenses, 900);
-    expect(dashboard.finalResult, 2750);
+    expect(dashboard.finalResult, 3250);
   });
 
   test('fixture real identifica 102 y conserva solo gasto caja legitimo', () {
@@ -883,19 +883,19 @@ void main() {
 
     final day = dashboard.cashCutDailyDetails.single;
     expect(day.cashCounted, 19541);
-    expect(day.cashExpensesPaid, 36);
-    expect(day.cashOperationalBeforeExpenses, 19577);
-    expect(dashboard.cashCollected, 19577);
+    expect(day.cashExpensesPaid, 102);
+    expect(day.cashOperationalBeforeExpenses, 19643);
+    expect(dashboard.cashCollected, 19643);
     expect(dashboard.cardGrossCollected, 6021.70);
     expect(dashboard.cardFees, 238.47);
     expect(dashboard.cardCollected, 5783.23);
-    expect(dashboard.realCollected, 25360.23);
+    expect(dashboard.realCollected, 25426.23);
     expect(dashboard.expectedMonetaryGrossIncome, 25939.80);
     expect(dashboard.expectedMonetaryIncome, 25701.33);
     expect(dashboard.paidExpenses, 2081);
     expect(dashboard.cashShortages, 686.90);
     expect(dashboard.cashOverages, 411.80);
-    expect(dashboard.finalResult, -2479.13);
+    expect(dashboard.finalResult, -2413.13);
   });
 
   test('varios cortes no duplican gasto por misma fecha operativa', () {
@@ -1056,6 +1056,197 @@ void main() {
           withExpenseDashboard.operatingResult,
       closeTo(66, 0.001),
     );
+  });
+
+  test('cortes cerrados usan snapshot de gastos caja y no gastos actuales', () {
+    FinanceDashboardBundle buildClosedCuts({
+      CashWithdrawalRequest? variableExpense,
+    }) {
+      final withdrawals = [
+        _expense(
+          'approved',
+          2015,
+          businessDate: '2026-08-15',
+          cashSessionId: 'admin',
+        ),
+        ?variableExpense,
+      ];
+      return buildFinanceDashboard(
+        FinanceDashboardInput(
+          key: const FinanceDashboardKey(
+            restaurantId: 'restaurant',
+            branchId: 'branch',
+            startBusinessDate: '2026-08-10',
+            endBusinessDate: '2026-08-15',
+          ),
+          salesSummary: _emptySales,
+          paymentsByOrder: const {},
+          cashSessions: [
+            _cashSession(
+              id: 'cut-2026-08-15',
+              businessDate: '2026-08-15',
+              countedCashAmount: 10000,
+              terminalReportedAmount: 6021.70,
+              expectedCashAmount: 9985.10,
+              expectedCardChargedAmount: 6021.70,
+              expectedCardFeeAbsorbedAmount: 238.47,
+              approvedWithdrawalsTotal: 446,
+              shortageAmount: 686.90,
+              overAmount: 411.80,
+            ),
+            _cashSession(
+              id: 'cut-2026-08-14',
+              businessDate: '2026-08-14',
+              countedCashAmount: 3000,
+              expectedCashAmount: 3000,
+              approvedWithdrawalsTotal: 285,
+              shortageAmount: 0,
+              overAmount: 0,
+            ),
+            _cashSession(
+              id: 'cut-2026-08-13',
+              businessDate: '2026-08-13',
+              countedCashAmount: 2000,
+              expectedCashAmount: 2000,
+              approvedWithdrawalsTotal: 114,
+              shortageAmount: 0,
+              overAmount: 0,
+            ),
+            _cashSession(
+              id: 'cut-2026-08-12',
+              businessDate: '2026-08-12',
+              countedCashAmount: 1500,
+              expectedCashAmount: 1500,
+              approvedWithdrawalsTotal: 968,
+              shortageAmount: 0,
+              overAmount: 0,
+            ),
+            _cashSession(
+              id: 'cut-2026-08-11',
+              businessDate: '2026-08-11',
+              countedCashAmount: 700,
+              expectedCashAmount: 700,
+              approvedWithdrawalsTotal: 38,
+              shortageAmount: 0,
+              overAmount: 0,
+            ),
+            _cashSession(
+              id: 'cut-2026-08-10',
+              businessDate: '2026-08-10',
+              countedCashAmount: 362,
+              expectedCashAmount: 688,
+              approvedWithdrawalsTotal: 194,
+              shortageAmount: 0,
+              overAmount: 0,
+            ),
+          ],
+          withdrawals: withdrawals,
+          purchases: [
+            _purchase(
+              total: 25758.36,
+              paid: 25758.36,
+              balance: 0,
+              businessDate: '2026-08-15',
+            ),
+          ],
+          supplierPayments: [
+            _supplierPayment(
+              amount: 2430,
+              method: 'partner_contribution',
+              businessDate: '2026-08-15',
+            ),
+          ],
+          suppliers: const [],
+        ),
+      );
+    }
+
+    final baseDashboard = buildClosedCuts();
+    final activeDashboard = buildClosedCuts(
+      variableExpense: _expense(
+        'approved',
+        66,
+        businessDate: '2026-08-15',
+        cashSessionId: 'cut-2026-08-15',
+        source: 'historical_admin',
+        reason: 'Se dieron 3 tacos menos',
+        isHistorical: true,
+      ),
+    );
+    final cancelledDashboard = buildClosedCuts(
+      variableExpense: _expense(
+        'cancelled',
+        66,
+        businessDate: '2026-08-15',
+        cashSessionId: 'cut-2026-08-15',
+        source: 'historical_admin',
+        reason: 'Se dieron 3 tacos menos',
+        isHistorical: true,
+      ),
+    );
+
+    for (final dashboard in [
+      baseDashboard,
+      activeDashboard,
+      cancelledDashboard,
+    ]) {
+      expect(dashboard.cashCutDailyDetails.map((row) => row.cashExpensesPaid), [
+        194,
+        38,
+        968,
+        114,
+        285,
+        446,
+      ]);
+      expect(dashboard.cashCutPeriodTotal.cashExpensesPaid, 2045);
+      expect(dashboard.cashCollected, 19607);
+      expect(dashboard.cardGrossCollected, 6021.70);
+      expect(dashboard.cardFees, 238.47);
+      expect(dashboard.cardCollected, 5783.23);
+      expect(dashboard.realCollected, 25390.23);
+      expect(dashboard.expectedMonetaryGrossIncome, 25939.80);
+      expect(dashboard.expectedMonetaryIncome, 25701.33);
+      expect(dashboard.cashShortages, 686.90);
+      expect(dashboard.cashOverages, 411.80);
+    }
+
+    expect(baseDashboard.paidExpenses, 2015);
+    expect(activeDashboard.paidExpenses, 2081);
+    expect(cancelledDashboard.paidExpenses, 2015);
+    expect(baseDashboard.operatingResult, -2383.13);
+    expect(activeDashboard.operatingResult, -2449.13);
+    expect(cancelledDashboard.operatingResult, -2383.13);
+    expect(
+      activeDashboard.operatingResult - baseDashboard.operatingResult,
+      closeTo(-66, 0.001),
+    );
+    expect(baseDashboard.reconciliationDifference, 46.87);
+    expect(activeDashboard.reconciliationDifference, -19.13);
+
+    final text = financeWhatsappSummaryText(
+      bundle: baseDashboard,
+      restaurantName: "Los Padrino's Tacos",
+      branchName: 'Aviacion',
+    );
+    expect(text, contains('Cobrado real: \$25,390.23'));
+    expect(text, contains('Gastos: -\$2,015.00'));
+    expect(text, contains('Resultado operativo: -\$2,383.13'));
+    expect(text, contains('Diferencia por conciliar: +\$46.87'));
+
+    final workbook = Excel.decodeBytes(
+      buildFinanceDashboardWorkbook(
+        bundle: baseDashboard,
+        restaurantName: "Los Padrino's Tacos",
+        branchName: 'Aviacion',
+        generatedAt: DateTime(2026, 8, 18, 10),
+      ),
+    );
+    final summaryText = workbook.tables['Resumen']!.rows
+        .expand((row) => row)
+        .map((cell) => cell?.value?.toString() ?? '')
+        .join(' ');
+    expect(summaryText, contains('Diferencia por conciliar'));
+    expect(summaryText, contains('46.87'));
   });
 
   test('detalle diario agrupa varios cortes y ordena fechas ascendente', () {
