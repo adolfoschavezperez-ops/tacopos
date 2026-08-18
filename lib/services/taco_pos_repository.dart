@@ -7661,20 +7661,6 @@ class TacoPosRepository {
         return;
       }
 
-      final preview = await _historicalCashCorrectionPreview(
-        branch: branch,
-        businessDate: freshSession.businessDate,
-        countedCashAmount: freshSession.countedCashAmount,
-        terminalReportedAmount: freshSession.terminalReportedAmount,
-        openingCashAmount: freshSession.openingCashAmount,
-        extraWithdrawalAmount: amount,
-      );
-      if (preview.existingSession == null) {
-        throw StateError(
-          'No existe un corte cerrado para esta fecha. Utiliza primero la opcion Rehacer corte historico.',
-        );
-      }
-
       transaction.set(withdrawalRef, {
         'id': withdrawalRef.id,
         'restaurantId': freshSession.restaurantId,
@@ -7709,32 +7695,6 @@ class TacoPosRepository {
         'updatedAt': now,
       });
 
-      transaction.update(sessionRef, {
-        'expectedCashAmount': preview.expectedCashAmount,
-        'expectedCardChargedAmount': preview.cardSalesAmount,
-        'expectedCardBaseAmount': preview.cardBaseAmount,
-        'expectedCardSurchargeAmount': preview.cardSurchargeAmount,
-        'expectedCardFeeAbsorbedAmount': preview.cardCommissionAmount,
-        'expectedPlatformAmount': preview.platformAmount,
-        'expectedEmployeeConsumptionAmount': preview.employeeConsumptionAmount,
-        'approvedWithdrawalsTotal': preview.approvedWithdrawalsTotal,
-        'pendingWithdrawalsTotal': preview.pendingWithdrawalsTotal,
-        'withdrawalRequestCount': preview.withdrawalRequestCount + 1,
-        'totalExpectedRealMoney': preview.totalExpectedRealMoney,
-        'totalCountedRealMoney': preview.totalCountedRealMoney,
-        'cashDifference': preview.cashDifference,
-        'cardDifference': preview.cardDifference,
-        'netDifference': preview.netDifference,
-        'shortageAmount': preview.shortageAmount,
-        'overAmount': preview.overAmount,
-        'historicalExpenseAdjustedAt': now,
-        'historicalExpenseAdjustedByEmployeeId': employee?.id ?? '',
-        'historicalExpenseAdjustedByEmployeeName': employee?.name ?? '',
-        'lastHistoricalExpenseId': withdrawalRef.id,
-        'lastHistoricalExpenseReason': cleanReason,
-        'updatedAt': now,
-      });
-
       transaction.set(activityRef, {
         'type': 'historical_cash_expense_added',
         'actionType': 'historical_cash_expense_added',
@@ -7744,19 +7704,20 @@ class TacoPosRepository {
         'amount': amount,
         'reason': cleanReason,
         'previousApprovedWithdrawals': freshSession.approvedWithdrawalsTotal,
-        'newApprovedWithdrawals': preview.approvedWithdrawalsTotal,
+        'newApprovedWithdrawals': freshSession.approvedWithdrawalsTotal,
         'previousExpectedCash': freshSession.expectedCashAmount,
-        'newExpectedCash': preview.expectedCashAmount,
+        'newExpectedCash': freshSession.expectedCashAmount,
         'previousCashDifference': freshSession.cashDifference,
-        'newCashDifference': preview.cashDifference,
+        'newCashDifference': freshSession.cashDifference,
         'countedCashPreserved': freshSession.countedCashAmount,
         'terminalReportedPreserved': freshSession.terminalReportedAmount,
+        'cashSessionSnapshotPreserved': true,
         'employeeId': employee?.id ?? '',
         'employeeName': employee?.name ?? '',
         'businessDate': freshSession.businessDate,
         'timestamp': now,
         'message':
-            'Se agrego un gasto historico de \$${amount.toStringAsFixed(2)} al corte de la sucursal ${freshSession.branchName} del dia ${freshSession.businessDate} y se regenero el corte.',
+            'Se agrego un gasto administrativo de \$${amount.toStringAsFixed(2)} para la sucursal ${freshSession.branchName} del dia ${freshSession.businessDate} sin modificar el corte cerrado.',
         ..._employeeAuditFields(prefix: 'createdBy'),
         'createdAt': now,
         'createdBy': _auth.currentUser?.uid ?? 'anonymous',
