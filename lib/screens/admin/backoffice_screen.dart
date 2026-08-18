@@ -39,6 +39,7 @@ import 'branch_catalog_screen.dart';
 import 'discount_admin_screen.dart';
 import 'device_versions_screen.dart';
 import 'employee_catalog_screen.dart';
+import 'expense_policy_admin_screen.dart';
 import 'finance_admin_screen.dart';
 import 'kitchen_admin_screen.dart';
 import 'live_operations_screen.dart';
@@ -2912,6 +2913,16 @@ class _SettingsSection extends StatelessWidget {
           () => Navigator.push(
             context,
             MaterialPageRoute(builder: (_) => const DiscountAdminScreen()),
+          ),
+        ),
+      if (employee?.hasAdminAccess == true)
+        _SettingsLink(
+          'Politicas de gasto',
+          'Autoautorizacion configurable con limites y consumo.',
+          Icons.rule_folder_outlined,
+          () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ExpensePolicyAdminScreen()),
           ),
         ),
       if (kIsWeb && employee?.hasAdminAccess == true)

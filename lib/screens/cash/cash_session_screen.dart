@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/cash/cash_close_execution.dart';
+import '../../core/expenses/expense_policy.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/cash_session.dart';
 import '../../models/cash_withdrawal_request.dart';
@@ -609,8 +610,16 @@ class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
   final _reasonController = TextEditingController();
   final _amountFocusNode = FocusNode();
   final _reasonFocusNode = FocusNode();
+  late final Future<List<ExpensePolicy>> _policiesFuture;
+  ExpensePolicy? _selectedPolicy;
   bool _saving = false;
   String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _policiesFuture = widget.repository.getActiveExpensePoliciesOnce();
+  }
 
   @override
   void dispose() {
@@ -648,6 +657,8 @@ class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
         cashSessionId: widget.session.id,
         amount: amount,
         reason: _reasonController.text,
+        policyId: _selectedPolicy?.id ?? '',
+        paymentSource: 'cash',
       );
       if (!mounted) {
         return;
@@ -673,6 +684,47 @@ class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            FutureBuilder<List<ExpensePolicy>>(
+              future: _policiesFuture,
+              builder: (context, snapshot) {
+                final policies = snapshot.data ?? const <ExpensePolicy>[];
+                if (policies.isEmpty) return const SizedBox.shrink();
+                return Column(
+                  children: [
+                    DropdownButtonFormField<ExpensePolicy>(
+                      initialValue: _selectedPolicy,
+                      decoration: const InputDecoration(
+                        labelText: 'Tipo de gasto',
+                      ),
+                      items: [
+                        const DropdownMenuItem<ExpensePolicy>(
+                          value: null,
+                          child: Text('Solicitud manual'),
+                        ),
+                        ...policies.map(
+                          (policy) => DropdownMenuItem(
+                            value: policy,
+                            child: Text(policy.name),
+                          ),
+                        ),
+                      ],
+                      onChanged: _saving
+                          ? null
+                          : (policy) {
+                              setState(() {
+                                _selectedPolicy = policy;
+                                if (policy != null &&
+                                    !policy.allowFreeConcept) {
+                                  _reasonController.text = policy.name;
+                                }
+                              });
+                            },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                );
+              },
+            ),
             TextField(
               controller: _amountController,
               focusNode: _amountFocusNode,
@@ -689,7 +741,7 @@ class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
             TextField(
               controller: _reasonController,
               focusNode: _reasonFocusNode,
-              enabled: !_saving,
+              enabled: !_saving && (_selectedPolicy?.allowFreeConcept ?? true),
               minLines: 2,
               maxLines: 4,
               decoration: const InputDecoration(labelText: 'Motivo'),
@@ -748,7 +800,12 @@ class _WithdrawalRequestTile extends StatelessWidget {
         overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontWeight: FontWeight.w800),
       ),
-      subtitle: Text(label, style: TextStyle(color: color)),
+      subtitle: Text(
+        request.policyName.trim().isEmpty
+            ? label
+            : '$label - ${request.autoApproved ? 'Autoautorizado' : 'Politica'}: ${request.policyName}',
+        style: TextStyle(color: color),
+      ),
       trailing: MoneyText(
         value: request.amount,
         style: TextStyle(color: color, fontWeight: FontWeight.w800),

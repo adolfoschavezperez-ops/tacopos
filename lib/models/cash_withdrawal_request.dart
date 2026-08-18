@@ -32,6 +32,14 @@ class CashWithdrawalRequest {
     this.source = '',
     this.sourceName = '',
     this.isHistorical = false,
+    this.policyId = '',
+    this.policyVersion = 0,
+    this.policyName = '',
+    this.policySnapshot = const {},
+    this.autoApproved = false,
+    this.autoApprovedAt,
+    this.policyDecisionReasonCode = '',
+    this.policyDecisionMessage = '',
   });
 
   final String id;
@@ -62,6 +70,14 @@ class CashWithdrawalRequest {
   final String source;
   final String sourceName;
   final bool isHistorical;
+  final String policyId;
+  final int policyVersion;
+  final String policyName;
+  final Map<String, dynamic> policySnapshot;
+  final bool autoApproved;
+  final DateTime? autoApprovedAt;
+  final String policyDecisionReasonCode;
+  final String policyDecisionMessage;
 
   bool get isPending => status == 'pending';
   bool get isApproved => status == 'approved';
@@ -105,6 +121,21 @@ class CashWithdrawalRequest {
       source: data['source'] as String? ?? '',
       sourceName: data['sourceName'] as String? ?? '',
       isHistorical: data['isHistorical'] as bool? ?? false,
+      policyId: data['policyId'] as String? ?? '',
+      policyVersion: data['policyVersion'] is num
+          ? (data['policyVersion'] as num).toInt()
+          : 0,
+      policyName: data['policyName'] as String? ?? '',
+      policySnapshot: data['policySnapshot'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(
+              data['policySnapshot'] as Map<String, dynamic>,
+            )
+          : const {},
+      autoApproved: data['autoApproved'] as bool? ?? false,
+      autoApprovedAt: _toDate(data['autoApprovedAt']),
+      policyDecisionReasonCode:
+          data['policyDecisionReasonCode'] as String? ?? '',
+      policyDecisionMessage: data['policyDecisionMessage'] as String? ?? '',
     );
   }
 
