@@ -25,6 +25,23 @@ describe("secure expense autoapproval functions", () => {
     );
   });
 
+  it("requires App Check", async () => {
+    await assert.rejects(
+      () => submitExpenseRequestCore(db, baseInput(), {auth: {uid}}),
+      /Se requiere App Check/,
+    );
+  });
+
+  it("rejects consumed App Check token replay", async () => {
+    await assert.rejects(
+      () => submitExpenseRequestCore(db, baseInput(), {
+        auth: {uid},
+        app: {appId: "debug-app", alreadyConsumed: true},
+      }),
+      /Token App Check ya consumido/,
+    );
+  });
+
   it("requires active registered device", async () => {
     await restaurant().collection("devices").doc(uid).delete();
     await assert.rejects(
@@ -258,6 +275,19 @@ describe("secure expense autoapproval functions", () => {
       reason: "duplicado",
     }, adminContext());
     assert.equal(cancelled.restored, false);
+  });
+
+  it("requires App Check for cancellation", async () => {
+    await setMode("live");
+    const result = await submit(baseInput());
+    await assert.rejects(
+      () => cancelExpenseRequestCore(db, {
+        restaurantId,
+        requestId: result.requestId,
+        reason: "duplicado",
+      }, {auth: {uid: "admin-uid"}}),
+      /Se requiere App Check/,
+    );
   });
 
   it("cancels and restores quota when policy allows restore", async () => {

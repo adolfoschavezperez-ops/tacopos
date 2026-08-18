@@ -111,6 +111,7 @@ export async function submitExpenseRequestCore(
   context: CallableContext,
 ) {
   requireAuth(context);
+  requireFreshAppCheck(context);
   const uid = context.auth!.uid;
   const input = parseSubmitInput(raw);
   rejectForgedFields(raw);
@@ -296,6 +297,7 @@ export async function cancelExpenseRequestCore(
   context: CallableContext,
 ) {
   requireAuth(context);
+  requireFreshAppCheck(context);
   const uid = context.auth!.uid;
   const restaurantId = cleanString(raw.restaurantId);
   const requestId = cleanString(raw.requestId);
@@ -373,6 +375,16 @@ export async function cancelExpenseRequestCore(
 function requireAuth(context: CallableContext) {
   if (!context.auth?.uid) {
     throw new HttpsError("unauthenticated", "Se requiere autenticacion.");
+  }
+}
+
+function requireFreshAppCheck(context: CallableContext) {
+  if (!context.app) {
+    throw new HttpsError("unauthenticated", "Se requiere App Check.");
+  }
+  const app = context.app as {alreadyConsumed?: boolean};
+  if (app.alreadyConsumed === true) {
+    throw new HttpsError("permission-denied", "Token App Check ya consumido.");
   }
 }
 
