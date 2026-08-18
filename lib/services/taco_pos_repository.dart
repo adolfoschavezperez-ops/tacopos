@@ -16,6 +16,7 @@ import '../core/orders/employee_benefit_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
+import '../core/expenses/expense_policy.dart';
 import '../core/purchases/purchase_capture_discount.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/cash_difference_audit.dart';
@@ -924,6 +925,12 @@ class TacoPosRepository {
   CollectionReference<Map<String, dynamic>> get _cashWithdrawalRequestsRef =>
       _restaurantRef.collection('cashWithdrawalRequests');
 
+  CollectionReference<Map<String, dynamic>> get _expensePoliciesRef =>
+      _restaurantRef.collection('expensePolicies');
+
+  CollectionReference<Map<String, dynamic>> get _expensePolicyUsageRef =>
+      _restaurantRef.collection('expensePolicyUsage');
+
   CollectionReference<Map<String, dynamic>> get _kitchenStockItemsRef =>
       _restaurantRef.collection('kitchenStockItems');
 
@@ -972,6 +979,9 @@ class TacoPosRepository {
 
   DocumentReference<Map<String, dynamic>> get _saleFolioSettingsRef =>
       _restaurantRef.collection('settings').doc('saleFolio');
+
+  DocumentReference<Map<String, dynamic>> get _expensePolicySettingsRef =>
+      _restaurantRef.collection('settings').doc('expensePolicies');
 
   CollectionReference<Map<String, dynamic>> _dailySaleCountersRef(
     String branchId,
@@ -6590,6 +6600,11 @@ class TacoPosRepository {
     required String cashSessionId,
     required double amount,
     required String reason,
+    String policyId = '',
+    String paymentSource = 'cash',
+    String supplierId = '',
+    bool hasReceipt = false,
+    bool offline = false,
   }) async {
     _requireCashWithdrawalRequester();
     if (amount <= 0) {
@@ -6610,31 +6625,147 @@ class TacoPosRepository {
 
     final employee = AppSession.instance.employee;
     final docRef = _cashWithdrawalRequestsRef.doc();
-    await docRef.set({
-      'id': docRef.id,
-      'cashSessionId': cashSessionId,
-      'businessDate': session.businessDate,
-      ..._currentBranchFields,
-      'amount': amount,
-      'reason': reason.trim(),
-      'requestedByEmployeeId': employee?.id ?? '',
-      'requestedByEmployeeName': employee?.name ?? '',
-      'requestedAt': FieldValue.serverTimestamp(),
-      'status': 'pending',
-      'authorizedByEmployeeId': null,
-      'authorizedByEmployeeName': null,
-      'authorizedAt': null,
-      'adminNotes': null,
-      'approvedAt': null,
-      'approvedByEmployeeId': null,
-      'approvedByEmployeeName': null,
-      'rejectedAt': null,
-      'rejectedByEmployeeId': null,
-      'rejectedByEmployeeName': null,
-      'rejectReason': null,
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
+    final cleanPolicyId = policyId.trim();
+    if (cleanPolicyId.isEmpty) {
+      await docRef.set({
+        'id': docRef.id,
+        'cashSessionId': cashSessionId,
+        'businessDate': session.businessDate,
+        ..._currentBranchFields,
+        'amount': amount,
+        'reason': reason.trim(),
+        'requestedByEmployeeId': employee?.id ?? '',
+        'requestedByEmployeeName': employee?.name ?? '',
+        'requestedAt': FieldValue.serverTimestamp(),
+        'status': 'pending',
+        'authorizedByEmployeeId': null,
+        'authorizedByEmployeeName': null,
+        'authorizedAt': null,
+        'adminNotes': null,
+        'approvedAt': null,
+        'approvedByEmployeeId': null,
+        'approvedByEmployeeName': null,
+        'rejectedAt': null,
+        'rejectedByEmployeeId': null,
+        'rejectedByEmployeeName': null,
+        'rejectReason': null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return;
+    }
+
+    await _db.runTransaction((transaction) async {
+      final settingsDoc = await transaction.get(_expensePolicySettingsRef);
+      final settings = ExpensePolicySettings.fromMap(settingsDoc.data());
+      final policyRef = _expensePoliciesRef.doc(cleanPolicyId);
+      final policyDoc = await transaction.get(policyRef);
+      if (!policyDoc.exists) {
+        throw StateError('La politica de gasto ya no existe.');
+      }
+      final policy = ExpensePolicy.fromMap(policyDoc.id, policyDoc.data()!);
+      final periodKey = expensePolicyPeriodKey(
+        policy: policy,
+        businessDate: session.businessDate,
+      );
+      final usageRef = _expensePolicyUsageRef.doc(
+        _expensePolicyUsageDocId(policy.id, policy.branchId, periodKey),
+      );
+      final usageDoc = await transaction.get(usageRef);
+      final usage = usageDoc.exists
+          ? ExpensePolicyUsage.fromMap(usageDoc.id, usageDoc.data()!)
+          : ExpensePolicyUsage(
+              id: usageRef.id,
+              policyId: policy.id,
+              branchId: policy.branchId,
+              periodKey: periodKey,
+            );
+      final decision = evaluateExpensePolicy(
+        ExpensePolicyEvaluationInput(
+          settings: settings,
+          policy: policy,
+          usage: usage,
+          amount: amount,
+          businessDate: session.businessDate,
+          requestedAt: DateTime.now(),
+          paymentSource: paymentSource,
+          supplierId: supplierId,
+          requesterRole: employee?.hasAdminAccess == true ? 'admin' : 'staff',
+          requesterId: employee?.id ?? '',
+          hasReceipt: hasReceipt,
+          offline: offline,
+          reason: reason,
+        ),
+      );
+      final autoApproved = decision.autoApproved;
+      transaction.set(docRef, {
+        'id': docRef.id,
+        'cashSessionId': cashSessionId,
+        'businessDate': session.businessDate,
+        ..._currentBranchFields,
+        'amount': amount,
+        'reason': reason.trim(),
+        'source': paymentSource,
+        'sourceName': paymentSource,
+        'requestedByEmployeeId': employee?.id ?? '',
+        'requestedByEmployeeName': employee?.name ?? '',
+        'requestedAt': FieldValue.serverTimestamp(),
+        'status': autoApproved ? 'approved' : 'pending',
+        'authorizedByEmployeeId': autoApproved ? 'auto_policy' : null,
+        'authorizedByEmployeeName': autoApproved ? 'Politica de gasto' : null,
+        'authorizedAt': autoApproved ? FieldValue.serverTimestamp() : null,
+        'adminNotes': null,
+        'approvedAt': autoApproved ? FieldValue.serverTimestamp() : null,
+        'approvedByEmployeeId': autoApproved ? 'auto_policy' : null,
+        'approvedByEmployeeName': autoApproved ? 'Politica de gasto' : null,
+        'rejectedAt': null,
+        'rejectedByEmployeeId': null,
+        'rejectedByEmployeeName': null,
+        'rejectReason': null,
+        'policyId': policy.id,
+        'policyVersion': policy.policyVersion,
+        'policyName': policy.name,
+        'policySnapshot': policy.snapshotForExpense(),
+        'autoApproved': autoApproved,
+        'autoApprovedAt': autoApproved ? FieldValue.serverTimestamp() : null,
+        'policyDecisionReasonCode': decision.reasonCode,
+        'policyDecisionMessage': decision.message,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (autoApproved) {
+        final consumed = usage.consume(amount: amount, expenseId: docRef.id);
+        transaction.set(usageRef, {
+          ...consumed.toMap(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+      transaction.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': autoApproved
+            ? 'EXPENSE_AUTO_APPROVED'
+            : 'EXPENSE_SENT_TO_MANUAL_APPROVAL',
+        ..._currentBranchFields,
+        'expenseId': docRef.id,
+        'policyId': policy.id,
+        'policyName': policy.name,
+        'policyVersion': policy.policyVersion,
+        'policyDecisionReasonCode': decision.reasonCode,
+        'policyDecisionMessage': decision.message,
+        'amount': amount,
+        'employeeId': employee?.id ?? '',
+        'employeeName': employee?.name ?? '',
+        'createdAt': FieldValue.serverTimestamp(),
+      });
     });
+  }
+
+  String _expensePolicyUsageDocId(
+    String policyId,
+    String branchId,
+    String periodKey,
+  ) {
+    final raw = '$policyId|$branchId|$periodKey';
+    return raw.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
   }
 
   Future<void> authorizeCashWithdrawal({
@@ -9675,6 +9806,161 @@ class TacoPosRepository {
         'timestamp': FieldValue.serverTimestamp(),
         'createdAt': FieldValue.serverTimestamp(),
       });
+    });
+  }
+
+  Stream<ExpensePolicySettings> watchExpensePolicySettings() {
+    return _expensePolicySettingsRef.snapshots().map(
+      (doc) => ExpensePolicySettings.fromMap(doc.data()),
+    );
+  }
+
+  Future<ExpensePolicySettings> getExpensePolicySettingsOnce() async {
+    final doc = await _expensePolicySettingsRef.get();
+    return ExpensePolicySettings.fromMap(doc.data());
+  }
+
+  Future<void> saveExpensePolicySettings(ExpensePolicySettings settings) async {
+    _requireCashWithdrawalAuthorizer();
+    await _expensePolicySettingsRef.set({
+      ...settings.toMap(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedBy': AppSession.instance.employee?.id ?? '',
+    }, SetOptions(merge: true));
+    await _restaurantRef.collection('activityLog').add({
+      'type': 'EXPENSE_POLICY_SETTINGS_UPDATED',
+      ..._currentBranchFields,
+      'expensePoliciesEnabled': settings.expensePoliciesEnabled,
+      'manualApprovalCutoffEnabled': settings.manualApprovalCutoffEnabled,
+      'manualApprovalCutoffTime': settings.manualApprovalCutoffTime,
+      'employeeId': AppSession.instance.employee?.id ?? '',
+      'employeeName': AppSession.instance.employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Stream<List<ExpensePolicy>> watchExpensePolicies({bool activeOnly = false}) {
+    return _expensePoliciesRef.snapshots().map((snapshot) {
+      final policies =
+          snapshot.docs
+              .map((doc) => ExpensePolicy.fromMap(doc.id, doc.data()))
+              .where((policy) => _matchesCurrentBranch(policy.branchId))
+              .where((policy) => !activeOnly || policy.active)
+              .toList()
+            ..sort((a, b) {
+              final sort = a.sortOrder.compareTo(b.sortOrder);
+              return sort != 0 ? sort : a.name.compareTo(b.name);
+            });
+      return policies;
+    });
+  }
+
+  Future<List<ExpensePolicy>> getActiveExpensePoliciesOnce() async {
+    final snapshot = await _expensePoliciesRef
+        .where('active', isEqualTo: true)
+        .get();
+    return snapshot.docs
+        .map((doc) => ExpensePolicy.fromMap(doc.id, doc.data()))
+        .where((policy) => _matchesCurrentBranch(policy.branchId))
+        .toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+  }
+
+  Stream<List<ExpensePolicyUsage>> watchExpensePolicyUsage(String policyId) {
+    return _expensePolicyUsageRef
+        .where('policyId', isEqualTo: policyId)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs
+                  .map((doc) => ExpensePolicyUsage.fromMap(doc.id, doc.data()))
+                  .where((usage) => _matchesCurrentBranch(usage.branchId))
+                  .toList()
+                ..sort((a, b) => b.periodKey.compareTo(a.periodKey)),
+        );
+  }
+
+  Future<String> saveExpensePolicy(ExpensePolicy policy) async {
+    _requireCashWithdrawalAuthorizer();
+    final employee = AppSession.instance.employee;
+    final creating = policy.id.trim().isEmpty;
+    final docRef = creating
+        ? _expensePoliciesRef.doc()
+        : _expensePoliciesRef.doc(policy.id);
+    final previousDoc = creating ? null : await docRef.get();
+    final previousVersion = previousDoc?.exists == true
+        ? ExpensePolicy.fromMap(docRef.id, previousDoc!.data()!).policyVersion
+        : 0;
+    final version = creating ? 1 : previousVersion + 1;
+    final data = policy
+        .copyWith(
+          id: docRef.id,
+          restaurantId: AppSession.instance.currentRestaurantId,
+          branchId: policy.branchId.trim().isEmpty
+              ? AppSession.instance.currentBranchId
+              : policy.branchId,
+          policyVersion: version,
+          createdBy: creating ? employee?.id ?? '' : policy.createdBy,
+          updatedBy: employee?.id ?? '',
+        )
+        .toMap();
+    await docRef.set({
+      ...data,
+      'id': docRef.id,
+      'createdAt': creating
+          ? FieldValue.serverTimestamp()
+          : previousDoc?.data()?['createdAt'],
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+    await _restaurantRef.collection('activityLog').add({
+      'type': creating ? 'POLICY_CREATED' : 'POLICY_UPDATED',
+      ..._currentBranchFields,
+      'policyId': docRef.id,
+      'policyName': policy.name,
+      'policyVersion': version,
+      'employeeId': employee?.id ?? '',
+      'employeeName': employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    return docRef.id;
+  }
+
+  Future<String> duplicateExpensePolicy(
+    ExpensePolicy policy, {
+    String? targetBranchId,
+  }) async {
+    final copy = policy.copyWith(
+      id: '',
+      name: '${policy.name} copia',
+      branchId: targetBranchId ?? policy.branchId,
+      active: false,
+      policyVersion: 1,
+    );
+    final id = await saveExpensePolicy(copy);
+    await _restaurantRef.collection('activityLog').add({
+      'type': 'POLICY_DUPLICATED',
+      ..._currentBranchFields,
+      'sourcePolicyId': policy.id,
+      'newPolicyId': id,
+      'employeeId': AppSession.instance.employee?.id ?? '',
+      'employeeName': AppSession.instance.employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+    return id;
+  }
+
+  Future<void> setExpensePolicyActive({
+    required ExpensePolicy policy,
+    required bool active,
+  }) async {
+    await saveExpensePolicy(policy.copyWith(active: active));
+    await _restaurantRef.collection('activityLog').add({
+      'type': active ? 'POLICY_ENABLED' : 'POLICY_DISABLED',
+      ..._currentBranchFields,
+      'policyId': policy.id,
+      'employeeId': AppSession.instance.employee?.id ?? '',
+      'employeeName': AppSession.instance.employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
     });
   }
 

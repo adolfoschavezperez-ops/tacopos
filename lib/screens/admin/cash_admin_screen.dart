@@ -3545,6 +3545,17 @@ class _WithdrawalAdminCard extends StatelessWidget {
           ),
           if (request.sourceName.trim().isNotEmpty)
             _InfoLine(label: 'Origen', value: request.sourceName),
+          if (request.policyName.trim().isNotEmpty) ...[
+            _InfoLine(label: 'Politica', value: request.policyName),
+            _InfoLine(
+              label: 'Autorizacion',
+              value: request.autoApproved
+                  ? 'Autoautorizada v${request.policyVersion}'
+                  : request.policyDecisionMessage.trim().isNotEmpty
+                  ? request.policyDecisionMessage
+                  : 'Manual',
+            ),
+          ],
           _InfoLine(label: 'Fecha operativa', value: request.businessDate),
           _InfoLine(
             label: 'Solicitado',

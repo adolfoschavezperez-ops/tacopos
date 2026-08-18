@@ -246,6 +246,20 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      match /expensePolicies/{policyId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /expensePolicyUsage/{usageId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
       match /kitchenStockItems/{itemId} {
         allow read: if signedIn();
         allow create: if validCreate(restaurantId);

@@ -4,9 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/backoffice/backoffice_version.dart';
 
 void main() {
-  test('Backoffice version source returns 1.0.7', () {
-    expect(BackofficeVersion.version, '1.0.7');
-    expect(BackofficeVersion.label, 'Backoffice v1.0.7');
+  test('Backoffice version source returns 1.1.0', () {
+    expect(BackofficeVersion.version, '1.1.0');
+    expect(BackofficeVersion.label, 'Backoffice v1.1.0');
   });
 
   test('Backoffice UI shows version from the shared source', () {
@@ -28,6 +28,6 @@ void main() {
   test('Android pubspec version remains intact', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
 
-    expect(pubspec, contains('version: 1.4.2+15'));
+    expect(pubspec, contains('version: 1.5.0+16'));
   });
 }
