@@ -900,13 +900,6 @@ class _DetailGrid extends StatelessWidget {
   }
 }
 
-class _MetricLineData {
-  const _MetricLineData(this.label, this.value);
-
-  final String label;
-  final double value;
-}
-
 enum _DetailLineKind { value, section, total, warning }
 
 class _DetailLineData {
@@ -1114,60 +1107,7 @@ class _SummaryColumn extends StatelessWidget {
         children: [
           const _PanelTitle(title: 'RESUMEN', color: _FinanceColors.amber),
           const SizedBox(height: 10),
-          _SummaryCard(
-            title: '1. RESUMEN GENERAL',
-            tooltip:
-                'Resultado considerando el total facturado por proveedores, sin importar cuanto se ha pagado.',
-            lines: [
-              _MetricLineData('Ingreso real', bundle.realCollected),
-              _MetricLineData('Gastos', -bundle.paidExpenses),
-              _MetricLineData(
-                'Facturas proveedor',
-                -bundle.supplierInvoicesTotal,
-              ),
-            ],
-            total: bundle.generalResult,
-            formula:
-                '${_money(bundle.realCollected)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierInvoicesTotal)}',
-          ),
-          const SizedBox(height: 10),
-          _SummaryCard(
-            title: '2. RESUMEN DE COBROS',
-            tooltip:
-                'Flujo de dinero realmente cobrado menos gastos y pagos a proveedores.',
-            lines: [
-              _MetricLineData('Cobrado real', bundle.realCollected),
-              _MetricLineData('Gastos', -bundle.paidExpenses),
-              _MetricLineData(
-                'Pagado a proveedores',
-                -bundle.supplierPaidTotal,
-              ),
-            ],
-            total: bundle.collectionsResult,
-            formula:
-                '${_money(bundle.realCollected)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierPaidTotal)}',
-          ),
-          const SizedBox(height: 10),
-          _SummaryCard(
-            title: '3. RESUMEN FINAL',
-            tooltip:
-                'Resultado operativo menos facturas del periodo y saldo final despues de aportaciones de socios.',
-            lines: [
-              _MetricLineData('Cobrado real', bundle.realCollected),
-              _MetricLineData('Gastos', -bundle.paidExpenses),
-              _MetricLineData(
-                'Facturas proveedor',
-                -bundle.supplierInvoicesTotal,
-              ),
-              _MetricLineData('Resultado operativo', bundle.operatingResult),
-              _MetricLineData('Aportacion socios', bundle.partnerContributions),
-            ],
-            total: bundle.finalBalance,
-            totalLabel: 'Saldo final',
-            accentColor: financeFinalResultColor(bundle.finalBalance),
-            formula:
-                '${_money(bundle.realCollected)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierInvoicesTotal)} + ${_money(bundle.partnerContributions)}',
-          ),
+          _FinancialSummaryCard(bundle: bundle),
           const SizedBox(height: 18),
           Text(
             'Ultima actualizacion: ${DateFormat('dd/MM/yyyy HH:mm').format(bundle.loadedAt)}',
@@ -1197,105 +1137,226 @@ class _SummaryColumn extends StatelessWidget {
   }
 }
 
-class _SummaryCard extends StatelessWidget {
-  const _SummaryCard({
-    required this.title,
-    required this.tooltip,
-    required this.lines,
-    required this.total,
-    required this.formula,
-    this.totalLabel = 'Total',
-    this.accentColor,
-  });
+class _FinancialSummaryCard extends StatelessWidget {
+  const _FinancialSummaryCard({required this.bundle});
 
-  final String title;
-  final String tooltip;
-  final List<_MetricLineData> lines;
-  final double total;
-  final String formula;
-  final String totalLabel;
-  final Color? accentColor;
+  final FinanceDashboardBundle bundle;
 
   @override
   Widget build(BuildContext context) {
-    final totalColor = financeFinalResultColor(total);
+    final operatingColor = financeFinalResultColor(bundle.operatingResult);
+    final reconciliationColor = financeReconciliationDifferenceColor(
+      bundle.reconciliationDifference,
+    );
     return Tooltip(
-      message: tooltip,
+      message:
+          'Cobrado real menos gastos y facturas; las aportaciones se muestran despues como conciliacion.',
       child: Container(
-        key: ValueKey('finance-summary-card-$title'),
+        key: const ValueKey('finance-summary-card-RESUMEN FINANCIERO'),
         padding: const EdgeInsets.all(12),
         decoration: _panelDecoration(
           fill: _FinanceColors.panelHigh,
-          borderColor: accentColor,
+          borderColor: reconciliationColor,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              title,
+              'RESUMEN FINANCIERO',
               style: TextStyle(
-                color: accentColor ?? _FinanceColors.amber,
-                fontWeight: FontWeight.w800,
+                color: reconciliationColor,
+                fontWeight: FontWeight.w900,
                 fontSize: 12,
               ),
             ),
+            const SizedBox(height: 12),
+            const _SummarySectionLabel('SUMA', color: _FinanceColors.green),
+            _SummaryValueRow(
+              label: 'Cobrado real',
+              value: bundle.realCollected,
+              color: _FinanceColors.green,
+            ),
             const SizedBox(height: 10),
-            for (final line in lines)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        line.label,
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                    ),
-                    Text(
-                      _money(line.value.abs()),
-                      style: TextStyle(
-                        color: line.value < 0
-                            ? _FinanceColors.amber
-                            : _FinanceColors.green,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
+            const _SummarySectionLabel('RESTA', color: _FinanceColors.amber),
+            _SummaryValueRow(
+              label: 'Gastos',
+              value: -bundle.paidExpenses,
+              color: _FinanceColors.amber,
+              signed: true,
+            ),
+            _SummaryValueRow(
+              label: 'Facturas proveedor',
+              value: -bundle.supplierInvoicesTotal,
+              color: _FinanceColors.amber,
+              signed: true,
+            ),
+            const Divider(color: _FinanceColors.border),
+            _SummaryHighlightRow(
+              label: 'Resultado operativo',
+              value: bundle.operatingResult,
+              color: operatingColor,
+              formula:
+                  '${_money(bundle.realCollected)} - ${_money(bundle.paidExpenses)} - ${_money(bundle.supplierInvoicesTotal)}',
+            ),
+            const SizedBox(height: 12),
+            const _SummarySectionLabel(
+              'APORTACIONES',
+              color: _FinanceColors.violet,
+            ),
+            _SummaryValueRow(
+              label: 'Aportacion socios',
+              value: bundle.partnerContributions,
+              color: _FinanceColors.violet,
+              signed: true,
+            ),
+            const Divider(color: _FinanceColors.border),
+            const _SummarySectionLabel(
+              'CONCILIACION',
+              color: _FinanceColors.amber,
+            ),
+            _SummaryValueRow(
+              label: 'Resultado operativo',
+              value: bundle.operatingResult,
+              color: operatingColor,
+              signed: true,
+            ),
+            _SummaryValueRow(
+              label: 'Aportacion socios',
+              value: bundle.partnerContributions,
+              color: _FinanceColors.violet,
+              signed: true,
+            ),
+            _SummaryHighlightRow(
+              label:
+                  bundle.reconciliationDifference.abs() <= financeMoneyTolerance
+                  ? 'Conciliado'
+                  : 'Diferencia por conciliar',
+              value: bundle.reconciliationDifference,
+              color: reconciliationColor,
+              signed: true,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SummarySectionLabel extends StatelessWidget {
+  const _SummarySectionLabel(this.label, {required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
+class _SummaryValueRow extends StatelessWidget {
+  const _SummaryValueRow({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.signed = false,
+  });
+
+  final String label;
+  final double value;
+  final Color color;
+  final bool signed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 11))),
+          Text(
+            signed ? _signedMoney(value) : _money(value),
+            style: TextStyle(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SummaryHighlightRow extends StatelessWidget {
+  const _SummaryHighlightRow({
+    required this.label,
+    required this.value,
+    required this.color,
+    this.formula,
+    this.signed = false,
+  });
+
+  final String label;
+  final double value;
+  final Color color;
+  final String? formula;
+  final bool signed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color),
+        color: color.withValues(alpha: 0.08),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: _FinanceColors.text,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
               ),
-            const Divider(color: _FinanceColors.border),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    totalLabel,
-                    style: const TextStyle(
-                      color: _FinanceColors.text,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+              Text(
+                signed ? _signedMoney(value) : _money(value),
+                key: ValueKey('finance-summary-total-$label'),
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.w900,
+                  fontSize: 15,
                 ),
-                Text(
-                  _money(total),
-                  key: ValueKey('finance-summary-total-$title'),
-                  style: TextStyle(
-                    color: totalColor,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 16,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
+          ),
+          if (formula != null) ...[
             const SizedBox(height: 5),
             Text(
-              formula,
+              formula!,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: _FinanceColors.muted, fontSize: 10),
             ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -2764,7 +2825,9 @@ class _ShareFinalSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final operatingColor = financeFinalResultColor(bundle.operatingResult);
-    final accentColor = financeFinalResultColor(bundle.finalBalance);
+    final accentColor = financeReconciliationDifferenceColor(
+      bundle.reconciliationDifference,
+    );
     return Container(
       key: const ValueKey('finance-share-final-section'),
       margin: const EdgeInsets.only(top: 8),
@@ -2778,7 +2841,7 @@ class _ShareFinalSection extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'RESUMEN FINAL',
+            'RESUMEN FINANCIERO',
             style: TextStyle(
               color: accentColor,
               fontSize: 13,
@@ -2786,10 +2849,13 @@ class _ShareFinalSection extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 8),
-          _ShareValueLine(label: 'Ingreso real', value: bundle.realCollected),
+          const _ShareGroupLabel('SUMA', color: _FinanceColors.green),
+          _ShareValueLine(label: 'Cobrado real', value: bundle.realCollected),
+          const SizedBox(height: 6),
+          const _ShareGroupLabel('RESTA', color: _FinanceColors.amber),
           _ShareValueLine(label: 'Gastos', value: -bundle.paidExpenses),
           _ShareValueLine(
-            label: 'Facturas de proveedor',
+            label: 'Facturas proveedor',
             value: -bundle.supplierInvoicesTotal,
           ),
           const Divider(color: _FinanceColors.border),
@@ -2799,17 +2865,60 @@ class _ShareFinalSection extends StatelessWidget {
             strong: true,
             valueColor: operatingColor,
           ),
+          const SizedBox(height: 6),
+          const _ShareGroupLabel('APORTACIONES', color: _FinanceColors.violet),
           _ShareValueLine(
             label: 'Aportacion de socios',
             value: bundle.partnerContributions,
+            textValue: _signedMoney(bundle.partnerContributions),
+            valueColor: _FinanceColors.violet,
+          ),
+          const Divider(color: _FinanceColors.border),
+          const _ShareGroupLabel('CONCILIACION', color: _FinanceColors.amber),
+          _ShareValueLine(
+            label: 'Resultado operativo',
+            value: bundle.operatingResult,
+            valueColor: operatingColor,
           ),
           _ShareValueLine(
-            label: 'SALDO FINAL',
-            value: bundle.finalBalance,
+            label: 'Aportacion socios',
+            value: bundle.partnerContributions,
+            textValue: _signedMoney(bundle.partnerContributions),
+            valueColor: _FinanceColors.violet,
+          ),
+          _ShareValueLine(
+            label:
+                bundle.reconciliationDifference.abs() <= financeMoneyTolerance
+                ? 'CONCILIADO'
+                : 'DIFERENCIA POR CONCILIAR',
+            value: bundle.reconciliationDifference,
+            textValue: _signedMoney(bundle.reconciliationDifference),
             strong: true,
             valueColor: accentColor,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ShareGroupLabel extends StatelessWidget {
+  const _ShareGroupLabel(this.label, {required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.w900,
+        ),
       ),
     );
   }
@@ -2933,6 +3042,12 @@ Color financeFinalResultColor(double value) {
   if (value > financeMoneyTolerance) return _FinanceColors.green;
   if (value < -financeMoneyTolerance) return _FinanceColors.red;
   return _FinanceColors.muted;
+}
+
+@visibleForTesting
+Color financeReconciliationDifferenceColor(double value) {
+  if (value.abs() <= financeMoneyTolerance) return _FinanceColors.green;
+  return _FinanceColors.amber;
 }
 
 @visibleForTesting
@@ -3292,6 +3407,14 @@ String _money(double value) {
     symbol: r'$',
     decimalDigits: 2,
   ).format(value);
+}
+
+String _signedMoney(double value) {
+  final normalized = value.abs() <= financeMoneyTolerance ? 0.0 : value;
+  final formatted = _money(normalized.abs());
+  if (normalized > 0) return '+$formatted';
+  if (normalized < 0) return '-$formatted';
+  return formatted;
 }
 
 String _displayDate(String businessDate) {

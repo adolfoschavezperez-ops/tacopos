@@ -71,7 +71,7 @@ void _summarySheet(
     ('Resumen de cobros', bundle.collectionsResult),
     ('Resultado operativo', bundle.operatingResult),
     ('Aportacion de socios', bundle.partnerContributions),
-    ('Saldo final', bundle.finalBalance),
+    ('Diferencia por conciliar', bundle.reconciliationDifference),
   ]);
   _widths(sheet, [28, 24]);
 }
