@@ -132,10 +132,13 @@ class _SettingsPanelState extends State<_SettingsPanel> {
   @override
   Widget build(BuildContext context) {
     final settings = widget.settings;
+    final mode = settings.expensePolicyMode;
     return GlassPanel(
-      borderColor: settings.expensePoliciesEnabled
-          ? BrandColors.success
-          : BrandColors.textMuted,
+      borderColor: switch (mode) {
+        ExpensePolicyMode.live => BrandColors.success,
+        ExpensePolicyMode.shadow => BrandColors.accentYellow,
+        ExpensePolicyMode.off => BrandColors.textMuted,
+      },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -145,18 +148,27 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                 'Kill switch global. En OFF conserva el flujo manual actual.',
           ),
           const SizedBox(height: 10),
-          SwitchListTile.adaptive(
-            contentPadding: EdgeInsets.zero,
-            value: settings.expensePoliciesEnabled,
-            title: const Text('Habilitar politicas'),
-            subtitle: const Text(
-              'No activar en produccion hasta desplegar seguridad backend/rules.',
-            ),
-            onChanged: _saving
+          SegmentedButton<ExpensePolicyMode>(
+            segments: const [
+              ButtonSegment(
+                value: ExpensePolicyMode.off,
+                label: Text('Desactivado'),
+              ),
+              ButtonSegment(
+                value: ExpensePolicyMode.shadow,
+                label: Text('Prueba'),
+              ),
+              ButtonSegment(
+                value: ExpensePolicyMode.live,
+                label: Text('Activo'),
+              ),
+            ],
+            selected: {mode},
+            onSelectionChanged: _saving
                 ? null
-                : (value) => _save(
+                : (values) => _save(
                     ExpensePolicySettings(
-                      expensePoliciesEnabled: value,
+                      expensePolicyMode: values.first,
                       manualApprovalCutoffEnabled:
                           settings.manualApprovalCutoffEnabled,
                       manualApprovalCutoffTime:
@@ -164,6 +176,22 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                       defaultReceiptRequired: settings.defaultReceiptRequired,
                     ),
                   ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            switch (mode) {
+              ExpensePolicyMode.off => 'OFF: conserva el flujo manual actual.',
+              ExpensePolicyMode.shadow =>
+                'SHADOW: evalua politicas sin autoautorizar ni consumir cupo.',
+              ExpensePolicyMode.live =>
+                'LIVE: puede autoautorizar gastos y consumir cupo.',
+            },
+            style: TextStyle(
+              color: mode == ExpensePolicyMode.live
+                  ? BrandColors.danger
+                  : BrandColors.textMuted,
+              fontWeight: FontWeight.w700,
+            ),
           ),
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
@@ -178,7 +206,7 @@ class _SettingsPanelState extends State<_SettingsPanel> {
                 ? null
                 : (value) => _save(
                     ExpensePolicySettings(
-                      expensePoliciesEnabled: settings.expensePoliciesEnabled,
+                      expensePolicyMode: settings.expensePolicyMode,
                       manualApprovalCutoffEnabled: value,
                       manualApprovalCutoffTime:
                           settings.manualApprovalCutoffTime,

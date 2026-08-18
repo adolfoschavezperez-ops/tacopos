@@ -803,7 +803,7 @@ class _WithdrawalRequestTile extends StatelessWidget {
       subtitle: Text(
         request.policyName.trim().isEmpty
             ? label
-            : '$label - ${request.autoApproved ? 'Autoautorizado' : 'Politica'}: ${request.policyName}',
+            : '$label - ${request.policyOutcomeLabel}: ${request.policyName}',
         style: TextStyle(color: color),
       ),
       trailing: MoneyText(

@@ -38,6 +38,9 @@ class CashWithdrawalRequest {
     this.policySnapshot = const {},
     this.autoApproved = false,
     this.autoApprovedAt,
+    this.wouldAutoApprove = false,
+    this.policyEvaluationMode = '',
+    this.policyEvaluationReason = '',
     this.policyDecisionReasonCode = '',
     this.policyDecisionMessage = '',
   });
@@ -76,12 +79,22 @@ class CashWithdrawalRequest {
   final Map<String, dynamic> policySnapshot;
   final bool autoApproved;
   final DateTime? autoApprovedAt;
+  final bool wouldAutoApprove;
+  final String policyEvaluationMode;
+  final String policyEvaluationReason;
   final String policyDecisionReasonCode;
   final String policyDecisionMessage;
 
   bool get isPending => status == 'pending';
   bool get isApproved => status == 'approved';
   bool get isRejected => status == 'rejected';
+
+  String get policyOutcomeLabel {
+    if (autoApproved) return 'Autoautorizado';
+    if (wouldAutoApprove) return 'Cumpliria politica';
+    if (policyId.trim().isEmpty) return 'Manual';
+    return 'No cumplio politica';
+  }
 
   factory CashWithdrawalRequest.fromDoc(
     DocumentSnapshot<Map<String, dynamic>> doc,
@@ -133,6 +146,9 @@ class CashWithdrawalRequest {
           : const {},
       autoApproved: data['autoApproved'] as bool? ?? false,
       autoApprovedAt: _toDate(data['autoApprovedAt']),
+      wouldAutoApprove: data['wouldAutoApprove'] as bool? ?? false,
+      policyEvaluationMode: data['policyEvaluationMode'] as String? ?? '',
+      policyEvaluationReason: data['policyEvaluationReason'] as String? ?? '',
       policyDecisionReasonCode:
           data['policyDecisionReasonCode'] as String? ?? '',
       policyDecisionMessage: data['policyDecisionMessage'] as String? ?? '',

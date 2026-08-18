@@ -3548,6 +3548,10 @@ class _WithdrawalAdminCard extends StatelessWidget {
           if (request.policyName.trim().isNotEmpty) ...[
             _InfoLine(label: 'Politica', value: request.policyName),
             _InfoLine(
+              label: 'Resultado politica',
+              value: request.policyOutcomeLabel,
+            ),
+            _InfoLine(
               label: 'Autorizacion',
               value: request.autoApproved
                   ? 'Autoautorizada v${request.policyVersion}'
