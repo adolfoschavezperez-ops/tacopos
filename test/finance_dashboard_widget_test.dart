@@ -124,7 +124,15 @@ void main() {
             approvedWithdrawalsTotal: 500,
           ),
         ],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            1,
+            500,
+            businessDate: '2026-08-05',
+            cashSessionId: 'cut-2026-08-05',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
@@ -164,7 +172,7 @@ void main() {
     expect(find.text(r'$5,999.00'), findsWidgets);
   });
 
-  testWidgets('resumen final colorea importe y recuadro por signo', (
+  testWidgets('resumen financiero colorea resultado y conciliacion', (
     tester,
   ) async {
     tester.view
@@ -178,6 +186,15 @@ void main() {
     expect(financeFinalResultColor(-2412.66), const Color(0xFFE36565));
     expect(financeFinalResultColor(3500), const Color(0xFF55B845));
     expect(financeFinalResultColor(0), const Color(0xFFA2A6AA));
+    expect(
+      financeReconciliationDifferenceColor(-2412.66),
+      const Color(0xFFE9A91A),
+    );
+    expect(
+      financeReconciliationDifferenceColor(46.87),
+      const Color(0xFFE9A91A),
+    );
+    expect(financeReconciliationDifferenceColor(0), const Color(0xFF55B845));
 
     final formulaBundle = _summaryBundle(
       real: 25360.70,
@@ -191,44 +208,52 @@ void main() {
 
     final negativeBundle = _summaryBundle(real: 100, expenses: 150);
     await _pumpDashboardContent(tester, negativeBundle);
-    _expectSummaryFinalStyle(
+    _expectSummaryFinancialStyle(
       tester,
-      color: const Color(0xFFE36565),
-      value: r'-$50.00',
+      operatingColor: const Color(0xFFE36565),
+      operatingValue: r'-$50.00',
+      reconciliationColor: const Color(0xFFE9A91A),
+      reconciliationValue: r'-$50.00',
     );
     await _pumpShareSummary(tester, negativeBundle);
-    _expectShareFinalStyle(
+    _expectShareFinancialStyle(
       tester,
-      color: const Color(0xFFE36565),
+      color: const Color(0xFFE9A91A),
       value: r'-$50.00',
     );
 
     final positiveBundle = _summaryBundle(real: 3500);
     await _pumpDashboardContent(tester, positiveBundle);
-    _expectSummaryFinalStyle(
+    _expectSummaryFinancialStyle(
       tester,
-      color: const Color(0xFF55B845),
-      value: r'$3,500.00',
+      operatingColor: const Color(0xFF55B845),
+      operatingValue: r'$3,500.00',
+      reconciliationColor: const Color(0xFFE9A91A),
+      reconciliationValue: r'+$3,500.00',
     );
     await _pumpShareSummary(tester, positiveBundle);
-    _expectShareFinalStyle(
+    _expectShareFinancialStyle(
       tester,
-      color: const Color(0xFF55B845),
-      value: r'$3,500.00',
+      color: const Color(0xFFE9A91A),
+      value: r'+$3,500.00',
     );
 
     final zeroBundle = _summaryBundle();
     await _pumpDashboardContent(tester, zeroBundle);
-    _expectSummaryFinalStyle(
+    _expectSummaryFinancialStyle(
       tester,
-      color: const Color(0xFFA2A6AA),
-      value: r'$0.00',
+      operatingColor: const Color(0xFFA2A6AA),
+      operatingValue: r'$0.00',
+      reconciliationColor: const Color(0xFF55B845),
+      reconciliationValue: r'$0.00',
+      reconciled: true,
     );
     await _pumpShareSummary(tester, zeroBundle);
-    _expectShareFinalStyle(
+    _expectShareFinancialStyle(
       tester,
-      color: const Color(0xFFA2A6AA),
+      color: const Color(0xFF55B845),
       value: r'$0.00',
+      reconciled: true,
     );
   });
 }
@@ -280,27 +305,41 @@ Future<void> _pumpShareSummary(
   await tester.pump();
 }
 
-void _expectSummaryFinalStyle(
+void _expectSummaryFinancialStyle(
   WidgetTester tester, {
-  required Color color,
-  required String value,
+  required Color operatingColor,
+  required String operatingValue,
+  required Color reconciliationColor,
+  required String reconciliationValue,
+  bool reconciled = false,
 }) {
   final card = tester.widget<Container>(
-    find.byKey(const ValueKey('finance-summary-card-3. RESUMEN FINAL')),
+    find.byKey(const ValueKey('finance-summary-card-RESUMEN FINANCIERO')),
   );
-  expect(_containerBorderColor(card), color);
+  expect(_containerBorderColor(card), reconciliationColor);
 
-  final resultText = tester.widget<Text>(
-    find.byKey(const ValueKey('finance-summary-total-3. RESUMEN FINAL')),
+  final operatingText = tester.widget<Text>(
+    find.byKey(const ValueKey('finance-summary-total-Resultado operativo')),
   );
-  expect(resultText.data, value);
-  expect(resultText.style?.color, color);
+  expect(operatingText.data, operatingValue);
+  expect(operatingText.style?.color, operatingColor);
+
+  final reconciliationText = tester.widget<Text>(
+    find.byKey(
+      ValueKey(
+        'finance-summary-total-${reconciled ? 'Conciliado' : 'Diferencia por conciliar'}',
+      ),
+    ),
+  );
+  expect(reconciliationText.data, reconciliationValue);
+  expect(reconciliationText.style?.color, reconciliationColor);
 }
 
-void _expectShareFinalStyle(
+void _expectShareFinancialStyle(
   WidgetTester tester, {
   required Color color,
   required String value,
+  bool reconciled = false,
 }) {
   final section = tester.widget<Container>(
     find.byKey(const ValueKey('finance-share-final-section')),
@@ -308,7 +347,11 @@ void _expectShareFinalStyle(
   expect(_containerBorderColor(section), color);
 
   final resultText = tester.widget<Text>(
-    find.byKey(const ValueKey('finance-share-value-SALDO FINAL')),
+    find.byKey(
+      ValueKey(
+        'finance-share-value-${reconciled ? 'CONCILIADO' : 'DIFERENCIA POR CONCILIAR'}',
+      ),
+    ),
   );
   expect(resultText.data, value);
   expect(resultText.style?.color, color);
@@ -379,16 +422,19 @@ CashWithdrawalRequest _expense(
   int index,
   double amount, {
   String businessDate = '2026-07-12',
+  String cashSessionId = 'cash',
+  String source = '',
 }) {
   return CashWithdrawalRequest(
     id: 'expense-$index',
-    cashSessionId: 'cash',
+    cashSessionId: cashSessionId,
     businessDate: businessDate,
     amount: amount,
     reason: 'Gasto $index',
     requestedByEmployeeId: 'employee',
     requestedByEmployeeName: 'Empleado',
     status: 'approved',
+    source: source,
   );
 }
 

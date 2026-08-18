@@ -219,13 +219,21 @@ String financeWhatsappSummaryText({
     'FACTURAS PENDIENTES',
     _summaryMoney(bundle.pendingSupplierInvoices),
     '',
-    'RESUMEN FINAL',
-    'Ingreso real: ${_summaryMoney(bundle.realCollected)}',
+    'RESUMEN FINANCIERO',
+    'SUMA',
+    'Cobrado real: ${_summaryMoney(bundle.realCollected)}',
+    '',
+    'RESTA',
     'Gastos: -${_summaryMoney(bundle.paidExpenses)}',
-    'Facturas de proveedor: -${_summaryMoney(bundle.supplierInvoicesTotal)}',
+    'Facturas proveedor: -${_summaryMoney(bundle.supplierInvoicesTotal)}',
+    '',
     'Resultado operativo: ${_summaryMoney(bundle.operatingResult)}',
-    'Aportacion de socios: ${_summaryMoney(bundle.partnerContributions)}',
-    'Saldo final: ${_summaryMoney(bundle.finalBalance)}',
+    '',
+    'APORTACIONES',
+    'Aportacion de socios: ${_summarySignedMoney(bundle.partnerContributions)}',
+    '',
+    'CONCILIACION',
+    'Diferencia por conciliar: ${_summarySignedMoney(bundle.reconciliationDifference)}',
   ];
   return lines.join('\n');
 }
@@ -376,6 +384,14 @@ String _summaryFileToken(String value) {
 String _summaryMoney(double value) {
   final formatter = NumberFormat.currency(locale: 'es_MX', symbol: r'$');
   return formatter.format(_money(value));
+}
+
+String _summarySignedMoney(double value) {
+  final normalized = value.abs() <= financeMoneyTolerance ? 0.0 : _money(value);
+  final formatted = _summaryMoney(normalized.abs());
+  if (normalized > 0) return '+$formatted';
+  if (normalized < 0) return '-$formatted';
+  return formatted;
 }
 
 void logFinanceDashboardReconciliation<T>(
@@ -589,6 +605,7 @@ class FinanceDashboardBundle {
   double get operatingResult =>
       _money(realCollected - paidExpenses - supplierInvoicesTotal);
   double get finalBalance => _money(operatingResult + partnerContributions);
+  double get reconciliationDifference => finalBalance;
   double get generalResult => operatingResult;
   double get collectionsResult =>
       _money(realCollected - paidExpenses - supplierPaidTotal);
@@ -771,7 +788,7 @@ double financeCashWithdrawalsReflectedInCount(
   final related = withdrawals
       .where((request) => request.cashSessionId.trim() == session.id.trim())
       .toList(growable: false);
-  if (related.isEmpty) return snapshot;
+  if (related.isEmpty) return 0;
 
   final notReflected = related
       .where(
@@ -790,7 +807,7 @@ bool financeCashExpenseWasAlreadyReflectedInCount(
     return false;
   }
   if (request.cashSessionId.trim() != session.id.trim()) return false;
-  if (_financeCashExpenseIsExplicitlyNonDrawer(request)) return false;
+  if (!financeCashExpenseHasExplicitDrawerEvidence(request)) return false;
 
   final openedAt = session.openedAt;
   final eventAt =
@@ -804,9 +821,28 @@ bool financeCashExpenseWasAlreadyReflectedInCount(
   return true;
 }
 
+bool financeCashExpenseHasExplicitDrawerEvidence(
+  CashWithdrawalRequest request,
+) {
+  if (request.isHistorical) return false;
+  final source = _token('${request.source} ${request.sourceName}');
+  if (source.isEmpty) return false;
+  if (_financeCashExpenseIsExplicitlyNonDrawerToken(source)) return false;
+  return source.contains('cash_drawer') ||
+      source.contains('cash drawer') ||
+      source.contains('drawer') ||
+      source.contains('caja') ||
+      source.contains('efectivo');
+}
+
 bool _financeCashExpenseIsExplicitlyNonDrawer(CashWithdrawalRequest request) {
   if (request.isHistorical) return true;
-  final source = _token('${request.source} ${request.sourceName}');
+  return _financeCashExpenseIsExplicitlyNonDrawerToken(
+    _token('${request.source} ${request.sourceName}'),
+  );
+}
+
+bool _financeCashExpenseIsExplicitlyNonDrawerToken(String source) {
   if (source.isEmpty) return false;
   return source.contains('historical') ||
       source.contains('admin') ||
@@ -829,6 +865,9 @@ financeCashExpenseReconciliationTrace(
       .map((request) {
         final includedBeforeV103 =
             request.isApproved && request.amount > financeMoneyTolerance;
+        final explicitDrawer = financeCashExpenseHasExplicitDrawerEvidence(
+          request,
+        );
         final explicitlyNonDrawer = _financeCashExpenseIsExplicitlyNonDrawer(
           request,
         );
@@ -842,6 +881,8 @@ financeCashExpenseReconciliationTrace(
             ? 'non_positive_amount'
             : explicitlyNonDrawer
             ? 'explicit_non_cash_drawer'
+            : !explicitDrawer
+            ? 'missing_cash_drawer_evidence'
             : includedNow
             ? 'session_snapshot_cash_drawer'
             : 'not_reflected';

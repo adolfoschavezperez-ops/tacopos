@@ -42,7 +42,14 @@ void main() {
           order.id: [payment],
         },
         cashSessions: const [],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            500,
+            cashSessionId: 'cut-with-opening',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
@@ -98,7 +105,14 @@ void main() {
             expectedCardChargedAmount: 2000,
           ),
         ],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            500,
+            cashSessionId: 'cut-with-opening',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
@@ -470,9 +484,17 @@ void main() {
     expect(text, contains('Total facturado: \$25,758.36'));
     expect(text, contains('Total pagado: \$25,758.36'));
     expect(text, contains('FACTURAS PENDIENTES\n\$0.00'));
+    expect(text, contains('RESUMEN FINANCIERO'));
+    expect(text, contains('SUMA'));
+    expect(text, contains('Cobrado real: \$25,360.70'));
+    expect(text, contains('RESTA'));
+    expect(text, contains('Gastos: -\$2,015.00'));
+    expect(text, contains('Facturas proveedor: -\$25,758.36'));
     expect(text, contains('Resultado operativo: -\$2,412.66'));
+    expect(text, contains('APORTACIONES'));
     expect(text, contains('Aportacion de socios: \$0.00'));
-    expect(text, contains('Saldo final: -\$2,412.66'));
+    expect(text, contains('CONCILIACION'));
+    expect(text, contains('Diferencia por conciliar: -\$2,412.66'));
     expect(text, isNot(contains('Otros gastos')));
     expect(text, isNot(contains('Otros proveedores')));
     expect(
@@ -521,6 +543,7 @@ void main() {
             500,
             businessDate: '2026-08-05',
             cashSessionId: 'cut-2026-08-05',
+            source: 'cash_drawer',
           ),
         ],
         purchases: const [],
@@ -955,7 +978,14 @@ void main() {
             approvedWithdrawalsTotal: 500,
           ),
         ],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            500,
+            cashSessionId: 'cut-with-opening',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
@@ -969,6 +999,63 @@ void main() {
     expect(day.actualIncome, 5999);
     expect(day.expectedMonetaryIncome, 6049);
     expect(day.shortage, 50);
+  });
+
+  test('gasto financiero normal de 66 no cambia ingreso real dos veces', () {
+    FinanceDashboardBundle buildWithExpenses(List<CashWithdrawalRequest> rows) {
+      return buildFinanceDashboard(
+        FinanceDashboardInput(
+          key: key,
+          salesSummary: _emptySales,
+          paymentsByOrder: const {},
+          cashSessions: [
+            _cashSession(
+              id: 'cut-real-66',
+              countedCashAmount: 19607,
+              terminalReportedAmount: 6021.70,
+              expectedCashAmount: 19607,
+              expectedCardChargedAmount: 6021.70,
+              expectedCardFeeAbsorbedAmount: 238.47,
+            ),
+          ],
+          withdrawals: rows,
+          purchases: [_purchase(total: 25758.36, paid: 25758.36, balance: 0)],
+          supplierPayments: const [],
+          suppliers: const [],
+        ),
+      );
+    }
+
+    final baseDashboard = buildWithExpenses([
+      _expense('approved', 2015, cashSessionId: 'admin'),
+    ]);
+    final withExpenseDashboard = buildWithExpenses([
+      _expense('approved', 2015, cashSessionId: 'admin'),
+      _expense('approved', 66, cashSessionId: 'cut-real-66'),
+    ]);
+    final cancelledExpenseDashboard = buildWithExpenses([
+      _expense('approved', 2015, cashSessionId: 'admin'),
+      _expense('cancelled', 66, cashSessionId: 'cut-real-66'),
+    ]);
+
+    expect(baseDashboard.realCollected, 25390.23);
+    expect(withExpenseDashboard.realCollected, 25390.23);
+    expect(cancelledExpenseDashboard.realCollected, 25390.23);
+    expect(baseDashboard.paidExpenses, 2015);
+    expect(withExpenseDashboard.paidExpenses, 2081);
+    expect(cancelledExpenseDashboard.paidExpenses, 2015);
+    expect(baseDashboard.operatingResult, -2383.13);
+    expect(withExpenseDashboard.operatingResult, -2449.13);
+    expect(cancelledExpenseDashboard.operatingResult, -2383.13);
+    expect(
+      withExpenseDashboard.operatingResult - baseDashboard.operatingResult,
+      closeTo(-66, 0.001),
+    );
+    expect(
+      cancelledExpenseDashboard.operatingResult -
+          withExpenseDashboard.operatingResult,
+      closeTo(66, 0.001),
+    );
   });
 
   test('detalle diario agrupa varios cortes y ordena fechas ascendente', () {
@@ -1009,7 +1096,20 @@ void main() {
             countedCashAmount: 9999,
           ),
         ],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            100,
+            cashSessionId: 'cut-1',
+            source: 'cash_drawer',
+          ),
+          _expense(
+            'approved',
+            200,
+            cashSessionId: 'cut-2',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
@@ -1052,7 +1152,14 @@ void main() {
             expectedCardChargedAmount: 400,
           ),
         ],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            100,
+            cashSessionId: 'float',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
@@ -1100,7 +1207,14 @@ void main() {
         salesSummary: _emptySales,
         paymentsByOrder: const {},
         cashSessions: const [],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            100,
+            cashSessionId: 'float',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: [purchase],
         supplierPayments: [payment],
         suppliers: const [],
@@ -1186,9 +1300,16 @@ void main() {
         withdrawals: [
           _expense(
             'approved',
-            2081,
+            2045,
             businessDate: '2026-08-15',
             cashSessionId: 'expenses',
+          ),
+          _expense(
+            'approved',
+            36,
+            businessDate: '2026-08-15',
+            cashSessionId: 'cut-real-final',
+            source: 'cash_drawer',
           ),
         ],
         purchases: [
@@ -1482,7 +1603,14 @@ void main() {
             expectedCardChargedAmount: 2000,
           ),
         ],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            100,
+            cashSessionId: 'float',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
@@ -1511,7 +1639,14 @@ void main() {
             expectedCardChargedAmount: 2000,
           ),
         ],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            100,
+            cashSessionId: 'float',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
@@ -1539,7 +1674,14 @@ void main() {
             expectedCashAmount: 2900,
           ),
         ],
-        withdrawals: const [],
+        withdrawals: [
+          _expense(
+            'approved',
+            100,
+            cashSessionId: 'float',
+            source: 'cash_drawer',
+          ),
+        ],
         purchases: const [],
         supplierPayments: const [],
         suppliers: const [],
