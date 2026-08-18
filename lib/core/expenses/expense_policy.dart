@@ -13,22 +13,33 @@ enum ExpensePolicyDecisionStatus {
   rejected,
 }
 
+enum ExpensePolicyMode { off, shadow, live }
+
 class ExpensePolicySettings {
   const ExpensePolicySettings({
     this.expensePoliciesEnabled = false,
+    this.expensePolicyMode = ExpensePolicyMode.off,
     this.manualApprovalCutoffEnabled = false,
     this.manualApprovalCutoffTime = '',
     this.defaultReceiptRequired = false,
   });
 
   final bool expensePoliciesEnabled;
+  final ExpensePolicyMode expensePolicyMode;
   final bool manualApprovalCutoffEnabled;
   final String manualApprovalCutoffTime;
   final bool defaultReceiptRequired;
 
   factory ExpensePolicySettings.fromMap(Map<String, dynamic>? data) {
+    final mode = expensePolicyModeFromName(
+      data?['expensePolicyMode'] as String? ?? data?['mode'] as String? ?? '',
+      fallback: data?['expensePoliciesEnabled'] as bool? ?? false
+          ? ExpensePolicyMode.live
+          : ExpensePolicyMode.off,
+    );
     return ExpensePolicySettings(
-      expensePoliciesEnabled: data?['expensePoliciesEnabled'] as bool? ?? false,
+      expensePoliciesEnabled: mode != ExpensePolicyMode.off,
+      expensePolicyMode: mode,
       manualApprovalCutoffEnabled:
           data?['manualApprovalCutoffEnabled'] as bool? ?? false,
       manualApprovalCutoffTime:
@@ -39,7 +50,8 @@ class ExpensePolicySettings {
 
   Map<String, Object?> toMap() {
     return {
-      'expensePoliciesEnabled': expensePoliciesEnabled,
+      'expensePoliciesEnabled': expensePolicyMode == ExpensePolicyMode.live,
+      'expensePolicyMode': expensePolicyMode.name,
       'manualApprovalCutoffEnabled': manualApprovalCutoffEnabled,
       'manualApprovalCutoffTime': manualApprovalCutoffTime,
       'defaultReceiptRequired': defaultReceiptRequired,
@@ -577,6 +589,16 @@ ExpensePolicyFrequencyType expensePolicyFrequencyTypeFromName(String value) {
   return ExpensePolicyFrequencyType.values.firstWhere(
     (type) => type.name == value,
     orElse: () => ExpensePolicyFrequencyType.daily,
+  );
+}
+
+ExpensePolicyMode expensePolicyModeFromName(
+  String value, {
+  ExpensePolicyMode fallback = ExpensePolicyMode.off,
+}) {
+  return ExpensePolicyMode.values.firstWhere(
+    (mode) => mode.name == value.trim().toLowerCase(),
+    orElse: () => fallback,
   );
 }
 

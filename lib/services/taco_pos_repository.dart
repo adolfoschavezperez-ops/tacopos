@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer' as developer;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/cash/cash_close_execution.dart';
@@ -879,9 +883,15 @@ class _CashScheduleCacheEntry {
 }
 
 class TacoPosRepository {
-  TacoPosRepository({FirebaseFirestore? firestore, FirebaseAuth? auth})
-    : _db = firestore ?? FirebaseFirestore.instance,
-      _auth = auth ?? FirebaseAuth.instance;
+  TacoPosRepository({
+    FirebaseFirestore? firestore,
+    FirebaseAuth? auth,
+    FirebaseAppCheck? appCheck,
+    http.Client? httpClient,
+  }) : _db = firestore ?? FirebaseFirestore.instance,
+       _auth = auth ?? FirebaseAuth.instance,
+       _appCheck = appCheck ?? FirebaseAppCheck.instance,
+       _httpClient = httpClient ?? http.Client();
 
   static const cardSurchargeRate = 0.04;
   static const operationResetPin = '072026';
@@ -895,6 +905,8 @@ class TacoPosRepository {
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
+  final FirebaseAppCheck _appCheck;
+  final http.Client _httpClient;
 
   DocumentReference<Map<String, dynamic>> get _restaurantRef =>
       _db.collection('restaurants').doc(AppConstants.restaurantId);
@@ -6655,117 +6667,99 @@ class TacoPosRepository {
       return;
     }
 
-    await _db.runTransaction((transaction) async {
-      final settingsDoc = await transaction.get(_expensePolicySettingsRef);
-      final settings = ExpensePolicySettings.fromMap(settingsDoc.data());
-      final policyRef = _expensePoliciesRef.doc(cleanPolicyId);
-      final policyDoc = await transaction.get(policyRef);
-      if (!policyDoc.exists) {
-        throw StateError('La politica de gasto ya no existe.');
-      }
-      final policy = ExpensePolicy.fromMap(policyDoc.id, policyDoc.data()!);
-      final periodKey = expensePolicyPeriodKey(
-        policy: policy,
-        businessDate: session.businessDate,
+    if (offline) {
+      throw StateError(
+        'No fue posible validar la politica. El gasto no puede autoautorizarse sin conexion.',
       );
-      final usageRef = _expensePolicyUsageRef.doc(
-        _expensePolicyUsageDocId(policy.id, policy.branchId, periodKey),
-      );
-      final usageDoc = await transaction.get(usageRef);
-      final usage = usageDoc.exists
-          ? ExpensePolicyUsage.fromMap(usageDoc.id, usageDoc.data()!)
-          : ExpensePolicyUsage(
-              id: usageRef.id,
-              policyId: policy.id,
-              branchId: policy.branchId,
-              periodKey: periodKey,
-            );
-      final decision = evaluateExpensePolicy(
-        ExpensePolicyEvaluationInput(
-          settings: settings,
-          policy: policy,
-          usage: usage,
-          amount: amount,
-          businessDate: session.businessDate,
-          requestedAt: DateTime.now(),
-          paymentSource: paymentSource,
-          supplierId: supplierId,
-          requesterRole: employee?.hasAdminAccess == true ? 'admin' : 'staff',
-          requesterId: employee?.id ?? '',
-          hasReceipt: hasReceipt,
-          offline: offline,
-          reason: reason,
-        ),
-      );
-      final autoApproved = decision.autoApproved;
-      transaction.set(docRef, {
-        'id': docRef.id,
-        'cashSessionId': cashSessionId,
-        'businessDate': session.businessDate,
-        ..._currentBranchFields,
-        'amount': amount,
-        'reason': reason.trim(),
-        'source': paymentSource,
-        'sourceName': paymentSource,
-        'requestedByEmployeeId': employee?.id ?? '',
-        'requestedByEmployeeName': employee?.name ?? '',
-        'requestedAt': FieldValue.serverTimestamp(),
-        'status': autoApproved ? 'approved' : 'pending',
-        'authorizedByEmployeeId': autoApproved ? 'auto_policy' : null,
-        'authorizedByEmployeeName': autoApproved ? 'Politica de gasto' : null,
-        'authorizedAt': autoApproved ? FieldValue.serverTimestamp() : null,
-        'adminNotes': null,
-        'approvedAt': autoApproved ? FieldValue.serverTimestamp() : null,
-        'approvedByEmployeeId': autoApproved ? 'auto_policy' : null,
-        'approvedByEmployeeName': autoApproved ? 'Politica de gasto' : null,
-        'rejectedAt': null,
-        'rejectedByEmployeeId': null,
-        'rejectedByEmployeeName': null,
-        'rejectReason': null,
-        'policyId': policy.id,
-        'policyVersion': policy.policyVersion,
-        'policyName': policy.name,
-        'policySnapshot': policy.snapshotForExpense(),
-        'autoApproved': autoApproved,
-        'autoApprovedAt': autoApproved ? FieldValue.serverTimestamp() : null,
-        'policyDecisionReasonCode': decision.reasonCode,
-        'policyDecisionMessage': decision.message,
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-      if (autoApproved) {
-        final consumed = usage.consume(amount: amount, expenseId: docRef.id);
-        transaction.set(usageRef, {
-          ...consumed.toMap(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-      transaction.set(_restaurantRef.collection('activityLog').doc(), {
-        'type': autoApproved
-            ? 'EXPENSE_AUTO_APPROVED'
-            : 'EXPENSE_SENT_TO_MANUAL_APPROVAL',
-        ..._currentBranchFields,
-        'expenseId': docRef.id,
-        'policyId': policy.id,
-        'policyName': policy.name,
-        'policyVersion': policy.policyVersion,
-        'policyDecisionReasonCode': decision.reasonCode,
-        'policyDecisionMessage': decision.message,
-        'amount': amount,
-        'employeeId': employee?.id ?? '',
-        'employeeName': employee?.name ?? '',
-        'createdAt': FieldValue.serverTimestamp(),
-      });
-    });
+    }
+    await _submitExpenseRequestFunction(
+      cashSessionId: cashSessionId,
+      businessDate: session.businessDate,
+      amount: amount,
+      reason: reason,
+      policyId: cleanPolicyId,
+      paymentSource: paymentSource,
+      supplierId: supplierId,
+      hasReceipt: hasReceipt,
+      employee: employee,
+    );
   }
 
-  String _expensePolicyUsageDocId(
-    String policyId,
-    String branchId,
-    String periodKey,
-  ) {
-    final raw = '$policyId|$branchId|$periodKey';
-    return raw.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+  Future<Map<String, dynamic>> _submitExpenseRequestFunction({
+    required String cashSessionId,
+    required String businessDate,
+    required double amount,
+    required String reason,
+    required String policyId,
+    required String paymentSource,
+    required String supplierId,
+    required bool hasReceipt,
+    required Employee? employee,
+  }) async {
+    try {
+      final user = _auth.currentUser;
+      final idToken = await user?.getIdToken();
+      if (idToken == null || idToken.isEmpty) {
+        throw StateError('Se requiere autenticacion para validar la politica.');
+      }
+      final appCheckToken = await _appCheck.getLimitedUseToken();
+      final response = await _httpClient.post(
+        Uri.https(
+          'us-central1-tacopos-renovadev.cloudfunctions.net',
+          'submitExpenseRequest',
+        ),
+        headers: {
+          'Authorization': 'Bearer $idToken',
+          'X-Firebase-AppCheck': appCheckToken,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'data': {
+            'restaurantId': AppConstants.restaurantId,
+            'branchId': AppSession.instance.currentBranchId,
+            'policyId': policyId,
+            'amount': amount,
+            'supplierId': supplierId,
+            'paymentSource': paymentSource,
+            'reason': reason.trim(),
+            'requesterId': employee?.id ?? '',
+            'requesterName': employee?.name ?? '',
+            'requesterRole': employee?.hasAdminAccess == true
+                ? 'admin'
+                : 'staff',
+            'businessDate': businessDate,
+            'cashSessionId': cashSessionId,
+            'clientRequestId': const Uuid().v4(),
+            'hasReceipt': hasReceipt,
+          },
+        }),
+      );
+      final decoded = jsonDecode(response.body);
+      if (response.statusCode >= 400) {
+        final error = decoded is Map<String, dynamic>
+            ? decoded['error'] as Map<String, dynamic>?
+            : null;
+        final message = error?['message']?.toString().trim();
+        throw StateError(
+          message?.isNotEmpty == true
+              ? message!
+              : 'No fue posible validar la politica de gasto.',
+        );
+      }
+      if (decoded is! Map<String, dynamic> ||
+          decoded['result'] is! Map<String, dynamic>) {
+        throw StateError('Respuesta invalida al validar la politica.');
+      }
+      return Map<String, dynamic>.from(
+        decoded['result'] as Map<String, dynamic>,
+      );
+    } on StateError {
+      rethrow;
+    } catch (_) {
+      throw StateError(
+        'No fue posible validar la politica. El gasto no puede autoautorizarse sin conexion.',
+      );
+    }
   }
 
   Future<void> authorizeCashWithdrawal({
@@ -9831,6 +9825,7 @@ class TacoPosRepository {
       'type': 'EXPENSE_POLICY_SETTINGS_UPDATED',
       ..._currentBranchFields,
       'expensePoliciesEnabled': settings.expensePoliciesEnabled,
+      'expensePolicyMode': settings.expensePolicyMode.name,
       'manualApprovalCutoffEnabled': settings.manualApprovalCutoffEnabled,
       'manualApprovalCutoffTime': settings.manualApprovalCutoffTime,
       'employeeId': AppSession.instance.employee?.id ?? '',
