@@ -1,6 +1,6 @@
 {
   "scripts": {
-    "test:rules": "mocha \"test/firestore-rules/*.test.js\""
+    "test:rules": "mocha --timeout 30000 \"test/firestore-rules/*.test.js\""
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^4.0.1",

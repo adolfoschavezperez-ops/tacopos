@@ -44,6 +44,94 @@ service cloud.firestore {
         : validUpdate();
     }
 
+    function authUserPath(restaurantId) {
+      return /databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid);
+    }
+
+    function hasAuthUser(restaurantId) {
+      return signedIn() && exists(authUserPath(restaurantId));
+    }
+
+    function authUser(restaurantId) {
+      return get(authUserPath(restaurantId)).data;
+    }
+
+    function isBackofficeAdmin(restaurantId) {
+      return hasAuthUser(restaurantId) &&
+        authUser(restaurantId).active == true &&
+        (
+          authUser(restaurantId).isSuperAdmin == true ||
+          authUser(restaurantId).permissions.canViewAdmin == true ||
+          authUser(restaurantId).permissions.canAuthorizeCashWithdrawals == true
+        );
+    }
+
+    function isSensitiveSetting(settingId) {
+      return settingId in ['appUpdates', 'expensePolicies'];
+    }
+
+    function validDeviceHeartbeatCreate(restaurantId, deviceId) {
+      return signedIn() &&
+        request.auth.uid == deviceId &&
+        validRestaurantField(restaurantId) &&
+        validBranchField() &&
+        request.resource.data.deviceId == deviceId &&
+        request.resource.data.keys().hasOnly([
+          'deviceId',
+          'deviceName',
+          'branchId',
+          'branchName',
+          'role',
+          'platform',
+          'appVersionName',
+          'appVersionCode',
+          'availableVersionCode',
+          'lastSeenAt',
+          'lastUpdateCheckAt',
+          'employeeId',
+          'employeeName',
+          'updateStatus',
+          'updatedAt'
+        ]);
+    }
+
+    function validDeviceHeartbeatUpdate(deviceId) {
+      return signedIn() &&
+        request.auth.uid == deviceId &&
+        immutableRestaurantId() &&
+        validBranchField() &&
+        request.resource.data.deviceId == resource.data.deviceId &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'deviceName',
+          'branchId',
+          'branchName',
+          'role',
+          'platform',
+          'appVersionName',
+          'appVersionCode',
+          'availableVersionCode',
+          'lastSeenAt',
+          'lastUpdateCheckAt',
+          'employeeId',
+          'employeeName',
+          'updateStatus',
+          'updatedAt'
+        ]);
+    }
+
+    function preservesExpensePolicyApprovalFields() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'policyId',
+        'policyVersion',
+        'policyName',
+        'policySnapshot',
+        'autoApproved',
+        'autoApprovedAt',
+        'policyDecisionReasonCode',
+        'policyDecisionMessage'
+      ]);
+    }
+
     function validDailySaleCounterCreate(restaurantId, branchId, businessDate) {
       return validCreate(restaurantId) &&
         request.resource.data.keys().hasAll([
@@ -242,22 +330,38 @@ service cloud.firestore {
       match /cashWithdrawalRequests/{requestId} {
         allow read: if signedIn();
         allow create: if validCreate(restaurantId);
-        allow update: if validUpdate();
+        allow update: if validUpdate() &&
+          preservesExpensePolicyApprovalFields();
         allow delete: if false;
       }
 
       match /expensePolicies/{policyId} {
         allow read: if signedIn();
-        allow create: if validCreate(restaurantId);
-        allow update: if validUpdate();
+        allow create: if isBackofficeAdmin(restaurantId) &&
+          validCreate(restaurantId);
+        allow update: if isBackofficeAdmin(restaurantId) &&
+          validUpdate();
         allow delete: if false;
       }
 
       match /expensePolicyUsage/{usageId} {
         allow read: if signedIn();
-        allow create: if validCreate(restaurantId);
-        allow update: if validUpdate();
+        allow create, update: if false;
         allow delete: if false;
+      }
+
+      match /devices/{deviceId} {
+        allow read: if signedIn();
+        allow create: if validDeviceHeartbeatCreate(restaurantId, deviceId) ||
+          (isBackofficeAdmin(restaurantId) && validCreate(restaurantId));
+        allow update: if validDeviceHeartbeatUpdate(deviceId) ||
+          (isBackofficeAdmin(restaurantId) && validUpdate());
+        allow delete: if false;
+      }
+
+      match /authUsers/{uid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
       }
 
       match /kitchenStockItems/{itemId} {
@@ -373,8 +477,12 @@ service cloud.firestore {
 
       match /settings/{settingId} {
         allow read: if signedIn();
-        allow create: if signedIn();
-        allow update: if signedIn();
+        allow create: if isSensitiveSetting(settingId)
+          ? isBackofficeAdmin(restaurantId)
+          : signedIn();
+        allow update: if isSensitiveSetting(settingId)
+          ? isBackofficeAdmin(restaurantId)
+          : signedIn();
         allow delete: if false;
       }
     }
