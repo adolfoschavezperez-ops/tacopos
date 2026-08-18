@@ -38,12 +38,6 @@ service cloud.firestore {
         immutableBranchId();
     }
 
-    function validWrite(restaurantId) {
-      return request.method == 'create'
-        ? validCreate(restaurantId)
-        : validUpdate();
-    }
-
     function authUserPath(restaurantId) {
       return /databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid);
     }
