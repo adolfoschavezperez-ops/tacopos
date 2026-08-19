@@ -90,10 +90,10 @@ void main() {
       expect(employee.restaurantAccess, ['main_restaurant']);
     });
 
-    test('usuario o pin incorrecto tiene mensaje limpio', () {
+    test('pin incorrecto tiene mensaje limpio', () {
       final message = backofficeLoginErrorMessage(Exception('bad login'));
 
-      expect(message, 'Usuario o PIN incorrectos.');
+      expect(message, 'PIN incorrecto.');
     });
 
     test('logout elimina acceso al limpiar sesion local', () {
@@ -116,34 +116,38 @@ void main() {
       expect(message, 'Inicia sesion para acceder al Backoffice.');
     });
 
-    test('pantalla web usa Usuario y PIN sin correo password', () {
+    test('pantalla web usa combo Usuario y PIN sin correo password', () {
       final source = File('lib/screens/login_screen.dart').readAsStringSync();
       final service = File(
         'lib/services/backoffice_admin_auth_service.dart',
       ).readAsStringSync();
 
       expect(source, contains("labelText: 'Usuario'"));
+      expect(source, contains('DropdownButtonFormField<BackofficeLoginUser>'));
       expect(source, contains("labelText: 'Empleado'"));
       expect(source, contains("labelText: 'PIN'"));
       expect(source, isNot(contains("labelText: 'Correo'")));
       expect(source, isNot(contains("labelText: 'Contrasena'")));
+      expect(source, isNot(contains('final _userController')));
       expect(source, contains('signInWithPin'));
+      expect(service, contains('listBackofficeUsers'));
+      expect(service, contains("httpsCallable('listBackofficeUsers')"));
       expect(service, contains('signInWithCustomToken'));
     });
 
     test('login web no lista empleados antes del custom token', () {
       final source = File('lib/screens/login_screen.dart').readAsStringSync();
 
-      expect(source, contains('if (!kIsWeb)'));
+      expect(source, contains('if (_isBackofficeWebLogin)'));
       expect(
         source,
         contains('_employeesStream = _repository.watchEmployees();'),
       );
       expect(
         source,
-        contains("decoration: const InputDecoration(labelText: 'Usuario')"),
+        contains('_backofficeUsersFuture = _loadBackofficeUsers();'),
       );
-      expect(source, contains('employeeId: usuario'));
+      expect(source, contains('employeeId: selectedUser.id'));
     });
   });
 }

@@ -1,6 +1,6 @@
 import * as assert from "assert";
 import * as admin from "firebase-admin";
-import {backofficePinLoginCore} from "../index";
+import {backofficePinLoginCore, listBackofficeUsersCore} from "../index";
 
 const db = admin.firestore();
 const restaurantId = "pin-restaurant";
@@ -126,6 +126,66 @@ describe("backoffice PIN login", () => {
   });
 });
 
+describe("listBackofficeUsers", () => {
+  beforeEach(async () => {
+    await admin.firestore().recursiveDelete(restaurant());
+  });
+
+  it("devuelve unicamente usuarios elegibles y activos", async () => {
+    await seedEmployee("admin", {name: "Admin", pin: "1234", canViewAdmin: true});
+    await seedEmployee("cash", {name: "Caja", pin: "2222", canAuthorizeCashWithdrawals: true});
+    await seedEmployee("waiter", {name: "Mesero", pin: "3333", canTakeOrders: true});
+    await seedEmployee("inactive", {name: "Inactivo", pin: "4444", active: false, canViewAdmin: true});
+
+    const result = await listUsers();
+
+    assert.deepEqual(result.users, [
+      {id: "admin", displayName: "Admin"},
+      {id: "cash", displayName: "Caja"},
+    ]);
+  });
+
+  it("no devuelve PIN hash email authUid ni permisos", async () => {
+    await seedEmployee("admin", {
+      name: "Admin",
+      pin: "1234",
+      pinHash: "hash",
+      email: "admin@example.com",
+      authUid: "uid",
+      canViewAdmin: true,
+    });
+
+    const result = await listUsers();
+    const serialized = JSON.stringify(result);
+
+    assert.equal(serialized.includes("1234"), false);
+    assert.equal(serialized.includes("hash"), false);
+    assert.equal(serialized.includes("admin@example.com"), false);
+    assert.equal(serialized.includes("uid"), false);
+    assert.equal(serialized.includes("canViewAdmin"), false);
+    assert.deepEqual(Object.keys(result.users[0]).sort(), ["displayName", "id"]);
+  });
+
+  it("rechaza restaurant invalido", async () => {
+    await assert.rejects(
+      () => listBackofficeUsersCore(db, {restaurantId: "bad/path"}, "127.0.0.1"),
+      /Restaurante invalido/,
+    );
+  });
+
+  it("rate limit funciona", async () => {
+    await restaurant()
+      .collection("backofficeUserListRateLimits")
+      .doc("list_127_0_0_1")
+      .set({
+        attempts: 60,
+        windowStartedAt: admin.firestore.Timestamp.now(),
+      });
+
+    await assert.rejects(() => listUsers(), /Demasiados intentos/);
+  });
+});
+
 function login(overrides: Record<string, unknown> = {}) {
   return backofficePinLoginCore(db, auth, {
     restaurantId,
@@ -133,6 +193,13 @@ function login(overrides: Record<string, unknown> = {}) {
     pin: "1234",
     ...overrides,
   }, "127.0.0.1") as Promise<Record<string, string>>;
+}
+
+function listUsers(overrides: Record<string, unknown> = {}) {
+  return listBackofficeUsersCore(db, {
+    restaurantId,
+    ...overrides,
+  }, "127.0.0.1") as Promise<{users: Array<{id: string; displayName: string}>}>;
 }
 
 async function seedEmployee(employeeId: string, data: Record<string, unknown>) {
