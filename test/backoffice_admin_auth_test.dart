@@ -1,7 +1,8 @@
-import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
-import 'package:tacopos/services/backoffice_admin_auth_service.dart';
 import 'package:tacopos/screens/login_screen.dart';
+import 'package:tacopos/services/backoffice_admin_auth_service.dart';
 
 void main() {
   group('Backoffice admin auth', () {
@@ -71,6 +72,7 @@ void main() {
           'active': true,
           'isSuperAdmin': true,
           'displayName': 'Admin',
+          'employeeId': 'admin',
           'permissions': {'canViewAdmin': true},
         },
       );
@@ -80,7 +82,7 @@ void main() {
         defaultBranchId: 'aviacion',
       );
 
-      expect(employee.id, 'admin-uid');
+      expect(employee.id, 'admin');
       expect(employee.name, 'Admin');
       expect(employee.hasAdminAccess, isTrue);
       expect(employee.canManageCash, isTrue);
@@ -88,12 +90,10 @@ void main() {
       expect(employee.restaurantAccess, ['main_restaurant']);
     });
 
-    test('password incorrecto tiene mensaje limpio', () {
-      final message = backofficeLoginErrorMessage(
-        FirebaseAuthException(code: 'wrong-password'),
-      );
+    test('usuario o pin incorrecto tiene mensaje limpio', () {
+      final message = backofficeLoginErrorMessage(Exception('bad login'));
 
-      expect(message, 'Correo o contrasena incorrectos.');
+      expect(message, 'Usuario o PIN incorrectos.');
     });
 
     test('logout elimina acceso al limpiar sesion local', () {
@@ -114,6 +114,20 @@ void main() {
       );
 
       expect(message, 'Inicia sesion para acceder al Backoffice.');
+    });
+
+    test('pantalla web restaura Usuario y PIN sin correo password', () {
+      final source = File('lib/screens/login_screen.dart').readAsStringSync();
+      final service = File(
+        'lib/services/backoffice_admin_auth_service.dart',
+      ).readAsStringSync();
+
+      expect(source, contains("labelText: 'Empleado'"));
+      expect(source, contains("labelText: 'PIN'"));
+      expect(source, isNot(contains("labelText: 'Correo'")));
+      expect(source, isNot(contains("labelText: 'Contrasena'")));
+      expect(source, contains('signInWithPin'));
+      expect(service, contains('signInWithCustomToken'));
     });
   });
 }
