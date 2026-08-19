@@ -31,6 +31,9 @@ Future<void> _activateAppCheck() async {
 }
 
 Future<void> _ensureAnonymousLogin() async {
+  if (kIsWeb) {
+    return;
+  }
   final auth = FirebaseAuth.instance;
 
   if (auth.currentUser == null) {
@@ -47,7 +50,9 @@ class TacoPosApp extends StatelessWidget {
       title: kIsWeb ? 'TacoPOS Backoffice' : 'TacoPOS',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
-      home: const AppUpdateGate(child: LoginGate()),
+      home: kIsWeb
+          ? const LoginGate()
+          : const AppUpdateGate(child: LoginGate()),
     );
   }
 }

@@ -23,6 +23,7 @@ import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../models/payment.dart';
 import '../../services/app_session.dart';
+import '../../services/backoffice_admin_auth_service.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
@@ -114,6 +115,7 @@ class BackofficeScreen extends StatefulWidget {
 
 class _BackofficeScreenState extends State<BackofficeScreen> {
   final _repository = TacoPosRepository();
+  final _adminAuthService = BackofficeAdminAuthService();
   late DateTime _startDate;
   late DateTime _endDate;
   _BackofficeSection _section = _BackofficeSection.dashboard;
@@ -201,6 +203,14 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
     });
   }
 
+  Future<void> _signOut() async {
+    if (kIsWeb) {
+      await _adminAuthService.signOut();
+    } else {
+      AppSession.instance.signOut();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final employee = AppSession.instance.employee;
@@ -256,6 +266,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                   _reportsExpanded = true;
                 }),
                 onSalesDataChanged: () => setState(() {}),
+                onSignOut: _signOut,
               );
 
               if (compact) {
@@ -265,6 +276,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                       section: effectiveSection,
                       employee: employee,
                       reportKind: _reportKind,
+                      onSignOut: _signOut,
                       onSectionChanged: (value) =>
                           setState(() => _section = value),
                       onReportSelected: (value) => setState(() {
@@ -296,6 +308,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                         setState(() => _reportsExpanded = value),
                     onToggleCollapsed: () =>
                         setState(() => _navCollapsed = !_navCollapsed),
+                    onSignOut: _signOut,
                   ),
                   Expanded(child: body),
                 ],
@@ -328,6 +341,7 @@ class _SideNav extends StatelessWidget {
     required this.onReportSelected,
     required this.onReportsExpansionChanged,
     required this.onToggleCollapsed,
+    required this.onSignOut,
   });
 
   final _BackofficeSection section;
@@ -339,6 +353,7 @@ class _SideNav extends StatelessWidget {
   final ValueChanged<_ReportKind> onReportSelected;
   final ValueChanged<bool> onReportsExpansionChanged;
   final VoidCallback onToggleCollapsed;
+  final VoidCallback onSignOut;
 
   @override
   Widget build(BuildContext context) {
@@ -388,7 +403,7 @@ class _SideNav extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               OutlinedButton.icon(
-                onPressed: AppSession.instance.signOut,
+                onPressed: onSignOut,
                 icon: const Icon(Icons.logout),
                 label: const Text('Salir'),
               ),
@@ -405,7 +420,7 @@ class _SideNav extends StatelessWidget {
             ] else
               IconButton(
                 tooltip: 'Salir',
-                onPressed: AppSession.instance.signOut,
+                onPressed: onSignOut,
                 icon: const Icon(Icons.logout),
               ),
           ],
@@ -594,6 +609,7 @@ class _MobileTopBar extends StatelessWidget {
     required this.section,
     required this.employee,
     required this.reportKind,
+    required this.onSignOut,
     required this.onSectionChanged,
     required this.onReportSelected,
   });
@@ -601,6 +617,7 @@ class _MobileTopBar extends StatelessWidget {
   final _BackofficeSection section;
   final Employee? employee;
   final _ReportKind reportKind;
+  final VoidCallback onSignOut;
   final ValueChanged<_BackofficeSection> onSectionChanged;
   final ValueChanged<_ReportKind> onReportSelected;
 
@@ -640,7 +657,7 @@ class _MobileTopBar extends StatelessWidget {
                 ),
                 IconButton(
                   tooltip: 'Salir',
-                  onPressed: AppSession.instance.signOut,
+                  onPressed: onSignOut,
                   icon: const Icon(Icons.logout),
                 ),
               ],
@@ -844,6 +861,7 @@ class _BackofficeBody extends StatelessWidget {
     required this.onOpenDiscountsReport,
     required this.onOpenYieldReport,
     required this.onSalesDataChanged,
+    required this.onSignOut,
   });
 
   final _BackofficeSection section;
@@ -861,6 +879,7 @@ class _BackofficeBody extends StatelessWidget {
   final VoidCallback onOpenDiscountsReport;
   final VoidCallback onOpenYieldReport;
   final VoidCallback onSalesDataChanged;
+  final VoidCallback onSignOut;
 
   @override
   Widget build(BuildContext context) {

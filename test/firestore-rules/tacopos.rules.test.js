@@ -125,6 +125,17 @@ async function seedAdmin(uid = 'admin-uid', restaurantId = RESTAURANT_ID) {
   });
 }
 
+async function seedInactiveAdmin(uid = 'inactive-admin', restaurantId = RESTAURANT_ID) {
+  await seed(`restaurants/${restaurantId}/authUsers/${uid}`, {
+    active: false,
+    isSuperAdmin: true,
+    permissions: {
+      canViewAdmin: true,
+      canAuthorizeCashWithdrawals: true,
+    },
+  });
+}
+
 function appUpdatesPath(restaurantId = RESTAURANT_ID) {
   return `restaurants/${restaurantId}/settings/appUpdates`;
 }
@@ -702,6 +713,22 @@ describe('TacoPOS Firestore production guard rails', () => {
     );
   });
 
+  it('admin inactivo no puede crear politicas de gasto', async () => {
+    await seedInactiveAdmin();
+
+    await assertFails(
+      setDoc(doc(authedDb('inactive-admin'), policyPath('hielo')), policyData()),
+    );
+  });
+
+  it('admin de otro restaurante no puede administrar politicas cruzadas', async () => {
+    await seedAdmin('cross-admin', 'otro-restaurante');
+
+    await assertFails(
+      setDoc(doc(authedDb('cross-admin'), policyPath('hielo')), policyData()),
+    );
+  });
+
   it('admin puede leer settings de politicas y consultar usage', async () => {
     await seedAdmin();
     await seed(expenseSettingsPath(), { expensePoliciesEnabled: false });
@@ -743,6 +770,25 @@ describe('TacoPOS Firestore production guard rails', () => {
 
     await assertFails(
       updateDoc(doc(authedDb('waiter-uid'), usagePath()), {
+        amountUsed: 0,
+        usesUsed: 0,
+      }),
+    );
+  });
+
+  it('expensePolicyUsage sigue protegido incluso para admin', async () => {
+    await seedAdmin();
+    await seed(usagePath(), {
+      policyId: 'hielo',
+      branchId: BRANCH_ID,
+      periodKey: '2026-08-18',
+      amountUsed: 40,
+      usesUsed: 1,
+      expenseIds: ['expense-1'],
+    });
+
+    await assertFails(
+      updateDoc(doc(adminDb(), usagePath()), {
         amountUsed: 0,
         usesUsed: 0,
       }),
