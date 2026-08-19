@@ -704,9 +704,10 @@ String backofficeLoginErrorMessage(Object? error) {
   }
   if (error is FirebaseFunctionsException) {
     return switch (error.code) {
+      'unauthenticated' => 'PIN incorrecto.',
       'permission-denied' => 'No tienes permisos para acceder al Backoffice.',
       'resource-exhausted' => 'Demasiados intentos. Intenta mas tarde.',
-      _ => 'PIN incorrecto.',
+      _ => 'No fue posible iniciar sesion. Intenta nuevamente.',
     };
   }
   if (error is FirebaseException && error.code == 'permission-denied') {

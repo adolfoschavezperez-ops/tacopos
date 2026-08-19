@@ -1,4 +1,5 @@
 import * as admin from "firebase-admin";
+import {logger} from "firebase-functions";
 import {HttpsError, onCall} from "firebase-functions/v2/https";
 
 admin.initializeApp();
@@ -206,19 +207,61 @@ export async function backofficePinLoginCore(
 
   const employeeDoc = await resolveBackofficeEmployee(restaurantRef, loginIdentifier);
   const employee = employeeDoc.data();
+  const debugBase = {
+    restaurantId,
+    employeeId: loginIdentifier,
+    employeeDocumentId: employeeDoc.exists ? employeeDoc.id : null,
+    employeeFound: employeeDoc.exists,
+    receivedPinType: typeof raw.pin,
+    normalizationStrategy: "received trim; stored Employee.pin string equality",
+  };
   if (!employeeDoc.exists || !employee) {
+    logger.info("backofficePinLogin diagnostic", {
+      ...debugBase,
+      reason: "employee_not_found",
+      comparisonResult: false,
+    });
     await recordFailedLogin(rateRef);
     throw new HttpsError("unauthenticated", "Usuario o PIN incorrectos.");
   }
   if (employee.active === false) {
+    logger.info("backofficePinLogin diagnostic", {
+      ...debugBase,
+      reason: "inactive",
+      active: false,
+      role: backofficeRoleForLog(employee, employeeDoc.id),
+      pinFieldExists: Object.prototype.hasOwnProperty.call(employee, "pin"),
+      storedPinType: pinTypeForLog(employee.pin),
+      comparisonResult: false,
+    });
     await recordFailedLogin(rateRef);
     throw new HttpsError("unauthenticated", "Usuario o PIN incorrectos.");
   }
-  if (cleanString(employee.pin) !== pin) {
+  const storedPin = employeePinAsOriginalString(employee);
+  const pinMatches = storedPin === pin;
+  logger.info("backofficePinLogin diagnostic", {
+    ...debugBase,
+    reason: pinMatches ? "pin_match" : "pin_mismatch",
+    active: employee.active !== false,
+    role: backofficeRoleForLog(employee, employeeDoc.id),
+    pinFieldExists: Object.prototype.hasOwnProperty.call(employee, "pin"),
+    storedPinType: pinTypeForLog(employee.pin),
+    comparisonResult: pinMatches,
+  });
+  if (!pinMatches) {
     await recordFailedLogin(rateRef);
     throw new HttpsError("unauthenticated", "Usuario o PIN incorrectos.");
   }
   if (!employeeCanAccessBackoffice(employee, employeeDoc.id)) {
+    logger.info("backofficePinLogin diagnostic", {
+      ...debugBase,
+      reason: "no_backoffice_permission",
+      active: employee.active !== false,
+      role: backofficeRoleForLog(employee, employeeDoc.id),
+      pinFieldExists: Object.prototype.hasOwnProperty.call(employee, "pin"),
+      storedPinType: pinTypeForLog(employee.pin),
+      comparisonResult: true,
+    });
     await recordFailedLogin(rateRef);
     throw new HttpsError("permission-denied", "No tienes permisos para acceder al Backoffice.");
   }
@@ -794,6 +837,28 @@ function employeeCanAccessBackoffice(
     employee.canAuthorizeCashWithdrawals === true ||
     employeeId.toLowerCase().trim() === "admin" ||
     name === "admin";
+}
+
+function employeePinAsOriginalString(employee: admin.firestore.DocumentData): string {
+  return typeof employee.pin === "string" ? employee.pin : "";
+}
+
+function pinTypeForLog(pin: unknown): string {
+  if (pin === null) return "null";
+  if (Array.isArray(pin)) return "array";
+  return typeof pin;
+}
+
+function backofficeRoleForLog(
+  employee: admin.firestore.DocumentData,
+  employeeId: string,
+): string {
+  if (employee.isSuperAdmin === true || employeeId.toLowerCase() === "admin") {
+    return "super_admin";
+  }
+  if (employee.canViewAdmin === true) return "can_view_admin";
+  if (employee.canAuthorizeCashWithdrawals === true) return "can_authorize_cash";
+  return "none";
 }
 
 async function resolveBackofficeEmployee(
