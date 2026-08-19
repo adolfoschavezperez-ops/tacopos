@@ -25,6 +25,24 @@ class BackofficeAdminAuthService {
 
   User? get currentUser => _auth.currentUser;
 
+  Future<List<BackofficeLoginUser>> listBackofficeUsers({
+    String restaurantId = AppConstants.restaurantId,
+  }) async {
+    final callable = _functions.httpsCallable('listBackofficeUsers');
+    final response = await callable.call<Map<String, dynamic>>({
+      'restaurantId': restaurantId,
+    });
+    final rawUsers = response.data['users'];
+    if (rawUsers is! List) {
+      return const [];
+    }
+    return rawUsers
+        .whereType<Map>()
+        .map(BackofficeLoginUser.fromMap)
+        .where((user) => user.id.isNotEmpty && user.displayName.isNotEmpty)
+        .toList(growable: false);
+  }
+
   Future<BackofficeAdminSession> signInWithPin({
     required String employeeId,
     required String pin,
@@ -116,6 +134,20 @@ class BackofficeAdminAuthService {
             .toList()
           ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
     return branches;
+  }
+}
+
+class BackofficeLoginUser {
+  const BackofficeLoginUser({required this.id, required this.displayName});
+
+  final String id;
+  final String displayName;
+
+  static BackofficeLoginUser fromMap(Map<Object?, Object?> data) {
+    return BackofficeLoginUser(
+      id: data['id']?.toString().trim() ?? '',
+      displayName: data['displayName']?.toString().trim() ?? '',
+    );
   }
 }
 

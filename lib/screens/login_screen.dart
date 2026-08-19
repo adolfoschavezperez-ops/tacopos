@@ -93,33 +93,48 @@ class LoginScreen extends StatefulWidget {
     super.key,
     this.backofficeAuthService,
     this.initialError = '',
+    this.backofficeUsersLoader,
+    this.backofficePinLogin,
+    this.forceBackofficeWebLogin,
   });
 
   final BackofficeAdminAuthService? backofficeAuthService;
   final String initialError;
+  final Future<List<BackofficeLoginUser>> Function()? backofficeUsersLoader;
+  final Future<void> Function({
+    required String employeeId,
+    required String pin,
+  })?
+  backofficePinLogin;
+  final bool? forceBackofficeWebLogin;
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _repository = TacoPosRepository();
-  final _userController = TextEditingController();
   final _pinController = TextEditingController();
   final _pinFocusNode = FocusNode();
-  late final BackofficeAdminAuthService _backofficeAuthService;
+  late final TacoPosRepository _repository;
+  BackofficeAdminAuthService? _backofficeAuthService;
   Stream<List<Employee>>? _employeesStream;
+  Future<List<BackofficeLoginUser>>? _backofficeUsersFuture;
+  BackofficeLoginUser? _selectedBackofficeUser;
   Employee? _selectedEmployee;
   bool _busy = false;
   String _error = '';
 
+  bool get _isBackofficeWebLogin => widget.forceBackofficeWebLogin ?? kIsWeb;
+
   @override
   void initState() {
     super.initState();
-    _backofficeAuthService =
-        widget.backofficeAuthService ?? BackofficeAdminAuthService();
+    _backofficeAuthService = widget.backofficeAuthService;
     _error = widget.initialError;
-    if (!kIsWeb) {
+    if (_isBackofficeWebLogin) {
+      _backofficeUsersFuture = _loadBackofficeUsers();
+    } else {
+      _repository = TacoPosRepository();
       _employeesStream = _repository.watchEmployees();
       _repository.ensureDefaultBranch();
       _repository.ensureInitialAdminEmployee();
@@ -136,18 +151,41 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
-    _userController.dispose();
     _pinFocusNode.dispose();
     _pinController.dispose();
     super.dispose();
   }
 
+  Future<List<BackofficeLoginUser>> _loadBackofficeUsers() {
+    final loader = widget.backofficeUsersLoader;
+    if (loader != null) {
+      return loader();
+    }
+    final authService = _backofficeAuthService ??= BackofficeAdminAuthService();
+    return authService.listBackofficeUsers();
+  }
+
+  void _retryBackofficeUsers() {
+    setState(() {
+      _selectedBackofficeUser = null;
+      _error = '';
+      _backofficeUsersFuture = _loadBackofficeUsers();
+    });
+  }
+
   Future<void> _login() async {
-    if (kIsWeb) {
-      final usuario = _userController.text.trim();
-      if (usuario.isEmpty) {
+    if (_isBackofficeWebLogin) {
+      final selectedUser = _selectedBackofficeUser;
+      if (selectedUser == null) {
         setState(() {
-          _error = 'Ingresa usuario.';
+          _error = 'Selecciona un usuario.';
+        });
+        return;
+      }
+      final pin = _pinController.text.trim();
+      if (pin.isEmpty) {
+        setState(() {
+          _error = 'Ingresa tu PIN.';
         });
         return;
       }
@@ -158,10 +196,17 @@ class _LoginScreenState extends State<LoginScreen> {
       });
 
       try {
-        await _backofficeAuthService.signInWithPin(
-          employeeId: usuario,
-          pin: _pinController.text.trim(),
-        );
+        final pinLogin = widget.backofficePinLogin;
+        if (pinLogin != null) {
+          await pinLogin(employeeId: selectedUser.id, pin: pin);
+        } else {
+          final authService = _backofficeAuthService ??=
+              BackofficeAdminAuthService();
+          await authService.signInWithPin(
+            employeeId: selectedUser.id,
+            pin: pin,
+          );
+        }
       } catch (error) {
         if (!mounted) {
           return;
@@ -284,8 +329,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 460),
-                      child: kIsWeb
-                          ? _buildLoginPanel(context)
+                      child: _isBackofficeWebLogin
+                          ? _buildBackofficeUserLogin()
                           : _buildEmployeeLogin(),
                     ),
                   ),
@@ -295,6 +340,66 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildBackofficeUserLogin() {
+    return FutureBuilder<List<BackofficeLoginUser>>(
+      future: _backofficeUsersFuture,
+      builder: (context, snapshot) {
+        final loading = snapshot.connectionState != ConnectionState.done;
+        final hasError = snapshot.hasError;
+        final users = snapshot.data ?? const <BackofficeLoginUser>[];
+        final selectedId = _selectedBackofficeUser?.id;
+        final selectedUser = selectedId == null
+            ? null
+            : users.where((user) => user.id == selectedId).firstOrNull;
+        if (selectedUser == null && _selectedBackofficeUser != null) {
+          _selectedBackofficeUser = null;
+        }
+
+        final selector = DropdownButtonFormField<BackofficeLoginUser>(
+          key: const ValueKey('backoffice-user-dropdown'),
+          initialValue: selectedUser,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Usuario'),
+          hint: Text(
+            loading
+                ? 'Cargando usuarios...'
+                : hasError
+                ? 'No fue posible cargar usuarios'
+                : 'Selecciona un usuario',
+            overflow: TextOverflow.ellipsis,
+          ),
+          items: users
+              .map(
+                (user) => DropdownMenuItem(
+                  value: user,
+                  child: Text(
+                    user.displayName,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: _busy || loading || hasError
+              ? null
+              : (user) {
+                  setState(() {
+                    _selectedBackofficeUser = user;
+                    _error = '';
+                  });
+                },
+        );
+
+        return _buildLoginPanel(
+          context,
+          employeeSelector: selector,
+          loadError: hasError
+              ? 'No fue posible cargar los usuarios. Reintentar.'
+              : null,
+        );
+      },
     );
   }
 
@@ -335,12 +440,13 @@ class _LoginScreenState extends State<LoginScreen> {
           employeeSelector: DropdownButtonFormField<Employee>(
             key: ValueKey(selectedEmployee?.id ?? 'none'),
             initialValue: selectedEmployee,
+            isExpanded: true,
             decoration: const InputDecoration(labelText: 'Empleado'),
             items: employees
                 .map(
                   (employee) => DropdownMenuItem(
                     value: employee,
-                    child: Text(employee.name),
+                    child: Text(employee.name, overflow: TextOverflow.ellipsis),
                   ),
                 )
                 .toList(),
@@ -358,17 +464,11 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildLoginPanel(BuildContext context, {Widget? employeeSelector}) {
-    final userField = kIsWeb
-        ? TextField(
-            controller: _userController,
-            enabled: !_busy,
-            textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(labelText: 'Usuario'),
-            onSubmitted: (_) => _pinFocusNode.requestFocus(),
-          )
-        : employeeSelector;
-
+  Widget _buildLoginPanel(
+    BuildContext context, {
+    Widget? employeeSelector,
+    String? loadError,
+  }) {
     return GlassPanel(
       borderRadius: 28,
       padding: const EdgeInsets.all(24),
@@ -385,18 +485,38 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           const SizedBox(height: 22),
           Text(
-            kIsWeb ? 'TacoPOS Backoffice' : AppConstants.brandName,
+            _isBackofficeWebLogin
+                ? 'TacoPOS Backoffice'
+                : AppConstants.brandName,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           const SizedBox(height: 6),
           Text(
-            kIsWeb ? 'Acceso administrativo' : 'Inicio de sesion operativo',
+            _isBackofficeWebLogin
+                ? 'Acceso administrativo'
+                : 'Inicio de sesion operativo',
             textAlign: TextAlign.center,
             style: TextStyle(color: BrandColors.textMuted),
           ),
           const SizedBox(height: 22),
-          ?userField,
+          ?employeeSelector,
+          if (loadError != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              loadError,
+              style: const TextStyle(
+                color: BrandColors.danger,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _retryBackofficeUsers,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Reintentar'),
+            ),
+          ],
           const SizedBox(height: 14),
           TextField(
             controller: _pinController,
@@ -586,11 +706,11 @@ String backofficeLoginErrorMessage(Object? error) {
     return switch (error.code) {
       'permission-denied' => 'No tienes permisos para acceder al Backoffice.',
       'resource-exhausted' => 'Demasiados intentos. Intenta mas tarde.',
-      _ => 'Usuario o PIN incorrectos.',
+      _ => 'PIN incorrecto.',
     };
   }
   if (error is FirebaseException && error.code == 'permission-denied') {
     return 'No tienes permisos para acceder al Backoffice.';
   }
-  return 'Usuario o PIN incorrectos.';
+  return 'PIN incorrecto.';
 }

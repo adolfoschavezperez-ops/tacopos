@@ -52,6 +52,10 @@ interface BackofficePinLoginData {
   clientRequestId?: unknown;
 }
 
+interface ListBackofficeUsersData {
+  restaurantId?: unknown;
+}
+
 interface AuthAdmin {
   getUser(uid: string): Promise<admin.auth.UserRecord>;
   createUser(properties: admin.auth.CreateRequest): Promise<admin.auth.UserRecord>;
@@ -133,6 +137,51 @@ export const backofficePinLogin = onCall(
   ),
 );
 
+export const listBackofficeUsers = onCall(
+  {
+    region,
+  },
+  async (request) => listBackofficeUsersCore(
+    db,
+    request.data,
+    request.rawRequest.ip,
+  ),
+);
+
+export async function listBackofficeUsersCore(
+  firestore: admin.firestore.Firestore,
+  raw: ListBackofficeUsersData,
+  requesterKey = "unknown",
+) {
+  const restaurantId = cleanString(raw.restaurantId);
+  if (!isSafeDocumentId(restaurantId)) {
+    throw new HttpsError("invalid-argument", "Restaurante invalido.");
+  }
+
+  const restaurantRef = firestore.collection("restaurants").doc(restaurantId);
+  const rateRef = restaurantRef
+    .collection("backofficeUserListRateLimits")
+    .doc(rateLimitId("list", requesterKey));
+  const blocked = await applyListRateLimit(rateRef);
+  if (blocked) {
+    throw new HttpsError("resource-exhausted", "Demasiados intentos. Intenta mas tarde.");
+  }
+
+  const snapshot = await restaurantRef
+    .collection("employees")
+    .where("active", "==", true)
+    .get();
+  const users = snapshot.docs
+    .filter((doc) => employeeCanAccessBackoffice(doc.data(), doc.id))
+    .map((doc) => ({
+      id: doc.id,
+      displayName: cleanString(doc.data().name) || doc.id,
+    }))
+    .sort((a, b) => a.displayName.localeCompare(b.displayName, "es"));
+
+  return {users};
+}
+
 export async function backofficePinLoginCore(
   firestore: admin.firestore.Firestore,
   auth: AuthAdmin,
@@ -142,7 +191,7 @@ export async function backofficePinLoginCore(
   const restaurantId = cleanString(raw.restaurantId);
   const loginIdentifier = cleanString(raw.employeeId || raw.userId || raw.usuario);
   const pin = cleanString(raw.pin);
-  if (!restaurantId || !loginIdentifier || !pin) {
+  if (!isSafeDocumentId(restaurantId) || !loginIdentifier || !pin) {
     throw new HttpsError("invalid-argument", "Usuario o PIN incorrectos.");
   }
 
@@ -888,6 +937,29 @@ async function clearLoginRateLimit(ref: admin.firestore.DocumentReference) {
   }, {merge: true});
 }
 
+async function applyListRateLimit(ref: admin.firestore.DocumentReference) {
+  const now = admin.firestore.Timestamp.now();
+  return db.runTransaction(async (tx) => {
+    const doc = await tx.get(ref);
+    const data = doc.data() ?? {};
+    const windowStartedAt = data.windowStartedAt instanceof admin.firestore.Timestamp
+      ? data.windowStartedAt.toMillis()
+      : 0;
+    const windowMs = 60 * 1000;
+    const sameWindow = Date.now() - windowStartedAt < windowMs;
+    const attempts = sameWindow ? Number(data.attempts ?? 0) : 0;
+    if (attempts >= 60) {
+      return true;
+    }
+    tx.set(ref, {
+      attempts: attempts + 1,
+      windowStartedAt: sameWindow ? data.windowStartedAt ?? now : now,
+      updatedAt: now,
+    }, {merge: true});
+    return false;
+  });
+}
+
 function safeFrequency(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
 }
@@ -928,6 +1000,10 @@ function minutes(value: string): number | null {
 
 function cleanString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isSafeDocumentId(value: string): boolean {
+  return value.length > 0 && value.length <= 120 && !value.includes("/");
 }
 
 function stringList(value: unknown): string[] {
