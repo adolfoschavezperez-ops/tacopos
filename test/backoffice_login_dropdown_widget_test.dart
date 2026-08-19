@@ -1,3 +1,4 @@
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/theme/app_theme.dart';
@@ -93,6 +94,28 @@ void main() {
 
     expect(find.text('PIN incorrecto.'), findsOneWidget);
     expect(find.textContaining('permission-denied'), findsNothing);
+  });
+
+  testWidgets('error backend muestra mensaje generico', (tester) async {
+    await pumpLogin(
+      tester,
+      loginError: FirebaseFunctionsException(
+        code: 'internal',
+        message: 'signBlob denied',
+      ),
+    );
+
+    await selectUser(tester, 'Gabriel');
+    await tester.enterText(find.byType(TextField), '1234');
+    await tester.tap(find.text('Entrar'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('No fue posible iniciar sesion. Intenta nuevamente.'),
+      findsOneWidget,
+    );
+    expect(find.text('PIN incorrecto.'), findsNothing);
+    expect(find.textContaining('signBlob'), findsNothing);
   });
 
   testWidgets('usuario sin permiso muestra mensaje limpio', (tester) async {

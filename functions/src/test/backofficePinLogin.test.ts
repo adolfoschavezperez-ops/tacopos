@@ -26,6 +26,46 @@ describe("backoffice PIN login", () => {
     assert.equal(authUser.data()?.pin, undefined);
   });
 
+  it("PIN string correcto conserva la semantica original", async () => {
+    await seedEmployee("admin", {pin: "1234", canViewAdmin: true});
+
+    const result = await login({pin: "1234"});
+
+    assert.equal(result.uid, "bo_pin-restaurant_admin");
+    assert.equal(result.customToken, "token:bo_pin-restaurant_admin");
+  });
+
+  it("PIN con ceros iniciales no se convierte a numero", async () => {
+    await seedEmployee("admin", {pin: "0123", canViewAdmin: true});
+
+    const result = await login({pin: "0123"});
+
+    assert.equal(result.uid, "bo_pin-restaurant_admin");
+    await assert.rejects(() => login({pin: "123"}), /Usuario o PIN incorrectos/);
+  });
+
+  it("PIN numerico legacy replica modelo original y no autentica", async () => {
+    await seedEmployee("admin", {pin: 1234, canViewAdmin: true});
+
+    await assert.rejects(() => login({pin: "1234"}), /Usuario o PIN incorrectos/);
+    assert.equal(auth.createdUids.length, 0);
+  });
+
+  it("dos usuarios validan solo su propio PIN", async () => {
+    await seedEmployee("admin", {pin: "1111", canViewAdmin: true});
+    await seedEmployee("caja", {pin: "2222", canAuthorizeCashWithdrawals: true});
+
+    const adminResult = await login({employeeId: "admin", pin: "1111"});
+    const cajaResult = await login({employeeId: "caja", pin: "2222"});
+
+    assert.equal(adminResult.uid, "bo_pin-restaurant_admin");
+    assert.equal(cajaResult.uid, "bo_pin-restaurant_caja");
+    await assert.rejects(
+      () => login({employeeId: "admin", pin: "2222"}),
+      /Usuario o PIN incorrectos/,
+    );
+  });
+
   it("usuario escrito puede resolver empleado por nombre desde backend", async () => {
     await seedEmployee("adolfo", {
       name: "Adolfo",
@@ -52,16 +92,20 @@ describe("backoffice PIN login", () => {
 
     await assert.rejects(() => login({pin: "0000"}), /Usuario o PIN incorrectos/);
     assert.equal(auth.createdUids.length, 0);
+    const authUsers = await restaurant().collection("authUsers").get();
+    assert.equal(authUsers.size, 0);
   });
 
   it("usuario inexistente no revela detalle", async () => {
     await assert.rejects(() => login(), /Usuario o PIN incorrectos/);
+    assert.equal(auth.createdUids.length, 0);
   });
 
   it("usuario inactivo no entra", async () => {
     await seedEmployee("admin", {pin: "1234", active: false, canViewAdmin: true});
 
     await assert.rejects(() => login(), /Usuario o PIN incorrectos/);
+    assert.equal(auth.createdUids.length, 0);
   });
 
   it("usuario sin Backoffice no recibe sesion admin", async () => {
@@ -124,6 +168,15 @@ describe("backoffice PIN login", () => {
     assert.equal(serialized.includes("9876"), false);
     assert.equal(JSON.stringify(authUser.data()).includes("9876"), false);
   });
+
+  it("diagnostico no registra PINs en texto", () => {
+    const source = require("fs").readFileSync("src/index.ts", "utf8") as string;
+
+    assert.equal(source.includes("receivedPinValue"), false);
+    assert.equal(source.includes("storedPinValue"), false);
+    assert.equal(source.includes("pin: raw.pin"), false);
+    assert.equal(source.includes("pin: employee.pin"), false);
+  });
 });
 
 describe("listBackofficeUsers", () => {
@@ -143,6 +196,17 @@ describe("listBackofficeUsers", () => {
       {id: "admin", displayName: "Admin"},
       {id: "cash", displayName: "Caja"},
     ]);
+  });
+
+  it("employeeId de la lista es el document id que consume login", async () => {
+    await seedEmployee("empleado-A", {name: "Usuario A", pin: "1212", canViewAdmin: true});
+
+    const result = await listUsers();
+    const selected = result.users.find((user) => user.displayName === "Usuario A");
+    assert.equal(selected?.id, "empleado-A");
+
+    const loginResult = await login({employeeId: selected?.id, pin: "1212"});
+    assert.equal(loginResult.uid, "bo_pin-restaurant_empleado-a");
   });
 
   it("no devuelve PIN hash email authUid ni permisos", async () => {
