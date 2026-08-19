@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../core/constants/app_constants.dart';
@@ -7,26 +8,42 @@ import '../models/employee.dart';
 import 'app_session.dart';
 
 class BackofficeAdminAuthService {
-  BackofficeAdminAuthService({FirebaseAuth? auth, FirebaseFirestore? firestore})
-    : _auth = auth ?? FirebaseAuth.instance,
-      _firestore = firestore ?? FirebaseFirestore.instance;
+  BackofficeAdminAuthService({
+    FirebaseAuth? auth,
+    FirebaseFirestore? firestore,
+    FirebaseFunctions? functions,
+  }) : _auth = auth ?? FirebaseAuth.instance,
+       _firestore = firestore ?? FirebaseFirestore.instance,
+       _functions =
+           functions ?? FirebaseFunctions.instanceFor(region: 'us-central1');
 
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
+  final FirebaseFunctions _functions;
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
   User? get currentUser => _auth.currentUser;
 
-  Future<BackofficeAdminSession> signIn({
-    required String email,
-    required String password,
+  Future<BackofficeAdminSession> signInWithPin({
+    required String employeeId,
+    required String pin,
     String restaurantId = AppConstants.restaurantId,
   }) async {
-    final credential = await _auth.signInWithEmailAndPassword(
-      email: email.trim(),
-      password: password,
-    );
+    final callable = _functions.httpsCallable('backofficePinLogin');
+    final response = await callable.call<Map<String, dynamic>>({
+      'restaurantId': restaurantId,
+      'employeeId': employeeId.trim(),
+      'pin': pin,
+      'clientRequestId': DateTime.now().microsecondsSinceEpoch.toString(),
+    });
+    final customToken = response.data['customToken'] as String? ?? '';
+    if (customToken.isEmpty) {
+      throw const BackofficeAdminAuthException(
+        'No se pudo iniciar sesion administrativa.',
+      );
+    }
+    final credential = await _auth.signInWithCustomToken(customToken);
     final user = credential.user;
     if (user == null) {
       throw const BackofficeAdminAuthException(
@@ -123,6 +140,7 @@ class BackofficeAdminRecord {
     required this.isSuperAdmin,
     required this.permissions,
     required this.displayName,
+    required this.employeeId,
   });
 
   final String uid;
@@ -132,6 +150,7 @@ class BackofficeAdminRecord {
   final bool isSuperAdmin;
   final Map<String, bool> permissions;
   final String displayName;
+  final String employeeId;
 
   bool get canAccessBackoffice =>
       exists &&
@@ -168,43 +187,47 @@ class BackofficeAdminRecord {
           (data?['displayName'] as String?) ??
           (data?['name'] as String?) ??
           email,
+      employeeId: (data?['employeeId'] as String?) ?? uid,
     );
   }
 
   Employee toEmployee({required String restaurantId, String? defaultBranchId}) {
+    bool read(String key) => isSuperAdmin || permissions[key] == true;
     return Employee(
-      id: uid,
+      id: employeeId,
       name: displayName.trim().isEmpty ? email : displayName,
       active: active,
       pin: '',
       canTakeOrders: false,
       canCharge: false,
-      canViewKitchen: true,
-      canViewAdmin: true,
-      canManageProducts: true,
-      canManageTables: true,
-      canManagePlatforms: true,
-      canManageEmployees: true,
-      canManageCash: true,
-      canAuthorizeCashWithdrawals: true,
-      canOpenKitchen: true,
-      canCloseKitchen: true,
-      canViewKitchenReports: true,
-      canViewKitchenHourlySalesComparison: true,
-      canManageKitchenStock: true,
-      canCancelOrders: true,
-      canCancelPayments: true,
-      canCancelItems: true,
-      canApproveKitchenCancellations: true,
-      canViewLiveOperations: true,
-      canControlLiveOperations: true,
-      canViewPurchases: true,
-      canManageSuppliers: true,
-      canRegisterPurchases: true,
-      canPaySuppliers: true,
-      canCancelSupplierPayments: true,
-      canViewAccountsPayable: true,
-      canViewPurchaseReports: true,
+      canViewKitchen: read('canViewKitchen'),
+      canViewAdmin: read('canViewAdmin'),
+      canManageProducts: read('canManageProducts'),
+      canManageTables: read('canManageTables'),
+      canManagePlatforms: read('canManagePlatforms'),
+      canManageEmployees: read('canManageEmployees'),
+      canManageCash: read('canManageCash'),
+      canAuthorizeCashWithdrawals: read('canAuthorizeCashWithdrawals'),
+      canOpenKitchen: read('canOpenKitchen'),
+      canCloseKitchen: read('canCloseKitchen'),
+      canViewKitchenReports: read('canViewKitchenReports'),
+      canViewKitchenHourlySalesComparison: read(
+        'canViewKitchenHourlySalesComparison',
+      ),
+      canManageKitchenStock: read('canManageKitchenStock'),
+      canCancelOrders: read('canCancelOrders'),
+      canCancelPayments: read('canCancelPayments'),
+      canCancelItems: read('canCancelItems'),
+      canApproveKitchenCancellations: read('canApproveKitchenCancellations'),
+      canViewLiveOperations: read('canViewLiveOperations'),
+      canControlLiveOperations: read('canControlLiveOperations'),
+      canViewPurchases: read('canViewPurchases'),
+      canManageSuppliers: read('canManageSuppliers'),
+      canRegisterPurchases: read('canRegisterPurchases'),
+      canPaySuppliers: read('canPaySuppliers'),
+      canCancelSupplierPayments: read('canCancelSupplierPayments'),
+      canViewAccountsPayable: read('canViewAccountsPayable'),
+      canViewPurchaseReports: read('canViewPurchaseReports'),
       isSuperAdmin: isSuperAdmin,
       defaultRestaurantId: restaurantId,
       defaultBranchId: defaultBranchId ?? AppConstants.defaultBranchId,

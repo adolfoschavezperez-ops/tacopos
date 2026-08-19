@@ -43,6 +43,22 @@ interface CancelExpenseData {
   reason?: unknown;
 }
 
+interface BackofficePinLoginData {
+  restaurantId?: unknown;
+  usuario?: unknown;
+  userId?: unknown;
+  employeeId?: unknown;
+  pin?: unknown;
+  clientRequestId?: unknown;
+}
+
+interface AuthAdmin {
+  getUser(uid: string): Promise<admin.auth.UserRecord>;
+  createUser(properties: admin.auth.CreateRequest): Promise<admin.auth.UserRecord>;
+  updateUser(uid: string, properties: admin.auth.UpdateRequest): Promise<admin.auth.UserRecord>;
+  createCustomToken(uid: string): Promise<string>;
+}
+
 interface Policy {
   id: string;
   restaurantId: string;
@@ -104,6 +120,71 @@ export const cancelExpenseRequest = onCall(
   },
   async (request) => cancelExpenseRequestCore(db, request.data, request),
 );
+
+export const backofficePinLogin = onCall(
+  {
+    region,
+  },
+  async (request) => backofficePinLoginCore(
+    db,
+    admin.auth(),
+    request.data,
+    request.rawRequest.ip,
+  ),
+);
+
+export async function backofficePinLoginCore(
+  firestore: admin.firestore.Firestore,
+  auth: AuthAdmin,
+  raw: BackofficePinLoginData,
+  requesterKey = "unknown",
+) {
+  const restaurantId = cleanString(raw.restaurantId);
+  const employeeId = cleanString(raw.employeeId || raw.userId || raw.usuario);
+  const pin = cleanString(raw.pin);
+  if (!restaurantId || !employeeId || !pin) {
+    throw new HttpsError("invalid-argument", "Usuario o PIN incorrectos.");
+  }
+
+  const restaurantRef = firestore.collection("restaurants").doc(restaurantId);
+  const rateRef = restaurantRef
+    .collection("backofficeLoginRateLimits")
+    .doc(rateLimitId(employeeId, requesterKey));
+  const blocked = await applyLoginRateLimit(rateRef);
+  if (blocked) {
+    throw new HttpsError("resource-exhausted", "Demasiados intentos. Intenta mas tarde.");
+  }
+
+  const employeeRef = restaurantRef.collection("employees").doc(employeeId);
+  const employeeDoc = await employeeRef.get();
+  const employee = employeeDoc.data();
+  if (!employeeDoc.exists || !employee) {
+    await recordFailedLogin(rateRef);
+    throw new HttpsError("unauthenticated", "Usuario o PIN incorrectos.");
+  }
+  if (employee.active === false) {
+    await recordFailedLogin(rateRef);
+    throw new HttpsError("unauthenticated", "Usuario o PIN incorrectos.");
+  }
+  if (cleanString(employee.pin) !== pin) {
+    await recordFailedLogin(rateRef);
+    throw new HttpsError("unauthenticated", "Usuario o PIN incorrectos.");
+  }
+  if (!employeeCanAccessBackoffice(employee, employeeDoc.id)) {
+    await recordFailedLogin(rateRef);
+    throw new HttpsError("permission-denied", "No tienes permisos para acceder al Backoffice.");
+  }
+
+  const uid = backofficeUid(restaurantId, employeeDoc.id);
+  await ensureAuthUser(auth, uid, cleanString(employee.name) || employeeDoc.id);
+  await syncBackofficeAuthUser(restaurantRef, uid, employeeDoc.id, employee);
+  await clearLoginRateLimit(rateRef);
+  const customToken = await auth.createCustomToken(uid);
+  return {
+    customToken,
+    uid,
+  };
+}
 
 export async function submitExpenseRequestCore(
   firestore: admin.firestore.Firestore,
@@ -653,6 +734,129 @@ function isAdmin(data?: admin.firestore.DocumentData): boolean {
     (data.isSuperAdmin === true ||
       data.permissions?.canViewAdmin === true ||
       data.permissions?.canAuthorizeCashWithdrawals === true);
+}
+
+function employeeCanAccessBackoffice(
+  employee: admin.firestore.DocumentData,
+  employeeId: string,
+): boolean {
+  const name = cleanString(employee.name).toLowerCase();
+  return employee.isSuperAdmin === true ||
+    employee.canViewAdmin === true ||
+    employee.canAuthorizeCashWithdrawals === true ||
+    employeeId.toLowerCase().trim() === "admin" ||
+    name === "admin";
+}
+
+async function ensureAuthUser(
+  auth: AuthAdmin,
+  uid: string,
+  displayName: string,
+) {
+  try {
+    const user = await auth.getUser(uid);
+    if (user.disabled || user.displayName !== displayName) {
+      await auth.updateUser(uid, {disabled: false, displayName});
+    }
+  } catch (error) {
+    const code = (error as {code?: string}).code;
+    if (code !== "auth/user-not-found") throw error;
+    await auth.createUser({uid, displayName, disabled: false});
+  }
+}
+
+async function syncBackofficeAuthUser(
+  restaurantRef: admin.firestore.DocumentReference,
+  uid: string,
+  employeeId: string,
+  employee: admin.firestore.DocumentData,
+) {
+  const permissions = permissionsFromEmployee(employee);
+  await restaurantRef.collection("authUsers").doc(uid).set({
+    uid,
+    employeeId,
+    displayName: cleanString(employee.name) || employeeId,
+    active: employee.active !== false,
+    isSuperAdmin: employee.isSuperAdmin === true || employeeId.toLowerCase() === "admin",
+    restaurantId: restaurantRef.id,
+    permissions,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, {merge: true});
+}
+
+function permissionsFromEmployee(employee: admin.firestore.DocumentData) {
+  const keys = [
+    "canViewAdmin",
+    "canAuthorizeCashWithdrawals",
+    "canManageCash",
+    "canManageProducts",
+    "canManageTables",
+    "canManagePlatforms",
+    "canManageEmployees",
+    "canViewKitchenReports",
+    "canManageKitchenStock",
+    "canCancelOrders",
+    "canCancelPayments",
+    "canCancelItems",
+    "canApproveKitchenCancellations",
+    "canViewLiveOperations",
+    "canControlLiveOperations",
+    "canViewPurchases",
+    "canManageSuppliers",
+    "canRegisterPurchases",
+    "canPaySuppliers",
+    "canCancelSupplierPayments",
+    "canViewAccountsPayable",
+    "canViewPurchaseReports",
+  ];
+  return Object.fromEntries(keys.map((key) => [key, employee[key] === true]));
+}
+
+function backofficeUid(restaurantId: string, employeeId: string): string {
+  return `bo_${safeUidPart(restaurantId)}_${safeUidPart(employeeId)}`.slice(0, 128);
+}
+
+function safeUidPart(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9_-]/g, "_").replace(/_+/g, "_");
+}
+
+function rateLimitId(employeeId: string, requesterKey: string): string {
+  return `${safeUidPart(employeeId)}_${safeUidPart(requesterKey || "unknown")}`.slice(0, 180);
+}
+
+async function applyLoginRateLimit(ref: admin.firestore.DocumentReference) {
+  const doc = await ref.get();
+  const data = doc.data() ?? {};
+  const windowStartedAt = data.windowStartedAt instanceof admin.firestore.Timestamp
+    ? data.windowStartedAt.toMillis()
+    : 0;
+  const failedAttempts = Number(data.failedAttempts ?? 0);
+  const windowMs = 15 * 60 * 1000;
+  return Date.now() - windowStartedAt < windowMs && failedAttempts >= 5;
+}
+
+async function recordFailedLogin(ref: admin.firestore.DocumentReference) {
+  const now = admin.firestore.Timestamp.now();
+  await db.runTransaction(async (tx) => {
+    const doc = await tx.get(ref);
+    const data = doc.data() ?? {};
+    const windowStartedAt = data.windowStartedAt instanceof admin.firestore.Timestamp
+      ? data.windowStartedAt.toMillis()
+      : 0;
+    const expired = Date.now() - windowStartedAt >= 15 * 60 * 1000;
+    tx.set(ref, {
+      failedAttempts: expired ? 1 : Number(data.failedAttempts ?? 0) + 1,
+      windowStartedAt: expired ? now : data.windowStartedAt ?? now,
+      updatedAt: now,
+    }, {merge: true});
+  });
+}
+
+async function clearLoginRateLimit(ref: admin.firestore.DocumentReference) {
+  await ref.set({
+    failedAttempts: 0,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, {merge: true});
 }
 
 function safeFrequency(value: number): number {

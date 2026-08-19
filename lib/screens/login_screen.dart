@@ -1,3 +1,4 @@
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -23,7 +24,7 @@ class LoginGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (kIsWeb) {
-      return const BackofficeAdminLoginGate();
+      return const BackofficePinLoginGate();
     }
     return AnimatedBuilder(
       animation: AppSession.instance,
@@ -36,15 +37,14 @@ class LoginGate extends StatelessWidget {
   }
 }
 
-class BackofficeAdminLoginGate extends StatefulWidget {
-  const BackofficeAdminLoginGate({super.key});
+class BackofficePinLoginGate extends StatefulWidget {
+  const BackofficePinLoginGate({super.key});
 
   @override
-  State<BackofficeAdminLoginGate> createState() =>
-      _BackofficeAdminLoginGateState();
+  State<BackofficePinLoginGate> createState() => _BackofficePinLoginGateState();
 }
 
-class _BackofficeAdminLoginGateState extends State<BackofficeAdminLoginGate> {
+class _BackofficePinLoginGateState extends State<BackofficePinLoginGate> {
   final _authService = BackofficeAdminAuthService();
   Future<void>? _sessionLoad;
 
@@ -57,7 +57,7 @@ class _BackofficeAdminLoginGateState extends State<BackofficeAdminLoginGate> {
         if (user == null || user.isAnonymous) {
           AppSession.instance.signOut();
           _sessionLoad = null;
-          return BackofficeAdminLoginScreen(authService: _authService);
+          return LoginScreen(backofficeAuthService: _authService);
         }
         _sessionLoad ??= _authService.loadCurrentAdminSession();
         return FutureBuilder<void>(
@@ -73,8 +73,8 @@ class _BackofficeAdminLoginGateState extends State<BackofficeAdminLoginGate> {
               );
             }
             if (sessionSnapshot.hasError) {
-              return BackofficeAdminLoginScreen(
-                authService: _authService,
+              return LoginScreen(
+                backofficeAuthService: _authService,
                 initialError: backofficeLoginErrorMessage(
                   sessionSnapshot.error,
                 ),
@@ -88,200 +88,15 @@ class _BackofficeAdminLoginGateState extends State<BackofficeAdminLoginGate> {
   }
 }
 
-class BackofficeAdminLoginScreen extends StatefulWidget {
-  const BackofficeAdminLoginScreen({
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({
     super.key,
-    required this.authService,
+    this.backofficeAuthService,
     this.initialError = '',
   });
 
-  final BackofficeAdminAuthService authService;
+  final BackofficeAdminAuthService? backofficeAuthService;
   final String initialError;
-
-  @override
-  State<BackofficeAdminLoginScreen> createState() =>
-      _BackofficeAdminLoginScreenState();
-}
-
-class _BackofficeAdminLoginScreenState
-    extends State<BackofficeAdminLoginScreen> {
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _busy = false;
-  String _error = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _error = widget.initialError;
-  }
-
-  @override
-  void didUpdateWidget(covariant BackofficeAdminLoginScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.initialError != oldWidget.initialError) {
-      _error = widget.initialError;
-    }
-  }
-
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _login() async {
-    final email = _emailController.text.trim();
-    final password = _passwordController.text;
-    if (email.isEmpty || password.isEmpty) {
-      setState(() {
-        _error = 'Captura correo y contrasena.';
-      });
-      return;
-    }
-    setState(() {
-      _busy = true;
-      _error = '';
-    });
-    try {
-      await widget.authService.signIn(email: email, password: password);
-    } catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _error = backofficeLoginErrorMessage(error);
-      });
-    }
-  }
-
-  Future<void> _logout() async {
-    setState(() {
-      _busy = true;
-      _error = '';
-    });
-    await widget.authService.signOut();
-    if (!mounted) return;
-    setState(() {
-      _busy = false;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      body: PremiumBackground(
-        child: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
-              return SingleChildScrollView(
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: EdgeInsets.fromLTRB(18, 18, 18, 18 + keyboardInset),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 460),
-                      child: GlassPanel(
-                        borderRadius: 28,
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Center(
-                              child: SizedBox(
-                                width: 118,
-                                height: 118,
-                                child: Image.asset(
-                                  AppConstants.logoAsset,
-                                  fit: BoxFit.contain,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 22),
-                            Text(
-                              'TacoPOS Backoffice',
-                              textAlign: TextAlign.center,
-                              style: Theme.of(context).textTheme.headlineMedium,
-                            ),
-                            const SizedBox(height: 6),
-                            const Text(
-                              'Acceso administrativo',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: BrandColors.textMuted),
-                            ),
-                            const SizedBox(height: 22),
-                            TextField(
-                              controller: _emailController,
-                              enabled: !_busy,
-                              keyboardType: TextInputType.emailAddress,
-                              textInputAction: TextInputAction.next,
-                              autofillHints: const [AutofillHints.email],
-                              decoration: const InputDecoration(
-                                labelText: 'Correo',
-                                prefixIcon: Icon(Icons.mail_outline),
-                              ),
-                            ),
-                            const SizedBox(height: 14),
-                            TextField(
-                              controller: _passwordController,
-                              enabled: !_busy,
-                              obscureText: true,
-                              textInputAction: TextInputAction.done,
-                              autofillHints: const [AutofillHints.password],
-                              decoration: const InputDecoration(
-                                labelText: 'Contrasena',
-                                prefixIcon: Icon(Icons.lock_outline),
-                              ),
-                              onSubmitted: (_) => _login(),
-                            ),
-                            if (_error.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Text(
-                                _error,
-                                style: const TextStyle(
-                                  color: BrandColors.danger,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 18),
-                            FilledButton.icon(
-                              onPressed: _busy ? null : _login,
-                              icon: const Icon(Icons.login),
-                              label: Text(
-                                _busy ? 'Entrando...' : 'Iniciar sesion',
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            OutlinedButton.icon(
-                              onPressed: _busy ? null : _logout,
-                              icon: const Icon(Icons.logout),
-                              label: const Text('Cerrar sesion'),
-                            ),
-                            const SizedBox(height: 14),
-                            const _LoginVersionStatus(),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -291,6 +106,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _repository = TacoPosRepository();
   final _pinController = TextEditingController();
   final _pinFocusNode = FocusNode();
+  late final BackofficeAdminAuthService _backofficeAuthService;
   late final Stream<List<Employee>> _employeesStream;
   Employee? _selectedEmployee;
   bool _busy = false;
@@ -299,9 +115,20 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
+    _backofficeAuthService =
+        widget.backofficeAuthService ?? BackofficeAdminAuthService();
+    _error = widget.initialError;
     _employeesStream = _repository.watchEmployees();
     _repository.ensureDefaultBranch();
     _repository.ensureInitialAdminEmployee();
+  }
+
+  @override
+  void didUpdateWidget(covariant LoginScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialError != oldWidget.initialError) {
+      _error = widget.initialError;
+    }
   }
 
   @override
@@ -326,28 +153,28 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      final valid = await _repository.validateEmployeePin(
-        employeeId: employee.id,
-        pin: _pinController.text.trim(),
-      );
-      if (!mounted) {
+      if (kIsWeb) {
+        await _backofficeAuthService.signInWithPin(
+          employeeId: employee.id,
+          pin: _pinController.text.trim(),
+        );
         return;
-      }
+      } else {
+        final valid = await _repository.validateEmployeePin(
+          employeeId: employee.id,
+          pin: _pinController.text.trim(),
+        );
+        if (!mounted) {
+          return;
+        }
 
-      if (!valid) {
-        setState(() {
-          _busy = false;
-          _error = 'PIN incorrecto o empleado inactivo.';
-        });
-        return;
-      }
-
-      if (kIsWeb && !_canAccessBackoffice(employee)) {
-        setState(() {
-          _busy = false;
-          _error = 'No tienes acceso al backoffice.';
-        });
-        return;
+        if (!valid) {
+          setState(() {
+            _busy = false;
+            _error = 'PIN incorrecto o empleado inactivo.';
+          });
+          return;
+        }
       }
 
       final branches = await _repository.getAccessibleBranches(employee);
@@ -378,7 +205,9 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       setState(() {
         _busy = false;
-        _error = 'No se pudo iniciar sesion: $error';
+        _error = kIsWeb
+            ? backofficeLoginErrorMessage(error)
+            : 'No se pudo iniciar sesion: $error';
       });
     }
   }
@@ -719,31 +548,19 @@ class _VersionStatusView {
   final String? actionLabel;
 }
 
-bool _canAccessBackoffice(Employee employee) {
-  return employee.hasAdminAccess ||
-      employee.canManageCash ||
-      employee.canViewKitchenReports ||
-      employee.canAuthorizeCashWithdrawals ||
-      employee.canViewLiveOperations;
-}
-
 String backofficeLoginErrorMessage(Object? error) {
   if (error is BackofficeAdminAuthException) {
     return error.message;
   }
-  if (error is FirebaseAuthException) {
+  if (error is FirebaseFunctionsException) {
     return switch (error.code) {
-      'wrong-password' ||
-      'invalid-credential' ||
-      'invalid-login-credentials' => 'Correo o contrasena incorrectos.',
-      'user-not-found' => 'Correo o contrasena incorrectos.',
-      'invalid-email' => 'Captura un correo valido.',
-      'user-disabled' => 'La cuenta administrativa esta desactivada.',
-      _ => 'No se pudo iniciar sesion administrativa.',
+      'permission-denied' => 'No tienes permisos para acceder al Backoffice.',
+      'resource-exhausted' => 'Demasiados intentos. Intenta mas tarde.',
+      _ => 'Usuario o PIN incorrectos.',
     };
   }
   if (error is FirebaseException && error.code == 'permission-denied') {
     return 'No tienes permisos para acceder al Backoffice.';
   }
-  return 'No se pudo iniciar sesion administrativa.';
+  return 'Usuario o PIN incorrectos.';
 }
