@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
@@ -8,6 +9,7 @@ import '../models/branch.dart';
 import '../models/employee.dart';
 import '../services/app_session.dart';
 import '../services/app_update_service.dart';
+import '../services/backoffice_admin_auth_service.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/app_update_gate.dart';
@@ -20,6 +22,9 @@ class LoginGate extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb) {
+      return const BackofficeAdminLoginGate();
+    }
     return AnimatedBuilder(
       animation: AppSession.instance,
       builder: (context, _) {
@@ -27,6 +32,250 @@ class LoginGate extends StatelessWidget {
             ? const HomeScreen()
             : const LoginScreen();
       },
+    );
+  }
+}
+
+class BackofficeAdminLoginGate extends StatefulWidget {
+  const BackofficeAdminLoginGate({super.key});
+
+  @override
+  State<BackofficeAdminLoginGate> createState() =>
+      _BackofficeAdminLoginGateState();
+}
+
+class _BackofficeAdminLoginGateState extends State<BackofficeAdminLoginGate> {
+  final _authService = BackofficeAdminAuthService();
+  Future<void>? _sessionLoad;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: _authService.authStateChanges,
+      builder: (context, snapshot) {
+        final user = snapshot.data;
+        if (user == null || user.isAnonymous) {
+          AppSession.instance.signOut();
+          _sessionLoad = null;
+          return BackofficeAdminLoginScreen(authService: _authService);
+        }
+        _sessionLoad ??= _authService.loadCurrentAdminSession();
+        return FutureBuilder<void>(
+          future: _sessionLoad,
+          builder: (context, sessionSnapshot) {
+            if (sessionSnapshot.connectionState != ConnectionState.done) {
+              return const Scaffold(
+                body: PremiumBackground(
+                  child: Center(
+                    child: LoadingPanel(message: 'Validando permisos...'),
+                  ),
+                ),
+              );
+            }
+            if (sessionSnapshot.hasError) {
+              return BackofficeAdminLoginScreen(
+                authService: _authService,
+                initialError: backofficeLoginErrorMessage(
+                  sessionSnapshot.error,
+                ),
+              );
+            }
+            return const HomeScreen();
+          },
+        );
+      },
+    );
+  }
+}
+
+class BackofficeAdminLoginScreen extends StatefulWidget {
+  const BackofficeAdminLoginScreen({
+    super.key,
+    required this.authService,
+    this.initialError = '',
+  });
+
+  final BackofficeAdminAuthService authService;
+  final String initialError;
+
+  @override
+  State<BackofficeAdminLoginScreen> createState() =>
+      _BackofficeAdminLoginScreenState();
+}
+
+class _BackofficeAdminLoginScreenState
+    extends State<BackofficeAdminLoginScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _busy = false;
+  String _error = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _error = widget.initialError;
+  }
+
+  @override
+  void didUpdateWidget(covariant BackofficeAdminLoginScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialError != oldWidget.initialError) {
+      _error = widget.initialError;
+    }
+  }
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _login() async {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+    if (email.isEmpty || password.isEmpty) {
+      setState(() {
+        _error = 'Captura correo y contrasena.';
+      });
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    try {
+      await widget.authService.signIn(email: email, password: password);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = backofficeLoginErrorMessage(error);
+      });
+    }
+  }
+
+  Future<void> _logout() async {
+    setState(() {
+      _busy = true;
+      _error = '';
+    });
+    await widget.authService.signOut();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      resizeToAvoidBottomInset: true,
+      body: PremiumBackground(
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final keyboardInset = MediaQuery.viewInsetsOf(context).bottom;
+              return SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: EdgeInsets.fromLTRB(18, 18, 18, 18 + keyboardInset),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 460),
+                      child: GlassPanel(
+                        borderRadius: 28,
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Center(
+                              child: SizedBox(
+                                width: 118,
+                                height: 118,
+                                child: Image.asset(
+                                  AppConstants.logoAsset,
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 22),
+                            Text(
+                              'TacoPOS Backoffice',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.headlineMedium,
+                            ),
+                            const SizedBox(height: 6),
+                            const Text(
+                              'Acceso administrativo',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: BrandColors.textMuted),
+                            ),
+                            const SizedBox(height: 22),
+                            TextField(
+                              controller: _emailController,
+                              enabled: !_busy,
+                              keyboardType: TextInputType.emailAddress,
+                              textInputAction: TextInputAction.next,
+                              autofillHints: const [AutofillHints.email],
+                              decoration: const InputDecoration(
+                                labelText: 'Correo',
+                                prefixIcon: Icon(Icons.mail_outline),
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            TextField(
+                              controller: _passwordController,
+                              enabled: !_busy,
+                              obscureText: true,
+                              textInputAction: TextInputAction.done,
+                              autofillHints: const [AutofillHints.password],
+                              decoration: const InputDecoration(
+                                labelText: 'Contrasena',
+                                prefixIcon: Icon(Icons.lock_outline),
+                              ),
+                              onSubmitted: (_) => _login(),
+                            ),
+                            if (_error.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                _error,
+                                style: const TextStyle(
+                                  color: BrandColors.danger,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 18),
+                            FilledButton.icon(
+                              onPressed: _busy ? null : _login,
+                              icon: const Icon(Icons.login),
+                              label: Text(
+                                _busy ? 'Entrando...' : 'Iniciar sesion',
+                              ),
+                            ),
+                            const SizedBox(height: 10),
+                            OutlinedButton.icon(
+                              onPressed: _busy ? null : _logout,
+                              icon: const Icon(Icons.logout),
+                              label: const Text('Cerrar sesion'),
+                            ),
+                            const SizedBox(height: 14),
+                            const _LoginVersionStatus(),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
     );
   }
 }
@@ -471,12 +720,30 @@ class _VersionStatusView {
 }
 
 bool _canAccessBackoffice(Employee employee) {
-  // TODO: Antes de produccion real, migrar backoffice web a Firebase Auth
-  // con email/password y reglas de Firestore mas estrictas. El PIN operativo
-  // sirve para piloto, pero no debe ser la seguridad final de una app publica.
   return employee.hasAdminAccess ||
       employee.canManageCash ||
       employee.canViewKitchenReports ||
       employee.canAuthorizeCashWithdrawals ||
       employee.canViewLiveOperations;
+}
+
+String backofficeLoginErrorMessage(Object? error) {
+  if (error is BackofficeAdminAuthException) {
+    return error.message;
+  }
+  if (error is FirebaseAuthException) {
+    return switch (error.code) {
+      'wrong-password' ||
+      'invalid-credential' ||
+      'invalid-login-credentials' => 'Correo o contrasena incorrectos.',
+      'user-not-found' => 'Correo o contrasena incorrectos.',
+      'invalid-email' => 'Captura un correo valido.',
+      'user-disabled' => 'La cuenta administrativa esta desactivada.',
+      _ => 'No se pudo iniciar sesion administrativa.',
+    };
+  }
+  if (error is FirebaseException && error.code == 'permission-denied') {
+    return 'No tienes permisos para acceder al Backoffice.';
+  }
+  return 'No se pudo iniciar sesion administrativa.';
 }
