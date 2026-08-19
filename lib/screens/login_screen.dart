@@ -104,10 +104,11 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _repository = TacoPosRepository();
+  final _userController = TextEditingController();
   final _pinController = TextEditingController();
   final _pinFocusNode = FocusNode();
   late final BackofficeAdminAuthService _backofficeAuthService;
-  late final Stream<List<Employee>> _employeesStream;
+  Stream<List<Employee>>? _employeesStream;
   Employee? _selectedEmployee;
   bool _busy = false;
   String _error = '';
@@ -118,9 +119,11 @@ class _LoginScreenState extends State<LoginScreen> {
     _backofficeAuthService =
         widget.backofficeAuthService ?? BackofficeAdminAuthService();
     _error = widget.initialError;
-    _employeesStream = _repository.watchEmployees();
-    _repository.ensureDefaultBranch();
-    _repository.ensureInitialAdminEmployee();
+    if (!kIsWeb) {
+      _employeesStream = _repository.watchEmployees();
+      _repository.ensureDefaultBranch();
+      _repository.ensureInitialAdminEmployee();
+    }
   }
 
   @override
@@ -133,12 +136,44 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
+    _userController.dispose();
     _pinFocusNode.dispose();
     _pinController.dispose();
     super.dispose();
   }
 
   Future<void> _login() async {
+    if (kIsWeb) {
+      final usuario = _userController.text.trim();
+      if (usuario.isEmpty) {
+        setState(() {
+          _error = 'Ingresa usuario.';
+        });
+        return;
+      }
+
+      setState(() {
+        _busy = true;
+        _error = '';
+      });
+
+      try {
+        await _backofficeAuthService.signInWithPin(
+          employeeId: usuario,
+          pin: _pinController.text.trim(),
+        );
+      } catch (error) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _busy = false;
+          _error = backofficeLoginErrorMessage(error);
+        });
+      }
+      return;
+    }
+
     final employee = _selectedEmployee;
     if (employee == null) {
       setState(() {
@@ -153,41 +188,33 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      if (kIsWeb) {
-        await _backofficeAuthService.signInWithPin(
-          employeeId: employee.id,
-          pin: _pinController.text.trim(),
-        );
+      final valid = await _repository.validateEmployeePin(
+        employeeId: employee.id,
+        pin: _pinController.text.trim(),
+      );
+      if (!mounted) {
         return;
-      } else {
-        final valid = await _repository.validateEmployeePin(
-          employeeId: employee.id,
-          pin: _pinController.text.trim(),
-        );
-        if (!mounted) {
-          return;
-        }
+      }
 
-        if (!valid) {
-          setState(() {
-            _busy = false;
-            _error = 'PIN incorrecto o empleado inactivo.';
-          });
-          return;
-        }
+      if (!valid) {
+        setState(() {
+          _busy = false;
+          _error = 'PIN incorrecto o empleado inactivo.';
+        });
+        return;
       }
 
       final branches = await _repository.getAccessibleBranches(employee);
       if (!mounted) {
         return;
       }
-      final selectedBranch = !kIsWeb && branches.length > 1
+      final selectedBranch = branches.length > 1
           ? await _selectBranch(branches)
           : (branches.isEmpty ? null : branches.first);
       if (!mounted) {
         return;
       }
-      if (!kIsWeb && branches.length > 1 && selectedBranch == null) {
+      if (branches.length > 1 && selectedBranch == null) {
         setState(() {
           _busy = false;
           _error = 'Selecciona una sucursal para continuar.';
@@ -257,139 +284,9 @@ class _LoginScreenState extends State<LoginScreen> {
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 460),
-                      child: StreamBuilder<List<Employee>>(
-                        stream: _employeesStream,
-                        builder: (context, snapshot) {
-                          if (snapshot.hasError) {
-                            return EmptyState(
-                              icon: Icons.error_outline,
-                              title: 'No se pudieron cargar empleados',
-                              message: '${snapshot.error}',
-                            );
-                          }
-
-                          if (snapshot.connectionState ==
-                              ConnectionState.waiting) {
-                            return const LoadingPanel(
-                              message: 'Cargando acceso...',
-                            );
-                          }
-
-                          final employees = snapshot.data ?? [];
-                          if (employees.isEmpty) {
-                            return const EmptyState(
-                              icon: Icons.badge_outlined,
-                              title: 'Sin empleados activos',
-                              message: 'Activa un empleado desde Admin.',
-                            );
-                          }
-
-                          final selectedId = _selectedEmployee?.id;
-                          final selectedEmployee = selectedId == null
-                              ? null
-                              : employees
-                                    .where(
-                                      (employee) => employee.id == selectedId,
-                                    )
-                                    .firstOrNull;
-
-                          return GlassPanel(
-                            borderRadius: 28,
-                            padding: const EdgeInsets.all(24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Center(
-                                  child: SizedBox(
-                                    width: 118,
-                                    height: 118,
-                                    child: Image.asset(
-                                      AppConstants.logoAsset,
-                                      fit: BoxFit.contain,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 22),
-                                Text(
-                                  kIsWeb
-                                      ? 'TacoPOS Backoffice'
-                                      : AppConstants.brandName,
-                                  textAlign: TextAlign.center,
-                                  style: Theme.of(
-                                    context,
-                                  ).textTheme.headlineMedium,
-                                ),
-                                const SizedBox(height: 6),
-                                Text(
-                                  kIsWeb
-                                      ? 'Acceso administrativo'
-                                      : 'Inicio de sesion operativo',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: BrandColors.textMuted,
-                                  ),
-                                ),
-                                const SizedBox(height: 22),
-                                DropdownButtonFormField<Employee>(
-                                  key: ValueKey(selectedEmployee?.id ?? 'none'),
-                                  initialValue: selectedEmployee,
-                                  decoration: const InputDecoration(
-                                    labelText: 'Empleado',
-                                  ),
-                                  items: employees
-                                      .map(
-                                        (employee) => DropdownMenuItem(
-                                          value: employee,
-                                          child: Text(employee.name),
-                                        ),
-                                      )
-                                      .toList(),
-                                  onChanged: _busy
-                                      ? null
-                                      : (employee) {
-                                          setState(() {
-                                            _selectedEmployee = employee;
-                                            _error = '';
-                                          });
-                                        },
-                                ),
-                                const SizedBox(height: 14),
-                                TextField(
-                                  controller: _pinController,
-                                  focusNode: _pinFocusNode,
-                                  enabled: !_busy,
-                                  obscureText: true,
-                                  keyboardType: TextInputType.number,
-                                  textInputAction: TextInputAction.done,
-                                  decoration: const InputDecoration(
-                                    labelText: 'PIN',
-                                  ),
-                                  onSubmitted: (_) => _login(),
-                                ),
-                                if (_error.isNotEmpty) ...[
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    _error,
-                                    style: const TextStyle(
-                                      color: BrandColors.danger,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ],
-                                const SizedBox(height: 18),
-                                FilledButton.icon(
-                                  onPressed: _busy ? null : _login,
-                                  icon: const Icon(Icons.login),
-                                  label: Text(_busy ? 'Entrando...' : 'Entrar'),
-                                ),
-                                const SizedBox(height: 14),
-                                const _LoginVersionStatus(),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
+                      child: kIsWeb
+                          ? _buildLoginPanel(context)
+                          : _buildEmployeeLogin(),
                     ),
                   ),
                 ),
@@ -397,6 +294,139 @@ class _LoginScreenState extends State<LoginScreen> {
             },
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildEmployeeLogin() {
+    return StreamBuilder<List<Employee>>(
+      stream: _employeesStream,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return EmptyState(
+            icon: Icons.error_outline,
+            title: 'No se pudieron cargar empleados',
+            message: '${snapshot.error}',
+          );
+        }
+
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const LoadingPanel(message: 'Cargando acceso...');
+        }
+
+        final employees = snapshot.data ?? [];
+        if (employees.isEmpty) {
+          return const EmptyState(
+            icon: Icons.badge_outlined,
+            title: 'Sin empleados activos',
+            message: 'Activa un empleado desde Admin.',
+          );
+        }
+
+        final selectedId = _selectedEmployee?.id;
+        final selectedEmployee = selectedId == null
+            ? null
+            : employees
+                  .where((employee) => employee.id == selectedId)
+                  .firstOrNull;
+
+        return _buildLoginPanel(
+          context,
+          employeeSelector: DropdownButtonFormField<Employee>(
+            key: ValueKey(selectedEmployee?.id ?? 'none'),
+            initialValue: selectedEmployee,
+            decoration: const InputDecoration(labelText: 'Empleado'),
+            items: employees
+                .map(
+                  (employee) => DropdownMenuItem(
+                    value: employee,
+                    child: Text(employee.name),
+                  ),
+                )
+                .toList(),
+            onChanged: _busy
+                ? null
+                : (employee) {
+                    setState(() {
+                      _selectedEmployee = employee;
+                      _error = '';
+                    });
+                  },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLoginPanel(BuildContext context, {Widget? employeeSelector}) {
+    final userField = kIsWeb
+        ? TextField(
+            controller: _userController,
+            enabled: !_busy,
+            textInputAction: TextInputAction.next,
+            decoration: const InputDecoration(labelText: 'Usuario'),
+            onSubmitted: (_) => _pinFocusNode.requestFocus(),
+          )
+        : employeeSelector;
+
+    return GlassPanel(
+      borderRadius: 28,
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: SizedBox(
+              width: 118,
+              height: 118,
+              child: Image.asset(AppConstants.logoAsset, fit: BoxFit.contain),
+            ),
+          ),
+          const SizedBox(height: 22),
+          Text(
+            kIsWeb ? 'TacoPOS Backoffice' : AppConstants.brandName,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.headlineMedium,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            kIsWeb ? 'Acceso administrativo' : 'Inicio de sesion operativo',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: BrandColors.textMuted),
+          ),
+          const SizedBox(height: 22),
+          ?userField,
+          const SizedBox(height: 14),
+          TextField(
+            controller: _pinController,
+            focusNode: _pinFocusNode,
+            enabled: !_busy,
+            obscureText: true,
+            keyboardType: TextInputType.number,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(labelText: 'PIN'),
+            onSubmitted: (_) => _login(),
+          ),
+          if (_error.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              _error,
+              style: const TextStyle(
+                color: BrandColors.danger,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: _busy ? null : _login,
+            icon: const Icon(Icons.login),
+            label: Text(_busy ? 'Entrando...' : 'Entrar'),
+          ),
+          const SizedBox(height: 14),
+          const _LoginVersionStatus(),
+        ],
       ),
     );
   }

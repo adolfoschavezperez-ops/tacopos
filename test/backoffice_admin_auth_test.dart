@@ -116,18 +116,34 @@ void main() {
       expect(message, 'Inicia sesion para acceder al Backoffice.');
     });
 
-    test('pantalla web restaura Usuario y PIN sin correo password', () {
+    test('pantalla web usa Usuario y PIN sin correo password', () {
       final source = File('lib/screens/login_screen.dart').readAsStringSync();
       final service = File(
         'lib/services/backoffice_admin_auth_service.dart',
       ).readAsStringSync();
 
+      expect(source, contains("labelText: 'Usuario'"));
       expect(source, contains("labelText: 'Empleado'"));
       expect(source, contains("labelText: 'PIN'"));
       expect(source, isNot(contains("labelText: 'Correo'")));
       expect(source, isNot(contains("labelText: 'Contrasena'")));
       expect(source, contains('signInWithPin'));
       expect(service, contains('signInWithCustomToken'));
+    });
+
+    test('login web no lista empleados antes del custom token', () {
+      final source = File('lib/screens/login_screen.dart').readAsStringSync();
+
+      expect(source, contains('if (!kIsWeb)'));
+      expect(
+        source,
+        contains('_employeesStream = _repository.watchEmployees();'),
+      );
+      expect(
+        source,
+        contains("decoration: const InputDecoration(labelText: 'Usuario')"),
+      );
+      expect(source, contains('employeeId: usuario'));
     });
   });
 }

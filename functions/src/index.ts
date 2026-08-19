@@ -140,23 +140,22 @@ export async function backofficePinLoginCore(
   requesterKey = "unknown",
 ) {
   const restaurantId = cleanString(raw.restaurantId);
-  const employeeId = cleanString(raw.employeeId || raw.userId || raw.usuario);
+  const loginIdentifier = cleanString(raw.employeeId || raw.userId || raw.usuario);
   const pin = cleanString(raw.pin);
-  if (!restaurantId || !employeeId || !pin) {
+  if (!restaurantId || !loginIdentifier || !pin) {
     throw new HttpsError("invalid-argument", "Usuario o PIN incorrectos.");
   }
 
   const restaurantRef = firestore.collection("restaurants").doc(restaurantId);
   const rateRef = restaurantRef
     .collection("backofficeLoginRateLimits")
-    .doc(rateLimitId(employeeId, requesterKey));
+    .doc(rateLimitId(loginIdentifier, requesterKey));
   const blocked = await applyLoginRateLimit(rateRef);
   if (blocked) {
     throw new HttpsError("resource-exhausted", "Demasiados intentos. Intenta mas tarde.");
   }
 
-  const employeeRef = restaurantRef.collection("employees").doc(employeeId);
-  const employeeDoc = await employeeRef.get();
+  const employeeDoc = await resolveBackofficeEmployee(restaurantRef, loginIdentifier);
   const employee = employeeDoc.data();
   if (!employeeDoc.exists || !employee) {
     await recordFailedLogin(rateRef);
@@ -746,6 +745,36 @@ function employeeCanAccessBackoffice(
     employee.canAuthorizeCashWithdrawals === true ||
     employeeId.toLowerCase().trim() === "admin" ||
     name === "admin";
+}
+
+async function resolveBackofficeEmployee(
+  restaurantRef: admin.firestore.DocumentReference,
+  loginIdentifier: string,
+) {
+  const employeesRef = restaurantRef.collection("employees");
+  const normalized = loginIdentifier.toLowerCase();
+  const candidateIds = Array.from(new Set([
+    loginIdentifier,
+    normalized,
+    safeUidPart(loginIdentifier),
+  ].filter((value) => value.length > 0)));
+
+  for (const candidateId of candidateIds) {
+    const doc = await employeesRef.doc(candidateId).get();
+    if (doc.exists) {
+      return doc;
+    }
+  }
+
+  const fields = ["username", "userId", "usuario", "login", "name"];
+  for (const field of fields) {
+    const snapshot = await employeesRef.where(field, "==", loginIdentifier).limit(2).get();
+    if (snapshot.size === 1) {
+      return snapshot.docs[0];
+    }
+  }
+
+  return employeesRef.doc("missing_login_document").get();
 }
 
 async function ensureAuthUser(

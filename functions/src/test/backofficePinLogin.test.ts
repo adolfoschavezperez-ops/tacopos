@@ -26,6 +26,27 @@ describe("backoffice PIN login", () => {
     assert.equal(authUser.data()?.pin, undefined);
   });
 
+  it("usuario escrito puede resolver empleado por nombre desde backend", async () => {
+    await seedEmployee("adolfo", {
+      name: "Adolfo",
+      pin: "1234",
+      canViewAdmin: true,
+    });
+
+    const result = await login({employeeId: undefined, usuario: "Adolfo"});
+
+    assert.equal(result.uid, "bo_pin-restaurant_adolfo");
+    assert.equal(result.customToken, "token:bo_pin-restaurant_adolfo");
+  });
+
+  it("usuario escrito no requiere id exacto si coincide en minusculas", async () => {
+    await seedEmployee("adolfo", {pin: "1234", canViewAdmin: true});
+
+    const result = await login({employeeId: "Adolfo"});
+
+    assert.equal(result.uid, "bo_pin-restaurant_adolfo");
+  });
+
   it("PIN incorrecto no genera token", async () => {
     await seedEmployee("admin", {pin: "1234", canViewAdmin: true});
 
