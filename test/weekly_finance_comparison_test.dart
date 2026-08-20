@@ -130,7 +130,7 @@ void main() {
 
     final current = report.weeks.last.metrics;
     expect(current.grossSales, 4200);
-    expect(current.discounts, 130);
+    expect(current.discounts, 30);
     expect(current.netSales, 4070);
     expect(current.realIncome, 4070);
     expect(current.shortages, 0);

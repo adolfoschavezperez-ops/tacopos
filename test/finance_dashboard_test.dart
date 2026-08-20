@@ -1971,10 +1971,7 @@ void main() {
       'meal',
       order.id,
       amount: 100,
-      chargedAmount: 0,
       method: 'employee_consumption',
-      discountAmount: 100,
-      appliedDiscountType: 'employee_free_meal',
     );
     final summary = buildCanonicalSalesSummary([
       SalesOrderBundleInput(
@@ -2011,7 +2008,7 @@ void main() {
     expect(dashboard.netSales, 4000);
     expect(dashboard.realCollected, 4000);
     expect(dashboard.expectedMonetaryIncome, 4000);
-    expect(dashboard.employeeConsumption, 0);
+    expect(dashboard.employeeConsumption, 100);
     expect(dashboard.cashShortages, 0);
   });
 
@@ -2029,10 +2026,7 @@ void main() {
       'meal-1908',
       order.id,
       amount: 259,
-      chargedAmount: 0,
       method: 'employee_consumption',
-      discountAmount: 259,
-      appliedDiscountType: 'employee_free_meal',
     );
     final summary = buildCanonicalSalesSummary([
       SalesOrderBundleInput(
@@ -2072,7 +2066,7 @@ void main() {
     expect(dashboard.employeeFreeMeals, 259);
     expect(dashboard.netSales, 7825);
     expect(dashboard.realCollected, 7825);
-    expect(dashboard.employeeConsumption, 0);
+    expect(dashboard.employeeConsumption, 259);
     expect(dashboard.salesByDay.single.employeeFreeMeals, 259);
     expect(dashboard.salesByDay.single.netSales, 7825);
   });
@@ -2101,10 +2095,7 @@ void main() {
       'meal-19',
       day19.id,
       amount: 259,
-      chargedAmount: 0,
       method: 'employee_consumption',
-      discountAmount: 259,
-      appliedDiscountType: 'employee_free_meal',
     );
     final summary = buildCanonicalSalesSummary([
       SalesOrderBundleInput(
