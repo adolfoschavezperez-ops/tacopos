@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../core/theme/brand_colors.dart';
+import '../../core/catalog/product_unit_cost.dart';
 import '../../models/kitchen_stock_item.dart';
 import '../../models/order_platform.dart';
 import '../../models/product.dart';
@@ -1026,6 +1027,7 @@ class _ProductDialog extends StatefulWidget {
 class _ProductDialogState extends State<_ProductDialog> {
   late final TextEditingController _nameController;
   late final TextEditingController _priceController;
+  late final TextEditingController _unitCostController;
   late final Map<String, TextEditingController> _platformControllers;
   late List<ProductCategory> _categories;
   late String _categoryId;
@@ -1046,6 +1048,9 @@ class _ProductDialogState extends State<_ProductDialog> {
     _categoryId = initialCategory?.id ?? '';
     _priceController = TextEditingController(
       text: product == null ? '' : product.price.toStringAsFixed(2),
+    );
+    _unitCostController = TextEditingController(
+      text: formatProductUnitCostInput(product?.unitCost),
     );
     _platformControllers = {
       for (final platform in widget.platforms.where(
@@ -1098,6 +1103,7 @@ class _ProductDialogState extends State<_ProductDialog> {
   void dispose() {
     _nameController.dispose();
     _priceController.dispose();
+    _unitCostController.dispose();
     for (final controller in _platformControllers.values) {
       controller.dispose();
     }
@@ -1176,11 +1182,16 @@ class _ProductDialogState extends State<_ProductDialog> {
 
   Future<void> _save() async {
     final price = double.tryParse(_priceController.text.replaceAll(',', '.'));
+    final unitCostResult = parseProductUnitCostInput(_unitCostController.text);
     final selectedCategory = _selectedCategory;
     if (_nameController.text.trim().isEmpty ||
         selectedCategory == null ||
         price == null) {
       _message('Completa nombre, categoria y precio.');
+      return;
+    }
+    if (!unitCostResult.isValid) {
+      _message(unitCostResult.error!);
       return;
     }
 
@@ -1211,6 +1222,7 @@ class _ProductDialogState extends State<_ProductDialog> {
         categoryName: selectedCategory.name,
         category: selectedCategory.name,
         price: price,
+        unitCost: unitCostResult.value,
         platformPrices: platformPrices,
         active: _active,
         sendToKitchen: _sendToKitchen,
@@ -1333,6 +1345,7 @@ class _ProductDialogState extends State<_ProductDialog> {
                           categories: _categories,
                           categoryId: _selectedCategory?.id ?? '',
                           priceController: _priceController,
+                          unitCostController: _unitCostController,
                           active: _active,
                           sendToKitchen: _sendToKitchen,
                           saving: _saving,
@@ -1454,6 +1467,7 @@ class _MainProductFields extends StatelessWidget {
     required this.categories,
     required this.categoryId,
     required this.priceController,
+    required this.unitCostController,
     required this.active,
     required this.sendToKitchen,
     required this.saving,
@@ -1467,6 +1481,7 @@ class _MainProductFields extends StatelessWidget {
   final List<ProductCategory> categories;
   final String categoryId;
   final TextEditingController priceController;
+  final TextEditingController unitCostController;
   final bool active;
   final bool sendToKitchen;
   final bool saving;
@@ -1524,6 +1539,16 @@ class _MainProductFields extends StatelessWidget {
             enabled: !saving,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: const InputDecoration(labelText: 'Precio tienda'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: unitCostController,
+            enabled: !saving,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: 'Costo unitario',
+              helperText: 'Opcional. Vacio = sin costo capturado',
+            ),
           ),
           const SizedBox(height: 10),
           SwitchListTile(
@@ -2024,6 +2049,12 @@ class _ProductAdminTile extends StatelessWidget {
                     _MiniInfoChip(
                       label: 'Precio tienda ${_moneyText(product.price)}',
                       color: BrandColors.accentYellow,
+                    ),
+                    _MiniInfoChip(
+                      label: 'Costo ${productUnitCostLabel(product.unitCost)}',
+                      color: product.unitCost == null
+                          ? BrandColors.textMuted
+                          : BrandColors.info,
                     ),
                     for (final platform in platformPrices)
                       _MiniInfoChip(
