@@ -1253,10 +1253,6 @@ class _DashboardSection extends StatelessWidget {
               );
             }
             final summary = snapshot.data!;
-            final discountReport = buildDiscountsByDayReport(
-              orderRows: summary.orderRows,
-              paymentsByOrder: _paymentsByOrder(payments),
-            );
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -1274,7 +1270,7 @@ class _DashboardSection extends StatelessWidget {
                     ),
                     ExecutiveKpiCard(
                       title: 'Descuentos aplicados',
-                      value: _money(discountReport.normalDiscounts),
+                      value: _money(summary.partialDiscountTotal),
                       detail: 'Socio, familia, empleado porcentual y otros',
                       icon: Icons.local_offer_outlined,
                       accent: BrandColors.accentOrange,
@@ -1283,7 +1279,7 @@ class _DashboardSection extends StatelessWidget {
                     ),
                     ExecutiveKpiCard(
                       title: 'Comidas gratis empleados',
-                      value: _money(discountReport.employeeFreeMeals),
+                      value: _money(summary.employeeFreeMealTotal),
                       detail: 'Consumos gratuitos registrados para empleados',
                       icon: Icons.badge_outlined,
                       accent: BrandColors.success,
@@ -1293,14 +1289,14 @@ class _DashboardSection extends StatelessWidget {
                     ExecutiveKpiCard(
                       title: 'Venta neta',
                       value: _money(summary.netSales),
-                      detail: 'Venta bruta menos descuentos',
+                      detail: 'Venta bruta menos descuentos y comidas gratis',
                       icon: Icons.receipt_long,
                       accent: BrandColors.info,
                     ),
                     ExecutiveKpiCard(
                       title: 'Cobrado real',
-                      value: _money(summary.totalCollected),
-                      detail: 'Suma de pagos activos aplicados',
+                      value: _money(summary.monetaryCollected),
+                      detail: 'Pagos monetarios activos aplicados',
                       icon: Icons.payments_outlined,
                       accent: BrandColors.success,
                     ),

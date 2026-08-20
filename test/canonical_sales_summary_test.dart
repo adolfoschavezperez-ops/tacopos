@@ -13,6 +13,8 @@ void main() {
 
     expect(summary.grossSales, 100);
     expect(summary.discountTotal, 0);
+    expect(summary.partialDiscountTotal, 0);
+    expect(summary.employeeFreeMealTotal, 0);
     expect(summary.netSales, 100);
     expect(summary.totalCollected, 100);
     expect(summary.reconciliationDifference, 0);
@@ -29,6 +31,8 @@ void main() {
 
     expect(summary.grossSales, 100);
     expect(summary.discountTotal, 20);
+    expect(summary.partialDiscountTotal, 20);
+    expect(summary.employeeFreeMealTotal, 0);
     expect(summary.netSales, 80);
     expect(summary.totalCollected, 80);
   });
@@ -61,6 +65,7 @@ void main() {
           base: 100,
           charged: 0,
           discountAmount: 100,
+          appliedDiscountType: 'employee_free_meal',
           applied: 0,
         ),
       ),
@@ -68,8 +73,11 @@ void main() {
 
     expect(summary.grossSales, 100);
     expect(summary.discountTotal, 100);
+    expect(summary.partialDiscountTotal, 0);
+    expect(summary.employeeFreeMealTotal, 100);
     expect(summary.netSales, 0);
     expect(summary.employeeConsumption, 0);
+    expect(summary.monetaryCollected, 0);
     expect(summary.totalCollected, 0);
   });
 
@@ -83,6 +91,7 @@ void main() {
           base: 100,
           charged: 70,
           discountAmount: 30,
+          appliedDiscountType: 'employee_30',
           applied: 70,
         ),
       ),
@@ -90,8 +99,11 @@ void main() {
 
     expect(summary.grossSales, 100);
     expect(summary.discountTotal, 30);
+    expect(summary.partialDiscountTotal, 30);
+    expect(summary.employeeFreeMealTotal, 0);
     expect(summary.netSales, 70);
     expect(summary.employeeConsumption, 70);
+    expect(summary.monetaryCollected, 0);
     expect(summary.totalCollected, 70);
   });
 
@@ -110,6 +122,7 @@ void main() {
     ]);
 
     expect(summary.employeeConsumption, 0);
+    expect(summary.monetaryCollected, 0);
     expect(summary.totalCollected, 0);
   });
 
@@ -212,6 +225,7 @@ void main() {
             base: 70,
             charged: 0,
             discountAmount: 70,
+            appliedDiscountType: 'employee_free_meal',
             applied: 0,
           ),
         ],
@@ -221,10 +235,114 @@ void main() {
     expect(summary.cashCollected, 80);
     expect(summary.cardCollected, 50);
     expect(summary.discountTotal, 70);
+    expect(summary.employeeFreeMealTotal, 70);
     expect(summary.netSales, 130);
     expect(summary.totalCollected, 130);
     expect(summary.reconciliationDifference, 0);
   });
+
+  test('orden mixta: comida gratis reduce venta neta y no cobrado real', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(total: 200),
+        items: [item(total: 200), item(total: 100)],
+        payments: [
+          payment(method: 'cash', base: 200, charged: 200),
+          payment(
+            method: 'employee_consumption',
+            base: 100,
+            charged: 0,
+            discountAmount: 100,
+            appliedDiscountType: 'employee_free_meal',
+            applied: 0,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.grossSales, 300);
+    expect(summary.partialDiscountTotal, 0);
+    expect(summary.employeeFreeMealTotal, 100);
+    expect(summary.netSales, 200);
+    expect(summary.cashCollected, 200);
+    expect(summary.employeeConsumption, 0);
+    expect(summary.monetaryCollected, 200);
+    expect(summary.totalCollected, 200);
+  });
+
+  test('fixture 19/08: bruto 8084 free meal 259 neto y cobrado 7825', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(total: 7825, businessDate: '2026-08-19'),
+        items: [item(total: 7825), item(total: 259)],
+        payments: [
+          payment(method: 'cash', base: 6634, charged: 6634),
+          payment(method: 'card', base: 1191, charged: 1191),
+          payment(
+            method: 'employee_consumption',
+            base: 259,
+            charged: 0,
+            discountAmount: 259,
+            appliedDiscountType: 'employee_free_meal',
+            applied: 0,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.grossSales, 8084);
+    expect(summary.partialDiscountTotal, 0);
+    expect(summary.employeeFreeMealTotal, 259);
+    expect(summary.netSales, 7825);
+    expect(summary.monetaryCollected, 7825);
+    expect(summary.totalCollected, 7825);
+  });
+
+  test(
+    'fixture periodo: bruto 19329 descuento 133 free meal 259 neto 18937',
+    () {
+      final summary = buildCanonicalSalesSummary([
+        SalesOrderBundleInput(
+          order: order(total: 3982, businessDate: '2026-08-17'),
+          items: [item(total: 3982)],
+          payments: [payment(method: 'cash', base: 3982, charged: 3982)],
+        ),
+        SalesOrderBundleInput(
+          order: order(total: 7130, businessDate: '2026-08-18'),
+          items: [item(total: 7263)],
+          payments: [
+            payment(
+              method: 'cash',
+              base: 7263,
+              charged: 7130,
+              discountAmount: 133,
+            ),
+          ],
+        ),
+        SalesOrderBundleInput(
+          order: order(total: 7825, businessDate: '2026-08-19'),
+          items: [item(total: 7825), item(total: 259)],
+          payments: [
+            payment(method: 'cash', base: 6634, charged: 6634),
+            payment(method: 'card', base: 1191, charged: 1191),
+            payment(
+              method: 'employee_consumption',
+              base: 259,
+              charged: 0,
+              discountAmount: 259,
+              appliedDiscountType: 'employee_free_meal',
+              applied: 0,
+            ),
+          ],
+        ),
+      ]);
+
+      expect(summary.grossSales, 19329);
+      expect(summary.partialDiscountTotal, 133);
+      expect(summary.employeeFreeMealTotal, 259);
+      expect(summary.netSales, 18937);
+    },
+  );
 
   test('efectivo con cambio: neto 80 recibido 100 cambio 20 cobrado 80', () {
     final summary = buildCanonicalSalesSummary([
@@ -517,6 +635,7 @@ Payment payment({
   DateTime? createdAt,
   String status = 'active',
   DateTime? cancelledAt,
+  String? appliedDiscountType,
 }) {
   return Payment(
     id: 'payment-$base-$charged',
@@ -533,6 +652,7 @@ Payment payment({
     cashReceivedAmount: received,
     cashChangeAmount: change,
     discountAmount: discountAmount,
+    appliedDiscountType: appliedDiscountType,
     cardFeeAbsorbedAmount: cardFee,
     businessDate: businessDate,
     createdAt: createdAt,

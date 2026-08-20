@@ -732,7 +732,11 @@ class _DetailGrid extends StatelessWidget {
     );
     final salesValid =
         salesBreakdown.isValid &&
-        (bundle.grossSales - bundle.discounts - bundle.netSales).abs() <=
+        (bundle.grossSales -
+                    bundle.discounts -
+                    bundle.employeeFreeMeals -
+                    bundle.netSales)
+                .abs() <=
             financeMoneyTolerance;
     logFinanceDashboardReconciliation('sales', salesBreakdown);
     logFinanceDashboardReconciliation('collected', collectionsBreakdown);
@@ -753,6 +757,10 @@ class _DetailGrid extends StatelessWidget {
           const _DetailLineData.section('VENTA BRUTA MENOS DESCUENTOS'),
           _DetailLineData.value('Venta bruta', bundle.grossSales),
           _DetailLineData.value('Descuentos aplicados', -bundle.discounts),
+          _DetailLineData.value(
+            'Comidas gratis empleados',
+            -bundle.employeeFreeMeals,
+          ),
           _DetailLineData.total('Total venta neta', bundle.netSales),
           const _DetailLineData.section('COMPOSICION DE VENTA NETA'),
           _DetailLineData.value(
@@ -1407,6 +1415,7 @@ class _TablesGrid extends StatelessWidget {
               row.salesWithoutDiscount,
               row.salesWithDiscount,
               row.discounts,
+              row.employeeFreeMeals,
               row.netSales,
               row.documents,
             ],
@@ -1416,6 +1425,7 @@ class _TablesGrid extends StatelessWidget {
               Text(_money(row.salesWithoutDiscount)),
               Text(_money(row.salesWithDiscount)),
               Text(_money(row.discounts)),
+              Text(_money(row.employeeFreeMeals)),
               Text(_money(row.netSales)),
               Text('${row.documents}'),
             ],
@@ -1430,13 +1440,14 @@ class _TablesGrid extends StatelessWidget {
     rows.add(
       _TableRowData(
         isTotal: true,
-        sortValues: const ['', 0, 0, 0, 0, 0, 0],
+        sortValues: const ['', 0, 0, 0, 0, 0, 0, 0],
         cells: [
           _totalText('TOTAL'),
           _totalText(_money(bundle.grossSales)),
           _totalText(_money(bundle.salesWithoutDiscount)),
           _totalText(_money(bundle.salesWithDiscount)),
           _totalText(_money(bundle.discounts)),
+          _totalText(_money(bundle.employeeFreeMeals)),
           _totalText(_money(bundle.netSales)),
           _totalText('${bundle.salesOrders.length}'),
         ],
@@ -1451,6 +1462,7 @@ class _TablesGrid extends StatelessWidget {
         'Sin descuento',
         'Con descuento',
         'Descuento',
+        'Comidas empleados',
         'Venta neta',
         'Documentos',
       ],

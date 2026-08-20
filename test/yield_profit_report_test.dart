@@ -478,12 +478,18 @@ CanonicalSalesSummary _sales(List<CanonicalProductSalesRow> rows) {
   return CanonicalSalesSummary(
     grossSales: rows.fold(0, (sum, row) => sum + row.grossSales),
     discountTotal: rows.fold(0, (sum, row) => sum + row.discountAllocated),
+    partialDiscountTotal: rows.fold(
+      0,
+      (sum, row) => sum + row.discountAllocated,
+    ),
+    employeeFreeMealTotal: 0,
     netSales: rows.fold(0, (sum, row) => sum + row.netSales),
     cashCollected: 0,
     cardCollected: 0,
     platformCollected: 0,
     employeeConsumption: 0,
     otherCollected: 0,
+    monetaryCollected: 0,
     totalCollected: 0,
     reconciliationDifference: 0,
     paidOrdersCount: 1,
