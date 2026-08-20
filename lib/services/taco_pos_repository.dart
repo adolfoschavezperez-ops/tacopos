@@ -973,6 +973,157 @@ class ExpenseRequestFunctionClient {
 HttpsCallableOptions expenseRequestCallableOptions() =>
     HttpsCallableOptions(limitedUseAppCheckToken: true);
 
+class ExpenseRequestAuthStatus {
+  const ExpenseRequestAuthStatus({
+    required this.ready,
+    required this.authPresent,
+    required this.uidPresent,
+    required this.isAnonymous,
+    this.errorMessage,
+  });
+
+  const ExpenseRequestAuthStatus.ready({required bool isAnonymous})
+    : this(
+        ready: true,
+        authPresent: true,
+        uidPresent: true,
+        isAnonymous: isAnonymous,
+      );
+
+  const ExpenseRequestAuthStatus.failed(String message)
+    : this(
+        ready: false,
+        authPresent: false,
+        uidPresent: false,
+        isAnonymous: null,
+        errorMessage: message,
+      );
+
+  final bool ready;
+  final bool authPresent;
+  final bool uidPresent;
+  final bool? isAnonymous;
+  final String? errorMessage;
+}
+
+class ExpenseRequestAuthSession {
+  ExpenseRequestAuthSession._({required this.ensureReady});
+
+  factory ExpenseRequestAuthSession.production(FirebaseAuth auth) {
+    return ExpenseRequestAuthSession._(
+      ensureReady: () async {
+        try {
+          var user = auth.currentUser;
+          if (user == null && !kIsWeb) {
+            final credential = await auth.signInAnonymously();
+            user = credential.user ?? auth.currentUser;
+          }
+          final token = await user?.getIdToken();
+          final ready = user != null && (token?.isNotEmpty ?? false);
+          return ExpenseRequestAuthStatus(
+            ready: ready,
+            authPresent: user != null,
+            uidPresent: (user?.uid.trim().isNotEmpty ?? false),
+            isAnonymous: user?.isAnonymous,
+            errorMessage: ready
+                ? null
+                : 'No fue posible iniciar la sesion del dispositivo. Intenta nuevamente.',
+          );
+        } catch (_) {
+          return const ExpenseRequestAuthStatus.failed(
+            'No fue posible iniciar la sesion del dispositivo. Intenta nuevamente.',
+          );
+        }
+      },
+    );
+  }
+
+  factory ExpenseRequestAuthSession.fake(
+    Future<ExpenseRequestAuthStatus> Function() ensureReady,
+  ) {
+    return ExpenseRequestAuthSession._(ensureReady: ensureReady);
+  }
+
+  final Future<ExpenseRequestAuthStatus> Function() ensureReady;
+}
+
+class ExpenseRequestDebugContext {
+  const ExpenseRequestDebugContext({
+    required this.restaurantId,
+    required this.branchId,
+    required this.cashSessionId,
+    required this.cashSessionStatus,
+    required this.policyId,
+    required this.policyMode,
+    required this.networkAvailable,
+  });
+
+  final String restaurantId;
+  final String branchId;
+  final String cashSessionId;
+  final String cashSessionStatus;
+  final String policyId;
+  final String policyMode;
+  final bool? networkAvailable;
+}
+
+Future<Map<String, dynamic>> submitExpenseRequestWithPreparedSession({
+  required ExpenseRequestAuthSession authSession,
+  required ExpenseRequestFunctionClient functionClient,
+  required ExpenseRequestFunctionPayload payload,
+  required ExpenseRequestDebugContext debugContext,
+  void Function(String marker, {Object? error, StackTrace? stackTrace})?
+  debugLog,
+}) async {
+  debugLog?.call('expensePolicy: before-call');
+  final authStatus = await authSession.ensureReady();
+  if (!authStatus.ready) {
+    debugLog?.call(
+      'expensePolicy: auth-not-ready '
+      'firebaseInitialized=true '
+      'authPresent=${authStatus.authPresent} '
+      'uidPresent=${authStatus.uidPresent} '
+      'isAnonymous=${authStatus.isAnonymous} '
+      'restaurantId=${debugContext.restaurantId.isNotEmpty} '
+      'branchId=${debugContext.branchId.isNotEmpty} '
+      'cashSessionId=${debugContext.cashSessionId.isNotEmpty} '
+      'cashSessionStatus=${debugContext.cashSessionStatus} '
+      'selectedPolicyId=${debugContext.policyId.isNotEmpty} '
+      'policyMode=${debugContext.policyMode} '
+      'networkAvailable=${debugContext.networkAvailable}',
+    );
+    throw StateError(
+      authStatus.errorMessage ??
+          'No fue posible iniciar la sesion del dispositivo. Intenta nuevamente.',
+    );
+  }
+
+  debugLog?.call('expensePolicy: callable-start');
+  try {
+    final result = await functionClient.call(payload);
+    debugLog?.call('expensePolicy: callable-result');
+    return result;
+  } on FirebaseFunctionsException catch (error, stackTrace) {
+    debugLog?.call(
+      'expensePolicy: callable-error',
+      error: {
+        'code': error.code,
+        'message': error.message,
+        'detailsReason': _functionDetailsReason(error.details),
+      },
+      stackTrace: stackTrace,
+    );
+    throw StateError(submitExpenseRequestErrorMessage(error));
+  } catch (error, stackTrace) {
+    debugLog?.call(
+      'expensePolicy: callable-error',
+      error: error,
+      stackTrace: stackTrace,
+    );
+    throw StateError(submitExpenseRequestErrorMessage(error));
+  }
+}
+
 String submitExpenseRequestErrorMessage(Object error) {
   if (error is FirebaseFunctionsException) {
     return switch (error.code) {
@@ -983,9 +1134,9 @@ String submitExpenseRequestErrorMessage(Object error) {
       'unauthenticated' =>
         _looksLikeAppCheckFailure(error)
             ? 'No fue posible validar este dispositivo. Cierra y vuelve a abrir TacoPOS.'
-            : 'La sesion no esta lista para validar la politica. Cierra y vuelve a entrar.',
+            : 'No fue posible iniciar la sesion del dispositivo. Intenta nuevamente.',
       'permission-denied' =>
-        _looksLikeAppCheckFailure(error)
+        _looksLikeAppCheckFailure(error) || _looksLikeDeviceFailure(error)
             ? 'No fue posible validar este dispositivo. Cierra y vuelve a abrir TacoPOS.'
             : 'No fue posible validar este dispositivo para solicitar el gasto.',
       'invalid-argument' || 'failed-precondition' => _cleanFunctionMessage(
@@ -1019,6 +1170,21 @@ bool _looksLikeAppCheckFailure(FirebaseFunctionsException error) {
       text.contains('token app check');
 }
 
+bool _looksLikeDeviceFailure(FirebaseFunctionsException error) {
+  final text = '${error.message ?? ''} ${error.details ?? ''}'.toLowerCase();
+  return text.contains('dispositivo') ||
+      text.contains('device_not_registered') ||
+      text.contains('device_inactive') ||
+      text.contains('branch_mismatch');
+}
+
+Object? _functionDetailsReason(Object? details) {
+  if (details is Map) {
+    return details['reason'];
+  }
+  return null;
+}
+
 String _cleanFunctionMessage(
   FirebaseFunctionsException error, {
   required String fallback,
@@ -1032,11 +1198,15 @@ class TacoPosRepository {
     FirebaseFirestore? firestore,
     FirebaseAuth? auth,
     ExpenseRequestFunctionClient? expenseRequestFunctionClient,
+    ExpenseRequestAuthSession? expenseRequestAuthSession,
   }) : _db = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? FirebaseAuth.instance,
        _expenseRequestFunctionClient =
            expenseRequestFunctionClient ??
-           ExpenseRequestFunctionClient.production();
+           ExpenseRequestFunctionClient.production(),
+       _expenseRequestAuthSession =
+           expenseRequestAuthSession ??
+           ExpenseRequestAuthSession.production(auth ?? FirebaseAuth.instance);
 
   static const cardSurchargeRate = 0.04;
   static const operationResetPin = '072026';
@@ -1051,6 +1221,7 @@ class TacoPosRepository {
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
   final ExpenseRequestFunctionClient _expenseRequestFunctionClient;
+  final ExpenseRequestAuthSession _expenseRequestAuthSession;
 
   DocumentReference<Map<String, dynamic>> get _restaurantRef =>
       _db.collection('restaurants').doc(AppConstants.restaurantId);
@@ -6772,11 +6943,11 @@ class TacoPosRepository {
 
     final sessionDoc = await _cashSessionsRef.doc(cashSessionId).get();
     if (!sessionDoc.exists) {
-      throw StateError('La caja ya no existe.');
+      throw StateError('No hay una caja abierta para registrar este gasto.');
     }
     final session = CashSession.fromDoc(sessionDoc);
     if (!session.isOpen) {
-      throw StateError('La caja ya esta cerrada.');
+      throw StateError('No hay una caja abierta para registrar este gasto.');
     }
 
     final employee = AppSession.instance.employee;
@@ -6840,59 +7011,54 @@ class TacoPosRepository {
     required bool hasReceipt,
     required Employee? employee,
   }) async {
-    try {
-      final user = _auth.currentUser;
-      final idToken = await user?.getIdToken();
-      if (idToken == null || idToken.isEmpty) {
-        throw StateError('Se requiere autenticacion para validar la politica.');
-      }
-      return await _expenseRequestFunctionClient.call(
-        ExpenseRequestFunctionPayload(
-          restaurantId: AppConstants.restaurantId,
-          branchId: AppSession.instance.currentBranchId,
-          policyId: policyId,
-          amount: amount,
-          supplierId: supplierId,
-          paymentSource: paymentSource,
-          reason: reason.trim(),
-          requesterId: employee?.id ?? '',
-          requesterName: employee?.name ?? '',
-          requesterRole: employee?.hasAdminAccess == true ? 'admin' : 'staff',
-          businessDate: businessDate,
-          cashSessionId: cashSessionId,
-          clientRequestId: const Uuid().v4(),
-          hasReceipt: hasReceipt,
-        ),
-      );
-    } on StateError {
-      rethrow;
-    } on FirebaseFunctionsException catch (error, stackTrace) {
-      _logSubmitExpenseRequestFailure(error, stackTrace);
-      throw StateError(submitExpenseRequestErrorMessage(error));
-    } catch (error, stackTrace) {
-      _logSubmitExpenseRequestFailure(error, stackTrace);
-      throw StateError(submitExpenseRequestErrorMessage(error));
-    }
+    return submitExpenseRequestWithPreparedSession(
+      authSession: _expenseRequestAuthSession,
+      functionClient: _expenseRequestFunctionClient,
+      payload: ExpenseRequestFunctionPayload(
+        restaurantId: AppConstants.restaurantId,
+        branchId: AppSession.instance.currentBranchId,
+        policyId: policyId,
+        amount: amount,
+        supplierId: supplierId,
+        paymentSource: paymentSource,
+        reason: reason.trim(),
+        requesterId: employee?.id ?? '',
+        requesterName: employee?.name ?? '',
+        requesterRole: employee?.hasAdminAccess == true ? 'admin' : 'staff',
+        businessDate: businessDate,
+        cashSessionId: cashSessionId,
+        clientRequestId: const Uuid().v4(),
+        hasReceipt: hasReceipt,
+      ),
+      debugContext: ExpenseRequestDebugContext(
+        restaurantId: AppConstants.restaurantId,
+        branchId: AppSession.instance.currentBranchId,
+        cashSessionId: cashSessionId,
+        cashSessionStatus: 'open',
+        policyId: policyId,
+        policyMode: 'unknown',
+        networkAvailable: null,
+      ),
+      debugLog: _logSubmitExpenseRequestMarker,
+    );
   }
 
-  void _logSubmitExpenseRequestFailure(Object error, StackTrace stackTrace) {
+  void _logSubmitExpenseRequestMarker(
+    String marker, {
+    Object? error,
+    StackTrace? stackTrace,
+  }) {
     if (!kDebugMode) return;
     final user = _auth.currentUser;
     developer.log(
-      'submitExpenseRequest failed '
+      '$marker '
       'region=${ExpenseRequestFunctionClient.expenseRequestFunctionRegion} '
       'function=${ExpenseRequestFunctionClient.submitExpenseRequestFunctionName} '
       'limitedUseAppCheckToken=true '
       'authPresent=${user != null} '
       'isAnonymous=${user?.isAnonymous}',
       name: 'TacoPosRepository',
-      error: error is FirebaseFunctionsException
-          ? {
-              'code': error.code,
-              'message': error.message,
-              'details': error.details,
-            }
-          : error,
+      error: error,
       stackTrace: stackTrace,
     );
   }
