@@ -4,9 +4,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/backoffice/backoffice_version.dart';
 
 void main() {
-  test('Backoffice version source returns 1.1.11', () {
-    expect(BackofficeVersion.version, '1.1.11');
-    expect(BackofficeVersion.label, 'Backoffice v1.1.11');
+  test('Backoffice version source returns 1.1.12', () {
+    expect(BackofficeVersion.version, '1.1.12');
+    expect(BackofficeVersion.label, 'Backoffice v1.1.12');
   });
 
   test('Backoffice UI shows version from the shared source', () {

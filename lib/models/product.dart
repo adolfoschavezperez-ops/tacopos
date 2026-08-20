@@ -11,6 +11,7 @@ class Product {
     required this.categoryName,
     required this.category,
     required this.price,
+    this.unitCost,
     required this.active,
     required this.sendToKitchen,
     required this.sortOrder,
@@ -29,6 +30,7 @@ class Product {
   final String categoryName;
   final String category;
   final double price;
+  final double? unitCost;
   final bool active;
   final bool sendToKitchen;
   final int sortOrder;
@@ -44,7 +46,10 @@ class Product {
       ProductRecipeItem.toMapList(recipeItems);
 
   factory Product.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data() ?? {};
+    return Product.fromMap(doc.id, doc.data() ?? {});
+  }
+
+  factory Product.fromMap(String id, Map<String, dynamic> data) {
     final legacyCategory = _readString(data['category'], 'General');
     final categoryName = _readString(data['categoryName'], legacyCategory);
     final categoryId = _readString(
@@ -78,12 +83,13 @@ class Product {
         recipeItems.isNotEmpty;
 
     return Product(
-      id: doc.id,
-      name: _readString(data['name'], doc.id),
+      id: id,
+      name: _readString(data['name'], id),
       categoryId: categoryId,
       categoryName: categoryName,
       category: categoryName,
       price: _readDouble(data['price']),
+      unitCost: _readNullableDouble(data['unitCost']),
       active: _readBool(data['active'], fallback: true),
       sendToKitchen: _readBool(
         data['sendToKitchen'],
@@ -101,6 +107,28 @@ class Product {
           stockConsumptionQty ?? primaryRecipe?.consumptionFactor,
       recipeItems: recipeItems,
     );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'categoryId': categoryId,
+      'categoryName': categoryName,
+      'category': category,
+      'price': price,
+      if (unitCost != null) 'unitCost': unitCost,
+      'active': active,
+      'sendToKitchen': sendToKitchen,
+      'sortOrder': sortOrder,
+      'platformPrices': platformPrices,
+      'affectsKitchenStock': affectsKitchenStock,
+      'kitchenStockItemId': kitchenStockItemId,
+      'kitchenStockItemName': kitchenStockItemName,
+      'kitchenStockUnit': kitchenStockUnit,
+      'stockConsumptionQty': stockConsumptionQty,
+      'recipeItems': recipeItemsMap,
+    };
   }
 
   double priceForPlatform(String? platformId) {
@@ -128,6 +156,24 @@ class Product {
     }
 
     return 0;
+  }
+
+  static double? _readNullableDouble(Object? value) {
+    if (value == null) {
+      return null;
+    }
+
+    if (value is num) {
+      final parsed = value.toDouble();
+      return parsed.isFinite ? parsed : null;
+    }
+
+    if (value is String) {
+      final parsed = double.tryParse(value.trim().replaceAll(',', '.'));
+      return parsed != null && parsed.isFinite ? parsed : null;
+    }
+
+    return null;
   }
 
   static Map<String, double> _readPlatformPrices(Object? value) {
