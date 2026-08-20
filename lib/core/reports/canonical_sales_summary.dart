@@ -184,6 +184,7 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
   var platformCollected = 0.0;
   var employeeConsumption = 0.0;
   var otherCollected = 0.0;
+  var reconciliationCollected = 0.0;
   var paidOrdersCount = 0;
   var takeoutOrdersCount = 0;
   var dineInOrdersCount = 0;
@@ -251,12 +252,19 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
         (sum, payment) => sum + canonicalPaymentAppliedAmount(payment),
       ),
     );
-    final difference = _roundMoney(collected - net);
+    final collectedForReconciliation = _roundMoney(
+      activePayments.fold<double>(
+        0,
+        (sum, payment) => sum + _paymentReconciliationAppliedAmount(payment),
+      ),
+    );
+    final difference = _roundMoney(collectedForReconciliation - net);
 
     grossSales += gross;
     discountTotal += discount;
     partialDiscountTotal += partialDiscount;
     employeeFreeMealTotal += freeMealDiscount;
+    reconciliationCollected += collectedForReconciliation;
     for (final payment in activePayments) {
       final amount = canonicalPaymentAppliedAmount(payment);
       switch (payment.method.trim().toLowerCase()) {
@@ -340,7 +348,7 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
     otherCollected: _roundMoney(otherCollected),
     monetaryCollected: _roundMoney(monetaryCollected),
     totalCollected: _roundMoney(totalCollected),
-    reconciliationDifference: _roundMoney(totalCollected - netSales),
+    reconciliationDifference: _roundMoney(reconciliationCollected - netSales),
     paidOrdersCount: paidOrdersCount,
     takeoutOrdersCount: takeoutOrdersCount,
     dineInOrdersCount: dineInOrdersCount,
@@ -396,6 +404,11 @@ bool isCanonicalActivePayment(Payment payment) {
 
 double canonicalPaymentAppliedAmount(Payment payment, {double? tipAmount}) {
   return paymentMonetaryAppliedToSale(payment, tipOverride: tipAmount);
+}
+
+double _paymentReconciliationAppliedAmount(Payment payment) {
+  if (_isEmployeeFreeMealPaymentFallback(payment)) return 0;
+  return canonicalPaymentAppliedAmount(payment);
 }
 
 double? _explicitOrderDiscount(PosOrder order, double gross) {

@@ -79,6 +79,8 @@ void main() {
     expect(summary.employeeConsumption, 0);
     expect(summary.monetaryCollected, 0);
     expect(summary.totalCollected, 0);
+    expect(summary.reconciliationDifference, 0);
+    expect(summary.hasReconciliationDifference, isFalse);
   });
 
   test('comida gratis legacy solo payment descuenta venta neta', () {
@@ -100,6 +102,8 @@ void main() {
     expect(summary.netSales, 0);
     expect(summary.employeeConsumption, 100);
     expect(summary.monetaryCollected, 0);
+    expect(summary.reconciliationDifference, 0);
+    expect(summary.hasReconciliationDifference, isFalse);
   });
 
   test('comida gratis con metadata y payment no duplica', () {
@@ -123,6 +127,8 @@ void main() {
     expect(summary.employeeFreeMealTotal, 100);
     expect(summary.netSales, 0);
     expect(summary.monetaryCollected, 0);
+    expect(summary.reconciliationDifference, 0);
+    expect(summary.hasReconciliationDifference, isFalse);
   });
 
   test('descuento empleado 30 cobra solo el neto', () {
@@ -149,6 +155,8 @@ void main() {
     expect(summary.employeeConsumption, 70);
     expect(summary.monetaryCollected, 0);
     expect(summary.totalCollected, 70);
+    expect(summary.reconciliationDifference, 0);
+    expect(summary.hasReconciliationDifference, isFalse);
   });
 
   test('pago historico con descuento 100 y charged cero no cae al bruto', () {
@@ -333,6 +341,9 @@ void main() {
     expect(summary.netSales, 7825);
     expect(summary.monetaryCollected, 7825);
     expect(summary.employeeConsumption, 259);
+    expect(summary.reconciliationDifference, 0);
+    expect(summary.hasReconciliationDifference, isFalse);
+    expect(summary.integrityIssues, isEmpty);
   });
 
   test(
@@ -372,6 +383,8 @@ void main() {
       expect(summary.employeeFreeMealTotal, 259);
       expect(summary.netSales, 18937);
       expect(summary.monetaryCollected, 18937);
+      expect(summary.reconciliationDifference, 0);
+      expect(summary.hasReconciliationDifference, isFalse);
     },
   );
 
@@ -393,6 +406,7 @@ void main() {
     expect(summary.cashCollected, 80);
     expect(summary.totalCollected, 80);
     expect(summary.reconciliationDifference, 0);
+    expect(summary.hasReconciliationDifference, isFalse);
   });
 
   test('tarjeta: comision separada y cobrado real 100', () {
@@ -423,6 +437,31 @@ void main() {
     expect(summary.totalCollected, 88);
     expect(summary.hasReconciliationDifference, isTrue);
     expect(summary.integrityIssues.single.message, contains('auditoria'));
+  });
+
+  test('faltante monetario real mantiene alerta por saldo pendiente', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(total: 100, gross: 100, payment: payment(base: 80, charged: 80)),
+    ]);
+
+    expect(summary.netSales, 100);
+    expect(summary.reconciliationDifference, -20);
+    expect(summary.hasReconciliationDifference, isTrue);
+    expect(summary.integrityIssues.single.amount, -20);
+  });
+
+  test('diferencia menor a tolerancia no genera alerta falsa', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(
+        total: 100,
+        gross: 100,
+        payment: payment(base: 99.999, charged: 99.999),
+      ),
+    ]);
+
+    expect(summary.reconciliationDifference.abs(), lessThanOrEqualTo(0.02));
+    expect(summary.hasReconciliationDifference, isFalse);
+    expect(summary.integrityIssues, isEmpty);
   });
 
   test('pago despues de medianoche pertenece al businessDate de la orden', () {
