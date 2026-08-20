@@ -81,6 +81,50 @@ void main() {
     expect(summary.totalCollected, 0);
   });
 
+  test('comida gratis legacy solo payment descuenta venta neta', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(
+        total: 100,
+        payment: payment(
+          method: 'employee_consumption',
+          base: 100,
+          charged: 100,
+        ),
+      ),
+    ]);
+
+    expect(summary.grossSales, 100);
+    expect(summary.discountTotal, 100);
+    expect(summary.partialDiscountTotal, 0);
+    expect(summary.employeeFreeMealTotal, 100);
+    expect(summary.netSales, 0);
+    expect(summary.employeeConsumption, 100);
+    expect(summary.monetaryCollected, 0);
+  });
+
+  test('comida gratis con metadata y payment no duplica', () {
+    final summary = buildCanonicalSalesSummary([
+      bundle(
+        total: 0,
+        payment: payment(
+          method: 'employee_consumption',
+          base: 100,
+          charged: 0,
+          discountAmount: 100,
+          appliedDiscountType: 'employee_free_meal',
+          applied: 0,
+        ),
+      ),
+    ]);
+
+    expect(summary.grossSales, 100);
+    expect(summary.discountTotal, 100);
+    expect(summary.partialDiscountTotal, 0);
+    expect(summary.employeeFreeMealTotal, 100);
+    expect(summary.netSales, 0);
+    expect(summary.monetaryCollected, 0);
+  });
+
   test('descuento empleado 30 cobra solo el neto', () {
     final summary = buildCanonicalSalesSummary([
       bundle(
@@ -278,14 +322,7 @@ void main() {
         payments: [
           payment(method: 'cash', base: 6634, charged: 6634),
           payment(method: 'card', base: 1191, charged: 1191),
-          payment(
-            method: 'employee_consumption',
-            base: 259,
-            charged: 0,
-            discountAmount: 259,
-            appliedDiscountType: 'employee_free_meal',
-            applied: 0,
-          ),
+          payment(method: 'employee_consumption', base: 259, charged: 259),
         ],
       ),
     ]);
@@ -295,7 +332,7 @@ void main() {
     expect(summary.employeeFreeMealTotal, 259);
     expect(summary.netSales, 7825);
     expect(summary.monetaryCollected, 7825);
-    expect(summary.totalCollected, 7825);
+    expect(summary.employeeConsumption, 259);
   });
 
   test(
@@ -325,14 +362,7 @@ void main() {
           payments: [
             payment(method: 'cash', base: 6634, charged: 6634),
             payment(method: 'card', base: 1191, charged: 1191),
-            payment(
-              method: 'employee_consumption',
-              base: 259,
-              charged: 0,
-              discountAmount: 259,
-              appliedDiscountType: 'employee_free_meal',
-              applied: 0,
-            ),
+            payment(method: 'employee_consumption', base: 259, charged: 259),
           ],
         ),
       ]);
@@ -341,6 +371,7 @@ void main() {
       expect(summary.partialDiscountTotal, 133);
       expect(summary.employeeFreeMealTotal, 259);
       expect(summary.netSales, 18937);
+      expect(summary.monetaryCollected, 18937);
     },
   );
 

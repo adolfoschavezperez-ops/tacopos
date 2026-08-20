@@ -216,12 +216,31 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
       orderGrossTotal: gross,
       activePayments: activePayments.map(PaymentSettlementInput.fromPayment),
     );
-    final discount = _roundMoney(
+    final baseDiscount = _roundMoney(
       paymentDiscount ?? orderDiscount ?? reconciliation.discountAmount,
     ).clamp(0, gross).toDouble();
+    final metadataFreeMealDiscount = _roundMoney(
+      _employeeFreeMealMetadataDiscount(activePayments),
+    ).clamp(0, gross).toDouble();
+    final detectedFreeMealDiscount = _roundMoney(
+      _employeeFreeMealDiscount(
+        activePayments,
+        metadataFreeMealDiscount: metadataFreeMealDiscount,
+      ),
+    ).clamp(0, gross).toDouble();
+    final discount = _roundMoney(
+      paymentDiscount == null
+          ? baseDiscount < detectedFreeMealDiscount
+                ? detectedFreeMealDiscount
+                : baseDiscount
+          : baseDiscount +
+                (detectedFreeMealDiscount - metadataFreeMealDiscount)
+                    .clamp(0, double.infinity)
+                    .toDouble(),
+    ).clamp(0, gross).toDouble();
     final freeMealDiscount = _roundMoney(
-      _employeeFreeMealDiscount(activePayments, discount),
-    ).clamp(0, discount).toDouble();
+      detectedFreeMealDiscount.clamp(0, discount).toDouble(),
+    );
     final partialDiscount = _roundMoney(
       (discount - freeMealDiscount).clamp(0, double.infinity).toDouble(),
     );
@@ -416,19 +435,55 @@ double? _explicitPaymentsDiscount(List<Payment> payments, double gross) {
   return null;
 }
 
-double _employeeFreeMealDiscount(List<Payment> payments, double discountTotal) {
+double _employeeFreeMealMetadataDiscount(List<Payment> payments) {
   var total = 0.0;
   for (final payment in payments) {
     if (!isEmployeeFreeMealPayment(payment)) continue;
-    total += payment.discountAmount.clamp(0, double.infinity).toDouble();
+    total += paymentDiscountAppliedToSale(
+      payment,
+    ).clamp(0, double.infinity).toDouble();
   }
-  return _roundMoney(total.clamp(0, discountTotal).toDouble());
+  return _roundMoney(total);
+}
+
+double _employeeFreeMealDiscount(
+  List<Payment> payments, {
+  required double metadataFreeMealDiscount,
+}) {
+  var legacyPaymentTotal = 0.0;
+  for (final payment in payments) {
+    if (!_isEmployeeFreeMealPaymentFallback(payment)) continue;
+    legacyPaymentTotal += payment.baseAmount
+        .clamp(0, double.infinity)
+        .toDouble();
+  }
+  return _roundMoney(
+    metadataFreeMealDiscount > legacyPaymentTotal
+        ? metadataFreeMealDiscount
+        : legacyPaymentTotal,
+  );
 }
 
 bool isEmployeeFreeMealPayment(Payment payment) {
   return payment.method.trim().toLowerCase() == 'employee_consumption' &&
       payment.appliedDiscountType?.trim().toLowerCase() ==
           employeeDailyMealDiscountType;
+}
+
+bool _isEmployeeFreeMealPaymentFallback(Payment payment) {
+  if (isEmployeeFreeMealPayment(payment)) return true;
+  if (payment.method.trim().toLowerCase() != 'employee_consumption') {
+    return false;
+  }
+  if (payment.baseAmount <= 0) return false;
+  final discountType = payment.appliedDiscountType?.trim().toLowerCase() ?? '';
+  if (discountType.isNotEmpty) return false;
+  if (payment.discountAmount > salesReconciliationTolerance) return false;
+  if (payment.appliedDiscountPercent > salesReconciliationTolerance) {
+    return false;
+  }
+  if (payment.discountPercent > salesReconciliationTolerance) return false;
+  return true;
 }
 
 double? _discountFromPercent(Map<String, double> fields, double gross) {
