@@ -159,6 +159,8 @@ CanonicalOrderSalesRow discountRow({
     order: order,
     grossSales: 100,
     discountTotal: discountAmount,
+    partialDiscountTotal: discountAmount,
+    employeeFreeMealTotal: 0,
     netSales: 100 - discountAmount,
     totalCollected: 100 - discountAmount,
     reconciliationDifference: 0,

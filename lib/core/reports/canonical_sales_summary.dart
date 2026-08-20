@@ -1,4 +1,5 @@
 import '../cash/operational_business_date.dart';
+import '../orders/employee_benefit_checkout.dart';
 import '../orders/order_payment_reconciliation.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
@@ -13,12 +14,15 @@ class CanonicalSalesSummary {
   const CanonicalSalesSummary({
     required this.grossSales,
     required this.discountTotal,
+    required this.partialDiscountTotal,
+    required this.employeeFreeMealTotal,
     required this.netSales,
     required this.cashCollected,
     required this.cardCollected,
     required this.platformCollected,
     required this.employeeConsumption,
     required this.otherCollected,
+    required this.monetaryCollected,
     required this.totalCollected,
     required this.reconciliationDifference,
     required this.paidOrdersCount,
@@ -32,12 +36,15 @@ class CanonicalSalesSummary {
 
   final double grossSales;
   final double discountTotal;
+  final double partialDiscountTotal;
+  final double employeeFreeMealTotal;
   final double netSales;
   final double cashCollected;
   final double cardCollected;
   final double platformCollected;
   final double employeeConsumption;
   final double otherCollected;
+  final double monetaryCollected;
   final double totalCollected;
   final double reconciliationDifference;
   final int paidOrdersCount;
@@ -59,6 +66,8 @@ class CanonicalOrderSalesRow {
     required this.order,
     required this.grossSales,
     required this.discountTotal,
+    required this.partialDiscountTotal,
+    required this.employeeFreeMealTotal,
     required this.netSales,
     required this.totalCollected,
     required this.reconciliationDifference,
@@ -68,6 +77,8 @@ class CanonicalOrderSalesRow {
   final PosOrder order;
   final double grossSales;
   final double discountTotal;
+  final double partialDiscountTotal;
+  final double employeeFreeMealTotal;
   final double netSales;
   final double totalCollected;
   final double reconciliationDifference;
@@ -166,6 +177,8 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
 ) {
   var grossSales = 0.0;
   var discountTotal = 0.0;
+  var partialDiscountTotal = 0.0;
+  var employeeFreeMealTotal = 0.0;
   var cashCollected = 0.0;
   var cardCollected = 0.0;
   var platformCollected = 0.0;
@@ -206,6 +219,12 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
     final discount = _roundMoney(
       paymentDiscount ?? orderDiscount ?? reconciliation.discountAmount,
     ).clamp(0, gross).toDouble();
+    final freeMealDiscount = _roundMoney(
+      _employeeFreeMealDiscount(activePayments, discount),
+    ).clamp(0, discount).toDouble();
+    final partialDiscount = _roundMoney(
+      (discount - freeMealDiscount).clamp(0, double.infinity).toDouble(),
+    );
     final net = _roundMoney(gross - discount);
     final collected = _roundMoney(
       activePayments.fold<double>(
@@ -217,6 +236,8 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
 
     grossSales += gross;
     discountTotal += discount;
+    partialDiscountTotal += partialDiscount;
+    employeeFreeMealTotal += freeMealDiscount;
     for (final payment in activePayments) {
       final amount = canonicalPaymentAppliedAmount(payment);
       switch (payment.method.trim().toLowerCase()) {
@@ -271,6 +292,8 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
         order: order,
         grossSales: gross,
         discountTotal: discount,
+        partialDiscountTotal: partialDiscount,
+        employeeFreeMealTotal: freeMealDiscount,
         netSales: net,
         totalCollected: collected,
         reconciliationDifference: difference,
@@ -279,24 +302,24 @@ CanonicalSalesSummary buildCanonicalSalesSummary(
     );
   }
 
-  final totalCollected =
-      cashCollected +
-      cardCollected +
-      platformCollected +
-      employeeConsumption +
-      otherCollected;
+  final monetaryCollected =
+      cashCollected + cardCollected + platformCollected + otherCollected;
+  final totalCollected = monetaryCollected + employeeConsumption;
   final netSales = _roundMoney(grossSales - discountTotal);
   final productRows = products.values.map((entry) => entry.toRow()).toList()
     ..sort((a, b) => b.netSales.compareTo(a.netSales));
   return CanonicalSalesSummary(
     grossSales: _roundMoney(grossSales),
     discountTotal: _roundMoney(discountTotal),
+    partialDiscountTotal: _roundMoney(partialDiscountTotal),
+    employeeFreeMealTotal: _roundMoney(employeeFreeMealTotal),
     netSales: netSales,
     cashCollected: _roundMoney(cashCollected),
     cardCollected: _roundMoney(cardCollected),
     platformCollected: _roundMoney(platformCollected),
     employeeConsumption: _roundMoney(employeeConsumption),
     otherCollected: _roundMoney(otherCollected),
+    monetaryCollected: _roundMoney(monetaryCollected),
     totalCollected: _roundMoney(totalCollected),
     reconciliationDifference: _roundMoney(totalCollected - netSales),
     paidOrdersCount: paidOrdersCount,
@@ -391,6 +414,21 @@ double? _explicitPaymentsDiscount(List<Payment> payments, double gross) {
   }
   if (percentTotal > 0) return gross * percentTotal.clamp(0, 1);
   return null;
+}
+
+double _employeeFreeMealDiscount(List<Payment> payments, double discountTotal) {
+  var total = 0.0;
+  for (final payment in payments) {
+    if (!isEmployeeFreeMealPayment(payment)) continue;
+    total += payment.discountAmount.clamp(0, double.infinity).toDouble();
+  }
+  return _roundMoney(total.clamp(0, discountTotal).toDouble());
+}
+
+bool isEmployeeFreeMealPayment(Payment payment) {
+  return payment.method.trim().toLowerCase() == 'employee_consumption' &&
+      payment.appliedDiscountType?.trim().toLowerCase() ==
+          employeeDailyMealDiscountType;
 }
 
 double? _discountFromPercent(Map<String, double> fields, double gross) {

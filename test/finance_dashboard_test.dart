@@ -1971,7 +1971,10 @@ void main() {
       'meal',
       order.id,
       amount: 100,
+      chargedAmount: 0,
       method: 'employee_consumption',
+      discountAmount: 100,
+      appliedDiscountType: 'employee_free_meal',
     );
     final summary = buildCanonicalSalesSummary([
       SalesOrderBundleInput(
@@ -2003,10 +2006,145 @@ void main() {
     );
 
     expect(dashboard.grossSales, 4100);
+    expect(dashboard.discounts, 0);
+    expect(dashboard.employeeFreeMeals, 100);
+    expect(dashboard.netSales, 4000);
     expect(dashboard.realCollected, 4000);
     expect(dashboard.expectedMonetaryIncome, 4000);
-    expect(dashboard.employeeConsumption, 100);
+    expect(dashboard.employeeConsumption, 0);
     expect(dashboard.cashShortages, 0);
+  });
+
+  test('fixture 19/08 excluye consumo empleado de cobrado real', () {
+    const augustKey = FinanceDashboardKey(
+      restaurantId: 'restaurant',
+      branchId: 'branch',
+      startBusinessDate: '2026-08-19',
+      endBusinessDate: '2026-08-19',
+    );
+    final order = _order('fixture-1908', businessDate: '2026-08-19');
+    final cash = _payment('cash-1908', order.id, amount: 6634);
+    final card = _payment('card-1908', order.id, amount: 1191, method: 'card');
+    final employeeMeal = _payment(
+      'meal-1908',
+      order.id,
+      amount: 259,
+      chargedAmount: 0,
+      method: 'employee_consumption',
+      discountAmount: 259,
+      appliedDiscountType: 'employee_free_meal',
+    );
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order,
+        items: [_item(7825), _item(259)],
+        payments: [cash, card, employeeMeal],
+      ),
+    ]);
+
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: augustKey,
+        salesSummary: summary,
+        paymentsByOrder: {
+          order.id: [cash, card, employeeMeal],
+        },
+        cashSessions: [
+          _cashSession(
+            id: 'cut-1908',
+            businessDate: '2026-08-19',
+            countedCashAmount: 6634,
+            terminalReportedAmount: 1191,
+            expectedCashAmount: 6634,
+            expectedCardChargedAmount: 1191,
+            expectedEmployeeConsumptionAmount: 259,
+          ),
+        ],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.grossSales, 8084);
+    expect(dashboard.discounts, 0);
+    expect(dashboard.employeeFreeMeals, 259);
+    expect(dashboard.netSales, 7825);
+    expect(dashboard.realCollected, 7825);
+    expect(dashboard.employeeConsumption, 0);
+    expect(dashboard.salesByDay.single.employeeFreeMeals, 259);
+    expect(dashboard.salesByDay.single.netSales, 7825);
+  });
+
+  test('fixture periodo separa descuento parcial y comida gratis', () {
+    const augustKey = FinanceDashboardKey(
+      restaurantId: 'restaurant',
+      branchId: 'branch',
+      startBusinessDate: '2026-08-17',
+      endBusinessDate: '2026-08-19',
+    );
+    final day17 = _order('day-17', businessDate: '2026-08-17');
+    final day18 = _order('day-18', businessDate: '2026-08-18');
+    final day19 = _order('day-19', businessDate: '2026-08-19');
+    final payment17 = _payment('cash-17', day17.id, amount: 3982);
+    final payment18 = _payment(
+      'cash-18',
+      day18.id,
+      amount: 7263,
+      chargedAmount: 7130,
+      discountAmount: 133,
+    );
+    final cash19 = _payment('cash-19', day19.id, amount: 6634);
+    final card19 = _payment('card-19', day19.id, amount: 1191, method: 'card');
+    final meal19 = _payment(
+      'meal-19',
+      day19.id,
+      amount: 259,
+      chargedAmount: 0,
+      method: 'employee_consumption',
+      discountAmount: 259,
+      appliedDiscountType: 'employee_free_meal',
+    );
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: day17,
+        items: [_item(3982)],
+        payments: [payment17],
+      ),
+      SalesOrderBundleInput(
+        order: day18,
+        items: [_item(7263)],
+        payments: [payment18],
+      ),
+      SalesOrderBundleInput(
+        order: day19,
+        items: [_item(7825), _item(259)],
+        payments: [cash19, card19, meal19],
+      ),
+    ]);
+
+    final dashboard = buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: augustKey,
+        salesSummary: summary,
+        paymentsByOrder: {
+          day17.id: [payment17],
+          day18.id: [payment18],
+          day19.id: [cash19, card19, meal19],
+        },
+        cashSessions: const [],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+
+    expect(dashboard.grossSales, 19329);
+    expect(dashboard.discounts, 133);
+    expect(dashboard.employeeFreeMeals, 259);
+    expect(dashboard.netSales, 18937);
   });
 
   test('cache comparte cargas simultaneas e invalida solo la clave', () async {
@@ -2162,6 +2300,9 @@ Payment _payment(
   String id,
   String orderId, {
   required double amount,
+  double? chargedAmount,
+  double discountAmount = 0,
+  String? appliedDiscountType,
   String method = 'cash',
   double? received,
   double? change,
@@ -2180,10 +2321,12 @@ Payment _payment(
     baseAmount: amount,
     surchargeRate: 0,
     surchargeAmount: 0,
-    chargedAmount: amount,
-    appliedAmount: amount,
+    chargedAmount: chargedAmount ?? amount,
+    appliedAmount: chargedAmount ?? amount,
     cashReceivedAmount: received,
     cashChangeAmount: change,
+    discountAmount: discountAmount,
+    appliedDiscountType: appliedDiscountType,
     businessDate: businessDate,
     createdAt: createdAt,
     status: status,

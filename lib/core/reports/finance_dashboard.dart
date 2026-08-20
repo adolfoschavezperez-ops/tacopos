@@ -530,9 +530,12 @@ class FinanceDashboardBundle {
         .fold<double>(0, (sum, row) => sum + row.netSales),
   );
   double get discounts => _money(
-    salesOrders.fold<double>(0, (sum, row) => sum + row.discountTotal),
+    salesOrders.fold<double>(0, (sum, row) => sum + row.partialDiscountTotal),
   );
-  double get netSales => _money(grossSales - discounts);
+  double get employeeFreeMeals => _money(
+    salesOrders.fold<double>(0, (sum, row) => sum + row.employeeFreeMealTotal),
+  );
+  double get netSales => _money(grossSales - discounts - employeeFreeMeals);
 
   double get expectedMonetaryIncome => _money(
     cashCutSummaries.fold<double>(
@@ -1123,6 +1126,7 @@ class FinanceSalesDayRow {
     required this.salesWithoutDiscount,
     required this.salesWithDiscount,
     required this.discounts,
+    required this.employeeFreeMeals,
     required this.netSales,
     required this.documents,
   });
@@ -1132,6 +1136,7 @@ class FinanceSalesDayRow {
   final double salesWithoutDiscount;
   final double salesWithDiscount;
   final double discounts;
+  final double employeeFreeMeals;
   final double netSales;
   final int documents;
 }
@@ -1379,7 +1384,10 @@ List<FinanceSalesDayRow> _salesByDay(List<CanonicalOrderSalesRow> orders) {
             .fold<double>(0, (sum, row) => sum + row.netSales),
       ),
       discounts: _money(
-        rows.fold<double>(0, (sum, row) => sum + row.discountTotal),
+        rows.fold<double>(0, (sum, row) => sum + row.partialDiscountTotal),
+      ),
+      employeeFreeMeals: _money(
+        rows.fold<double>(0, (sum, row) => sum + row.employeeFreeMealTotal),
       ),
       netSales: _money(rows.fold<double>(0, (sum, row) => sum + row.netSales)),
       documents: rows.length,

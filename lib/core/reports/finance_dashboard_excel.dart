@@ -85,6 +85,7 @@ void _salesSheet(Sheet sheet, FinanceDashboardBundle bundle) {
     'Venta sin descuento',
     'Venta con descuento',
     'Descuento aplicado',
+    'Comidas gratis empleados',
     'Venta neta',
   ]);
   for (final row in bundle.salesOrders) {
@@ -96,10 +97,11 @@ void _salesSheet(Sheet sheet, FinanceDashboardBundle bundle) {
         row.grossSales,
         row.hasExplicitDiscount ? 0 : row.netSales,
         row.hasExplicitDiscount ? row.netSales : 0,
-        row.discountTotal,
+        row.partialDiscountTotal,
+        row.employeeFreeMealTotal,
         row.netSales,
       ],
-      moneyColumns: const {2, 3, 4, 5, 6},
+      moneyColumns: const {2, 3, 4, 5, 6, 7},
     );
   }
   _append(
@@ -111,12 +113,13 @@ void _salesSheet(Sheet sheet, FinanceDashboardBundle bundle) {
       bundle.salesWithoutDiscount,
       bundle.salesWithDiscount,
       bundle.discounts,
+      bundle.employeeFreeMeals,
       bundle.netSales,
     ],
-    moneyColumns: const {2, 3, 4, 5, 6},
+    moneyColumns: const {2, 3, 4, 5, 6, 7},
     total: true,
   );
-  _widths(sheet, [18, 24, 28, 23, 23, 22, 20]);
+  _widths(sheet, [18, 24, 28, 23, 23, 22, 28, 20]);
 }
 
 void _collectionsSheet(Sheet sheet, FinanceDashboardBundle bundle) {
