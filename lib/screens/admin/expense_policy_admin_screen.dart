@@ -47,7 +47,7 @@ class _ExpensePolicyAdminScreenState extends State<ExpensePolicyAdminScreen> {
               return ListView(
                 padding: const EdgeInsets.all(22),
                 children: [
-                  _SettingsPanel(
+                  ExpensePolicySettingsPanel(
                     settings: settings,
                     onChanged: (value) async {
                       await _repository.saveExpensePolicySettings(value);
@@ -116,17 +116,28 @@ class _ExpensePolicyAdminScreenState extends State<ExpensePolicyAdminScreen> {
   }
 }
 
-class _SettingsPanel extends StatefulWidget {
-  const _SettingsPanel({required this.settings, required this.onChanged});
+typedef ExpensePolicyTimePicker =
+    Future<TimeOfDay?> Function(BuildContext context, TimeOfDay initialTime);
+
+class ExpensePolicySettingsPanel extends StatefulWidget {
+  const ExpensePolicySettingsPanel({
+    super.key,
+    required this.settings,
+    required this.onChanged,
+    this.timePicker,
+  });
 
   final ExpensePolicySettings settings;
   final Future<void> Function(ExpensePolicySettings settings) onChanged;
+  final ExpensePolicyTimePicker? timePicker;
 
   @override
-  State<_SettingsPanel> createState() => _SettingsPanelState();
+  State<ExpensePolicySettingsPanel> createState() =>
+      _ExpensePolicySettingsPanelState();
 }
 
-class _SettingsPanelState extends State<_SettingsPanel> {
+class _ExpensePolicySettingsPanelState
+    extends State<ExpensePolicySettingsPanel> {
   bool _saving = false;
 
   @override
@@ -198,23 +209,102 @@ class _SettingsPanelState extends State<_SettingsPanel> {
             value: settings.manualApprovalCutoffEnabled,
             title: const Text('Horario limite para aprobacion manual'),
             subtitle: Text(
-              settings.manualApprovalCutoffTime.trim().isEmpty
-                  ? 'Sin hora configurada'
-                  : settings.manualApprovalCutoffTime,
+              settings.manualApprovalCutoffEnabled
+                  ? settings.manualApprovalCutoffTime.trim().isEmpty
+                        ? 'Sin hora configurada'
+                        : 'Hora limite ${_formatCutoffLabel(context, settings.manualApprovalCutoffTime)}'
+                  : 'Sin limite de horario',
             ),
-            onChanged: _saving
-                ? null
-                : (value) => _save(
-                    ExpensePolicySettings(
-                      expensePolicyMode: settings.expensePolicyMode,
-                      manualApprovalCutoffEnabled: value,
-                      manualApprovalCutoffTime:
-                          settings.manualApprovalCutoffTime,
-                      defaultReceiptRequired: settings.defaultReceiptRequired,
+            onChanged: _saving ? null : _toggleManualApprovalCutoff,
+          ),
+          if (settings.manualApprovalCutoffEnabled) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Hora limite',
+                    style: TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: _saving ? null : _editManualApprovalCutoffTime,
+                  icon: const Icon(Icons.schedule_outlined),
+                  label: Text(
+                    _formatCutoffLabel(
+                      context,
+                      settings.manualApprovalCutoffTime,
                     ),
                   ),
-          ),
+                ),
+                const SizedBox(width: 6),
+                OutlinedButton(
+                  onPressed: _saving ? null : _editManualApprovalCutoffTime,
+                  child: const Text('Editar'),
+                ),
+              ],
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Future<void> _toggleManualApprovalCutoff(bool value) async {
+    final settings = widget.settings;
+    if (!value) {
+      await _save(
+        ExpensePolicySettings(
+          expensePolicyMode: settings.expensePolicyMode,
+          manualApprovalCutoffEnabled: false,
+          manualApprovalCutoffTime: settings.manualApprovalCutoffTime,
+          defaultReceiptRequired: settings.defaultReceiptRequired,
+        ),
+      );
+      return;
+    }
+
+    final current = _parseCutoffTime(settings.manualApprovalCutoffTime);
+    if (current == null) {
+      final selected = await _pickTime(const TimeOfDay(hour: 22, minute: 0));
+      if (selected == null) return;
+      await _saveCutoffTime(selected);
+      return;
+    }
+
+    await _save(
+      ExpensePolicySettings(
+        expensePolicyMode: settings.expensePolicyMode,
+        manualApprovalCutoffEnabled: true,
+        manualApprovalCutoffTime: settings.manualApprovalCutoffTime,
+        defaultReceiptRequired: settings.defaultReceiptRequired,
+      ),
+    );
+  }
+
+  Future<void> _editManualApprovalCutoffTime() async {
+    final selected = await _pickTime(
+      _parseCutoffTime(widget.settings.manualApprovalCutoffTime) ??
+          const TimeOfDay(hour: 22, minute: 0),
+    );
+    if (selected == null) return;
+    await _saveCutoffTime(selected);
+  }
+
+  Future<TimeOfDay?> _pickTime(TimeOfDay initialTime) {
+    final picker = widget.timePicker;
+    if (picker != null) return picker(context, initialTime);
+    return showTimePicker(context: context, initialTime: initialTime);
+  }
+
+  Future<void> _saveCutoffTime(TimeOfDay time) {
+    final settings = widget.settings;
+    return _save(
+      ExpensePolicySettings(
+        expensePolicyMode: settings.expensePolicyMode,
+        manualApprovalCutoffEnabled: true,
+        manualApprovalCutoffTime: _formatCutoffStorage(time),
+        defaultReceiptRequired: settings.defaultReceiptRequired,
       ),
     );
   }
@@ -227,6 +317,25 @@ class _SettingsPanelState extends State<_SettingsPanel> {
       if (mounted) setState(() => _saving = false);
     }
   }
+}
+
+TimeOfDay? _parseCutoffTime(String value) {
+  final parts = value.trim().split(':');
+  if (parts.length != 2) return null;
+  final hour = int.tryParse(parts[0]);
+  final minute = int.tryParse(parts[1]);
+  if (hour == null || minute == null) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return TimeOfDay(hour: hour, minute: minute);
+}
+
+String _formatCutoffStorage(TimeOfDay time) =>
+    '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+
+String _formatCutoffLabel(BuildContext context, String value) {
+  final time = _parseCutoffTime(value);
+  if (time == null) return 'Sin hora configurada';
+  return time.format(context);
 }
 
 class _PolicyCard extends StatelessWidget {
