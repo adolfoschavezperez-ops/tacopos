@@ -1,12 +1,10 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:developer' as developer;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
@@ -882,16 +880,163 @@ class _CashScheduleCacheEntry {
   final DateTime loadedAt;
 }
 
+class ExpenseRequestFunctionPayload {
+  const ExpenseRequestFunctionPayload({
+    required this.restaurantId,
+    required this.branchId,
+    required this.policyId,
+    required this.amount,
+    required this.supplierId,
+    required this.paymentSource,
+    required this.reason,
+    required this.requesterId,
+    required this.requesterName,
+    required this.requesterRole,
+    required this.businessDate,
+    required this.cashSessionId,
+    required this.clientRequestId,
+    required this.hasReceipt,
+  });
+
+  final String restaurantId;
+  final String branchId;
+  final String policyId;
+  final double amount;
+  final String supplierId;
+  final String paymentSource;
+  final String reason;
+  final String requesterId;
+  final String requesterName;
+  final String requesterRole;
+  final String businessDate;
+  final String cashSessionId;
+  final String clientRequestId;
+  final bool hasReceipt;
+
+  Map<String, Object?> toMap() => {
+    'restaurantId': restaurantId,
+    'branchId': branchId,
+    'policyId': policyId,
+    'amount': amount,
+    'supplierId': supplierId,
+    'paymentSource': paymentSource,
+    'reason': reason,
+    'requesterId': requesterId,
+    'requesterName': requesterName,
+    'requesterRole': requesterRole,
+    'businessDate': businessDate,
+    'cashSessionId': cashSessionId,
+    'clientRequestId': clientRequestId,
+    'hasReceipt': hasReceipt,
+  };
+}
+
+class ExpenseRequestFunctionClient {
+  ExpenseRequestFunctionClient._({required this.call});
+
+  factory ExpenseRequestFunctionClient.production({
+    FirebaseFunctions? functions,
+  }) {
+    final instance =
+        functions ??
+        FirebaseFunctions.instanceFor(region: expenseRequestFunctionRegion);
+    return ExpenseRequestFunctionClient._(
+      call: (payload) async {
+        final callable = instance.httpsCallable(
+          submitExpenseRequestFunctionName,
+          options: expenseRequestCallableOptions(),
+        );
+        final response = await callable.call(payload.toMap());
+        final data = response.data;
+        if (data is Map) return Map<String, dynamic>.from(data);
+        throw StateError('Respuesta invalida al validar la politica.');
+      },
+    );
+  }
+
+  factory ExpenseRequestFunctionClient.fake(
+    Future<Map<String, dynamic>> Function(ExpenseRequestFunctionPayload payload)
+    call,
+  ) {
+    return ExpenseRequestFunctionClient._(call: call);
+  }
+
+  static const submitExpenseRequestFunctionName = 'submitExpenseRequest';
+  static const expenseRequestFunctionRegion = 'us-central1';
+
+  final Future<Map<String, dynamic>> Function(
+    ExpenseRequestFunctionPayload payload,
+  )
+  call;
+}
+
+HttpsCallableOptions expenseRequestCallableOptions() =>
+    HttpsCallableOptions(limitedUseAppCheckToken: true);
+
+String submitExpenseRequestErrorMessage(Object error) {
+  if (error is FirebaseFunctionsException) {
+    return switch (error.code) {
+      'unavailable' || 'network-request-failed' =>
+        'No hay conexion. El gasto no puede autoautorizarse sin Internet.',
+      'deadline-exceeded' =>
+        'No se pudo validar el gasto a tiempo. Intenta nuevamente.',
+      'unauthenticated' =>
+        _looksLikeAppCheckFailure(error)
+            ? 'No fue posible validar este dispositivo. Cierra y vuelve a abrir TacoPOS.'
+            : 'La sesion no esta lista para validar la politica. Cierra y vuelve a entrar.',
+      'permission-denied' =>
+        _looksLikeAppCheckFailure(error)
+            ? 'No fue posible validar este dispositivo. Cierra y vuelve a abrir TacoPOS.'
+            : 'No fue posible validar este dispositivo para solicitar el gasto.',
+      'invalid-argument' || 'failed-precondition' => _cleanFunctionMessage(
+        error,
+        fallback:
+            'No fue posible validar este gasto con la politica seleccionada.',
+      ),
+      'resource-exhausted' =>
+        'La politica alcanzo su limite de uso. Solicita aprobacion manual.',
+      'internal' || 'unknown' =>
+        'No fue posible validar la politica en este momento. Intenta nuevamente.',
+      _ => _cleanFunctionMessage(
+        error,
+        fallback: 'No fue posible validar la politica de gasto.',
+      ),
+    };
+  }
+  if (error is StateError || error is ArgumentError) {
+    final message = error.toString().replaceFirst(RegExp(r'^[^:]+:\s*'), '');
+    return message.trim().isEmpty
+        ? 'No fue posible validar la politica de gasto.'
+        : message;
+  }
+  return 'No fue posible validar la politica de gasto.';
+}
+
+bool _looksLikeAppCheckFailure(FirebaseFunctionsException error) {
+  final text = '${error.message ?? ''} ${error.details ?? ''}'.toLowerCase();
+  return text.contains('app check') ||
+      text.contains('appcheck') ||
+      text.contains('token app check');
+}
+
+String _cleanFunctionMessage(
+  FirebaseFunctionsException error, {
+  required String fallback,
+}) {
+  final message = error.message?.trim();
+  return message == null || message.isEmpty ? fallback : message;
+}
+
 class TacoPosRepository {
   TacoPosRepository({
     FirebaseFirestore? firestore,
     FirebaseAuth? auth,
-    FirebaseAppCheck? appCheck,
-    http.Client? httpClient,
+    ExpenseRequestFunctionClient? expenseRequestFunctionClient,
   }) : _db = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? FirebaseAuth.instance,
-       _appCheck = appCheck ?? FirebaseAppCheck.instance,
-       _httpClient = httpClient ?? http.Client();
+       _expenseRequestFunctionClient =
+           expenseRequestFunctionClient ??
+           ExpenseRequestFunctionClient.production();
 
   static const cardSurchargeRate = 0.04;
   static const operationResetPin = '072026';
@@ -905,8 +1050,7 @@ class TacoPosRepository {
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
-  final FirebaseAppCheck _appCheck;
-  final http.Client _httpClient;
+  final ExpenseRequestFunctionClient _expenseRequestFunctionClient;
 
   DocumentReference<Map<String, dynamic>> get _restaurantRef =>
       _db.collection('restaurants').doc(AppConstants.restaurantId);
@@ -6702,64 +6846,55 @@ class TacoPosRepository {
       if (idToken == null || idToken.isEmpty) {
         throw StateError('Se requiere autenticacion para validar la politica.');
       }
-      final appCheckToken = await _appCheck.getLimitedUseToken();
-      final response = await _httpClient.post(
-        Uri.https(
-          'us-central1-tacopos-renovadev.cloudfunctions.net',
-          'submitExpenseRequest',
+      return await _expenseRequestFunctionClient.call(
+        ExpenseRequestFunctionPayload(
+          restaurantId: AppConstants.restaurantId,
+          branchId: AppSession.instance.currentBranchId,
+          policyId: policyId,
+          amount: amount,
+          supplierId: supplierId,
+          paymentSource: paymentSource,
+          reason: reason.trim(),
+          requesterId: employee?.id ?? '',
+          requesterName: employee?.name ?? '',
+          requesterRole: employee?.hasAdminAccess == true ? 'admin' : 'staff',
+          businessDate: businessDate,
+          cashSessionId: cashSessionId,
+          clientRequestId: const Uuid().v4(),
+          hasReceipt: hasReceipt,
         ),
-        headers: {
-          'Authorization': 'Bearer $idToken',
-          'X-Firebase-AppCheck': appCheckToken,
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'data': {
-            'restaurantId': AppConstants.restaurantId,
-            'branchId': AppSession.instance.currentBranchId,
-            'policyId': policyId,
-            'amount': amount,
-            'supplierId': supplierId,
-            'paymentSource': paymentSource,
-            'reason': reason.trim(),
-            'requesterId': employee?.id ?? '',
-            'requesterName': employee?.name ?? '',
-            'requesterRole': employee?.hasAdminAccess == true
-                ? 'admin'
-                : 'staff',
-            'businessDate': businessDate,
-            'cashSessionId': cashSessionId,
-            'clientRequestId': const Uuid().v4(),
-            'hasReceipt': hasReceipt,
-          },
-        }),
-      );
-      final decoded = jsonDecode(response.body);
-      if (response.statusCode >= 400) {
-        final error = decoded is Map<String, dynamic>
-            ? decoded['error'] as Map<String, dynamic>?
-            : null;
-        final message = error?['message']?.toString().trim();
-        throw StateError(
-          message?.isNotEmpty == true
-              ? message!
-              : 'No fue posible validar la politica de gasto.',
-        );
-      }
-      if (decoded is! Map<String, dynamic> ||
-          decoded['result'] is! Map<String, dynamic>) {
-        throw StateError('Respuesta invalida al validar la politica.');
-      }
-      return Map<String, dynamic>.from(
-        decoded['result'] as Map<String, dynamic>,
       );
     } on StateError {
       rethrow;
-    } catch (_) {
-      throw StateError(
-        'No fue posible validar la politica. El gasto no puede autoautorizarse sin conexion.',
-      );
+    } on FirebaseFunctionsException catch (error, stackTrace) {
+      _logSubmitExpenseRequestFailure(error, stackTrace);
+      throw StateError(submitExpenseRequestErrorMessage(error));
+    } catch (error, stackTrace) {
+      _logSubmitExpenseRequestFailure(error, stackTrace);
+      throw StateError(submitExpenseRequestErrorMessage(error));
     }
+  }
+
+  void _logSubmitExpenseRequestFailure(Object error, StackTrace stackTrace) {
+    if (!kDebugMode) return;
+    final user = _auth.currentUser;
+    developer.log(
+      'submitExpenseRequest failed '
+      'region=${ExpenseRequestFunctionClient.expenseRequestFunctionRegion} '
+      'function=${ExpenseRequestFunctionClient.submitExpenseRequestFunctionName} '
+      'limitedUseAppCheckToken=true '
+      'authPresent=${user != null} '
+      'isAnonymous=${user?.isAnonymous}',
+      name: 'TacoPosRepository',
+      error: error is FirebaseFunctionsException
+          ? {
+              'code': error.code,
+              'message': error.message,
+              'details': error.details,
+            }
+          : error,
+      stackTrace: stackTrace,
+    );
   }
 
   Future<void> authorizeCashWithdrawal({
