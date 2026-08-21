@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../services/app_session.dart';
 import '../services/app_update_service.dart';
 import '../services/device_registry_service.dart';
+import '../services/operational_session_service.dart';
 
 class AppUpdateGate extends StatefulWidget {
   const AppUpdateGate({
@@ -72,9 +73,8 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
 
   void _onSessionChanged() {
     unawaited(
-      _deviceRegistryService.recordHeartbeat(
+      OperationalSessionService.instance.ensureReadyForCurrentSession(
         updateResult: _lastResult,
-        force: true,
       ),
     );
   }
@@ -85,7 +85,13 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
       _requiredError = null;
     });
     final result = await _updateService.checkForUpdate();
-    await _deviceRegistryService.recordHeartbeat(updateResult: result);
+    if (AppSession.instance.isLoggedIn) {
+      await OperationalSessionService.instance.ensureReadyForCurrentSession(
+        updateResult: result,
+      );
+    } else {
+      await _deviceRegistryService.recordHeartbeat(updateResult: result);
+    }
     if (!mounted) return;
     setState(() {
       _checking = false;

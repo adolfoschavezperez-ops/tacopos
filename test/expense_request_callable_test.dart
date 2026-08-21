@@ -17,6 +17,19 @@ void main() {
     expect(expenseRequestCallableOptions().limitedUseAppCheckToken, isTrue);
   });
 
+  test('app bootstrap obtiene identidad canonica antes de runApp', () {
+    final source = File('lib/main.dart').readAsStringSync();
+
+    expect(
+      source,
+      contains('OperationalSessionService.instance.bootstrapAuth()'),
+    );
+    expect(
+      source.indexOf('_ensureAnonymousLogin()'),
+      lessThan(source.indexOf('runApp')),
+    );
+  });
+
   test('payload conserva clientRequestId para idempotencia', () {
     const payload = ExpenseRequestFunctionPayload(
       restaurantId: 'main_restaurant',
@@ -96,7 +109,7 @@ void main() {
     expect(result['status'], 'pending');
   });
 
-  test('auth inicialmente null se inicializa y callable continua', () async {
+  test('auth inicialmente lista por bootstrap y callable continua', () async {
     var ensureAttempts = 0;
     var called = false;
 
@@ -189,6 +202,40 @@ void main() {
     expect(source, contains('expense-auth: signin-success'));
     expect(source, contains('expense-auth: signin-error'));
     expect(source, isNot(contains('getIdToken()')));
+  });
+
+  test('envio de gasto no ejecuta bootstrap ni login auth', () {
+    final source = File(
+      'lib/services/taco_pos_repository.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('currentStatus()'));
+    expect(source, isNot(contains('ensureSignedIn()')));
+    expect(source, isNot(contains('signInAnonymously()')));
+  });
+
+  test('sesion operativa prepara device al entrar empleado', () {
+    final source = File('lib/widgets/app_update_gate.dart').readAsStringSync();
+
+    expect(source, contains('AppSession.instance.addListener'));
+    expect(source, contains('ensureReadyForCurrentSession'));
+    expect(source, contains('deviceRegistryService.recordHeartbeat'));
+  });
+
+  test('caja inexistente falla antes de auth/callable de gasto', () {
+    final source = File(
+      'lib/services/taco_pos_repository.dart',
+    ).readAsStringSync();
+    final cashCheck = source.indexOf(
+      "throw StateError('No hay una caja abierta",
+    );
+    final submitFunction = source.indexOf(
+      'await _submitExpenseRequestFunction',
+    );
+
+    expect(cashCheck, isNonNegative);
+    expect(submitFunction, isNonNegative);
+    expect(cashCheck, lessThan(submitFunction));
   });
 
   test('auth fallida registra codigo FirebaseAuthException real', () async {

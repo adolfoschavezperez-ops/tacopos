@@ -1017,9 +1017,7 @@ class ExpenseRequestAuthSession {
   factory ExpenseRequestAuthSession.production(FirebaseAuth auth) {
     return ExpenseRequestAuthSession._(
       ensureReady: () async {
-        final status = await OperationalAuthService(
-          auth: auth,
-        ).ensureSignedIn();
+        final status = OperationalAuthService(auth: auth).currentStatus();
         return ExpenseRequestAuthStatus(
           ready: status.ready,
           authPresent: status.authPresent,
