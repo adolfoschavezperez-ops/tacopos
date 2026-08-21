@@ -1049,7 +1049,7 @@ class ExpenseRequestDeviceSession {
   }) {
     final service = registryService ?? DeviceRegistryService.instance;
     return ExpenseRequestDeviceSession._(
-      ensureReady: () => service.recordHeartbeat(force: true),
+      ensureReady: () => service.ensureCurrentDeviceReady(),
     );
   }
 
@@ -1111,7 +1111,7 @@ Future<Map<String, dynamic>> submitExpenseRequestWithPreparedSession({
     );
     throw StateError(
       authStatus.errorMessage ??
-          'No fue posible iniciar la sesion del dispositivo (${authStatus.errorCode ?? 'unknown'}). Intenta nuevamente.',
+          'No fue posible autenticar este dispositivo (${authStatus.errorCode ?? 'unknown'}). Intenta nuevamente.',
     );
   }
 
@@ -1125,15 +1125,16 @@ Future<Map<String, dynamic>> submitExpenseRequestWithPreparedSession({
       error: error,
       stackTrace: stackTrace,
     );
-    throw StateError(
-      'No fue posible validar este dispositivo. Cierra y vuelve a abrir TacoPOS.',
-    );
+    final message = error is DeviceRegistryException
+        ? error.message
+        : 'Este dispositivo no esta registrado o activo.';
+    throw StateError(message);
   }
 
   debugLog?.call('expense-request: callable-start');
   try {
     final result = await functionClient.call(payload);
-    debugLog?.call('expense-request: callable-result');
+    debugLog?.call('expense-request: callable-success');
     return result;
   } on FirebaseFunctionsException catch (error, stackTrace) {
     debugLog?.call(
@@ -1148,7 +1149,7 @@ Future<Map<String, dynamic>> submitExpenseRequestWithPreparedSession({
     throw StateError(submitExpenseRequestErrorMessage(error));
   } catch (error, stackTrace) {
     debugLog?.call(
-      'expensePolicy: callable-error',
+      'expense-request: callable-error',
       error: error,
       stackTrace: stackTrace,
     );
@@ -1166,7 +1167,7 @@ String submitExpenseRequestErrorMessage(Object error) {
       'unauthenticated' =>
         _looksLikeAppCheckFailure(error)
             ? 'No fue posible validar este dispositivo. Cierra y vuelve a abrir TacoPOS.'
-            : 'No fue posible iniciar la sesion del dispositivo. Intenta nuevamente.',
+            : 'No fue posible autenticar este dispositivo. Intenta nuevamente.',
       'permission-denied' =>
         _looksLikeAppCheckFailure(error) || _looksLikeDeviceFailure(error)
             ? 'No fue posible validar este dispositivo. Cierra y vuelve a abrir TacoPOS.'
@@ -7048,6 +7049,7 @@ class TacoPosRepository {
     required bool hasReceipt,
     required Employee? employee,
   }) async {
+    _logSubmitExpenseRequestMarker('expense-request: cash-session-ready');
     return submitExpenseRequestWithPreparedSession(
       authSession: _expenseRequestAuthSession,
       deviceSession: _expenseRequestDeviceSession,

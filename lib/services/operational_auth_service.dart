@@ -51,13 +51,13 @@ class OperationalAuthService {
   Future<OperationalAuthStatus> ensureSignedIn() async {
     try {
       var user = _auth.currentUser;
-      _logBootstrap('auth-bootstrap: before', user: user);
+      _logBootstrap('expense-auth: bootstrap-start', user: user);
 
       if (user == null && !kIsWeb) {
-        _logBootstrap('auth-bootstrap: anonymous-signin-start', user: null);
+        _logBootstrap('expense-auth: signin-start', user: null);
         final credential = await _auth.signInAnonymously();
         user = credential.user ?? _auth.currentUser;
-        _logBootstrap('auth-bootstrap: anonymous-signin-success', user: user);
+        _logBootstrap('expense-auth: signin-success', user: user);
       }
 
       final ready = user != null && user.uid.trim().isNotEmpty;
@@ -67,7 +67,7 @@ class OperationalAuthService {
 
       return const OperationalAuthStatus.failed(
         errorMessage:
-            'No fue posible iniciar la sesion del dispositivo. Intenta nuevamente.',
+            'No fue posible autenticar este dispositivo. Intenta nuevamente.',
         errorCode: 'user-null',
       );
     } on FirebaseAuthException catch (error, stackTrace) {
@@ -75,14 +75,14 @@ class OperationalAuthService {
       return OperationalAuthStatus.failed(
         errorCode: error.code,
         errorMessage:
-            'No fue posible iniciar la sesion del dispositivo (${error.code}). Intenta nuevamente.',
+            'No fue posible autenticar este dispositivo (${error.code}). Intenta nuevamente.',
       );
     } catch (error, stackTrace) {
       _logUnknownError(error, stackTrace);
       return const OperationalAuthStatus.failed(
         errorCode: 'unknown',
         errorMessage:
-            'No fue posible iniciar la sesion del dispositivo (unknown). Intenta nuevamente.',
+            'No fue posible autenticar este dispositivo (unknown). Intenta nuevamente.',
       );
     }
   }
@@ -102,8 +102,9 @@ class OperationalAuthService {
   void _logAuthError(FirebaseAuthException error, StackTrace stackTrace) {
     if (!kDebugMode) return;
     developer.log(
-      'auth-bootstrap: anonymous-signin-error '
+      'expense-auth: signin-error '
       'firebaseAppsInitialized=${Firebase.apps.isNotEmpty} '
+      'exceptionType=${error.runtimeType} '
       'firebaseAuthCode=${error.code} '
       'firebaseAuthMessage=${error.message}',
       name: 'OperationalAuthService',
@@ -115,8 +116,9 @@ class OperationalAuthService {
   void _logUnknownError(Object error, StackTrace stackTrace) {
     if (!kDebugMode) return;
     developer.log(
-      'auth-bootstrap: anonymous-signin-error '
+      'expense-auth: signin-error '
       'firebaseAppsInitialized=${Firebase.apps.isNotEmpty} '
+      'exceptionType=${error.runtimeType} '
       'firebaseAuthCode=unknown '
       'firebaseAuthMessage=$error',
       name: 'OperationalAuthService',
