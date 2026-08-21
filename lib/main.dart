@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'core/theme/app_theme.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
+import 'services/operational_auth_service.dart';
 import 'widgets/app_update_gate.dart';
 
 void main() async {
@@ -34,10 +35,12 @@ Future<void> _ensureAnonymousLogin() async {
   if (kIsWeb) {
     return;
   }
-  final auth = FirebaseAuth.instance;
-
-  if (auth.currentUser == null) {
-    await auth.signInAnonymously();
+  final status = await OperationalAuthService().ensureSignedIn();
+  if (!status.ready) {
+    throw FirebaseAuthException(
+      code: status.errorCode ?? 'unknown',
+      message: status.errorMessage,
+    );
   }
 }
 
