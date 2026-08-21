@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/services/taco_pos_repository.dart';
@@ -81,6 +83,7 @@ void main() {
       authSession: ExpenseRequestAuthSession.fake(
         () async => const ExpenseRequestAuthStatus.ready(isAnonymous: true),
       ),
+      deviceSession: ExpenseRequestDeviceSession.fake(() async {}),
       functionClient: ExpenseRequestFunctionClient.fake((payload) async {
         called = true;
         return {'status': 'pending'};
@@ -102,6 +105,7 @@ void main() {
         ensureAttempts++;
         return const ExpenseRequestAuthStatus.ready(isAnonymous: true);
       }),
+      deviceSession: ExpenseRequestDeviceSession.fake(() async {}),
       functionClient: ExpenseRequestFunctionClient.fake((payload) async {
         called = true;
         return {
@@ -125,9 +129,11 @@ void main() {
       () => submitExpenseRequestWithPreparedSession(
         authSession: ExpenseRequestAuthSession.fake(
           () async => const ExpenseRequestAuthStatus.failed(
-            'No fue posible iniciar la sesion del dispositivo. Intenta nuevamente.',
+            'No fue posible iniciar la sesion del dispositivo (operation-not-allowed). Intenta nuevamente.',
+            errorCode: 'operation-not-allowed',
           ),
         ),
+        deviceSession: ExpenseRequestDeviceSession.fake(() async {}),
         functionClient: ExpenseRequestFunctionClient.fake((payload) async {
           called = true;
           return {'status': 'pending'};
@@ -153,6 +159,7 @@ void main() {
       authSession: ExpenseRequestAuthSession.fake(
         () async => const ExpenseRequestAuthStatus.ready(isAnonymous: true),
       ),
+      deviceSession: ExpenseRequestDeviceSession.fake(() async {}),
       functionClient: ExpenseRequestFunctionClient.fake(
         (payload) async => {'status': 'pending'},
       ),
@@ -162,10 +169,76 @@ void main() {
     );
 
     expect(markers, [
-      'expensePolicy: before-call',
-      'expensePolicy: callable-start',
-      'expensePolicy: callable-result',
+      'expense-request: before-call',
+      'expense-request: auth-ready',
+      'expense-request: device-ready',
+      'expense-request: callable-start',
+      'expense-request: callable-result',
     ]);
+  });
+
+  test('auth operativo no fuerza getIdToken antes de callable', () {
+    final source = File(
+      'lib/services/operational_auth_service.dart',
+    ).readAsStringSync();
+
+    expect(source, contains('if (user == null && !kIsWeb)'));
+    expect(source, contains('signInAnonymously()'));
+    expect(source, isNot(contains('getIdToken()')));
+  });
+
+  test('auth fallida registra codigo FirebaseAuthException real', () async {
+    final markers = <String>[];
+
+    await expectLater(
+      submitExpenseRequestWithPreparedSession(
+        authSession: ExpenseRequestAuthSession.fake(
+          () async => const ExpenseRequestAuthStatus.failed(
+            'No fue posible iniciar la sesion del dispositivo (network-request-failed). Intenta nuevamente.',
+            errorCode: 'network-request-failed',
+          ),
+        ),
+        deviceSession: ExpenseRequestDeviceSession.fake(() async {}),
+        functionClient: ExpenseRequestFunctionClient.fake(
+          (payload) async => {'status': 'pending'},
+        ),
+        payload: _payload(),
+        debugContext: _debugContext(),
+        debugLog: (marker, {error, stackTrace}) => markers.add(marker),
+      ),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(markers, contains(contains('authErrorCode=network-request-failed')));
+  });
+
+  test('device no registrado no se confunde con auth', () async {
+    var called = false;
+
+    expect(
+      () => submitExpenseRequestWithPreparedSession(
+        authSession: ExpenseRequestAuthSession.fake(
+          () async => const ExpenseRequestAuthStatus.ready(isAnonymous: true),
+        ),
+        deviceSession: ExpenseRequestDeviceSession.fake(
+          () async => throw StateError('Dispositivo no registrado.'),
+        ),
+        functionClient: ExpenseRequestFunctionClient.fake((payload) async {
+          called = true;
+          return {'status': 'pending'};
+        }),
+        payload: _payload(),
+        debugContext: _debugContext(),
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('validar este dispositivo'),
+        ),
+      ),
+    );
+    expect(called, isFalse);
   });
 
   test('unavailable se mapea a conexion', () {
