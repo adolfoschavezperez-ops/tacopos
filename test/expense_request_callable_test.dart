@@ -129,7 +129,7 @@ void main() {
       () => submitExpenseRequestWithPreparedSession(
         authSession: ExpenseRequestAuthSession.fake(
           () async => const ExpenseRequestAuthStatus.failed(
-            'No fue posible iniciar la sesion del dispositivo (operation-not-allowed). Intenta nuevamente.',
+            'No fue posible autenticar este dispositivo (operation-not-allowed). Intenta nuevamente.',
             errorCode: 'operation-not-allowed',
           ),
         ),
@@ -145,7 +145,7 @@ void main() {
         isA<StateError>().having(
           (error) => error.message,
           'message',
-          contains('sesion del dispositivo'),
+          contains('autenticar este dispositivo'),
         ),
       ),
     );
@@ -173,7 +173,7 @@ void main() {
       'expense-request: auth-ready',
       'expense-request: device-ready',
       'expense-request: callable-start',
-      'expense-request: callable-result',
+      'expense-request: callable-success',
     ]);
   });
 
@@ -184,6 +184,10 @@ void main() {
 
     expect(source, contains('if (user == null && !kIsWeb)'));
     expect(source, contains('signInAnonymously()'));
+    expect(source, contains('expense-auth: bootstrap-start'));
+    expect(source, contains('expense-auth: signin-start'));
+    expect(source, contains('expense-auth: signin-success'));
+    expect(source, contains('expense-auth: signin-error'));
     expect(source, isNot(contains('getIdToken()')));
   });
 
@@ -194,7 +198,7 @@ void main() {
       submitExpenseRequestWithPreparedSession(
         authSession: ExpenseRequestAuthSession.fake(
           () async => const ExpenseRequestAuthStatus.failed(
-            'No fue posible iniciar la sesion del dispositivo (network-request-failed). Intenta nuevamente.',
+            'No fue posible autenticar este dispositivo (network-request-failed). Intenta nuevamente.',
             errorCode: 'network-request-failed',
           ),
         ),
@@ -234,12 +238,89 @@ void main() {
         isA<StateError>().having(
           (error) => error.message,
           'message',
-          contains('validar este dispositivo'),
+          contains('dispositivo'),
         ),
       ),
     );
     expect(called, isFalse);
   });
+
+  test(
+    'device inactivo usa mensaje de dispositivo y no llama callable',
+    () async {
+      var called = false;
+
+      expect(
+        () => submitExpenseRequestWithPreparedSession(
+          authSession: ExpenseRequestAuthSession.fake(
+            () async => const ExpenseRequestAuthStatus.ready(isAnonymous: true),
+          ),
+          deviceSession: ExpenseRequestDeviceSession.fake(
+            () async => throw StateError(
+              'Este dispositivo no esta registrado o activo.',
+            ),
+          ),
+          functionClient: ExpenseRequestFunctionClient.fake((payload) async {
+            called = true;
+            return {'status': 'pending'};
+          }),
+          payload: _payload(),
+          debugContext: _debugContext(),
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'Este dispositivo no esta registrado o activo.',
+          ),
+        ),
+      );
+      expect(called, isFalse);
+    },
+  );
+
+  test(
+    'auth existente lista no dispara reintento adicional en el helper',
+    () async {
+      var authEnsures = 0;
+      var deviceEnsures = 0;
+      var calls = 0;
+
+      await submitExpenseRequestWithPreparedSession(
+        authSession: ExpenseRequestAuthSession.fake(() async {
+          authEnsures++;
+          return const ExpenseRequestAuthStatus.ready(isAnonymous: true);
+        }),
+        deviceSession: ExpenseRequestDeviceSession.fake(() async {
+          deviceEnsures++;
+        }),
+        functionClient: ExpenseRequestFunctionClient.fake((payload) async {
+          calls++;
+          return {'status': 'pending'};
+        }),
+        payload: _payload(),
+        debugContext: _debugContext(),
+      );
+
+      expect(authEnsures, 1);
+      expect(deviceEnsures, 1);
+      expect(calls, 1);
+    },
+  );
+
+  test(
+    'validacion de dispositivo verifica registro y active antes de callable',
+    () {
+      final source = File(
+        'lib/services/device_registry_service.dart',
+      ).readAsStringSync();
+
+      expect(source, contains('ensureCurrentDeviceReady'));
+      expect(source, contains("data['active'] == false"));
+      expect(source, contains('device-not-registered'));
+      expect(source, contains('device-branch-mismatch'));
+    },
+  );
 
   test('unavailable se mapea a conexion', () {
     final message = submitExpenseRequestErrorMessage(
@@ -254,7 +335,7 @@ void main() {
       _functionsError('unauthenticated', 'Auth required.'),
     );
 
-    expect(message, contains('sesion del dispositivo'));
+    expect(message, contains('autenticar este dispositivo'));
     expect(message, isNot(contains('sesion no esta lista')));
     expect(message, isNot(contains('No hay conexion')));
   });

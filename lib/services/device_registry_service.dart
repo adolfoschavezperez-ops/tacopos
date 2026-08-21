@@ -78,6 +78,16 @@ class RegisteredDevice {
   }
 }
 
+class DeviceRegistryException implements Exception {
+  const DeviceRegistryException(this.code, this.message);
+
+  final String code;
+  final String message;
+
+  @override
+  String toString() => 'DeviceRegistryException($code): $message';
+}
+
 class DeviceRegistryService {
   DeviceRegistryService({
     FirebaseFirestore? firestore,
@@ -198,6 +208,56 @@ class DeviceRegistryService {
         stackTrace: StackTrace.current,
         attemptedFields: _attemptedFields(),
       );
+    }
+  }
+
+  Future<void> ensureCurrentDeviceReady({bool recordHeartbeat = true}) async {
+    final uid = _auth.currentUser?.uid.trim();
+    if (!DeviceRegistryService.isValidDeviceId(uid)) {
+      throw const DeviceRegistryException(
+        'invalid-device-id',
+        'Este dispositivo no esta registrado o activo.',
+      );
+    }
+
+    final deviceId = uid!;
+    final doc = await _devicesRef.doc(deviceId).get();
+    if (!doc.exists) {
+      throw const DeviceRegistryException(
+        'device-not-registered',
+        'Este dispositivo no esta registrado o activo.',
+      );
+    }
+
+    final data = doc.data() ?? const <String, dynamic>{};
+    if (data['active'] == false) {
+      throw const DeviceRegistryException(
+        'device-inactive',
+        'Este dispositivo no esta registrado o activo.',
+      );
+    }
+
+    final restaurantId = data['restaurantId']?.toString().trim() ?? '';
+    if (restaurantId.isNotEmpty && restaurantId != AppConstants.restaurantId) {
+      throw const DeviceRegistryException(
+        'device-restaurant-mismatch',
+        'Este dispositivo no esta registrado o activo.',
+      );
+    }
+
+    final branchId = data['branchId']?.toString().trim() ?? '';
+    final currentBranchId = AppSession.instance.currentBranchId.trim();
+    if (branchId.isNotEmpty &&
+        currentBranchId.isNotEmpty &&
+        branchId != currentBranchId) {
+      throw const DeviceRegistryException(
+        'device-branch-mismatch',
+        'Este dispositivo no esta registrado o activo.',
+      );
+    }
+
+    if (recordHeartbeat) {
+      await recordHeartbeat(force: true);
     }
   }
 
