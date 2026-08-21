@@ -87,6 +87,21 @@ class OperationalAuthService {
     }
   }
 
+  OperationalAuthStatus currentStatus({
+    String errorMessage =
+        'La sesion segura no esta lista para validar este gasto.',
+  }) {
+    final user = _auth.currentUser;
+    final ready = user != null && user.uid.trim().isNotEmpty;
+    if (ready) {
+      return OperationalAuthStatus.ready(isAnonymous: user.isAnonymous);
+    }
+    return OperationalAuthStatus.failed(
+      errorMessage: errorMessage,
+      errorCode: 'current-user-null',
+    );
+  }
+
   void _logBootstrap(String marker, {required User? user}) {
     if (!kDebugMode) return;
     developer.log(
