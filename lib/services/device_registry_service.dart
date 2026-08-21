@@ -257,7 +257,7 @@ class DeviceRegistryService {
     }
 
     if (recordHeartbeat) {
-      await recordHeartbeat(force: true);
+      await this.recordHeartbeat(force: true);
     }
   }
 
