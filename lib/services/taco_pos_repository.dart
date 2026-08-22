@@ -19,6 +19,7 @@ import '../core/orders/order_activity.dart';
 import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
 import '../core/expenses/expense_policy.dart';
+import '../core/payments/payment_operational_scope.dart';
 import '../core/purchases/purchase_capture_discount.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/cash_difference_audit.dart';
@@ -14397,7 +14398,7 @@ class TacoPosRepository {
   Future<CashSession> _requireOpenCashSessionForPayment() async {
     final session = await getOpenCashSession();
     if (session == null) {
-      throw StateError('Debes abrir caja antes de cobrar.');
+      throw StateError('No hay una caja abierta para registrar el pago.');
     }
     return session;
   }
@@ -14415,30 +14416,13 @@ class TacoPosRepository {
     required PosOrder order,
     required CashSession openCashSession,
   }) {
-    final sessionBusinessDate = businessDateForOpenCashSession(openCashSession);
-    final orderBusinessDate = resolveOperationalBusinessDate(order: order);
-    final orderCashSessionId = order.cashSessionId?.trim() ?? '';
-
-    if (orderCashSessionId.isNotEmpty &&
-        orderCashSessionId != openCashSession.id) {
-      throw StateError(
-        'La orden pertenece a otra sesion de caja y no puede cobrarse en la caja actual.',
-      );
-    }
-    if (orderBusinessDate.isNotEmpty &&
-        orderBusinessDate != sessionBusinessDate) {
-      throw StateError(
-        'La orden pertenece a otro dia operativo y no puede cobrarse en la caja actual.',
-      );
-    }
-
+    final scope = resolveNewPaymentOperationalScope(
+      order: order,
+      activeCashSession: openCashSession,
+    );
     return (
-      businessDate: orderBusinessDate.isNotEmpty
-          ? orderBusinessDate
-          : sessionBusinessDate,
-      cashSessionId: orderCashSessionId.isNotEmpty
-          ? orderCashSessionId
-          : openCashSession.id,
+      businessDate: scope.businessDate,
+      cashSessionId: scope.cashSessionId,
     );
   }
 
