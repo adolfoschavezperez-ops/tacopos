@@ -222,20 +222,18 @@ void main() {
     expect(source, contains('deviceRegistryService.recordHeartbeat'));
   });
 
-  test('caja inexistente falla antes de auth/callable de gasto', () {
+  test('flujo Android de gasto ya no llama callable', () {
     final source = File(
       'lib/services/taco_pos_repository.dart',
     ).readAsStringSync();
     final cashCheck = source.indexOf(
       "throw StateError('No hay una caja abierta",
     );
-    final submitFunction = source.indexOf(
-      'await _submitExpenseRequestFunction',
-    );
 
     expect(cashCheck, isNonNegative);
-    expect(submitFunction, isNonNegative);
-    expect(cashCheck, lessThan(submitFunction));
+    expect(source, isNot(contains('await _submitExpenseRequestFunction')));
+    expect(source, isNot(contains('limitedUseAppCheckToken=true')));
+    expect(source, contains('_submitLocalExpensePolicyRequest'));
   });
 
   test('auth fallida registra codigo FirebaseAuthException real', () async {

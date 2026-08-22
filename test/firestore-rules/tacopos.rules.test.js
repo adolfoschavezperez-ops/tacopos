@@ -12,10 +12,12 @@ const {
   doc,
   getDoc,
   getDocs,
+  query,
   runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
 } = require('firebase/firestore');
 
 const PROJECT_ID = 'tacopos-renovadev';
@@ -746,6 +748,213 @@ describe('TacoPOS Firestore production guard rails', () => {
     await assertSucceeds(getDocs(collection(db, `restaurants/${RESTAURANT_ID}/expensePolicyUsage`)));
   });
 
+  it('device restaurant A lee policy A y no lee restaurant B', async () => {
+    await seed(devicePath('device-uid'), deviceData('device-uid'));
+    await seed(policyPath('hielo'), policyData());
+    await seed(policyPath('hielo', 'otro-restaurante'), policyData({
+      restaurantId: 'otro-restaurante',
+      branchId: BRANCH_ID,
+    }));
+
+    const db = authedDb('device-uid');
+    await assertSucceeds(getDoc(doc(db, policyPath('hielo'))));
+    await assertFails(getDoc(doc(db, policyPath('hielo', 'otro-restaurante'))));
+  });
+
+  it('device lista politicas activas solo de su branch para catalogo de gastos', async () => {
+    await seed(devicePath('device-uid'), deviceData('device-uid'));
+    await seed(policyPath('hielo'), policyData({ active: true, branchId: BRANCH_ID }));
+    await seed(policyPath('otra-branch'), policyData({
+      active: true,
+      branchId: 'otra',
+      code: 'otra-branch',
+      name: 'Otra branch',
+    }));
+
+    const db = authedDb('device-uid');
+    await assertSucceeds(
+      getDocs(
+        query(
+          collection(db, `restaurants/${RESTAURANT_ID}/expensePolicies`),
+          where('branchId', '==', BRANCH_ID),
+        ),
+      ),
+    );
+    await assertFails(
+      getDocs(
+        query(
+          collection(db, `restaurants/${RESTAURANT_ID}/expensePolicies`),
+          where('active', '==', true),
+        ),
+      ),
+    );
+  });
+
+  it('device crea expense de su branch y no en otro branch', async () => {
+    await seed(devicePath('device-uid'), deviceData('device-uid'));
+    const db = authedDb('device-uid');
+    const base = {
+      id: 'request-1',
+      clientRequestId: 'request-1',
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      cashSessionId: 'cash-open',
+      businessDate: BUSINESS_DATE,
+      amount: 40,
+      reason: 'Hielo',
+      status: 'approved',
+      requestedByDeviceId: 'device-uid',
+      requestedByEmployeeId: 'employee',
+      requestedByEmployeeName: 'Empleado',
+      policyId: 'hielo',
+      autoApproved: true,
+      wouldAutoApprove: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    await assertSucceeds(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/request-1`), base),
+    );
+    await assertFails(
+      setDoc(doc(db, `restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/request-2`), {
+        ...base,
+        id: 'request-2',
+        clientRequestId: 'request-2',
+        branchId: 'otra',
+      }),
+    );
+  });
+
+  it('device actualiza usage de su policy branch y cross restaurant usage falla', async () => {
+    await seed(devicePath('device-uid'), deviceData('device-uid'));
+    await seed(policyPath('hielo'), policyData({ branchId: BRANCH_ID }));
+    const db = authedDb('device-uid');
+
+    await assertSucceeds(
+      setDoc(doc(db, usagePath('hielo-usage')), {
+        policyId: 'hielo',
+        branchId: BRANCH_ID,
+        periodKey: 'hielo_aviacion:2026-07-31',
+        amountUsed: 40,
+        usesUsed: 1,
+        expenseIds: ['request-1'],
+        updatedAt: serverTimestamp(),
+      }),
+    );
+    await assertSucceeds(
+      updateDoc(doc(db, usagePath('hielo-usage')), {
+        amountUsed: 80,
+        usesUsed: 2,
+        expenseIds: ['request-1', 'request-2'],
+        updatedAt: serverTimestamp(),
+      }),
+    );
+    await assertFails(
+      setDoc(doc(db, usagePath('hielo-usage', 'otro-restaurante')), {
+        policyId: 'hielo',
+        branchId: BRANCH_ID,
+        periodKey: 'hielo_aviacion:2026-07-31',
+        amountUsed: 40,
+        usesUsed: 1,
+        expenseIds: ['request-1'],
+        updatedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it('device puede confirmar transaccion local-first completa de gasto aprobado', async () => {
+    await seed(devicePath('device-uid'), deviceData('device-uid'));
+    await seed(policyPath('hielo'), policyData({ branchId: BRANCH_ID }));
+    const db = authedDb('device-uid');
+    const requestId = 'request-local-first';
+
+    await assertSucceeds(
+      runTransaction(db, async (tx) => {
+        await tx.get(doc(db, usagePath('hielo-aviacion-2026-07-31')));
+        tx.set(doc(db, `restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/${requestId}`), {
+          id: requestId,
+          clientRequestId: requestId,
+          restaurantId: RESTAURANT_ID,
+          branchId: BRANCH_ID,
+          cashSessionId: 'cash-open',
+          businessDate: BUSINESS_DATE,
+          amount: 40,
+          reason: 'Hielo',
+          source: 'cash',
+          sourceName: 'cash',
+          supplierId: '',
+          hasReceipt: false,
+          requestedByDeviceId: 'device-uid',
+          requestedByEmployeeId: 'employee',
+          requestedByEmployeeName: 'Empleado',
+          requestedAt: serverTimestamp(),
+          status: 'approved',
+          authorizedByEmployeeId: 'auto_policy',
+          authorizedByEmployeeName: 'Politica de gasto',
+          authorizedAt: serverTimestamp(),
+          approvalSource: 'device_policy',
+          approvedAt: serverTimestamp(),
+          approvedByEmployeeId: 'auto_policy',
+          approvedByEmployeeName: 'Politica de gasto',
+          policyId: 'hielo',
+          policyVersion: 1,
+          policyName: 'Hielo',
+          policySnapshot: { id: 'hielo', name: 'Hielo' },
+          autoApproved: true,
+          autoApprovedAt: serverTimestamp(),
+          wouldAutoApprove: false,
+          policyEvaluationMode: 'live',
+          policyDecisionReasonCode: 'auto_approved',
+          policyDecisionMessage: 'Dentro de politica',
+          policyEvaluationReason: 'Dentro de politica',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        tx.set(doc(db, usagePath('hielo-aviacion-2026-07-31')), {
+          policyId: 'hielo',
+          branchId: BRANCH_ID,
+          periodKey: 'hielo_aviacion:2026-07-31',
+          amountUsed: 40,
+          usesUsed: 1,
+          expenseIds: [requestId],
+          updatedAt: serverTimestamp(),
+        });
+        tx.set(doc(collection(db, `restaurants/${RESTAURANT_ID}/activityLog`)), {
+          type: 'EXPENSE_AUTO_APPROVED_DEVICE',
+          restaurantId: RESTAURANT_ID,
+          branchId: BRANCH_ID,
+          expenseId: requestId,
+          policyId: 'hielo',
+          policyName: 'Hielo',
+          policyVersion: 1,
+          policyDecisionReasonCode: 'auto_approved',
+          policyDecisionMessage: 'Dentro de politica',
+          policyEvaluationMode: 'live',
+          amount: 40,
+          employeeId: 'employee',
+          employeeName: 'Empleado',
+          deviceId: 'device-uid',
+          approvalSource: 'device_policy',
+          createdAt: serverTimestamp(),
+        });
+        tx.set(doc(db, `restaurants/${RESTAURANT_ID}/expenseRequestIdempotency/${requestId}`), {
+          clientRequestId: requestId,
+          requestId,
+          result: {
+            requestId,
+            status: 'approved',
+            autoApproved: true,
+            amountUsed: 40,
+            usesUsed: 1,
+          },
+          createdAt: serverTimestamp(),
+          uid: 'device-uid',
+        });
+      }),
+    );
+  });
+
   it('usuario operativo no puede crear editar politicas ni modificar limites', async () => {
     await seed(policyPath('hielo'), policyData());
     const db = authedDb('waiter-uid');
@@ -816,6 +1025,7 @@ describe('TacoPOS Firestore production guard rails', () => {
   });
 
   it('mantiene orders payments cuts y expenses existentes protegidos', async () => {
+    await seed(devicePath('cashier-1'), deviceData('cashier-1'));
     const db = authedDb('cashier-1');
     await assertSucceeds(
       setDoc(doc(db, `restaurants/${RESTAURANT_ID}/orders/order-rules`), {
@@ -840,9 +1050,19 @@ describe('TacoPOS Firestore production guard rails', () => {
     );
     await assertSucceeds(
       setDoc(doc(db, `restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/expense-rules`), {
+        id: 'expense-rules',
+        clientRequestId: 'expense-rules',
         restaurantId: RESTAURANT_ID,
         branchId: BRANCH_ID,
+        cashSessionId: 'cash-rules',
+        businessDate: BUSINESS_DATE,
+        amount: 40,
+        reason: 'Hielo',
         status: 'pending',
+        requestedByDeviceId: 'cashier-1',
+        policyId: '',
+        autoApproved: false,
+        wouldAutoApprove: false,
       }),
     );
   });

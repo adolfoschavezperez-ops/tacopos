@@ -32,6 +32,130 @@ void main() {
       expect(second.reasonCode, 'max_uses');
     });
 
+    test('disponibilidad maxUses 1 con usage 0 queda enabled', () {
+      final policy = _policy(id: 'hielo', maxUsesPerPeriod: 1);
+      final availability = evaluateExpensePolicyAvailability(
+        policy: policy,
+        usage: _usage(
+          policyId: 'hielo',
+          periodKey: 'hielo_branch:2026-08-18',
+          usesUsed: 0,
+        ),
+        businessDate: '2026-08-18',
+      );
+
+      expect(availability.enabled, isTrue);
+      expect(availability.statusLabel, isEmpty);
+    });
+
+    test('disponibilidad maxUses 1 con usage 1 queda Ya utilizado', () {
+      final policy = _policy(id: 'hielo', maxUsesPerPeriod: 1);
+      final availability = evaluateExpensePolicyAvailability(
+        policy: policy,
+        usage: _usage(
+          policyId: 'hielo',
+          periodKey: 'hielo_branch:2026-08-18',
+          usesUsed: 1,
+        ),
+        businessDate: '2026-08-18',
+      );
+
+      expect(availability.enabled, isFalse);
+      expect(availability.statusLabel, 'Ya utilizado');
+      expect(availability.reasonCode, 'max_uses');
+    });
+
+    test('disponibilidad maxUses 3 permite usage 2 y bloquea usage 3', () {
+      final policy = _policy(id: 'hielo', maxUsesPerPeriod: 3);
+
+      expect(
+        evaluateExpensePolicyAvailability(
+          policy: policy,
+          usage: _usage(
+            policyId: 'hielo',
+            periodKey: 'hielo_branch:2026-08-18',
+            usesUsed: 2,
+          ),
+          businessDate: '2026-08-18',
+        ).enabled,
+        isTrue,
+      );
+      expect(
+        evaluateExpensePolicyAvailability(
+          policy: policy,
+          usage: _usage(
+            policyId: 'hielo',
+            periodKey: 'hielo_branch:2026-08-18',
+            usesUsed: 3,
+          ),
+          businessDate: '2026-08-18',
+        ).enabled,
+        isFalse,
+      );
+    });
+
+    test(
+      'disponibilidad con monto acumulado agotado muestra Limite agotado',
+      () {
+        final policy = _policy(
+          id: 'hielo',
+          maxUsesPerPeriod: 3,
+          maxAmountPerPeriod: 100,
+        );
+        final availability = evaluateExpensePolicyAvailability(
+          policy: policy,
+          usage: _usage(
+            policyId: 'hielo',
+            periodKey: 'hielo_branch:2026-08-18',
+            amountUsed: 100,
+            usesUsed: 1,
+          ),
+          businessDate: '2026-08-18',
+        );
+
+        expect(availability.enabled, isFalse);
+        expect(availability.statusLabel, 'Limite agotado');
+        expect(availability.reasonCode, 'max_period_amount');
+      },
+    );
+
+    test('disponibilidad no bloquea por usage de otro periodo', () {
+      final policy = _policy(id: 'hielo', maxUsesPerPeriod: 1);
+      final availability = evaluateExpensePolicyAvailability(
+        policy: policy,
+        usage: _usage(
+          policyId: 'hielo',
+          periodKey: 'hielo_branch:2026-08-17',
+          usesUsed: 1,
+        ),
+        businessDate: '2026-08-18',
+      );
+
+      expect(availability.enabled, isTrue);
+    });
+
+    test('disponibilidad no habilita si usage aun no cargo o fallo', () {
+      final policy = _policy(id: 'hielo', maxUsesPerPeriod: 1);
+
+      expect(
+        evaluateExpensePolicyAvailability(
+          policy: policy,
+          usage: null,
+          businessDate: '2026-08-18',
+          usageLoaded: false,
+        ).statusLabel,
+        'Verificando disponibilidad',
+      );
+      expect(
+        evaluateExpensePolicyAvailability(
+          policy: policy,
+          usage: null,
+          businessDate: '2026-08-18',
+        ).statusLabel,
+        'No fue posible verificar disponibilidad',
+      );
+    });
+
     test('monto maximo por operacion manda a aprobacion manual', () {
       final decision = evaluateExpensePolicy(
         _input(policy: _policy(maxAmountPerTransaction: 45), amount: 46),
@@ -427,6 +551,7 @@ ExpensePolicy _policy({
 ExpensePolicyUsage _usage({
   String policyId = 'policy',
   String branchId = 'branch',
+  String periodKey = 'period',
   double amountUsed = 0,
   int usesUsed = 0,
 }) {
@@ -434,7 +559,7 @@ ExpensePolicyUsage _usage({
     id: 'usage',
     policyId: policyId,
     branchId: branchId,
-    periodKey: 'period',
+    periodKey: periodKey,
     amountUsed: amountUsed,
     usesUsed: usesUsed,
   );

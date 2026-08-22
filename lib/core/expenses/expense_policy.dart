@@ -420,6 +420,64 @@ class ExpensePolicyDecision {
   bool get autoApproved => status == ExpensePolicyDecisionStatus.autoApproved;
 }
 
+class ExpensePolicyAvailability {
+  const ExpensePolicyAvailability({
+    required this.enabled,
+    this.statusLabel = '',
+    this.reasonCode = '',
+  });
+
+  final bool enabled;
+  final String statusLabel;
+  final String reasonCode;
+}
+
+ExpensePolicyAvailability evaluateExpensePolicyAvailability({
+  required ExpensePolicy policy,
+  required ExpensePolicyUsage? usage,
+  required String businessDate,
+  bool usageLoaded = true,
+}) {
+  if (!usageLoaded) {
+    return const ExpensePolicyAvailability(
+      enabled: false,
+      statusLabel: 'Verificando disponibilidad',
+      reasonCode: 'usage_loading',
+    );
+  }
+  if (usage == null) {
+    return const ExpensePolicyAvailability(
+      enabled: false,
+      statusLabel: 'No fue posible verificar disponibilidad',
+      reasonCode: 'usage_unavailable',
+    );
+  }
+  final periodKey = expensePolicyPeriodKey(
+    policy: policy,
+    businessDate: businessDate,
+  );
+  if (usage.periodKey != periodKey) {
+    return const ExpensePolicyAvailability(enabled: true);
+  }
+  if (policy.maxUsesPerPeriod > 0 &&
+      usage.usesUsed >= policy.maxUsesPerPeriod) {
+    return const ExpensePolicyAvailability(
+      enabled: false,
+      statusLabel: 'Ya utilizado',
+      reasonCode: 'max_uses',
+    );
+  }
+  if (policy.maxAmountPerPeriod > 0 &&
+      usage.amountUsed >= policy.maxAmountPerPeriod) {
+    return const ExpensePolicyAvailability(
+      enabled: false,
+      statusLabel: 'Limite agotado',
+      reasonCode: 'max_period_amount',
+    );
+  }
+  return const ExpensePolicyAvailability(enabled: true);
+}
+
 ExpensePolicyDecision evaluateExpensePolicy(
   ExpensePolicyEvaluationInput input,
 ) {

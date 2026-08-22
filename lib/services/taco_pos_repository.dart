@@ -19,6 +19,7 @@ import '../core/orders/order_activity.dart';
 import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
 import '../core/expenses/expense_policy.dart';
+import '../core/expenses/local_expense_policy_flow.dart';
 import '../core/payments/payment_operational_scope.dart';
 import '../core/purchases/purchase_capture_discount.dart';
 import '../core/reports/canonical_sales_summary.dart';
@@ -1229,14 +1230,10 @@ class TacoPosRepository {
   TacoPosRepository({
     FirebaseFirestore? firestore,
     FirebaseAuth? auth,
-    ExpenseRequestFunctionClient? expenseRequestFunctionClient,
     ExpenseRequestAuthSession? expenseRequestAuthSession,
     ExpenseRequestDeviceSession? expenseRequestDeviceSession,
   }) : _db = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? FirebaseAuth.instance,
-       _expenseRequestFunctionClient =
-           expenseRequestFunctionClient ??
-           ExpenseRequestFunctionClient.production(),
        _expenseRequestAuthSession =
            expenseRequestAuthSession ??
            ExpenseRequestAuthSession.production(auth ?? FirebaseAuth.instance),
@@ -1256,7 +1253,6 @@ class TacoPosRepository {
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
-  final ExpenseRequestFunctionClient _expenseRequestFunctionClient;
   final ExpenseRequestAuthSession _expenseRequestAuthSession;
   final ExpenseRequestDeviceSession _expenseRequestDeviceSession;
 
@@ -6991,17 +6987,27 @@ class TacoPosRepository {
     final docRef = _cashWithdrawalRequestsRef.doc();
     final cleanPolicyId = policyId.trim();
     if (cleanPolicyId.isEmpty) {
+      final clientRequestId = docRef.id;
       await docRef.set({
         'id': docRef.id,
+        'clientRequestId': clientRequestId,
         'cashSessionId': cashSessionId,
         'businessDate': session.businessDate,
         ..._currentBranchFields,
         'amount': amount,
         'reason': reason.trim(),
+        'source': paymentSource,
+        'sourceName': paymentSource,
+        'supplierId': supplierId.trim(),
+        'hasReceipt': hasReceipt,
         'requestedByEmployeeId': employee?.id ?? '',
         'requestedByEmployeeName': employee?.name ?? '',
+        'requestedByDeviceId': _auth.currentUser?.uid ?? '',
         'requestedAt': FieldValue.serverTimestamp(),
         'status': 'pending',
+        'policyId': '',
+        'autoApproved': false,
+        'wouldAutoApprove': false,
         'authorizedByEmployeeId': null,
         'authorizedByEmployeeName': null,
         'authorizedAt': null,
@@ -7020,11 +7026,39 @@ class TacoPosRepository {
     }
 
     if (offline) {
-      throw StateError(
-        'No fue posible validar la politica. El gasto no puede autoautorizarse sin conexion.',
-      );
+      final clientRequestId = docRef.id;
+      await docRef.set({
+        'id': docRef.id,
+        'clientRequestId': clientRequestId,
+        'cashSessionId': cashSessionId,
+        'businessDate': session.businessDate,
+        ..._currentBranchFields,
+        'amount': amount,
+        'reason': reason.trim(),
+        'source': paymentSource,
+        'sourceName': paymentSource,
+        'supplierId': supplierId.trim(),
+        'hasReceipt': hasReceipt,
+        'requestedByEmployeeId': employee?.id ?? '',
+        'requestedByEmployeeName': employee?.name ?? '',
+        'requestedByDeviceId': _auth.currentUser?.uid ?? '',
+        'requestedAt': FieldValue.serverTimestamp(),
+        'status': 'pending',
+        'policyId': cleanPolicyId,
+        'policyEvaluationMode': 'offline',
+        'policyDecisionReasonCode': 'offline',
+        'policyDecisionMessage':
+            'La autorizacion automatica requiere conexion.',
+        'policyEvaluationReason':
+            'La autorizacion automatica requiere conexion.',
+        'autoApproved': false,
+        'wouldAutoApprove': false,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      return;
     }
-    await _submitExpenseRequestFunction(
+    await _submitLocalExpensePolicyRequest(
       cashSessionId: cashSessionId,
       businessDate: session.businessDate,
       amount: amount,
@@ -7037,7 +7071,7 @@ class TacoPosRepository {
     );
   }
 
-  Future<Map<String, dynamic>> _submitExpenseRequestFunction({
+  Future<Map<String, dynamic>> _submitLocalExpensePolicyRequest({
     required String cashSessionId,
     required String businessDate,
     required double amount,
@@ -7048,58 +7082,115 @@ class TacoPosRepository {
     required bool hasReceipt,
     required Employee? employee,
   }) async {
-    _logSubmitExpenseRequestMarker('expense-request: cash-session-ready');
-    return submitExpenseRequestWithPreparedSession(
-      authSession: _expenseRequestAuthSession,
-      deviceSession: _expenseRequestDeviceSession,
-      functionClient: _expenseRequestFunctionClient,
-      payload: ExpenseRequestFunctionPayload(
-        restaurantId: AppConstants.restaurantId,
-        branchId: AppSession.instance.currentBranchId,
-        policyId: policyId,
-        amount: amount,
-        supplierId: supplierId,
-        paymentSource: paymentSource,
-        reason: reason.trim(),
-        requesterId: employee?.id ?? '',
-        requesterName: employee?.name ?? '',
-        requesterRole: employee?.hasAdminAccess == true ? 'admin' : 'staff',
-        businessDate: businessDate,
-        cashSessionId: cashSessionId,
-        clientRequestId: const Uuid().v4(),
-        hasReceipt: hasReceipt,
-      ),
-      debugContext: ExpenseRequestDebugContext(
-        restaurantId: AppConstants.restaurantId,
-        branchId: AppSession.instance.currentBranchId,
-        cashSessionId: cashSessionId,
-        cashSessionStatus: 'open',
-        policyId: policyId,
-        policyMode: 'unknown',
-        networkAvailable: null,
-      ),
-      debugLog: _logSubmitExpenseRequestMarker,
-    );
-  }
+    final authStatus = await _expenseRequestAuthSession.ensureReady();
+    if (!authStatus.ready) {
+      throw StateError(
+        authStatus.errorMessage ??
+            'No fue posible guardar el gasto. Intenta nuevamente.',
+      );
+    }
+    try {
+      await _expenseRequestDeviceSession.ensureReady();
+    } catch (_) {
+      throw StateError('Este dispositivo no esta registrado o activo.');
+    }
 
-  void _logSubmitExpenseRequestMarker(
-    String marker, {
-    Object? error,
-    StackTrace? stackTrace,
-  }) {
-    if (!kDebugMode) return;
-    final user = _auth.currentUser;
-    developer.log(
-      '$marker '
-      'region=${ExpenseRequestFunctionClient.expenseRequestFunctionRegion} '
-      'function=${ExpenseRequestFunctionClient.submitExpenseRequestFunctionName} '
-      'limitedUseAppCheckToken=true '
-      'authPresent=${user != null} '
-      'isAnonymous=${user?.isAnonymous}',
-      name: 'TacoPosRepository',
-      error: error,
-      stackTrace: stackTrace,
-    );
+    final clientRequestId = const Uuid().v4();
+    final requestRef = _cashWithdrawalRequestsRef.doc(clientRequestId);
+    final idempotencyRef = _restaurantRef
+        .collection('expenseRequestIdempotency')
+        .doc(clientRequestId);
+    return _db.runTransaction((tx) async {
+      final existingRequest = await tx.get(requestRef);
+      if (existingRequest.exists) {
+        final data = existingRequest.data() ?? {};
+        return {
+          'requestId': requestRef.id,
+          'expenseId': requestRef.id,
+          'status': data['status'],
+          'autoApproved': data['autoApproved'] == true,
+          'wouldAutoApprove': data['wouldAutoApprove'] == true,
+          'policyId': data['policyId'],
+          'policyVersion': data['policyVersion'],
+          'reason': data['policyDecisionMessage'],
+          'reasonCode': data['policyDecisionReasonCode'],
+        };
+      }
+
+      final settingsDoc = await tx.get(_expensePolicySettingsRef);
+      final policyRef = _expensePoliciesRef.doc(policyId);
+      final policyDoc = await tx.get(policyRef);
+      if (!policyDoc.exists) {
+        throw StateError('La politica de gasto ya no existe.');
+      }
+      final policy = ExpensePolicy.fromMap(policyDoc.id, policyDoc.data()!);
+      if (!_matchesCurrentBranch(policy.branchId)) {
+        throw StateError('La politica no corresponde a esta sucursal.');
+      }
+
+      final periodKey = expensePolicyPeriodKey(
+        policy: policy,
+        businessDate: businessDate,
+      );
+      final usageRef = _expensePolicyUsageRef.doc(
+        expensePolicyUsageDocId(
+          policyId: policy.id,
+          branchId: policy.branchId,
+          periodKey: periodKey,
+        ),
+      );
+      final usageDoc = await tx.get(usageRef);
+      final usage = ExpensePolicyUsage.fromMap(
+        usageRef.id,
+        usageDoc.data() ??
+            {
+              'policyId': policy.id,
+              'branchId': policy.branchId,
+              'periodKey': periodKey,
+            },
+      );
+      final serverNow = FieldValue.serverTimestamp();
+      final plan = buildLocalExpenseTransactionPlan(
+        input: LocalExpenseRequestInput(
+          restaurantId: AppSession.instance.currentRestaurantId,
+          restaurantName: AppSession.instance.currentRestaurantName,
+          branchId: AppSession.instance.currentBranchId,
+          branchName: AppSession.instance.currentBranchName,
+          cashSessionId: cashSessionId,
+          businessDate: businessDate,
+          amount: amount,
+          reason: reason,
+          policy: policy,
+          settings: ExpensePolicySettings.fromMap(settingsDoc.data()),
+          paymentSource: paymentSource,
+          supplierId: supplierId,
+          hasReceipt: hasReceipt,
+          clientRequestId: clientRequestId,
+          requesterId: employee?.id ?? '',
+          requesterName: employee?.name ?? '',
+          requesterRole: employee?.hasAdminAccess == true ? 'admin' : 'staff',
+          deviceId: _auth.currentUser?.uid ?? '',
+        ),
+        usage: usage,
+        serverTimestamp: serverNow,
+      );
+      tx.set(requestRef, plan.requestData);
+      if (plan.usageData != null) {
+        tx.set(usageRef, plan.usageData!, SetOptions(merge: true));
+      }
+      tx.set(
+        _restaurantRef.collection('activityLog').doc(),
+        plan.activityLogData,
+      );
+      tx.set(idempotencyRef, {
+        'clientRequestId': clientRequestId,
+        'requestId': requestRef.id,
+        'result': plan.result(usage.amountUsed),
+        'createdAt': serverNow,
+        'uid': _auth.currentUser?.uid ?? '',
+      });
+      return plan.result(usage.amountUsed);
+    });
   }
 
   Future<void> authorizeCashWithdrawal({
@@ -7140,6 +7231,114 @@ class TacoPosRepository {
         'rejectReason': cleanNotes,
       },
       'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<Map<String, dynamic>> cancelCashWithdrawalRequest({
+    required String requestId,
+    required String reason,
+  }) async {
+    final cleanRequestId = requestId.trim();
+    final cleanReason = reason.trim();
+    if (cleanRequestId.isEmpty || cleanReason.isEmpty) {
+      throw ArgumentError('Faltan datos para cancelar.');
+    }
+    final uid = _auth.currentUser?.uid ?? '';
+    if (uid.isEmpty) {
+      throw StateError('No fue posible guardar el gasto. Intenta nuevamente.');
+    }
+    final expenseRef = _cashWithdrawalRequestsRef.doc(cleanRequestId);
+    return _db.runTransaction((tx) async {
+      final expenseDoc = await tx.get(expenseRef);
+      if (!expenseDoc.exists) {
+        throw StateError('La solicitud ya no existe.');
+      }
+      final data = expenseDoc.data() ?? {};
+      if (data['cancelledAt'] != null || data['status'] == 'cancelled') {
+        return {
+          'requestId': cleanRequestId,
+          'status': 'cancelled',
+          'restored': false,
+          'reason': 'already_cancelled',
+        };
+      }
+
+      final policyId = (data['policyId'] as String? ?? '').trim();
+      final policyVersion = data['policyVersion'] is num
+          ? (data['policyVersion'] as num).toInt()
+          : 0;
+      final autoApproved = data['autoApproved'] == true;
+      var restored = false;
+      final now = FieldValue.serverTimestamp();
+      if (policyId.isNotEmpty && autoApproved) {
+        final policyRef = _expensePoliciesRef.doc(policyId);
+        final policyDoc = await tx.get(policyRef);
+        if (policyDoc.exists) {
+          final policy = ExpensePolicy.fromMap(policyDoc.id, policyDoc.data()!);
+          final periodKey = expensePolicyPeriodKey(
+            policy: policy,
+            businessDate: data['businessDate'] as String? ?? '',
+          );
+          final usageRef = _expensePolicyUsageRef.doc(
+            expensePolicyUsageDocId(
+              policyId: policy.id,
+              branchId: policy.branchId,
+              periodKey: periodKey,
+            ),
+          );
+          final usageDoc = await tx.get(usageRef);
+          final usage = ExpensePolicyUsage.fromMap(
+            usageRef.id,
+            usageDoc.data() ??
+                {
+                  'policyId': policy.id,
+                  'branchId': policy.branchId,
+                  'periodKey': periodKey,
+                },
+          );
+          if (policy.restoreQuotaOnCancellation &&
+              usage.expenseIds.contains(cleanRequestId)) {
+            tx.set(
+              usageRef,
+              restoredUsageData(
+                usage: usage,
+                requestId: cleanRequestId,
+                amount: data['amount'] is num
+                    ? (data['amount'] as num).toDouble()
+                    : 0,
+                serverTimestamp: now,
+              ),
+              SetOptions(merge: true),
+            );
+            restored = true;
+          }
+        }
+      }
+
+      tx.update(
+        expenseRef,
+        buildCancelledExpenseUpdate(
+          serverTimestamp: now,
+          cancelledByUid: uid,
+          reason: cleanReason,
+          quotaRestored: restored,
+          policyVersion: policyVersion,
+        ),
+      );
+      tx.set(_restaurantRef.collection('activityLog').doc(), {
+        'type': 'EXPENSE_CANCELLED_DEVICE',
+        'expenseId': cleanRequestId,
+        'policyId': policyId,
+        'quotaRestored': restored,
+        'reason': cleanReason,
+        'uid': uid,
+        'createdAt': now,
+      });
+      return {
+        'requestId': cleanRequestId,
+        'status': 'cancelled',
+        'restored': restored,
+      };
     });
   }
 
@@ -10192,11 +10391,12 @@ class TacoPosRepository {
 
   Future<List<ExpensePolicy>> getActiveExpensePoliciesOnce() async {
     final snapshot = await _expensePoliciesRef
-        .where('active', isEqualTo: true)
+        .where('branchId', isEqualTo: AppSession.instance.currentBranchId)
         .get();
     return snapshot.docs
         .map((doc) => ExpensePolicy.fromMap(doc.id, doc.data()))
         .where((policy) => _matchesCurrentBranch(policy.branchId))
+        .where((policy) => policy.active)
         .toList()
       ..sort((a, b) => a.name.compareTo(b.name));
   }
@@ -10204,6 +10404,20 @@ class TacoPosRepository {
   Stream<List<ExpensePolicyUsage>> watchExpensePolicyUsage(String policyId) {
     return _expensePolicyUsageRef
         .where('policyId', isEqualTo: policyId)
+        .snapshots()
+        .map(
+          (snapshot) =>
+              snapshot.docs
+                  .map((doc) => ExpensePolicyUsage.fromMap(doc.id, doc.data()))
+                  .where((usage) => _matchesCurrentBranch(usage.branchId))
+                  .toList()
+                ..sort((a, b) => b.periodKey.compareTo(a.periodKey)),
+        );
+  }
+
+  Stream<List<ExpensePolicyUsage>> watchCurrentBranchExpensePolicyUsage() {
+    return _expensePolicyUsageRef
+        .where('branchId', isEqualTo: AppSession.instance.currentBranchId)
         .snapshots()
         .map(
           (snapshot) =>

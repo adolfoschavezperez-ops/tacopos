@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -267,10 +269,10 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
   }
 
   Future<void> _requestWithdrawal(CashSession session) async {
-    final sent = await showDialog<bool>(
-      context: context,
-      builder: (_) =>
-          _WithdrawalRequestDialog(repository: _repository, session: session),
+    final sent = await showWithdrawalRequestDialog(
+      context,
+      repository: _repository,
+      session: session,
     );
 
     if (!mounted || sent != true) {
@@ -369,6 +371,18 @@ class _CashSessionScreenState extends State<CashSessionScreen> {
       ),
     );
   }
+}
+
+Future<bool?> showWithdrawalRequestDialog(
+  BuildContext context, {
+  required TacoPosRepository repository,
+  required CashSession session,
+}) {
+  return showDialog<bool>(
+    context: context,
+    builder: (_) =>
+        WithdrawalRequestDialog(repository: repository, session: session),
+  );
 }
 
 class _CashCloseDiffRow extends StatelessWidget {
@@ -591,43 +605,93 @@ class _OpenSessionPanel extends StatelessWidget {
   }
 }
 
-class _WithdrawalRequestDialog extends StatefulWidget {
-  const _WithdrawalRequestDialog({
+class WithdrawalRequestDialog extends StatefulWidget {
+  const WithdrawalRequestDialog({
     required this.repository,
     required this.session,
+    super.key,
   });
 
   final TacoPosRepository repository;
   final CashSession session;
 
   @override
-  State<_WithdrawalRequestDialog> createState() =>
+  State<WithdrawalRequestDialog> createState() =>
       _WithdrawalRequestDialogState();
 }
 
-class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
+class _WithdrawalRequestDialogState extends State<WithdrawalRequestDialog> {
   final _amountController = TextEditingController();
   final _reasonController = TextEditingController();
   final _amountFocusNode = FocusNode();
   final _reasonFocusNode = FocusNode();
-  late final Future<List<ExpensePolicy>> _policiesFuture;
-  ExpensePolicy? _selectedPolicy;
+  StreamSubscription<List<ExpensePolicyUsage>>? _usageSubscription;
+  List<ExpensePolicy> _policies = const [];
+  List<ExpensePolicyUsage> _usageRows = const [];
+  String _selectedPolicyId = '';
+  bool _selectedPolicyAllowsFreeConcept = true;
+  bool _policyPickerOpen = false;
+  bool _policiesLoaded = false;
+  bool _usageLoaded = false;
+  bool _usageFailed = false;
   bool _saving = false;
   String _error = '';
 
   @override
   void initState() {
     super.initState();
-    _policiesFuture = widget.repository.getActiveExpensePoliciesOnce();
+    _loadPolicies();
+    _usageSubscription = widget.repository
+        .watchCurrentBranchExpensePolicyUsage()
+        .listen(
+          (usageRows) {
+            if (!mounted) return;
+            setState(() {
+              _usageRows = usageRows;
+              _usageLoaded = true;
+              _usageFailed = false;
+            });
+            _clearUnavailableSelection();
+          },
+          onError: (_) {
+            if (!mounted) return;
+            setState(() {
+              _usageRows = const [];
+              _usageLoaded = true;
+              _usageFailed = true;
+            });
+            _clearUnavailableSelection();
+          },
+        );
   }
 
   @override
   void dispose() {
+    unawaited(_usageSubscription?.cancel());
     _amountController.dispose();
     _reasonController.dispose();
     _amountFocusNode.dispose();
     _reasonFocusNode.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPolicies() async {
+    try {
+      final policies = await widget.repository.getActiveExpensePoliciesOnce();
+      if (!mounted) return;
+      setState(() {
+        _policies = policies;
+        _policiesLoaded = true;
+      });
+      _clearUnavailableSelection();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _policies = const [];
+        _policiesLoaded = true;
+        _error = 'No fue posible cargar los tipos de gasto.';
+      });
+    }
   }
 
   Future<void> _submit() async {
@@ -657,7 +721,7 @@ class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
         cashSessionId: widget.session.id,
         amount: amount,
         reason: _reasonController.text,
-        policyId: _selectedPolicy?.id ?? '',
+        policyId: _selectedPolicyId,
         paymentSource: 'cash',
       );
       if (!mounted) {
@@ -675,88 +739,192 @@ class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
     }
   }
 
+  Map<String, ExpensePolicyAvailability> _availabilityByPolicy() {
+    final usageByPeriod = {
+      for (final usage in _usageRows) usage.periodKey: usage,
+    };
+    return {
+      for (final policy in _policies)
+        policy.id: evaluateExpensePolicyAvailability(
+          policy: policy,
+          usage: _usageFailed
+              ? null
+              : _usageForCurrentPeriod(
+                  policy: policy,
+                  usageByPeriod: usageByPeriod,
+                ),
+          businessDate: widget.session.businessDate,
+          usageLoaded: _usageLoaded,
+        ),
+    };
+  }
+
+  bool _isPolicyExhausted(ExpensePolicyAvailability? availability) {
+    return availability?.reasonCode == 'max_uses' ||
+        availability?.reasonCode == 'max_period_amount';
+  }
+
+  List<ExpensePolicy> _selectablePolicies(
+    Map<String, ExpensePolicyAvailability> availabilityByPolicy,
+  ) {
+    return _policies
+        .where((policy) => !_isPolicyExhausted(availabilityByPolicy[policy.id]))
+        .toList();
+  }
+
+  ExpensePolicyUsage? _usageForCurrentPeriod({
+    required ExpensePolicy policy,
+    required Map<String, ExpensePolicyUsage> usageByPeriod,
+  }) {
+    final periodKey = expensePolicyPeriodKey(
+      policy: policy,
+      businessDate: widget.session.businessDate,
+    );
+    return usageByPeriod[periodKey] ??
+        ExpensePolicyUsage(
+          id: '',
+          policyId: policy.id,
+          branchId: policy.branchId,
+          periodKey: periodKey,
+        );
+  }
+
+  ExpensePolicy? _findPolicy(List<ExpensePolicy> policies, String policyId) {
+    for (final policy in policies) {
+      if (policy.id == policyId) return policy;
+    }
+    return null;
+  }
+
+  void _clearUnavailableSelection() {
+    if (_selectedPolicyId.isEmpty || !_policiesLoaded) return;
+    final policy = _findPolicy(_policies, _selectedPolicyId);
+    final availability = policy == null
+        ? null
+        : _availabilityByPolicy()[_selectedPolicyId];
+    if (policy != null && !_isPolicyExhausted(availability)) return;
+    if (!mounted) return;
+    setState(() {
+      _selectedPolicyId = '';
+      _selectedPolicyAllowsFreeConcept = true;
+      _reasonController.clear();
+    });
+  }
+
+  Widget _buildPolicySelector() {
+    final availabilityByPolicy = _availabilityByPolicy();
+    final policies = _selectablePolicies(availabilityByPolicy);
+    final selectedPolicy = _findPolicy(policies, _selectedPolicyId);
+    return Column(
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: _saving
+              ? null
+              : () => setState(() => _policyPickerOpen = !_policyPickerOpen),
+          child: InputDecorator(
+            decoration: const InputDecoration(labelText: 'Tipo de gasto'),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    !_policiesLoaded
+                        ? 'Cargando tipos de gasto'
+                        : selectedPolicy?.name ?? 'Solicitud manual',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                Icon(_policyPickerOpen ? Icons.expand_less : Icons.expand_more),
+              ],
+            ),
+          ),
+        ),
+        if (_policyPickerOpen) ...[
+          const SizedBox(height: 8),
+          _InlinePolicyPicker(
+            policies: policies,
+            selectedPolicyId: _selectedPolicyId,
+            onManualSelected: () => _selectPolicy(''),
+            onPolicySelected: _selectPolicy,
+          ),
+        ],
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  void _selectPolicy(String selectedId) {
+    final policy = _findPolicy(
+      _selectablePolicies(_availabilityByPolicy()),
+      selectedId,
+    );
+    setState(() {
+      _selectedPolicyId = selectedId;
+      _policyPickerOpen = false;
+      if (policy != null && !policy.allowFreeConcept) {
+        _selectedPolicyAllowsFreeConcept = false;
+        _reasonController.text = policy.name;
+      } else if (policy == null) {
+        _selectedPolicyAllowsFreeConcept = true;
+        _reasonController.clear();
+      } else {
+        _selectedPolicyAllowsFreeConcept = true;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final targetWidth = size.width < 380 ? size.width - 32 : size.width * 0.85;
+    final dialogWidth = targetWidth.clamp(280.0, 780.0).toDouble();
     return AlertDialog(
       title: const Text('Solicitar retiro'),
-      content: SizedBox(
-        width: 420,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            FutureBuilder<List<ExpensePolicy>>(
-              future: _policiesFuture,
-              builder: (context, snapshot) {
-                final policies = snapshot.data ?? const <ExpensePolicy>[];
-                if (policies.isEmpty) return const SizedBox.shrink();
-                return Column(
-                  children: [
-                    DropdownButtonFormField<ExpensePolicy>(
-                      initialValue: _selectedPolicy,
-                      decoration: const InputDecoration(
-                        labelText: 'Tipo de gasto',
-                      ),
-                      items: [
-                        const DropdownMenuItem<ExpensePolicy>(
-                          value: null,
-                          child: Text('Solicitud manual'),
-                        ),
-                        ...policies.map(
-                          (policy) => DropdownMenuItem(
-                            value: policy,
-                            child: Text(policy.name),
-                          ),
-                        ),
-                      ],
-                      onChanged: _saving
-                          ? null
-                          : (policy) {
-                              setState(() {
-                                _selectedPolicy = policy;
-                                if (policy != null &&
-                                    !policy.allowFreeConcept) {
-                                  _reasonController.text = policy.name;
-                                }
-                              });
-                            },
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                );
-              },
-            ),
-            TextField(
-              controller: _amountController,
-              focusNode: _amountFocusNode,
-              enabled: !_saving,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(
-                labelText: 'Monto',
-                prefixText: '\$ ',
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _reasonController,
-              focusNode: _reasonFocusNode,
-              enabled: !_saving && (_selectedPolicy?.allowFreeConcept ?? true),
-              minLines: 2,
-              maxLines: 4,
-              decoration: const InputDecoration(labelText: 'Motivo'),
-            ),
-            if (_error.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Text(
-                _error,
-                style: const TextStyle(
-                  color: BrandColors.danger,
-                  fontWeight: FontWeight.w700,
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          minWidth: dialogWidth,
+          maxWidth: dialogWidth,
+          maxHeight: MediaQuery.sizeOf(context).height * 0.58,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildPolicySelector(),
+              TextField(
+                controller: _amountController,
+                focusNode: _amountFocusNode,
+                enabled: !_saving,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Monto',
+                  prefixText: '\$ ',
                 ),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _reasonController,
+                focusNode: _reasonFocusNode,
+                enabled: !_saving && _selectedPolicyAllowsFreeConcept,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Motivo'),
+              ),
+              if (_error.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error,
+                  style: const TextStyle(
+                    color: BrandColors.danger,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
       actions: [
@@ -769,6 +937,85 @@ class _WithdrawalRequestDialogState extends State<_WithdrawalRequestDialog> {
           child: Text(_saving ? 'Enviando...' : 'Enviar'),
         ),
       ],
+    );
+  }
+}
+
+class _InlinePolicyPicker extends StatelessWidget {
+  const _InlinePolicyPicker({
+    required this.policies,
+    required this.selectedPolicyId,
+    required this.onManualSelected,
+    required this.onPolicySelected,
+  });
+
+  final List<ExpensePolicy> policies;
+  final String selectedPolicyId;
+  final VoidCallback onManualSelected;
+  final ValueChanged<String> onPolicySelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxHeight: 260),
+      decoration: BoxDecoration(
+        color: BrandColors.surfaceHigh,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: BrandColors.glassBorder),
+      ),
+      child: ListView(
+        shrinkWrap: true,
+        padding: EdgeInsets.zero,
+        children: [
+          ListTile(
+            dense: true,
+            title: const Text(
+              'Solicitud manual',
+              style: TextStyle(fontWeight: FontWeight.w800),
+            ),
+            selected: selectedPolicyId.isEmpty,
+            onTap: onManualSelected,
+            trailing: selectedPolicyId.isEmpty
+                ? const Icon(Icons.check, color: BrandColors.accentYellow)
+                : null,
+          ),
+          for (final policy in policies)
+            _PolicyPickerTile(
+              policy: policy,
+              selected: policy.id == selectedPolicyId,
+              onSelected: () => onPolicySelected(policy.id),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PolicyPickerTile extends StatelessWidget {
+  const _PolicyPickerTile({
+    required this.policy,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final ExpensePolicy policy;
+  final bool selected;
+  final VoidCallback onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      selected: selected,
+      onTap: onSelected,
+      title: Text(
+        policy.name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontWeight: FontWeight.w800),
+      ),
+      trailing: selected
+          ? const Icon(Icons.check, color: BrandColors.accentYellow)
+          : null,
     );
   }
 }

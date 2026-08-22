@@ -172,15 +172,18 @@ void main() {
     );
   });
 
-  test('repository writes unitCost without changing Android version', () {
-    final repositorySource = File(
-      'lib/services/taco_pos_repository.dart',
-    ).readAsStringSync();
-    final pubspec = File('pubspec.yaml').readAsStringSync();
+  test(
+    'repository writes unitCost and keeps current Android release version',
+    () {
+      final repositorySource = File(
+        'lib/services/taco_pos_repository.dart',
+      ).readAsStringSync();
+      final pubspec = File('pubspec.yaml').readAsStringSync();
 
-    expect(repositorySource, contains("'unitCost': unitCost"));
-    expect(pubspec, contains('version: 1.5.6+23'));
-  });
+      expect(repositorySource, contains("'unitCost': unitCost"));
+      expect(pubspec, contains('version: 1.5.7+24'));
+    },
+  );
 }
 
 Map<String, dynamic> _productMap({double price = 45, Object? unitCost}) {
