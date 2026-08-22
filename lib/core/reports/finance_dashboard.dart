@@ -1239,6 +1239,12 @@ String financePurchaseBusinessDate(SupplierPurchase purchase) {
       _dateKey(purchase.purchaseDate);
 }
 
+String financeSupplierInvoicePeriodDate(SupplierPurchase purchase) {
+  final dueDate = purchase.dueDate;
+  if (dueDate != null) return _dateKey(dueDate);
+  return financePurchaseBusinessDate(purchase);
+}
+
 String financeSupplierPaymentBusinessDate(SupplierPayment payment) {
   return _validBusinessDate(payment.businessDate) ??
       _dateKey(payment.paymentDate);
@@ -1327,10 +1333,14 @@ FinanceDashboardBundle buildFinanceDashboard(
             (row) =>
                 !row.isCancelled &&
                 row.total >= 0 &&
-                _inRange(financePurchaseBusinessDate(row), key),
+                _inRange(financeSupplierInvoicePeriodDate(row), key),
           )
           .toList()
-        ..sort((a, b) => b.purchaseDate.compareTo(a.purchaseDate));
+        ..sort(
+          (a, b) => (b.dueDate ?? b.purchaseDate).compareTo(
+            a.dueDate ?? a.purchaseDate,
+          ),
+        );
   final supplierPayments =
       input.supplierPayments
           .where(

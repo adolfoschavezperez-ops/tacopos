@@ -1418,6 +1418,90 @@ void main() {
     expect(dashboard.supplierRows.single.balance, 400);
   });
 
+  test(
+    'factura proveedor capturada esta semana vence proxima y se excluye',
+    () {
+      final weekKey = const FinanceDashboardKey(
+        restaurantId: 'restaurant',
+        branchId: 'branch',
+        startBusinessDate: '2026-07-12',
+        endBusinessDate: '2026-07-18',
+      );
+      final dashboard = buildFinanceDashboard(
+        FinanceDashboardInput(
+          key: weekKey,
+          salesSummary: _emptySales,
+          paymentsByOrder: const {},
+          cashSessions: const [],
+          withdrawals: const [],
+          purchases: [
+            _purchase(
+              total: 1000,
+              paid: 0,
+              balance: 1000,
+              purchaseDate: DateTime(2026, 7, 12),
+              dueDate: DateTime(2026, 7, 12),
+            ),
+            _purchase(
+              total: 2000,
+              paid: 0,
+              balance: 2000,
+              purchaseDate: DateTime(2026, 7, 12),
+              dueDate: DateTime(2026, 7, 19),
+            ),
+          ],
+          supplierPayments: const [],
+          suppliers: const [],
+        ),
+      );
+
+      expect(dashboard.supplierInvoicesTotal, 1000);
+      expect(dashboard.purchases.map((purchase) => purchase.total), [1000]);
+    },
+  );
+
+  test(
+    'factura proveedor capturada antes se incluye en semana de vencimiento',
+    () {
+      final nextWeekKey = const FinanceDashboardKey(
+        restaurantId: 'restaurant',
+        branchId: 'branch',
+        startBusinessDate: '2026-07-19',
+        endBusinessDate: '2026-07-25',
+      );
+      final dashboard = buildFinanceDashboard(
+        FinanceDashboardInput(
+          key: nextWeekKey,
+          salesSummary: _emptySales,
+          paymentsByOrder: const {},
+          cashSessions: const [],
+          withdrawals: const [],
+          purchases: [
+            _purchase(
+              total: 1000,
+              paid: 0,
+              balance: 1000,
+              purchaseDate: DateTime(2026, 7, 12),
+              dueDate: DateTime(2026, 7, 12),
+            ),
+            _purchase(
+              total: 2000,
+              paid: 0,
+              balance: 2000,
+              purchaseDate: DateTime(2026, 7, 12),
+              dueDate: DateTime(2026, 7, 19),
+            ),
+          ],
+          supplierPayments: const [],
+          suppliers: const [],
+        ),
+      );
+
+      expect(dashboard.supplierInvoicesTotal, 2000);
+      expect(dashboard.purchases.map((purchase) => purchase.total), [2000]);
+    },
+  );
+
   test('aplica formulas de resultado operativo y saldo final', () {
     final order = _order('summary', businessDate: '2026-07-12');
     final payment = _payment('summary-payment', order.id, amount: 9000);
@@ -2431,13 +2515,16 @@ SupplierPurchase _purchase({
   String supplierId = 'supplier',
   String supplierName = 'Proveedor',
   String businessDate = '2026-07-12',
+  DateTime? purchaseDate,
+  DateTime? dueDate,
 }) {
   return SupplierPurchase(
     id: 'purchase-$supplierId-$total-$status',
     supplierId: supplierId,
     supplierName: supplierName,
-    purchaseDate: DateTime(2026, 7, 12),
+    purchaseDate: purchaseDate ?? DateTime(2026, 7, 12),
     businessDate: businessDate,
+    dueDate: dueDate,
     folio: 'F-1',
     documentType: 'invoice',
     status: status,

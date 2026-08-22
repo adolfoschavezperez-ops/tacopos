@@ -1340,6 +1340,9 @@ class TacoPosRepository {
   DocumentReference<Map<String, dynamic>> get _saleFolioSettingsRef =>
       _restaurantRef.collection('settings').doc('saleFolio');
 
+  DocumentReference<Map<String, dynamic>> get _purchaseFolioCounterRef =>
+      _restaurantRef.collection('settings').doc('purchaseFolioCounter');
+
   DocumentReference<Map<String, dynamic>> get _expensePolicySettingsRef =>
       _restaurantRef.collection('settings').doc('expensePolicies');
 
@@ -2476,6 +2479,117 @@ class TacoPosRepository {
         : purchases;
   }
 
+  Future<int> getNextSupplierPurchaseFolio() async {
+    _requirePurchaseAccess(register: true);
+    final counter = await _purchaseFolioCounterRef.get();
+    final counterLast = (counter.data()?['lastSequence'] as num?)?.toInt();
+    if (counterLast != null && counterLast >= 0) {
+      return counterLast + 1;
+    }
+    final latest = await _latestSupplierPurchaseFolioNumber();
+    return latest + 1;
+  }
+
+  Future<List<SupplierPurchase>> searchSupplierPurchasesByDueDate({
+    String? supplierId,
+    DateTime? startInclusive,
+    DateTime? endExclusive,
+    bool currentBranchOnly = true,
+  }) async {
+    _requirePurchaseAccess();
+    Query<Map<String, dynamic>> query = _supplierPurchasesRef;
+    final cleanSupplierId = supplierId?.trim() ?? '';
+    if (cleanSupplierId.isNotEmpty) {
+      query = query.where('supplierId', isEqualTo: cleanSupplierId);
+    }
+    if (startInclusive != null) {
+      query = query.where('dueDate', isGreaterThanOrEqualTo: startInclusive);
+    }
+    if (endExclusive != null) {
+      query = query.where('dueDate', isLessThan: endExclusive);
+    }
+    query = query.orderBy('dueDate');
+    final snapshot = await query.get();
+    final purchases = snapshot.docs.map(SupplierPurchase.fromDoc).toList()
+      ..sort((a, b) {
+        final byDue = _compareNullableDate(a.dueDate, b.dueDate);
+        if (byDue != 0) return byDue;
+        return b.purchaseDate.compareTo(a.purchaseDate);
+      });
+    return currentBranchOnly
+        ? _filterCurrentBranch(purchases, (purchase) => purchase.branchId)
+        : purchases;
+  }
+
+  Future<List<SupplierPurchase>> getSupplierPurchasesForSupplier({
+    required String supplierId,
+    bool currentBranchOnly = true,
+  }) async {
+    _requirePurchaseAccess();
+    final snapshot = await _supplierPurchasesRef
+        .where('supplierId', isEqualTo: supplierId.trim())
+        .orderBy('purchaseDate', descending: true)
+        .get();
+    final purchases = snapshot.docs.map(SupplierPurchase.fromDoc).toList();
+    return currentBranchOnly
+        ? _filterCurrentBranch(purchases, (purchase) => purchase.branchId)
+        : purchases;
+  }
+
+  Future<List<SupplierPayment>> searchSupplierPayments({
+    String? supplierId,
+    DateTime? startInclusive,
+    DateTime? endExclusive,
+    bool currentBranchOnly = true,
+  }) async {
+    _requirePurchaseAccess();
+    Query<Map<String, dynamic>> query = _supplierPaymentsRef;
+    final cleanSupplierId = supplierId?.trim() ?? '';
+    if (cleanSupplierId.isNotEmpty) {
+      query = query.where('supplierId', isEqualTo: cleanSupplierId);
+    }
+    if (startInclusive != null) {
+      query = query.where(
+        'paymentDate',
+        isGreaterThanOrEqualTo: startInclusive,
+      );
+    }
+    if (endExclusive != null) {
+      query = query.where('paymentDate', isLessThan: endExclusive);
+    }
+    query = query.orderBy('paymentDate', descending: true);
+    final snapshot = await query.get();
+    final payments = snapshot.docs.map(SupplierPayment.fromDoc).toList();
+    return currentBranchOnly
+        ? _filterCurrentBranch(payments, (payment) => payment.branchId)
+        : payments;
+  }
+
+  Future<List<SupplierPayment>> getSupplierPaymentsForSupplier({
+    required String supplierId,
+    bool currentBranchOnly = true,
+  }) {
+    return searchSupplierPayments(
+      supplierId: supplierId,
+      currentBranchOnly: currentBranchOnly,
+    );
+  }
+
+  Future<List<SupplierPayment>> getSupplierPaymentsForPurchase(
+    String purchaseId, {
+    bool currentBranchOnly = true,
+  }) async {
+    _requirePurchaseAccess();
+    final snapshot = await _supplierPaymentsRef
+        .where('purchaseId', isEqualTo: purchaseId.trim())
+        .orderBy('paymentDate', descending: true)
+        .get();
+    final payments = snapshot.docs.map(SupplierPayment.fromDoc).toList();
+    return currentBranchOnly
+        ? _filterCurrentBranch(payments, (payment) => payment.branchId)
+        : payments;
+  }
+
   Stream<List<SupplierPayment>> watchSupplierPayments({
     bool currentBranchOnly = true,
   }) {
@@ -3250,6 +3364,28 @@ class TacoPosRepository {
     return items;
   }
 
+  Future<int> _latestSupplierPurchaseFolioNumber() async {
+    final withCanonical = await _supplierPurchasesRef
+        .orderBy('folioNumber', descending: true)
+        .limit(1)
+        .get();
+    for (final doc in withCanonical.docs) {
+      final value = (doc.data()['folioNumber'] as num?)?.toInt();
+      if (value != null && value > 0) return value;
+    }
+    final legacy = await _supplierPurchasesRef
+        .orderBy('createdAt', descending: true)
+        .limit(50)
+        .get();
+    var latest = 0;
+    for (final doc in legacy.docs) {
+      final purchase = SupplierPurchase.fromDoc(doc);
+      final number = purchase.folioNumber;
+      if (number != null && number > latest) latest = number;
+    }
+    return latest;
+  }
+
   Future<SupplierPurchase> createSupplierPurchase({
     required Supplier supplier,
     required DateTime purchaseDate,
@@ -3274,59 +3410,74 @@ class TacoPosRepository {
         'El total final de la compra debe ser mayor a \$0.00.',
       );
     }
+    final initialLastFolio = await _latestSupplierPurchaseFolioNumber();
     final purchaseRef = _supplierPurchasesRef.doc();
-    final batch = _db.batch();
     final branchFields = _currentBranchFields;
-    batch.set(purchaseRef, {
-      'id': purchaseRef.id,
-      ...branchFields,
-      'supplierId': supplier.id,
-      'supplierName': supplier.commercialName,
-      'purchaseDate': Timestamp.fromDate(purchaseDate),
-      'dueDate': Timestamp.fromDate(dueDate),
-      'paymentWeekdaySnapshot': supplier.paymentWeekday,
-      'paymentWeekdayNameSnapshot': supplier.paymentWeekdayName,
-      'folio': folio.trim(),
-      'documentType': documentType,
-      'status': 'pending',
-      'subtotal': total,
-      'total': total,
-      'paidTotal': 0.0,
-      'balance': total,
-      'notes': notes.trim(),
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-      'createdByEmployeeId': employee?.id ?? '',
-      'createdByEmployeeName': employee?.name ?? '',
-    });
-    for (final item in items) {
-      final itemRef = purchaseRef.collection('items').doc();
-      final itemId = item.kitchenStockItemId ?? item.purchaseItemId;
-      final itemName = item.kitchenStockItemName ?? item.purchaseItemName;
-      batch.set(itemRef, {
-        'id': itemRef.id,
-        'itemId': itemId,
-        'itemName': itemName.trim(),
-        'purchaseItemId': item.purchaseItemId,
-        'purchaseItemName': item.purchaseItemName.trim(),
-        'kitchenStockItemId': item.kitchenStockItemId,
-        'kitchenStockItemName': item.kitchenStockItemName,
-        'affectsKitchenStock': item.affectsKitchenStock,
-        'affectsKitchenPerformance': item.affectsKitchenStock,
-        'quantity': item.quantity,
-        'unit': item.unit,
-        'unitCost': item.unitCostCalculated,
-        'unitCostCalculated': item.unitCostCalculated,
-        'lineTotal': item.lineTotal,
-        'lineTotalCents': item.lineTotalCents,
-        'calculationMode': item.calculationMode,
-        'total': item.lineTotal,
-        'status': 'active',
-        'notes': item.notes.trim(),
-        'updatedAt': FieldValue.serverTimestamp(),
+    final assignedFolio = await _db.runTransaction<int>((transaction) async {
+      final counterDoc = await transaction.get(_purchaseFolioCounterRef);
+      final currentLast =
+          (counterDoc.data()?['lastSequence'] as num?)?.toInt() ??
+          initialLastFolio;
+      final nextFolio = currentLast + 1;
+      final now = FieldValue.serverTimestamp();
+      transaction.set(_purchaseFolioCounterRef, {
+        'lastSequence': nextFolio,
+        'updatedAt': now,
+        'updatedByEmployeeId': employee?.id ?? '',
+        'updatedByEmployeeName': employee?.name ?? '',
+      }, SetOptions(merge: true));
+      transaction.set(purchaseRef, {
+        'id': purchaseRef.id,
+        ...branchFields,
+        'supplierId': supplier.id,
+        'supplierName': supplier.commercialName,
+        'purchaseDate': Timestamp.fromDate(purchaseDate),
+        'dueDate': Timestamp.fromDate(dueDate),
+        'paymentWeekdaySnapshot': supplier.paymentWeekday,
+        'paymentWeekdayNameSnapshot': supplier.paymentWeekdayName,
+        'folio': nextFolio.toString(),
+        'folioNumber': nextFolio,
+        'documentType': documentType,
+        'status': 'pending',
+        'subtotal': total,
+        'total': total,
+        'paidTotal': 0.0,
+        'balance': total,
+        'notes': notes.trim(),
+        'createdAt': now,
+        'updatedAt': now,
+        'createdByEmployeeId': employee?.id ?? '',
+        'createdByEmployeeName': employee?.name ?? '',
       });
-    }
-    await batch.commit();
+      for (final item in items) {
+        final itemRef = purchaseRef.collection('items').doc();
+        final itemId = item.kitchenStockItemId ?? item.purchaseItemId;
+        final itemName = item.kitchenStockItemName ?? item.purchaseItemName;
+        transaction.set(itemRef, {
+          'id': itemRef.id,
+          'itemId': itemId,
+          'itemName': itemName.trim(),
+          'purchaseItemId': item.purchaseItemId,
+          'purchaseItemName': item.purchaseItemName.trim(),
+          'kitchenStockItemId': item.kitchenStockItemId,
+          'kitchenStockItemName': item.kitchenStockItemName,
+          'affectsKitchenStock': item.affectsKitchenStock,
+          'affectsKitchenPerformance': item.affectsKitchenStock,
+          'quantity': item.quantity,
+          'unit': item.unit,
+          'unitCost': item.unitCostCalculated,
+          'unitCostCalculated': item.unitCostCalculated,
+          'lineTotal': item.lineTotal,
+          'lineTotalCents': item.lineTotalCents,
+          'calculationMode': item.calculationMode,
+          'total': item.lineTotal,
+          'status': 'active',
+          'notes': item.notes.trim(),
+          'updatedAt': now,
+        });
+      }
+      return nextFolio;
+    });
     return SupplierPurchase(
       id: purchaseRef.id,
       restaurantId: branchFields['restaurantId']?.toString() ?? '',
@@ -3339,7 +3490,8 @@ class TacoPosRepository {
       dueDate: dueDate,
       paymentWeekdaySnapshot: supplier.paymentWeekday,
       paymentWeekdayNameSnapshot: supplier.paymentWeekdayName,
-      folio: folio.trim(),
+      folio: assignedFolio.toString(),
+      folioNumber: assignedFolio,
       documentType: documentType,
       status: 'pending',
       subtotal: total,
@@ -3426,6 +3578,7 @@ class TacoPosRepository {
       'paymentWeekdaySnapshot': supplier.paymentWeekday,
       'paymentWeekdayNameSnapshot': supplier.paymentWeekdayName,
       'folio': folio.trim(),
+      'folioNumber': int.tryParse(folio.trim()),
       'documentType': documentType,
       'status': nextStatus,
       'subtotal': total,
@@ -5210,6 +5363,10 @@ class TacoPosRepository {
         .get();
     final purchasesFuture = Future.wait([
       _supplierPurchasesRef
+          .where('dueDate', isGreaterThanOrEqualTo: start)
+          .where('dueDate', isLessThan: endExclusive)
+          .get(),
+      _supplierPurchasesRef
           .where('purchaseDate', isGreaterThanOrEqualTo: start)
           .where('purchaseDate', isLessThan: endExclusive)
           .get(),
@@ -5277,7 +5434,7 @@ class TacoPosRepository {
             .map(Supplier.fromDoc)
             .toList(growable: false),
       ),
-      firestoreQueries: report.firestoreQueries + 7,
+      firestoreQueries: report.firestoreQueries + 8,
     );
   }
 
@@ -15209,6 +15366,13 @@ String _normalizeSupplierPaymentMethod(String value) {
     'partner_contribution' => 'partner_contribution',
     _ => value,
   };
+}
+
+int _compareNullableDate(DateTime? a, DateTime? b) {
+  if (a != null && b != null) return a.compareTo(b);
+  if (a != null) return -1;
+  if (b != null) return 1;
+  return 0;
 }
 
 const _defaultKitchenStockItems = [
