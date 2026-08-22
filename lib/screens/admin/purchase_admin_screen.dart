@@ -80,8 +80,8 @@ class _PurchaseData {
     required this.suppliers,
     required this.partners,
     required this.kitchenStockItems,
-    required this.purchases,
-    required this.payments,
+    this.purchases = const [],
+    this.payments = const [],
     required this.contributions,
   });
 
@@ -130,52 +130,33 @@ class _PurchaseDataScope extends StatelessWidget {
             return StreamBuilder<List<Partner>>(
               stream: repository.watchPartners(),
               builder: (context, partnersSnapshot) {
-                return StreamBuilder<List<SupplierPurchase>>(
-                  stream: repository.watchSupplierPurchases(),
-                  builder: (context, purchasesSnapshot) {
-                    return StreamBuilder<List<SupplierPayment>>(
-                      stream: repository.watchSupplierPayments(),
-                      builder: (context, paymentsSnapshot) {
-                        return StreamBuilder<List<PartnerContribution>>(
-                          stream: repository.watchPartnerContributions(),
-                          builder: (context, contributionsSnapshot) {
-                            final nestedError =
-                                partnersSnapshot.error ??
-                                purchasesSnapshot.error ??
-                                paymentsSnapshot.error ??
-                                contributionsSnapshot.error;
-                            if (nestedError != null) {
-                              return EmptyState(
-                                icon: Icons.error_outline,
-                                title: 'No se pudieron cargar compras',
-                                message: '$nestedError',
-                              );
-                            }
-                            final isLoading =
-                                !partnersSnapshot.hasData ||
-                                !purchasesSnapshot.hasData ||
-                                !paymentsSnapshot.hasData ||
-                                !contributionsSnapshot.hasData;
-                            if (isLoading) {
-                              return const LoadingPanel(
-                                message: 'Cargando compras...',
-                              );
-                            }
-                            final data = _PurchaseData(
-                              suppliers: suppliersSnapshot.data ?? const [],
-                              partners: partnersSnapshot.data ?? const [],
-                              kitchenStockItems:
-                                  kitchenSnapshot.data ?? const [],
-                              purchases: purchasesSnapshot.data ?? const [],
-                              payments: paymentsSnapshot.data ?? const [],
-                              contributions:
-                                  contributionsSnapshot.data ?? const [],
-                            );
-                            return builder(context, data);
-                          },
-                        );
-                      },
+                return StreamBuilder<List<PartnerContribution>>(
+                  stream: repository.watchPartnerContributions(),
+                  builder: (context, contributionsSnapshot) {
+                    final nestedError =
+                        partnersSnapshot.error ?? contributionsSnapshot.error;
+                    if (nestedError != null) {
+                      return EmptyState(
+                        icon: Icons.error_outline,
+                        title: 'No se pudieron cargar compras',
+                        message: '$nestedError',
+                      );
+                    }
+                    final isLoading =
+                        !partnersSnapshot.hasData ||
+                        !contributionsSnapshot.hasData;
+                    if (isLoading) {
+                      return const LoadingPanel(message: 'Cargando compras...');
+                    }
+                    final data = _PurchaseData(
+                      suppliers: suppliersSnapshot.data ?? const [],
+                      partners: partnersSnapshot.data ?? const [],
+                      kitchenStockItems: kitchenSnapshot.data ?? const [],
+                      purchases: const [],
+                      payments: const [],
+                      contributions: contributionsSnapshot.data ?? const [],
                     );
+                    return builder(context, data);
                   },
                 );
               },
@@ -292,19 +273,6 @@ class _SuppliersTabState extends State<_SuppliersTab> {
           )
         else
           ...suppliers.map((supplier) {
-            final purchases = widget.data.purchases.where(
-              (purchase) =>
-                  purchase.supplierId == supplier.id &&
-                  purchase.status != 'cancelled',
-            );
-            final balance = purchases.fold<double>(
-              0,
-              (sum, purchase) => sum + purchase.balance,
-            );
-            final purchased = purchases.fold<double>(
-              0,
-              (sum, purchase) => sum + purchase.total,
-            );
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: GlassCard(
@@ -324,8 +292,6 @@ class _SuppliersTabState extends State<_SuppliersTab> {
                     spacing: 12,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      _Metric(label: 'Compras', value: purchased),
-                      _Metric(label: 'Saldo', value: balance),
                       OutlinedButton.icon(
                         onPressed: () => _openSupplierHistory(supplier),
                         icon: const Icon(Icons.receipt_long_outlined, size: 18),
@@ -476,6 +442,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
   DateTime _dueDate = DateTime.now();
   final _lines = <PurchaseLineInput>[];
   bool _saving = false;
+  bool _loadingFolio = false;
 
   @override
   void dispose() {
@@ -515,17 +482,27 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
                         ),
                       )
                       .toList(),
-                  onChanged: (value) => setState(() {
-                    _supplierId = value;
-                    _suggestDueDate();
-                  }),
+                  onChanged: _onSupplierChanged,
                 ),
               ),
               SizedBox(
                 width: 180,
                 child: TextField(
                   controller: _folioController,
-                  decoration: const InputDecoration(labelText: 'Folio / nota'),
+                  readOnly: true,
+                  decoration: InputDecoration(
+                    labelText: 'Folio',
+                    suffixIcon: _loadingFolio
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : const Icon(Icons.lock_outline),
+                  ),
                 ),
               ),
               SizedBox(
@@ -707,6 +684,34 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
     _dueDate = _purchaseDate.add(Duration(days: supplier?.creditDays ?? 0));
   }
 
+  Future<void> _onSupplierChanged(String? value) async {
+    setState(() {
+      _supplierId = value;
+      _folioController.clear();
+      _suggestDueDate();
+    });
+    if (value == null || value.isEmpty) return;
+    await _loadNextFolio();
+  }
+
+  Future<void> _loadNextFolio() async {
+    setState(() => _loadingFolio = true);
+    try {
+      final folio = await widget.repository.getNextSupplierPurchaseFolio();
+      if (!mounted) return;
+      setState(() => _folioController.text = folio.toString());
+    } catch (error) {
+      if (!mounted) return;
+      showAppSnackBar(
+        context,
+        'No se pudo precargar el folio. Se asignara al guardar.',
+        type: AppSnackBarType.warning,
+      );
+    } finally {
+      if (mounted) setState(() => _loadingFolio = false);
+    }
+  }
+
   Future<void> _addLine() async {
     final line = await showDialog<PurchaseLineInput>(
       context: context,
@@ -770,10 +775,11 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
       );
       if (!mounted) return;
       setState(() {
-        _folioController.clear();
         _notesController.clear();
         _lines.clear();
       });
+      await _loadNextFolio();
+      if (!mounted) return;
       showAppSnackBar(
         context,
         'Compra registrada.',
@@ -814,12 +820,19 @@ class _AccountsPayableTab extends StatefulWidget {
 
 class _AccountsPayableTabState extends State<_AccountsPayableTab> {
   String _status = 'open';
+  String _supplierId = '';
+  DateTime? _startDate;
+  DateTime? _endDate;
+  bool _searched = false;
+  bool _loading = false;
+  String? _error;
+  List<SupplierPurchase> _purchases = const [];
 
   @override
   Widget build(BuildContext context) {
     final canCancelPurchase = _canCancelSupplierPurchase();
     final purchases =
-        widget.data.purchases.where((purchase) {
+        _purchases.where((purchase) {
           if (_status == 'open') return purchase.hasBalance;
           if (_status == 'paid') return purchase.status == 'paid';
           if (_status == 'partial') return purchase.status == 'partial';
@@ -842,22 +855,94 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
         _PurchaseHeader(
           title: 'Cuentas por pagar',
           subtitle: 'Compras pendientes, parciales y pagadas.',
-          action: _Dropdown(
-            label: 'Estado',
-            value: _status,
-            values: const {
-              'open': 'Con saldo',
-              'pending': 'Pendientes',
-              'partial': 'Parciales',
-              'paid': 'Pagadas',
-              'cancelled': 'Canceladas',
-              'all': 'Todas',
-            },
-            onChanged: (value) => setState(() => _status = value),
-          ),
         ),
         const SizedBox(height: 12),
-        if (purchases.isEmpty)
+        _FiltersWrap(
+          children: [
+            SizedBox(
+              width: 260,
+              child: DropdownButtonFormField<String>(
+                initialValue: _supplierId,
+                decoration: const InputDecoration(labelText: 'Proveedor'),
+                items: [
+                  const DropdownMenuItem(
+                    value: '',
+                    child: Text('Selecciona proveedor'),
+                  ),
+                  ...widget.data.suppliers.map(
+                    (supplier) => DropdownMenuItem(
+                      value: supplier.id,
+                      child: Text(supplier.commercialName),
+                    ),
+                  ),
+                ],
+                onChanged: (value) => setState(() {
+                  _supplierId = value ?? '';
+                  _searched = false;
+                  _purchases = const [];
+                  _error = null;
+                }),
+              ),
+            ),
+            _Dropdown(
+              label: 'Estado',
+              value: _status,
+              values: const {
+                'open': 'Con saldo',
+                'pending': 'Pendientes',
+                'partial': 'Parciales',
+                'paid': 'Pagadas',
+                'cancelled': 'Canceladas',
+                'all': 'Todas',
+              },
+              onChanged: (value) => setState(() => _status = value),
+            ),
+            OutlinedButton.icon(
+              onPressed: _loading ? null : () => _pickPayableDate(start: true),
+              icon: const Icon(Icons.event_outlined),
+              label: Text('Desde: ${_dueDateLabel(_startDate)}'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _loading ? null : () => _pickPayableDate(start: false),
+              icon: const Icon(Icons.event_available_outlined),
+              label: Text('Hasta: ${_dueDateLabel(_endDate)}'),
+            ),
+            FilledButton.icon(
+              onPressed: _loading || _supplierId.isEmpty
+                  ? null
+                  : () => _search(false),
+              icon: const Icon(Icons.search),
+              label: const Text('Buscar'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _loading ? null : () => _search(true),
+              icon: const Icon(Icons.travel_explore),
+              label: const Text('Buscar en todos los proveedores'),
+            ),
+            TextButton.icon(
+              onPressed: _loading ? null : _clear,
+              icon: const Icon(Icons.clear),
+              label: const Text('Limpiar'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (_loading)
+          const LoadingPanel(message: 'Consultando cuentas por pagar...')
+        else if (_error != null)
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'No se pudo consultar',
+            message: _error!,
+          )
+        else if (!_searched)
+          const EmptyState(
+            icon: Icons.manage_search_outlined,
+            title: 'Consulta bajo demanda',
+            message:
+                'Selecciona un proveedor o busca en todos los proveedores.',
+          )
+        else if (purchases.isEmpty)
           const EmptyState(
             icon: Icons.assignment_turned_in_outlined,
             title: 'Sin cuentas',
@@ -898,13 +983,8 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
                           onEdit: () => _editPurchaseFromRow(purchase),
                           onChangeDueDate: () => _changeDueDate(purchase),
                           onCancel: () => _cancelPurchase(purchase),
-                          onViewDetail: () => _showPurchaseDetail(
-                            context,
-                            repository: widget.repository,
-                            purchase: purchase,
-                            payments: widget.data.payments,
-                            data: widget.data,
-                          ),
+                          onViewDetail: () =>
+                              _showPurchaseDetailFromRow(purchase),
                           onPay: purchase.hasBalance
                               ? () => _payPurchase(purchase)
                               : null,
@@ -920,6 +1000,85 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
     );
   }
 
+  Future<void> _pickPayableDate({required bool start}) async {
+    final initial = start ? _startDate : _endDate;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial ?? DateTime.now(),
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (start) {
+        _startDate = picked;
+      } else {
+        _endDate = picked;
+      }
+      _searched = false;
+      _purchases = const [];
+      _error = null;
+    });
+  }
+
+  Future<void> _search(bool allSuppliers) async {
+    setState(() {
+      _loading = true;
+      _searched = true;
+      _error = null;
+      _purchases = const [];
+    });
+    try {
+      final purchases = await widget.repository
+          .searchSupplierPurchasesByDueDate(
+            supplierId: allSuppliers ? null : _supplierId,
+            startInclusive: _startDate == null
+                ? null
+                : _startOfDay(_startDate!),
+            endExclusive: _endDate == null
+                ? null
+                : _startOfDay(_endDate!).add(const Duration(days: 1)),
+          );
+      if (!mounted) return;
+      setState(() {
+        _purchases = purchases;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  void _clear() {
+    setState(() {
+      _supplierId = '';
+      _startDate = null;
+      _endDate = null;
+      _searched = false;
+      _loading = false;
+      _error = null;
+      _purchases = const [];
+    });
+  }
+
+  Future<void> _showPurchaseDetailFromRow(SupplierPurchase purchase) async {
+    final payments = await widget.repository.getSupplierPaymentsForPurchase(
+      purchase.id,
+    );
+    if (!mounted) return;
+    _showPurchaseDetail(
+      context,
+      repository: widget.repository,
+      purchase: purchase,
+      payments: payments,
+      data: widget.data,
+    );
+  }
+
   Future<void> _payPurchase(SupplierPurchase purchase) async {
     final paid = await showDialog<bool>(
       context: context,
@@ -929,6 +1088,8 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       ),
     );
     if (!mounted || paid != true) return;
+    await _search(_supplierId.isEmpty);
+    if (!mounted) return;
     showAppSnackBar(context, 'Pago registrado.', type: AppSnackBarType.success);
   }
 
@@ -978,11 +1139,11 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
   }
 
   Future<void> _cancelPurchase(SupplierPurchase purchase) async {
-    final activePayments = widget.data.payments
-        .where(
-          (payment) => payment.purchaseId == purchase.id && payment.isActive,
-        )
-        .toList();
+    final activePayments =
+        (await widget.repository.getSupplierPaymentsForPurchase(
+          purchase.id,
+        )).where((payment) => payment.isActive).toList();
+    if (!mounted) return;
     if (activePayments.isNotEmpty) {
       showAppSnackBar(
         context,
@@ -1008,6 +1169,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
         'Compra cancelada.',
         type: AppSnackBarType.success,
       );
+      await _search(_supplierId.isEmpty);
     } catch (error) {
       if (!mounted) return;
       showAppSnackBar(
@@ -1115,10 +1277,22 @@ class _SupplierPaymentsTab extends StatefulWidget {
 
 class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
   String _method = 'all';
+  String _supplierId = '';
+  DateTime? _startDate;
+  DateTime? _endDate;
+  bool _loading = true;
+  String? _error;
+  List<SupplierPayment> _payments = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _search();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final payments = widget.data.payments.where((payment) {
+    final payments = _payments.where((payment) {
       if (_method == 'all') return true;
       return payment.method == _method;
     }).toList();
@@ -1128,20 +1302,73 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
         _PurchaseHeader(
           title: 'Pagos a proveedores',
           subtitle: 'Historial de pagos aplicados.',
-          action: _Dropdown(
-            label: 'Forma',
-            value: _method,
-            values: const {
-              'all': 'Todos',
-              'cash': 'Efectivo',
-              'transfer': 'Transferencia',
-              'partner_contribution': 'Aportacion de socios',
-            },
-            onChanged: (value) => setState(() => _method = value),
-          ),
         ),
         const SizedBox(height: 12),
-        if (payments.isEmpty)
+        _FiltersWrap(
+          children: [
+            SizedBox(
+              width: 260,
+              child: DropdownButtonFormField<String>(
+                initialValue: _supplierId,
+                decoration: const InputDecoration(labelText: 'Proveedor'),
+                items: [
+                  const DropdownMenuItem(
+                    value: '',
+                    child: Text('Todos los proveedores'),
+                  ),
+                  ...widget.data.suppliers.map(
+                    (supplier) => DropdownMenuItem(
+                      value: supplier.id,
+                      child: Text(supplier.commercialName),
+                    ),
+                  ),
+                ],
+                onChanged: (value) => setState(() => _supplierId = value ?? ''),
+              ),
+            ),
+            _Dropdown(
+              label: 'Forma',
+              value: _method,
+              values: const {
+                'all': 'Todos',
+                'cash': 'Efectivo',
+                'transfer': 'Transferencia',
+                'partner_contribution': 'Aportacion de socios',
+              },
+              onChanged: (value) => setState(() => _method = value),
+            ),
+            OutlinedButton.icon(
+              onPressed: _loading ? null : () => _pickPaymentDate(start: true),
+              icon: const Icon(Icons.event_outlined),
+              label: Text('Desde: ${_dueDateLabel(_startDate)}'),
+            ),
+            OutlinedButton.icon(
+              onPressed: _loading ? null : () => _pickPaymentDate(start: false),
+              icon: const Icon(Icons.event_available_outlined),
+              label: Text('Hasta: ${_dueDateLabel(_endDate)}'),
+            ),
+            FilledButton.icon(
+              onPressed: _loading ? null : _search,
+              icon: const Icon(Icons.search),
+              label: const Text('Buscar'),
+            ),
+            TextButton.icon(
+              onPressed: _loading ? null : _clear,
+              icon: const Icon(Icons.clear),
+              label: const Text('Limpiar'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (_loading)
+          const LoadingPanel(message: 'Consultando pagos...')
+        else if (_error != null)
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'No se pudieron consultar pagos',
+            message: _error!,
+          )
+        else if (payments.isEmpty)
           const EmptyState(
             icon: Icons.payments_outlined,
             title: 'Sin pagos',
@@ -1187,6 +1414,61 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
       ],
     );
   }
+
+  Future<void> _pickPaymentDate({required bool start}) async {
+    final initial = start ? _startDate : _endDate;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial ?? DateTime.now(),
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (start) {
+        _startDate = picked;
+      } else {
+        _endDate = picked;
+      }
+    });
+  }
+
+  Future<void> _search() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final payments = await widget.repository.searchSupplierPayments(
+        supplierId: _supplierId,
+        startInclusive: _startDate == null ? null : _startOfDay(_startDate!),
+        endExclusive: _endDate == null
+            ? null
+            : _startOfDay(_endDate!).add(const Duration(days: 1)),
+      );
+      if (!mounted) return;
+      setState(() {
+        _payments = payments;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _clear() async {
+    setState(() {
+      _supplierId = '';
+      _startDate = null;
+      _endDate = null;
+      _method = 'all';
+    });
+    await _search();
+  }
 }
 
 class _SupplierStatementTab extends StatefulWidget {
@@ -1203,6 +1485,10 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
   String _supplierId = '';
   DateTime? _dueStart;
   DateTime? _dueEnd;
+  bool _loading = false;
+  String? _error;
+  List<SupplierPurchase> _purchases = const [];
+  List<SupplierPayment> _payments = const [];
 
   @override
   Widget build(BuildContext context) {
@@ -1223,7 +1509,10 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
                 initialValue: _supplierId,
                 decoration: const InputDecoration(labelText: 'Proveedor'),
                 items: [
-                  const DropdownMenuItem(value: '', child: Text('Todos')),
+                  const DropdownMenuItem(
+                    value: '',
+                    child: Text('Selecciona proveedor'),
+                  ),
                   ...widget.data.suppliers.map(
                     (supplier) => DropdownMenuItem(
                       value: supplier.id,
@@ -1231,16 +1520,16 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
                     ),
                   ),
                 ],
-                onChanged: (value) => setState(() => _supplierId = value ?? ''),
+                onChanged: _onSupplierChanged,
               ),
             ),
             OutlinedButton.icon(
-              onPressed: () => _pickDueBoundary(start: true),
+              onPressed: _loading ? null : () => _pickDueBoundary(start: true),
               icon: const Icon(Icons.event_outlined),
               label: Text('Vencimiento inicial: ${_dueDateLabel(_dueStart)}'),
             ),
             OutlinedButton.icon(
-              onPressed: () => _pickDueBoundary(start: false),
+              onPressed: _loading ? null : () => _pickDueBoundary(start: false),
               icon: const Icon(Icons.event_available_outlined),
               label: Text('Vencimiento final: ${_dueDateLabel(_dueEnd)}'),
             ),
@@ -1249,17 +1538,37 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
             _quickButton('Esta semana', _setWeek),
             _quickButton('Este mes', _setMonth),
             TextButton.icon(
-              onPressed: () => setState(() {
-                _dueStart = null;
-                _dueEnd = null;
-              }),
+              onPressed: () {
+                setState(() {
+                  _dueStart = null;
+                  _dueEnd = null;
+                  _purchases = const [];
+                  _payments = const [];
+                });
+                _loadSupplierStatement();
+              },
               icon: const Icon(Icons.clear),
               label: const Text('Limpiar filtro'),
             ),
           ],
         ),
         const SizedBox(height: 12),
-        if (rows.isEmpty)
+        if (_loading)
+          const LoadingPanel(message: 'Consultando estado de cuenta...')
+        else if (_error != null)
+          EmptyState(
+            icon: Icons.error_outline,
+            title: 'No se pudo consultar',
+            message: _error!,
+          )
+        else if (_supplierId.isEmpty)
+          const EmptyState(
+            icon: Icons.account_balance_wallet_outlined,
+            title: 'Selecciona proveedor',
+            message:
+                'Selecciona un proveedor para consultar su estado de cuenta.',
+          )
+        else if (rows.isEmpty)
           const EmptyState(
             icon: Icons.account_balance_wallet_outlined,
             title: 'Sin movimientos',
@@ -1279,21 +1588,17 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
 
   List<SupplierStatementRow> _buildRows() {
     final hasDueFilter = _dueStart != null || _dueEnd != null;
-    final supplierIds = _supplierId.isEmpty
-        ? <String>{
-            ...widget.data.purchases.map((purchase) => purchase.supplierId),
-            ...widget.data.payments.map((payment) => payment.supplierId),
-          }
-        : <String>{_supplierId};
+    if (_supplierId.isEmpty) return const [];
+    final supplierIds = <String>{_supplierId};
     final rows = <SupplierStatementRow>[];
     for (final supplierId in supplierIds) {
-      final purchases = widget.data.purchases.where((purchase) {
+      final purchases = _purchases.where((purchase) {
         if (purchase.supplierId != supplierId) return false;
         if (!hasDueFilter) return true;
         return _dateInRange(purchase.dueDate, _dueStart, _dueEnd);
       }).toList();
       final purchaseIds = purchases.map((purchase) => purchase.id).toSet();
-      final payments = widget.data.payments.where((payment) {
+      final payments = _payments.where((payment) {
         if (payment.supplierId != supplierId) return false;
         if (!hasDueFilter) return true;
         return purchaseIds.contains(payment.purchaseId);
@@ -1318,6 +1623,49 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
       rows.sort((a, b) => b.date.compareTo(a.date));
     }
     return rows;
+  }
+
+  Future<void> _onSupplierChanged(String? value) async {
+    setState(() {
+      _supplierId = value ?? '';
+      _purchases = const [];
+      _payments = const [];
+      _error = null;
+    });
+    if (_supplierId.isEmpty) return;
+    await _loadSupplierStatement();
+  }
+
+  Future<void> _loadSupplierStatement() async {
+    if (_supplierId.isEmpty) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _purchases = const [];
+      _payments = const [];
+    });
+    try {
+      final purchasesFuture = widget.repository.getSupplierPurchasesForSupplier(
+        supplierId: _supplierId,
+      );
+      final paymentsFuture = widget.repository.getSupplierPaymentsForSupplier(
+        supplierId: _supplierId,
+      );
+      final purchases = await purchasesFuture;
+      final payments = await paymentsFuture;
+      if (!mounted) return;
+      setState(() {
+        _purchases = purchases;
+        _payments = payments;
+        _loading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.toString();
+        _loading = false;
+      });
+    }
   }
 
   Widget _quickButton(String label, VoidCallback onPressed) {
@@ -1375,7 +1723,7 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
   }
 
   void _openPurchaseDetail(String purchaseId) {
-    final purchase = widget.data.purchases
+    final purchase = _purchases
         .where((purchase) => purchase.id == purchaseId)
         .firstOrNull;
     if (purchase == null) {
@@ -1390,13 +1738,13 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
       context,
       repository: widget.repository,
       purchase: purchase,
-      payments: widget.data.payments,
+      payments: _payments,
       data: widget.data,
     );
   }
 
   void _openCancelPayment(String paymentId) {
-    final payment = widget.data.payments
+    final payment = _payments
         .where((payment) => payment.id == paymentId)
         .firstOrNull;
     if (payment == null) {
@@ -1415,7 +1763,7 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
   }
 
   Future<void> _openChangeDueDate(String purchaseId) async {
-    final purchase = widget.data.purchases
+    final purchase = _purchases
         .where((purchase) => purchase.id == purchaseId)
         .firstOrNull;
     if (purchase == null) {
@@ -1434,6 +1782,8 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
       ),
     );
     if (!mounted || changed != true) return;
+    await _loadSupplierStatement();
+    if (!mounted) return;
     showAppSnackBar(
       context,
       'Fecha de vencimiento actualizada.',
@@ -1442,7 +1792,7 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
   }
 
   Future<void> _openEditPurchase(String purchaseId) async {
-    final purchase = widget.data.purchases
+    final purchase = _purchases
         .where((purchase) => purchase.id == purchaseId)
         .firstOrNull;
     if (purchase == null) {
@@ -1462,6 +1812,8 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
       ),
     );
     if (!mounted || saved != true) return;
+    await _loadSupplierStatement();
+    if (!mounted) return;
     showAppSnackBar(
       context,
       'Compra actualizada.',
@@ -1478,6 +1830,41 @@ class _PurchaseKardexTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return StreamBuilder<List<SupplierPurchase>>(
+      stream: repository.watchSupplierPurchases(),
+      builder: (context, purchasesSnapshot) {
+        return StreamBuilder<List<SupplierPayment>>(
+          stream: repository.watchSupplierPayments(),
+          builder: (context, paymentsSnapshot) {
+            final error = purchasesSnapshot.error ?? paymentsSnapshot.error;
+            if (error != null) {
+              return EmptyState(
+                icon: Icons.error_outline,
+                title: 'No se pudo cargar Kardex',
+                message: '$error',
+              );
+            }
+            if (!purchasesSnapshot.hasData || !paymentsSnapshot.hasData) {
+              return const LoadingPanel(message: 'Cargando Kardex...');
+            }
+            return _buildKardex(
+              context,
+              _PurchaseData(
+                suppliers: data.suppliers,
+                partners: data.partners,
+                kitchenStockItems: data.kitchenStockItems,
+                purchases: purchasesSnapshot.data ?? const [],
+                payments: paymentsSnapshot.data ?? const [],
+                contributions: data.contributions,
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildKardex(BuildContext context, _PurchaseData data) {
     final rows = <SupplierStatementRow>[];
     final supplierIds = <String>{
       ...data.purchases.map((purchase) => purchase.supplierId),

@@ -121,6 +121,7 @@ class SupplierPurchase {
     this.businessDate,
     this.dueDate,
     required this.folio,
+    this.folioNumber,
     required this.documentType,
     required this.status,
     required this.subtotal,
@@ -163,6 +164,7 @@ class SupplierPurchase {
   final String? cancelledByEmployeeName;
   final String? cancelReason;
   final String folio;
+  final int? folioNumber;
   final String documentType;
   final String status;
   final double subtotal;
@@ -204,6 +206,7 @@ class SupplierPurchase {
       cancelledByEmployeeName: data['cancelledByEmployeeName'] as String?,
       cancelReason: data['cancelReason'] as String?,
       folio: data['folio'] as String? ?? '',
+      folioNumber: _toInt(data['folioNumber']) ?? _toInt(data['folio']),
       documentType: data['documentType'] as String? ?? 'note',
       status: data['status'] as String? ?? 'pending',
       subtotal: _toDouble(data['subtotal']),
