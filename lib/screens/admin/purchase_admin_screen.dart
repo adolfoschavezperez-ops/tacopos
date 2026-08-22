@@ -695,9 +695,16 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
   }
 
   Future<void> _loadNextFolio() async {
+    final supplierId = _supplierId;
+    if (supplierId == null || supplierId.isEmpty) {
+      _folioController.clear();
+      return;
+    }
     setState(() => _loadingFolio = true);
     try {
-      final folio = await widget.repository.getNextSupplierPurchaseFolio();
+      final folio = await widget.repository.getNextSupplierPurchaseFolio(
+        supplierId,
+      );
       if (!mounted) return;
       setState(() => _folioController.text = folio.toString());
     } catch (error) {

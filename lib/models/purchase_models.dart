@@ -220,6 +220,14 @@ class SupplierPurchase {
   }
 }
 
+int nextSupplierPurchaseFolioFromNumbers(Iterable<int?> folios) {
+  var latest = 0;
+  for (final folio in folios) {
+    if (folio != null && folio > latest) latest = folio;
+  }
+  return latest + 1;
+}
+
 class SupplierPurchaseItem {
   const SupplierPurchaseItem({
     required this.id,

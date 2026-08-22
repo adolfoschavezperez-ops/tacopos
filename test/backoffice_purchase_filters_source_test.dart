@@ -44,10 +44,16 @@ void main() {
     );
   });
 
-  test('folio de compra usa counter transaccional global', () {
-    expect(repository, contains("doc('purchaseFolioCounter')"));
+  test('folio de compra usa counter transaccional por proveedor', () {
+    expect(repository, contains('supplierPurchaseFolioCounters'));
+    expect(
+      repository,
+      contains("where('supplierId', isEqualTo: cleanSupplierId)"),
+    );
+    expect(repository, contains("orderBy('folioNumber', descending: true)"));
     expect(repository, contains('runTransaction<int>'));
     expect(repository, contains("'folioNumber': nextFolio"));
     expect(repository, contains("'folio': nextFolio.toString()"));
+    expect(repository, isNot(contains("doc('purchaseFolioCounter')")));
   });
 }
