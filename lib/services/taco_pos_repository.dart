@@ -1340,8 +1340,11 @@ class TacoPosRepository {
   DocumentReference<Map<String, dynamic>> get _saleFolioSettingsRef =>
       _restaurantRef.collection('settings').doc('saleFolio');
 
-  DocumentReference<Map<String, dynamic>> get _purchaseFolioCounterRef =>
-      _restaurantRef.collection('settings').doc('purchaseFolioCounter');
+  DocumentReference<Map<String, dynamic>> _purchaseFolioCounterRef(
+    String supplierId,
+  ) => _restaurantRef
+      .collection('supplierPurchaseFolioCounters')
+      .doc(supplierId.trim());
 
   DocumentReference<Map<String, dynamic>> get _expensePolicySettingsRef =>
       _restaurantRef.collection('settings').doc('expensePolicies');
@@ -2479,14 +2482,16 @@ class TacoPosRepository {
         : purchases;
   }
 
-  Future<int> getNextSupplierPurchaseFolio() async {
+  Future<int> getNextSupplierPurchaseFolio(String supplierId) async {
     _requirePurchaseAccess(register: true);
-    final counter = await _purchaseFolioCounterRef.get();
+    final cleanSupplierId = supplierId.trim();
+    if (cleanSupplierId.isEmpty) return 1;
+    final counter = await _purchaseFolioCounterRef(cleanSupplierId).get();
     final counterLast = (counter.data()?['lastSequence'] as num?)?.toInt();
     if (counterLast != null && counterLast >= 0) {
       return counterLast + 1;
     }
-    final latest = await _latestSupplierPurchaseFolioNumber();
+    final latest = await _latestSupplierPurchaseFolioNumber(cleanSupplierId);
     return latest + 1;
   }
 
@@ -3364,8 +3369,11 @@ class TacoPosRepository {
     return items;
   }
 
-  Future<int> _latestSupplierPurchaseFolioNumber() async {
+  Future<int> _latestSupplierPurchaseFolioNumber(String supplierId) async {
+    final cleanSupplierId = supplierId.trim();
+    if (cleanSupplierId.isEmpty) return 0;
     final withCanonical = await _supplierPurchasesRef
+        .where('supplierId', isEqualTo: cleanSupplierId)
         .orderBy('folioNumber', descending: true)
         .limit(1)
         .get();
@@ -3374,16 +3382,17 @@ class TacoPosRepository {
       if (value != null && value > 0) return value;
     }
     final legacy = await _supplierPurchasesRef
+        .where('supplierId', isEqualTo: cleanSupplierId)
         .orderBy('createdAt', descending: true)
         .limit(50)
         .get();
-    var latest = 0;
+    final folios = <int>[];
     for (final doc in legacy.docs) {
       final purchase = SupplierPurchase.fromDoc(doc);
       final number = purchase.folioNumber;
-      if (number != null && number > latest) latest = number;
+      if (number != null) folios.add(number);
     }
-    return latest;
+    return nextSupplierPurchaseFolioFromNumbers(folios) - 1;
   }
 
   Future<SupplierPurchase> createSupplierPurchase({
@@ -3410,17 +3419,22 @@ class TacoPosRepository {
         'El total final de la compra debe ser mayor a \$0.00.',
       );
     }
-    final initialLastFolio = await _latestSupplierPurchaseFolioNumber();
+    final initialLastFolio = await _latestSupplierPurchaseFolioNumber(
+      supplier.id,
+    );
     final purchaseRef = _supplierPurchasesRef.doc();
     final branchFields = _currentBranchFields;
     final assignedFolio = await _db.runTransaction<int>((transaction) async {
-      final counterDoc = await transaction.get(_purchaseFolioCounterRef);
+      final counterRef = _purchaseFolioCounterRef(supplier.id);
+      final counterDoc = await transaction.get(counterRef);
       final currentLast =
           (counterDoc.data()?['lastSequence'] as num?)?.toInt() ??
           initialLastFolio;
       final nextFolio = currentLast + 1;
       final now = FieldValue.serverTimestamp();
-      transaction.set(_purchaseFolioCounterRef, {
+      transaction.set(counterRef, {
+        'supplierId': supplier.id,
+        'supplierName': supplier.commercialName,
         'lastSequence': nextFolio,
         'updatedAt': now,
         'updatedByEmployeeId': employee?.id ?? '',
