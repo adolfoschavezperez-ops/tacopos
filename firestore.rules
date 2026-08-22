@@ -46,6 +46,26 @@ service cloud.firestore {
       return signedIn() && exists(authUserPath(restaurantId));
     }
 
+    function devicePath(restaurantId) {
+      return /databases/$(database)/documents/restaurants/$(restaurantId)/devices/$(request.auth.uid);
+    }
+
+    function hasOperationalDevice(restaurantId) {
+      return signedIn() &&
+        exists(devicePath(restaurantId)) &&
+        get(devicePath(restaurantId)).data.get('active', true) != false;
+    }
+
+    function operationalDeviceBranch(restaurantId) {
+      return get(devicePath(restaurantId)).data.branchId;
+    }
+
+    function validOperationalDeviceBranch(restaurantId, branchId) {
+      return hasOperationalDevice(restaurantId) &&
+        branchId is string &&
+        operationalDeviceBranch(restaurantId) == branchId;
+    }
+
     function authUser(restaurantId) {
       return get(authUserPath(restaurantId)).data;
     }
@@ -122,8 +142,83 @@ service cloud.firestore {
         'autoApproved',
         'autoApprovedAt',
         'policyDecisionReasonCode',
-        'policyDecisionMessage'
+        'policyDecisionMessage',
+        'approvalSource',
+        'clientRequestId',
+        'amount',
+        'cashSessionId',
+        'businessDate',
+        'restaurantId',
+        'branchId'
       ]);
+    }
+
+    function validDeviceExpenseCreate(restaurantId, requestId) {
+      return validCreate(restaurantId) &&
+        validOperationalDeviceBranch(restaurantId, request.resource.data.branchId) &&
+        request.resource.data.requestedByDeviceId == request.auth.uid &&
+        request.resource.data.status in ['pending', 'approved'] &&
+        request.resource.data.autoApproved is bool &&
+        request.resource.data.wouldAutoApprove is bool &&
+        request.resource.data.amount is number &&
+        request.resource.data.amount > 0 &&
+        request.resource.data.cashSessionId is string &&
+        request.resource.data.businessDate is string &&
+        request.resource.data.policyId is string &&
+        request.resource.data.clientRequestId == requestId;
+    }
+
+    function validDeviceExpenseCancel(restaurantId) {
+      return validUpdate() &&
+        validOperationalDeviceBranch(restaurantId, resource.data.branchId) &&
+        request.resource.data.status == 'cancelled' &&
+        resource.data.status != 'cancelled' &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'status',
+          'cancelledAt',
+          'cancelledByUid',
+          'cancellationReason',
+          'quotaRestored',
+          'cancelledPolicyVersion',
+          'updatedAt'
+        ]);
+    }
+
+    function validExpenseUsageWrite(restaurantId) {
+      return signedIn() &&
+        validOperationalDeviceBranch(restaurantId, request.resource.data.branchId) &&
+        request.resource.data.policyId is string &&
+        request.resource.data.periodKey is string &&
+        request.resource.data.amountUsed is number &&
+        request.resource.data.usesUsed is number &&
+        request.resource.data.expenseIds is list &&
+        request.resource.data.keys().hasOnly([
+          'policyId',
+          'branchId',
+          'periodKey',
+          'amountUsed',
+          'usesUsed',
+          'expenseIds',
+          'updatedAt'
+        ]) &&
+        (
+          !exists(/databases/$(database)/documents/restaurants/$(restaurantId)/expensePolicies/$(request.resource.data.policyId)) ||
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)/expensePolicies/$(request.resource.data.policyId)).data.branchId == request.resource.data.branchId
+        );
+    }
+
+    function validDeviceExpenseIdempotencyCreate(restaurantId, requestId) {
+      return signedIn() &&
+        request.resource.data.clientRequestId == requestId &&
+        request.resource.data.requestId == requestId &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.keys().hasOnly([
+          'clientRequestId',
+          'requestId',
+          'result',
+          'createdAt',
+          'uid'
+        ]);
     }
 
     function validDailySaleCounterCreate(restaurantId, branchId, businessDate) {
@@ -323,14 +418,21 @@ service cloud.firestore {
 
       match /cashWithdrawalRequests/{requestId} {
         allow read: if signedIn();
-        allow create: if validCreate(restaurantId);
-        allow update: if validUpdate() &&
-          preservesExpensePolicyApprovalFields();
+        allow create: if validDeviceExpenseCreate(restaurantId, requestId) ||
+          (isBackofficeAdmin(restaurantId) && validCreate(restaurantId));
+        allow update: if (
+          isBackofficeAdmin(restaurantId) &&
+          validUpdate() &&
+          preservesExpensePolicyApprovalFields()
+        ) || validDeviceExpenseCancel(restaurantId);
         allow delete: if false;
       }
 
       match /expensePolicies/{policyId} {
-        allow read: if signedIn();
+        allow read: if validOperationalDeviceBranch(
+          restaurantId,
+          resource.data.branchId
+        ) || isBackofficeAdmin(restaurantId);
         allow create: if isBackofficeAdmin(restaurantId) &&
           validCreate(restaurantId);
         allow update: if isBackofficeAdmin(restaurantId) &&
@@ -339,9 +441,26 @@ service cloud.firestore {
       }
 
       match /expensePolicyUsage/{usageId} {
-        allow read: if signedIn();
-        allow create, update: if false;
+        allow get: if hasOperationalDevice(restaurantId) ||
+          isBackofficeAdmin(restaurantId);
+        allow list: if hasOperationalDevice(restaurantId) ||
+          isBackofficeAdmin(restaurantId);
+        allow create: if validExpenseUsageWrite(restaurantId);
+        allow update: if validExpenseUsageWrite(restaurantId) &&
+          request.resource.data.policyId == resource.data.policyId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.periodKey == resource.data.periodKey;
         allow delete: if false;
+      }
+
+      match /expenseRequestIdempotency/{requestId} {
+        allow read: if signedIn() &&
+          resource.data.uid == request.auth.uid;
+        allow create: if validDeviceExpenseIdempotencyCreate(
+          restaurantId,
+          requestId
+        );
+        allow update, delete: if false;
       }
 
       match /devices/{deviceId} {

@@ -9,6 +9,7 @@ import 'firebase_options.dart';
 import 'screens/login_screen.dart';
 import 'services/operational_session_service.dart';
 import 'widgets/app_update_gate.dart';
+import 'widgets/expense_cutoff_reminder_coordinator.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -53,6 +54,11 @@ class TacoPosApp extends StatelessWidget {
       title: kIsWeb ? 'TacoPOS Backoffice' : 'TacoPOS',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark(),
+      builder: (context, child) => kIsWeb
+          ? child ?? const SizedBox.shrink()
+          : ExpenseCutoffReminderCoordinator(
+              child: child ?? const SizedBox.shrink(),
+            ),
       home: kIsWeb
           ? const LoginGate()
           : const AppUpdateGate(child: LoginGate()),
