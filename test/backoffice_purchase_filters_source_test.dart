@@ -45,7 +45,10 @@ void main() {
   });
 
   test('folio de compra usa counter transaccional por proveedor', () {
-    expect(repository, contains('supplierPurchaseFolioCounters'));
+    expect(repository, contains("collection('settings')"));
+    expect(repository, contains('purchaseFolioCounter_'));
+    expect(repository, contains('_firestoreDocIdToken(supplierId)'));
+    expect(repository, isNot(contains('supplierPurchaseFolioCounters')));
     expect(
       repository,
       contains("where('supplierId', isEqualTo: cleanSupplierId)"),
@@ -54,6 +57,5 @@ void main() {
     expect(repository, contains('runTransaction<int>'));
     expect(repository, contains("'folioNumber': nextFolio"));
     expect(repository, contains("'folio': nextFolio.toString()"));
-    expect(repository, isNot(contains("doc('purchaseFolioCounter')")));
   });
 }
