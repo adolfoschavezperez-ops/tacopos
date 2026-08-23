@@ -1343,8 +1343,8 @@ class TacoPosRepository {
   DocumentReference<Map<String, dynamic>> _purchaseFolioCounterRef(
     String supplierId,
   ) => _restaurantRef
-      .collection('supplierPurchaseFolioCounters')
-      .doc(supplierId.trim());
+      .collection('settings')
+      .doc('purchaseFolioCounter_${_firestoreDocIdToken(supplierId)}');
 
   DocumentReference<Map<String, dynamic>> get _expensePolicySettingsRef =>
       _restaurantRef.collection('settings').doc('expensePolicies');
@@ -15387,6 +15387,14 @@ int _compareNullableDate(DateTime? a, DateTime? b) {
   if (a != null) return -1;
   if (b != null) return 1;
   return 0;
+}
+
+String _firestoreDocIdToken(String value) {
+  final clean = value.trim();
+  if (clean.isEmpty) return 'empty';
+  return clean.codeUnits
+      .map((unit) => unit.toRadixString(16).padLeft(2, '0'))
+      .join();
 }
 
 const _defaultKitchenStockItems = [
