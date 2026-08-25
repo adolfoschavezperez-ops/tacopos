@@ -20,8 +20,33 @@ import '../../utils/binary_exporter.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/loading_panel.dart';
 
+typedef FinanceDashboardLoader =
+    Future<FinanceDashboardBundle> Function({
+      required String startBusinessDate,
+      required String endBusinessDate,
+      bool forceRefresh,
+    });
+
 class FinanceMainDashboardScreen extends StatefulWidget {
-  const FinanceMainDashboardScreen({super.key});
+  const FinanceMainDashboardScreen({
+    super.key,
+    this.dashboardLoader,
+    this.hasAccessOverride,
+    this.initialStartDate,
+    this.initialEndDate,
+  });
+
+  @visibleForTesting
+  final FinanceDashboardLoader? dashboardLoader;
+
+  @visibleForTesting
+  final bool? hasAccessOverride;
+
+  @visibleForTesting
+  final DateTime? initialStartDate;
+
+  @visibleForTesting
+  final DateTime? initialEndDate;
 
   @override
   State<FinanceMainDashboardScreen> createState() =>
@@ -30,26 +55,32 @@ class FinanceMainDashboardScreen extends StatefulWidget {
 
 class _FinanceMainDashboardScreenState
     extends State<FinanceMainDashboardScreen> {
-  final TacoPosRepository _repository = TacoPosRepository();
-  late DateTime _startDate;
-  late DateTime _endDate;
+  late final TacoPosRepository _repository = TacoPosRepository();
+  DateTime? _draftStartDate;
+  DateTime? _draftEndDate;
+  DateTimeRange? _appliedDateRange;
   Future<FinanceDashboardBundle>? _future;
+  String? _validationMessage;
   bool _refreshing = false;
   bool _exporting = false;
 
-  String get _startBusinessDate => DateFormat('yyyy-MM-dd').format(_startDate);
-  String get _endBusinessDate => DateFormat('yyyy-MM-dd').format(_endDate);
+  String _businessDate(DateTime date) => DateFormat('yyyy-MM-dd').format(date);
+
   bool get _hasAccess =>
-      kIsWeb && canViewFinanceDashboard(AppSession.instance.employee);
+      widget.hasAccessOverride ??
+      (kIsWeb && canViewFinanceDashboard(AppSession.instance.employee));
+
+  DateTime? _dateOnly(DateTime? date) {
+    if (date == null) return null;
+    return DateTime(date.year, date.month, date.day);
+  }
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    _startDate = DateTime(now.year, now.month);
-    _endDate = DateTime(now.year, now.month, now.day);
+    _draftStartDate = _dateOnly(widget.initialStartDate);
+    _draftEndDate = _dateOnly(widget.initialEndDate);
     AppSession.instance.addListener(_onSessionChanged);
-    if (_hasAccess) _future = _fetch();
   }
 
   @override
@@ -61,31 +92,81 @@ class _FinanceMainDashboardScreenState
   void _onSessionChanged() {
     if (!mounted) return;
     setState(() {
-      _future = _hasAccess ? _fetch() : null;
+      _future = null;
+      _appliedDateRange = null;
+      _validationMessage = null;
+      _refreshing = false;
     });
   }
 
-  Future<FinanceDashboardBundle> _fetch({bool forceRefresh = false}) {
-    return _repository.getFinanceDashboardBundle(
-      startBusinessDate: _startBusinessDate,
-      endBusinessDate: _endBusinessDate,
+  Future<FinanceDashboardBundle> _fetch(
+    DateTimeRange range, {
+    bool forceRefresh = false,
+  }) {
+    final loader =
+        widget.dashboardLoader ?? _repository.getFinanceDashboardBundle;
+    return loader(
+      startBusinessDate: _businessDate(range.start),
+      endBusinessDate: _businessDate(range.end),
       forceRefresh: forceRefresh,
     );
   }
 
   void _reload() {
-    setState(() => _future = _fetch());
+    final range = _appliedDateRange;
+    if (range == null) return;
+    setState(() => _future = _fetch(range));
+  }
+
+  void _search() {
+    if (_draftStartDate == null || _draftEndDate == null) {
+      setState(() {
+        _validationMessage = 'Selecciona una fecha inicial y una fecha final.';
+      });
+      return;
+    }
+    var start = _draftStartDate!;
+    var end = _draftEndDate!;
+    if (end.isBefore(start)) {
+      final previousStart = start;
+      start = end;
+      end = previousStart;
+    }
+    final range = DateTimeRange(start: start, end: end);
+    final future = _fetch(range);
+    setState(() {
+      _draftStartDate = start;
+      _draftEndDate = end;
+      _appliedDateRange = range;
+      _validationMessage = null;
+      _future = future;
+    });
+  }
+
+  void _clear() {
+    setState(() {
+      _draftStartDate = null;
+      _draftEndDate = null;
+      _appliedDateRange = null;
+      _future = null;
+      _validationMessage = null;
+      _refreshing = false;
+    });
   }
 
   Future<void> _refresh() async {
     if (_refreshing || !_hasAccess) return;
+    final range = _appliedDateRange;
+    if (range == null) return;
     setState(() => _refreshing = true);
-    _repository.invalidateFinanceDashboardCache(
-      branchId: AppSession.instance.currentBranchId,
-      startBusinessDate: _startBusinessDate,
-      endBusinessDate: _endBusinessDate,
-    );
-    final future = _fetch(forceRefresh: true);
+    if (widget.dashboardLoader == null) {
+      _repository.invalidateFinanceDashboardCache(
+        branchId: AppSession.instance.currentBranchId,
+        startBusinessDate: _businessDate(range.start),
+        endBusinessDate: _businessDate(range.end),
+      );
+    }
+    final future = _fetch(range, forceRefresh: true);
     setState(() => _future = future);
     try {
       await future;
@@ -94,24 +175,33 @@ class _FinanceMainDashboardScreenState
     }
   }
 
-  Future<void> _pickRange() async {
-    final picked = await showDateRangePicker(
+  Future<void> _pickStartDate() async {
+    final picked = await showDatePicker(
       context: context,
-      initialDateRange: DateTimeRange(start: _startDate, end: _endDate),
+      initialDate: _draftStartDate ?? _draftEndDate ?? DateTime.now(),
       firstDate: DateTime(2024),
       lastDate: DateTime(DateTime.now().year + 2, 12, 31),
-      helpText: 'Periodo operativo',
-      saveText: 'Aplicar',
+      helpText: 'Fecha inicial',
     );
     if (picked == null || !mounted) return;
     setState(() {
-      _startDate = DateTime(
-        picked.start.year,
-        picked.start.month,
-        picked.start.day,
-      );
-      _endDate = DateTime(picked.end.year, picked.end.month, picked.end.day);
-      _future = _fetch();
+      _draftStartDate = DateTime(picked.year, picked.month, picked.day);
+      _validationMessage = null;
+    });
+  }
+
+  Future<void> _pickEndDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _draftEndDate ?? _draftStartDate ?? DateTime.now(),
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2, 12, 31),
+      helpText: 'Fecha final',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _draftEndDate = DateTime(picked.year, picked.month, picked.day);
+      _validationMessage = null;
     });
   }
 
@@ -121,16 +211,16 @@ class _FinanceMainDashboardScreenState
     setState(() {
       switch (preset) {
         case _DatePreset.today:
-          _startDate = today;
-          _endDate = today;
+          _draftStartDate = today;
+          _draftEndDate = today;
         case _DatePreset.week:
-          _startDate = today.subtract(Duration(days: today.weekday - 1));
-          _endDate = today;
+          _draftStartDate = today.subtract(Duration(days: today.weekday - 1));
+          _draftEndDate = today;
         case _DatePreset.month:
-          _startDate = DateTime(today.year, today.month);
-          _endDate = today;
+          _draftStartDate = DateTime(today.year, today.month);
+          _draftEndDate = today;
       }
-      _future = _fetch();
+      _validationMessage = null;
     });
   }
 
@@ -152,7 +242,7 @@ class _FinanceMainDashboardScreenState
       final branch = _fileToken(session.currentBranchName);
       final message = await exportBinaryFile(
         fileName:
-            'Reporte_Financiero_${branch}_${_startBusinessDate}_$_endBusinessDate.xlsx',
+            'Reporte_Financiero_${branch}_${bundle.key.startBusinessDate}_${bundle.key.endBusinessDate}.xlsx',
         bytes: bytes,
         mimeType:
             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -197,31 +287,34 @@ class _FinanceMainDashboardScreenState
         ),
       );
     }
-    final future = _future ??= _fetch();
     return Scaffold(
       backgroundColor: _FinanceColors.background,
       body: SafeArea(
-        child: FutureBuilder<FinanceDashboardBundle>(
-          future: future,
-          builder: (context, snapshot) {
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  padding: EdgeInsets.all(constraints.maxWidth < 900 ? 12 : 18),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 1880),
-                      child: Column(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: EdgeInsets.all(constraints.maxWidth < 900 ? 12 : 18),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 1880),
+                  child: FutureBuilder<FinanceDashboardBundle>(
+                    future: _future,
+                    builder: (context, snapshot) {
+                      return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           _DashboardHeader(
-                            startDate: _startDate,
-                            endDate: _endDate,
+                            startDate: _draftStartDate,
+                            endDate: _draftEndDate,
                             exporting: _exporting,
                             bundle: snapshot.data,
+                            validationMessage: _validationMessage,
                             onBack: _returnToBackoffice,
-                            onPickRange: _pickRange,
+                            onPickStartDate: _pickStartDate,
+                            onPickEndDate: _pickEndDate,
                             onPreset: _setPreset,
+                            onSearch: _search,
+                            onClear: _clear,
                             onExport: snapshot.data == null
                                 ? null
                                 : () => _export(snapshot.data!),
@@ -230,7 +323,9 @@ class _FinanceMainDashboardScreenState
                                 : () => _showPeriodSummary(snapshot.data!),
                           ),
                           const SizedBox(height: 14),
-                          if (snapshot.connectionState ==
+                          if (_future == null)
+                            const _DashboardEmptyPrompt()
+                          else if (snapshot.connectionState ==
                                   ConnectionState.waiting &&
                               !snapshot.hasData)
                             const SizedBox(
@@ -244,18 +339,40 @@ class _FinanceMainDashboardScreenState
                           else if (snapshot.data case final bundle?)
                             FinanceDashboardContent(
                               bundle: bundle,
-                              repository: _repository,
+                              repository: widget.dashboardLoader == null
+                                  ? _repository
+                                  : null,
                               refreshing: _refreshing,
                               onRefresh: _refresh,
                             ),
                         ],
-                      ),
-                    ),
+                      );
+                    },
                   ),
-                );
-              },
+                ),
+              ),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+class _DashboardEmptyPrompt extends StatelessWidget {
+  const _DashboardEmptyPrompt();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 360,
+      decoration: _panelDecoration(),
+      child: const Center(
+        child: EmptyState(
+          icon: Icons.manage_search_outlined,
+          title: 'Dashboard bajo demanda',
+          message:
+              'Selecciona un rango de fechas para consultar el Dashboard financiero.',
         ),
       ),
     );
@@ -268,20 +385,28 @@ class _DashboardHeader extends StatelessWidget {
     required this.endDate,
     required this.exporting,
     required this.bundle,
+    required this.validationMessage,
     required this.onBack,
-    required this.onPickRange,
+    required this.onPickStartDate,
+    required this.onPickEndDate,
     required this.onPreset,
+    required this.onSearch,
+    required this.onClear,
     required this.onExport,
     required this.onSummary,
   });
 
-  final DateTime startDate;
-  final DateTime endDate;
+  final DateTime? startDate;
+  final DateTime? endDate;
   final bool exporting;
   final FinanceDashboardBundle? bundle;
+  final String? validationMessage;
   final VoidCallback onBack;
-  final VoidCallback onPickRange;
+  final VoidCallback onPickStartDate;
+  final VoidCallback onPickEndDate;
   final ValueChanged<_DatePreset> onPreset;
+  final VoidCallback onSearch;
+  final VoidCallback onClear;
   final VoidCallback? onExport;
   final VoidCallback? onSummary;
 
@@ -348,59 +473,101 @@ class _DashboardHeader extends StatelessWidget {
           constraints: const BoxConstraints(minWidth: 520),
           padding: const EdgeInsets.all(8),
           decoration: _panelDecoration(),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              OutlinedButton.icon(
-                onPressed: onPickRange,
-                icon: const Icon(Icons.calendar_month_outlined, size: 18),
-                label: Text(
-                  '${DateFormat('dd/MM/yyyy').format(startDate)} - ${DateFormat('dd/MM/yyyy').format(endDate)}',
-                ),
-              ),
-              _PresetButton(
-                label: 'Hoy',
-                onTap: () => onPreset(_DatePreset.today),
-              ),
-              _PresetButton(
-                label: 'Semana',
-                onTap: () => onPreset(_DatePreset.week),
-              ),
-              _PresetButton(
-                label: 'Mes',
-                onTap: () => onPreset(_DatePreset.month),
-              ),
-              if (session.accessibleBranches.length > 1)
-                SizedBox(
-                  width: 180,
-                  child: DropdownButtonFormField<Branch>(
-                    initialValue: session.selectedBranch,
-                    isDense: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Sucursal',
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  OutlinedButton.icon(
+                    key: const ValueKey('finance-dashboard-start-date'),
+                    onPressed: onPickStartDate,
+                    icon: const Icon(Icons.event_outlined, size: 18),
+                    label: Text(
+                      startDate == null
+                          ? 'Fecha desde'
+                          : 'Desde ${DateFormat('dd/MM/yyyy').format(startDate!)}',
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('finance-dashboard-end-date'),
+                    onPressed: onPickEndDate,
+                    icon: const Icon(Icons.event_available_outlined, size: 18),
+                    label: Text(
+                      endDate == null
+                          ? 'Fecha hasta'
+                          : 'Hasta ${DateFormat('dd/MM/yyyy').format(endDate!)}',
+                    ),
+                  ),
+                  _PresetButton(
+                    label: 'Hoy',
+                    onTap: () => onPreset(_DatePreset.today),
+                  ),
+                  _PresetButton(
+                    label: 'Semana',
+                    onTap: () => onPreset(_DatePreset.week),
+                  ),
+                  _PresetButton(
+                    label: 'Mes',
+                    onTap: () => onPreset(_DatePreset.month),
+                  ),
+                  FilledButton.icon(
+                    key: const ValueKey('finance-dashboard-search'),
+                    onPressed: onSearch,
+                    icon: const Icon(Icons.search),
+                    label: const Text('Buscar'),
+                  ),
+                  OutlinedButton.icon(
+                    key: const ValueKey('finance-dashboard-clear'),
+                    onPressed: onClear,
+                    icon: const Icon(Icons.clear),
+                    label: const Text('Limpiar'),
+                  ),
+                  if (session.accessibleBranches.length > 1)
+                    SizedBox(
+                      width: 180,
+                      child: DropdownButtonFormField<Branch>(
+                        initialValue: session.selectedBranch,
+                        isDense: true,
+                        decoration: const InputDecoration(
+                          labelText: 'Sucursal',
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                        ),
+                        items: session.accessibleBranches
+                            .map(
+                              (branch) => DropdownMenuItem(
+                                value: branch,
+                                child: Text(
+                                  branch.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (branch) {
+                          if (branch != null) session.selectBranch(branch);
+                        },
                       ),
                     ),
-                    items: session.accessibleBranches
-                        .map(
-                          (branch) => DropdownMenuItem(
-                            value: branch,
-                            child: Text(
-                              branch.name,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (branch) {
-                      if (branch != null) session.selectBranch(branch);
-                    },
+                ],
+              ),
+              if (validationMessage != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  validationMessage!,
+                  style: const TextStyle(
+                    color: BrandColors.danger,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
                   ),
                 ),
+              ],
             ],
           ),
         ),
