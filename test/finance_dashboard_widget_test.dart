@@ -9,6 +9,105 @@ import 'package:tacopos/models/purchase_models.dart';
 import 'package:tacopos/screens/admin/finance_main_dashboard_screen.dart';
 
 void main() {
+  testWidgets('dashboard principal inicia bajo demanda sin cargar finanzas', (
+    tester,
+  ) async {
+    final loader = _FinanceDashboardLoaderSpy();
+
+    await tester.pumpWidget(_dashboardShell(loader: loader));
+    await tester.pump();
+
+    expect(loader.calls, isEmpty);
+    expect(find.text('Fecha desde'), findsOneWidget);
+    expect(find.text('Fecha hasta'), findsOneWidget);
+    expect(
+      find.text(
+        'Selecciona un rango de fechas para consultar el Dashboard financiero.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Cargando dashboard financiero...'), findsNothing);
+  });
+
+  testWidgets('dashboard no consulta con fecha inicial incompleta', (
+    tester,
+  ) async {
+    final loader = _FinanceDashboardLoaderSpy();
+
+    await tester.pumpWidget(
+      _dashboardShell(loader: loader, initialStartDate: DateTime(2026, 8, 17)),
+    );
+    await tester.tap(find.byKey(const ValueKey('finance-dashboard-search')));
+    await tester.pump();
+
+    expect(loader.calls, isEmpty);
+    expect(
+      find.text('Selecciona una fecha inicial y una fecha final.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'dashboard no consulta al seleccionar rango hasta pulsar buscar',
+    (tester) async {
+      final loader = _FinanceDashboardLoaderSpy();
+
+      await tester.pumpWidget(
+        _dashboardShell(
+          loader: loader,
+          initialStartDate: DateTime(2026, 8, 17),
+          initialEndDate: DateTime(2026, 8, 23),
+        ),
+      );
+      await tester.pump();
+
+      expect(loader.calls, isEmpty);
+      expect(find.text('Desde 17/08/2026'), findsOneWidget);
+      expect(find.text('Hasta 23/08/2026'), findsOneWidget);
+    },
+  );
+
+  testWidgets('dashboard busca solo al pulsar buscar y limpiar no consulta', (
+    tester,
+  ) async {
+    final loader = _FinanceDashboardLoaderSpy();
+
+    await tester.pumpWidget(
+      _dashboardShell(
+        loader: loader,
+        initialStartDate: DateTime(2026, 8, 17),
+        initialEndDate: DateTime(2026, 8, 23),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('finance-dashboard-search')));
+    await tester.pumpAndSettle();
+
+    expect(loader.calls, ['2026-08-17..2026-08-23']);
+    expect(find.text('VENTA'), findsOneWidget);
+
+    await tester.tap(find.text('Hoy'));
+    await tester.pump();
+    expect(loader.calls, ['2026-08-17..2026-08-23']);
+    expect(find.text('VENTA'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('finance-dashboard-search')));
+    await tester.pumpAndSettle();
+    expect(loader.calls, hasLength(2));
+
+    await tester.tap(find.byKey(const ValueKey('finance-dashboard-clear')));
+    await tester.pump();
+    expect(loader.calls, hasLength(2));
+    expect(find.text('VENTA'), findsNothing);
+    expect(find.text('Fecha desde'), findsOneWidget);
+    expect(find.text('Fecha hasta'), findsOneWidget);
+    expect(
+      find.text(
+        'Selecciona un rango de fechas para consultar el Dashboard financiero.',
+      ),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('dashboard financiero no desborda en resoluciones objetivo', (
     tester,
   ) async {
@@ -524,4 +623,49 @@ SupplierPayment _supplierPayment(
     method: method,
     status: 'active',
   );
+}
+
+Widget _dashboardShell({
+  required _FinanceDashboardLoaderSpy loader,
+  DateTime? initialStartDate,
+  DateTime? initialEndDate,
+}) {
+  return MaterialApp(
+    theme: AppTheme.dark(),
+    home: FinanceMainDashboardScreen(
+      hasAccessOverride: true,
+      dashboardLoader: loader.call,
+      initialStartDate: initialStartDate,
+      initialEndDate: initialEndDate,
+    ),
+  );
+}
+
+class _FinanceDashboardLoaderSpy {
+  final calls = <String>[];
+
+  Future<FinanceDashboardBundle> call({
+    required String startBusinessDate,
+    required String endBusinessDate,
+    bool forceRefresh = false,
+  }) async {
+    calls.add('$startBusinessDate..$endBusinessDate');
+    return buildFinanceDashboard(
+      FinanceDashboardInput(
+        key: FinanceDashboardKey(
+          restaurantId: 'restaurant',
+          branchId: 'branch',
+          startBusinessDate: startBusinessDate,
+          endBusinessDate: endBusinessDate,
+        ),
+        salesSummary: buildCanonicalSalesSummary(const []),
+        paymentsByOrder: const {},
+        cashSessions: const [],
+        withdrawals: const [],
+        purchases: const [],
+        supplierPayments: const [],
+        suppliers: const [],
+      ),
+    );
+  }
 }
