@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -46,6 +48,8 @@ class _OrderScreenState extends State<OrderScreen> {
   late Stream<PosOrder?> _orderStream;
   late final Stream<List<Product>> _productsStream;
   late final Stream<List<ProductCategory>> _productCategoriesStream;
+  late final Future<String> _businessDateFuture;
+  late final Stream<Map<String, ProductStockOutRow>> _stockOutsStream;
   late String _boundOrderId;
   StreamSubscription<List<OrderItem>>? _itemsSubscription;
   List<OrderItem> _loadedItems = const [];
@@ -61,6 +65,10 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   void initState() {
     super.initState();
+    _businessDateFuture = _resolveOrderBusinessDate();
+    _stockOutsStream = _repository.watchActiveProductStockOuts(
+      businessDateFuture: _businessDateFuture,
+    );
     _bindOrderStreams(widget.orderId);
     _productsStream = _repository.watchProducts(activeOnly: true);
     _productCategoriesStream = _repository.watchProductCategories(
@@ -75,6 +83,11 @@ class _OrderScreenState extends State<OrderScreen> {
       currentPersonNumber: _selectedPerson,
       currentAction: 'Levantando orden',
     );
+  }
+
+  Future<String> _resolveOrderBusinessDate() async {
+    final session = await _repository.getOpenCashSession();
+    return session?.businessDate ?? '';
   }
 
   @override
@@ -156,6 +169,12 @@ class _OrderScreenState extends State<OrderScreen> {
           .watchOrderItems(cleanOrderId)
           .listen(
             (items) {
+              if (kDebugMode) {
+                developer.log(
+                  '[TacoPOS][orderCapture] T4 items snapshot received '
+                  'orderId=$cleanOrderId itemCount=${items.length}',
+                );
+              }
               debugPrint('[TacoPOS][OrderItems.streamCount] ${items.length}');
               if (!mounted || cleanOrderId != _boundOrderId) {
                 return;
@@ -649,7 +668,7 @@ class _OrderScreenState extends State<OrderScreen> {
         final menu = _ProductMenu(
           productsStream: _productsStream,
           categoriesStream: _productCategoriesStream,
-          stockOutsStream: _repository.watchActiveProductStockOuts(),
+          stockOutsStream: _stockOutsStream,
           selectedCategory: _selectedCategory,
           platformId: order?.orderType == 'takeout' ? order?.platformId : null,
           onCategoryChanged: (category) {
@@ -657,11 +676,20 @@ class _OrderScreenState extends State<OrderScreen> {
               _selectedCategory = category;
             });
           },
-          onAddProduct: (product) => _repository.addProductToOrder(
-            orderId: _boundOrderId,
-            product: product,
-            personNumber: selectedPerson,
-          ),
+          onAddProduct: (product, stockedOut) {
+            if (kDebugMode) {
+              developer.log(
+                '[TacoPOS][orderCapture] T0 product tap '
+                'productId=${product.id} stockedOut=$stockedOut',
+              );
+            }
+            return _repository.addProductToOrder(
+              orderId: _boundOrderId,
+              product: product,
+              personNumber: selectedPerson,
+              knownStockedOut: stockedOut,
+            );
+          },
           onMarkProductStockOut: _repository.markProductStockOut,
           onClearProductStockOut: (product) =>
               _repository.clearProductStockOut(product),
@@ -2107,7 +2135,7 @@ class _ProductMenu extends StatelessWidget {
   final String selectedCategory;
   final String? platformId;
   final ValueChanged<String> onCategoryChanged;
-  final ValueChanged<Product> onAddProduct;
+  final Future<void> Function(Product product, bool stockedOut) onAddProduct;
   final Future<void> Function(Product product) onMarkProductStockOut;
   final Future<void> Function(Product product) onClearProductStockOut;
   final bool canAddProducts;
@@ -2298,7 +2326,7 @@ class _ProductMenu extends StatelessWidget {
                                           );
                                           return;
                                         }
-                                        onAddProduct(product);
+                                        onAddProduct(product, stockedOut);
                                       }
                                     : onBlockedAddProduct,
                                 onLongPressCompleted: canAddProducts

@@ -2243,9 +2243,12 @@ class TacoPosRepository {
     );
   }
 
-  Stream<Map<String, ProductStockOutRow>> watchActiveProductStockOuts() {
+  Stream<Map<String, ProductStockOutRow>> watchActiveProductStockOuts({
+    Future<String>? businessDateFuture,
+  }) {
     return _productStockOutsRef.snapshots().asyncMap((snapshot) async {
-      final businessDate = await currentKitchenBusinessDate();
+      final businessDate =
+          await (businessDateFuture ?? currentKitchenBusinessDate());
       final branchId = AppSession.instance.currentBranchId;
       final rows = snapshot.docs
           .map(ProductStockOutRow.fromDoc)
@@ -10744,18 +10747,22 @@ class TacoPosRepository {
     required String orderId,
     required Product product,
     required int personNumber,
+    bool? knownStockedOut,
   }) async {
     _requireTakeOrders();
     final cleanOrderId = orderId.trim();
     final itemsPath =
         'restaurants/${AppConstants.restaurantId}/orders/$cleanOrderId/items';
-    developer.log(
-      '[TacoPOS][addProduct] orderId=$cleanOrderId path=$itemsPath '
-      'productName=${product.name} qty=1',
-    );
+    final startedAt = DateTime.now();
+    if (kDebugMode) {
+      developer.log(
+        '[TacoPOS][orderCapture] T1 addProduct start '
+        'orderId=$cleanOrderId productName=${product.name}',
+      );
+    }
     final orderDoc = await _ordersRef.doc(cleanOrderId).get();
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
-    if (await isProductStockedOut(product)) {
+    if (knownStockedOut ?? await isProductStockedOut(product)) {
       throw StateError('Producto agotado hasta cierre de cocina.');
     }
     final personName =
@@ -10839,11 +10846,19 @@ class TacoPosRepository {
       'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    developer.log(
-      '[TacoPOS][addProduct] saved itemId=${itemRef.id} '
-      'path=$itemsPath/${itemRef.id} productName=${product.name} qty=1',
-    );
+    if (kDebugMode) {
+      developer.log(
+        '[TacoPOS][orderCapture] T2 item write complete '
+        'itemId=${itemRef.id} elapsedMs=${DateTime.now().difference(startedAt).inMilliseconds}',
+      );
+    }
     await recalculateOrderTotal(cleanOrderId);
+    if (kDebugMode) {
+      developer.log(
+        '[TacoPOS][orderCapture] T3 recalculate complete '
+        'orderId=$cleanOrderId elapsedMs=${DateTime.now().difference(startedAt).inMilliseconds}',
+      );
+    }
   }
 
   Future<void> renamePerson({
