@@ -243,34 +243,233 @@ void main() {
       expect(report.tipCandidates.single.amount, 20);
       expect(report.orders.single.paymentVsNetDifference, 0);
     });
+
+    test('cancelled order without payments has no monetary impact', () {
+      final report = buildCashDifferenceAuditReport(
+        session: _session(),
+        orders: [
+          _order(
+            id: 'cancelled-160',
+            label: 'Mesa 3',
+            total: 160,
+            netTotal: 160,
+            status: 'cancelled',
+            paymentStatus: 'pending',
+          ),
+        ],
+        payments: const [],
+      );
+
+      final row = report.orders.single;
+      expect(row.countsForSales, isFalse);
+      expect(row.netTotal, 0);
+      expect(row.activePaymentTotal, 0);
+      expect(row.calculatedPendingTotal, 0);
+      expect(row.paymentVsNetDifference, 0);
+      expect(row.observation, 'Cancelada - Sin impacto monetario');
+      expect(report.netSales, 0);
+      expect(report.orderLedgerDifference, 0);
+    });
+
+    test(
+      'cancelled order with cancelled historical payments has no impact',
+      () {
+        final report = buildCashDifferenceAuditReport(
+          session: _session(),
+          orders: [
+            _order(
+              id: 'cancelled-with-payment',
+              label: 'Mesa 3',
+              total: 160,
+              netTotal: 160,
+              status: 'cancelled',
+              paymentStatus: 'cancelled',
+            ),
+          ],
+          payments: [
+            _input(
+              _payment(
+                id: 'historical-cancelled',
+                orderId: 'cancelled-with-payment',
+                amount: 160,
+                status: 'cancelled',
+                cancelledAt: DateTime(2026, 7, 28, 4),
+              ),
+            ),
+          ],
+        );
+
+        final row = report.orders.single;
+        expect(row.netTotal, 0);
+        expect(row.activePaymentTotal, 0);
+        expect(row.calculatedPendingTotal, 0);
+        expect(row.paymentVsNetDifference, 0);
+        expect(row.observation, 'Cancelada - Sin impacto monetario');
+        expect(report.activePaymentTotal, 0);
+        expect(
+          report.cancelledPayments.single.paymentId,
+          'historical-cancelled',
+        );
+      },
+    );
+
+    test('cancelled order with active payment does not contaminate totals', () {
+      final report = buildCashDifferenceAuditReport(
+        session: _session(),
+        orders: [
+          _order(
+            id: 'cancelled-active-payment',
+            label: 'Mesa 3',
+            total: 160,
+            netTotal: 160,
+            status: 'cancelled',
+            paymentStatus: 'pending',
+          ),
+        ],
+        payments: [
+          _input(
+            _payment(
+              id: 'active-but-cancelled-order',
+              orderId: 'cancelled-active-payment',
+              amount: 160,
+              status: 'active',
+            ),
+          ),
+        ],
+      );
+
+      final row = report.orders.single;
+      expect(row.netTotal, 0);
+      expect(row.activePaymentTotal, 0);
+      expect(row.paymentVsNetDifference, 0);
+      expect(report.activePaymentTotal, 0);
+      expect(
+        report.excludedPayments.single.paymentId,
+        'active-but-cancelled-order',
+      );
+      expect(report.netSales, 0);
+      expect(report.paymentNetDifference, 0);
+      expect(report.cashCandidates, isEmpty);
+      expect(report.cardCandidates, isEmpty);
+      expect(report.changeIssues, isEmpty);
+    });
+
+    test('global difference subtracts approved withdrawals from valid net', () {
+      final report = buildCashDifferenceAuditReport(
+        session: _session(
+          countedCashAmount: 4790,
+          terminalReportedAmount: 2068,
+          expectedCashAmount: 5247,
+          expectedCardChargedAmount: 1895.4,
+          approvedWithdrawalsTotal: 420,
+        ),
+        orders: [
+          _order(
+            id: 'sales',
+            label: 'Mesa 1',
+            total: 6960.40,
+            netTotal: 6960.40,
+          ),
+        ],
+        payments: [
+          _input(_payment(id: 'cash', orderId: 'sales', amount: 5167)),
+          _input(
+            _payment(
+              id: 'card',
+              orderId: 'sales',
+              method: 'card',
+              amount: 1895.40,
+            ),
+          ),
+        ],
+      );
+
+      expect(report.observedMoney, 6358);
+      expect(report.expectedPhysicalMoney, 6540.40);
+      expect(report.globalDifference, closeTo(-182.40, 0.001));
+    });
+
+    test('active payments greater than net creates data finding', () {
+      final report = buildCashDifferenceAuditReport(
+        session: _session(
+          countedCashAmount: 4790,
+          terminalReportedAmount: 2068,
+          expectedCashAmount: 5247,
+          expectedCardChargedAmount: 1895.4,
+          approvedWithdrawalsTotal: 420,
+        ),
+        orders: [
+          _order(
+            id: 'mesa-4',
+            label: 'Mesa 4',
+            total: 6960.40,
+            netTotal: 6960.40,
+          ),
+        ],
+        payments: [
+          _input(_payment(id: 'cash', orderId: 'mesa-4', amount: 5167)),
+          _input(
+            _payment(
+              id: 'card',
+              orderId: 'mesa-4',
+              method: 'card',
+              amount: 1895.40,
+            ),
+          ),
+        ],
+      );
+
+      expect(report.activePaymentTotal, 7062.40);
+      expect(report.paymentNetDifference, closeTo(102, 0.001));
+      final finding = report.findings
+          .where(
+            (row) => row.finding == 'Los pagos activos exceden la venta neta',
+          )
+          .single;
+      expect(finding.amount, closeTo(102, 0.001));
+      expect(finding.type, 'Datos');
+      expect(finding.reducesGlobalDifference, 'No');
+    });
   });
 }
 
-CashSession _session() {
-  return const CashSession(
+CashSession _session({
+  double countedCashAmount = 3552,
+  double terminalReportedAmount = 941.76,
+  double expectedCashAmount = 3465.4,
+  double expectedCardChargedAmount = 281,
+  double approvedWithdrawalsTotal = 0,
+}) {
+  final cashDifference =
+      countedCashAmount -
+      500 -
+      (expectedCashAmount - 500 + approvedWithdrawalsTotal);
+  final cardDifference = terminalReportedAmount - expectedCardChargedAmount;
+  final netDifference = cashDifference + cardDifference;
+  return CashSession(
     id: 'NkTSfERJPJb0hbRhrStH',
     businessDate: '2026-07-27',
     status: 'closed',
     openingCashAmount: 500,
     openedByEmployeeId: 'employee-1',
     openedByEmployeeName: 'Gael Pineda',
-    countedCashAmount: 3552,
-    terminalReportedAmount: 941.76,
-    expectedCashAmount: 3465.4,
-    expectedCardChargedAmount: 281,
+    countedCashAmount: countedCashAmount,
+    terminalReportedAmount: terminalReportedAmount,
+    expectedCashAmount: expectedCashAmount,
+    expectedCardChargedAmount: expectedCardChargedAmount,
     expectedCardBaseAmount: 430,
     expectedCardSurchargeAmount: 0,
     expectedCardFeeAbsorbedAmount: 11.4086,
     expectedPlatformAmount: 0,
     expectedEmployeeConsumptionAmount: 0,
-    totalExpectedRealMoney: 3746.4,
-    totalCountedRealMoney: 4493.76,
-    cashDifference: 86.6,
-    cardDifference: 660.76,
-    netDifference: 747.36,
-    shortageAmount: 0,
-    overAmount: 747.36,
-    approvedWithdrawalsTotal: 0,
+    totalExpectedRealMoney: expectedCashAmount + expectedCardChargedAmount,
+    totalCountedRealMoney: countedCashAmount + terminalReportedAmount,
+    cashDifference: cashDifference,
+    cardDifference: cardDifference,
+    netDifference: netDifference,
+    shortageAmount: netDifference < 0 ? netDifference.abs() : 0,
+    overAmount: netDifference > 0 ? netDifference : 0,
+    approvedWithdrawalsTotal: approvedWithdrawalsTotal,
     pendingWithdrawalsTotal: 0,
     withdrawalRequestCount: 0,
     notes: '',
@@ -287,6 +486,7 @@ PosOrder _order({
   String businessDate = '2026-07-27',
   String cashSessionId = 'NkTSfERJPJb0hbRhrStH',
   String status = 'paid',
+  String paymentStatus = 'paid',
 }) {
   return PosOrder(
     id: id,
@@ -294,7 +494,7 @@ PosOrder _order({
     tableName: label,
     status: status,
     kitchenStatus: 'served',
-    paymentStatus: 'paid',
+    paymentStatus: paymentStatus,
     total: total,
     paidTotal: total,
     pendingTotal: 0,

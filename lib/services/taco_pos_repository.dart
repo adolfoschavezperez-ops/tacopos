@@ -18,6 +18,7 @@ import '../core/orders/employee_benefit_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
+import '../core/orders/payment_application_guard.dart';
 import '../core/expenses/expense_policy.dart';
 import '../core/expenses/local_expense_policy_flow.dart';
 import '../core/payments/payment_operational_scope.dart';
@@ -210,6 +211,45 @@ class PaymentResult {
 
   final bool allPaid;
   final String? saleFolioDisplay;
+}
+
+class RepositoryPaymentPersistencePreview {
+  const RepositoryPaymentPersistencePreview({
+    required this.paymentData,
+    required this.totals,
+  });
+
+  final Map<String, Object?> paymentData;
+  final OrderPaymentReconciliationTotals totals;
+}
+
+@visibleForTesting
+RepositoryPaymentPersistencePreview buildRepositoryPaymentPersistencePreview({
+  required PosOrder order,
+  required Map<String, Object?> paymentData,
+  required Iterable<Payment> previousActivePayments,
+  double? freshPendingAmount,
+  String newPaymentId = '',
+}) {
+  final guardedPaymentData = normalizePaymentDataForRemaining(
+    paymentData: paymentData,
+    orderNetAmount: order.netTotal ?? order.total,
+    previousActivePayments: previousActivePayments,
+    freshPendingAmount: freshPendingAmount,
+  );
+  final totals = reconcileOrderPayments(
+    orderGrossTotal: order.grossSubtotal ?? order.total,
+    activePayments: [
+      ...previousActivePayments
+          .where((payment) => payment.isActive)
+          .map(PaymentSettlementInput.fromPayment),
+      PaymentSettlementInput.fromPaymentData(newPaymentId, guardedPaymentData),
+    ],
+  );
+  return RepositoryPaymentPersistencePreview(
+    paymentData: guardedPaymentData,
+    totals: totals,
+  );
 }
 
 class SaleFolioPaymentException implements Exception {
@@ -13147,17 +13187,20 @@ class TacoPosRepository {
         final businessDate =
             _businessDateForOrder(freshOrder) ??
             businessDateForOpenCashSession(cashSession);
-        final totals = _reconcileOrderPayments(
+        final persistencePreview = buildRepositoryPaymentPersistencePreview(
           order: freshOrder,
+          paymentData: paymentData,
           previousActivePayments: previousActivePayments,
-          newPaymentData: paymentData,
+          freshPendingAmount: freshOrder.pendingTotal,
           newPaymentId: paymentRef.id,
         );
+        final guardedPaymentData = persistencePreview.paymentData;
+        final totals = persistencePreview.totals;
         if (freshOrder.total - totals.paidTotal > 0.01) {
           throw StateError('La venta aun tiene saldo pendiente.');
         }
         if (!config.appliesToBusinessDate(businessDate)) {
-          transaction.set(paymentRef, paymentData);
+          transaction.set(paymentRef, guardedPaymentData);
           for (final doc in itemDocs) {
             transaction.update(doc.reference, {
               'paymentStatus': 'paid',
@@ -13212,7 +13255,7 @@ class TacoPosRepository {
           'saleFolioVersion': saleFolioVersion,
         };
         final paymentWithFolio = {
-          ...paymentData,
+          ...guardedPaymentData,
           'saleFolioSequence': assignment.sequence,
           'saleFolioDisplay': assignment.display,
           'saleFolioFull': assignment.full,
