@@ -41,4 +41,41 @@ void main() {
       ),
     );
   });
+
+  test('Cortes navega unicamente un dia operativo por vez', () {
+    expect(screenSource, contains('void _shiftSearchedDate(int days)'));
+    expect(screenSource, contains("parseStrict(searched)"));
+    expect(screenSource, contains('Duration(days: days)'));
+    expect(screenSource, contains('Día anterior'));
+    expect(screenSource, contains('Día siguiente'));
+    expect(screenSource, contains('canNavigate'));
+  });
+
+  test(
+    'listados largos de compras guardan su posicion durante la navegacion',
+    () {
+      final purchaseSource = File(
+        'lib/screens/admin/purchase_admin_screen.dart',
+      ).readAsStringSync();
+
+      expect(
+        purchaseSource,
+        contains("PageStorageKey<String>('backoffice-suppliers-list')"),
+      );
+      expect(
+        purchaseSource,
+        contains("PageStorageKey<String>('backoffice-payables-list')"),
+      );
+      expect(
+        purchaseSource,
+        contains("PageStorageKey<String>('backoffice-supplier-payments-list')"),
+      );
+      expect(
+        purchaseSource,
+        contains(
+          "PageStorageKey<String>('backoffice-supplier-statement-list')",
+        ),
+      );
+    },
+  );
 }

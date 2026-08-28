@@ -210,6 +210,7 @@ class _SuppliersTabState extends State<_SuppliersTab> {
       return true;
     }).toList();
     return ListView(
+      key: const PageStorageKey<String>('backoffice-suppliers-list'),
       padding: const EdgeInsets.all(18),
       children: [
         _PurchaseHeader(
@@ -347,6 +348,7 @@ class _PurchaseItemsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView(
+      key: const PageStorageKey<String>('backoffice-purchase-items-list'),
       padding: const EdgeInsets.all(18),
       children: [
         _PurchaseHeader(
@@ -456,6 +458,7 @@ class _RegisterPurchaseTabState extends State<_RegisterPurchaseTab> {
     final supplier = _supplier();
     final total = purchaseLinesTotal(_lines);
     return ListView(
+      key: const PageStorageKey<String>('backoffice-register-purchase-list'),
       padding: const EdgeInsets.all(18),
       children: [
         const _PurchaseHeader(
@@ -857,6 +860,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
           return b.purchaseDate.compareTo(a.purchaseDate);
         });
     return ListView(
+      key: const PageStorageKey<String>('backoffice-payables-list'),
       padding: const EdgeInsets.all(18),
       children: [
         _PurchaseHeader(
@@ -1304,6 +1308,7 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
       return payment.method == _method;
     }).toList();
     return ListView(
+      key: const PageStorageKey<String>('backoffice-supplier-payments-list'),
       padding: const EdgeInsets.all(18),
       children: [
         _PurchaseHeader(
@@ -1501,6 +1506,7 @@ class _SupplierStatementTabState extends State<_SupplierStatementTab> {
   Widget build(BuildContext context) {
     final rows = _buildRows();
     return ListView(
+      key: const PageStorageKey<String>('backoffice-supplier-statement-list'),
       padding: const EdgeInsets.all(18),
       children: [
         const _PurchaseHeader(
