@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:developer' as developer;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/orders/order_capture_sort.dart';
+import '../../core/orders/order_capture_queue.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
@@ -45,11 +44,14 @@ class OrderScreen extends StatefulWidget {
 
 class _OrderScreenState extends State<OrderScreen> {
   final _repository = TacoPosRepository();
+  final _captureState = OrderCaptureState();
+  final ValueNotifier<String?> _platformIdNotifier = ValueNotifier(null);
   late Stream<PosOrder?> _orderStream;
   late final Stream<List<Product>> _productsStream;
   late final Stream<List<ProductCategory>> _productCategoriesStream;
   late final Future<String> _businessDateFuture;
   late final Stream<Map<String, ProductStockOutRow>> _stockOutsStream;
+  late final Widget _productMenu;
   late String _boundOrderId;
   StreamSubscription<List<OrderItem>>? _itemsSubscription;
   List<OrderItem> _loadedItems = const [];
@@ -57,10 +59,10 @@ class _OrderScreenState extends State<OrderScreen> {
   Object? _itemsError;
   int _selectedPerson = 1;
   int _personCount = 1;
-  String _selectedCategory = 'tacos';
   bool _busy = false;
   String? _lastOrderDebugSignature;
   String? _lastItemsDebugSignature;
+  PosOrder? _latestOrder;
 
   @override
   void initState() {
@@ -73,6 +75,18 @@ class _OrderScreenState extends State<OrderScreen> {
     _productsStream = _repository.watchProducts(activeOnly: true);
     _productCategoriesStream = _repository.watchProductCategories(
       activeOnly: true,
+    );
+    _productMenu = _StableProductMenu(
+      productsStream: _productsStream,
+      categoriesStream: _productCategoriesStream,
+      stockOutsStream: _stockOutsStream,
+      platformIdListenable: _platformIdNotifier,
+      onAddProduct: _handleAddProduct,
+      onMarkProductStockOut: _repository.markProductStockOut,
+      onClearProductStockOut: _repository.clearProductStockOut,
+      canAddProducts: AppSession.instance.employee?.canTakeOrders == true,
+      onBlockedAddProduct: () =>
+          _showMessage('No tienes permiso para levantar pedidos'),
     );
     LivePresenceService.instance.update(
       appMode: 'waiter',
@@ -110,6 +124,8 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   void dispose() {
     _itemsSubscription?.cancel();
+    _captureState.clear();
+    _platformIdNotifier.dispose();
     super.dispose();
   }
 
@@ -139,6 +155,7 @@ class _OrderScreenState extends State<OrderScreen> {
       setState(() {
         if (clearItems) {
           _loadedItems = const [];
+          _captureState.clear();
         }
         _itemsLoading = cleanOrderId.isNotEmpty && _loadedItems.isEmpty;
         _itemsError = cleanOrderId.isEmpty
@@ -161,7 +178,8 @@ class _OrderScreenState extends State<OrderScreen> {
         return;
       }
       setState(() {
-        _loadedItems = initialItems;
+        _captureState.reconcile(initialItems);
+        _loadedItems = _captureState.effectiveItems;
         _itemsLoading = false;
         _itemsError = null;
       });
@@ -169,18 +187,20 @@ class _OrderScreenState extends State<OrderScreen> {
           .watchOrderItems(cleanOrderId)
           .listen(
             (items) {
-              if (kDebugMode) {
-                developer.log(
-                  '[TacoPOS][orderCapture] T4 items snapshot received '
-                  'orderId=$cleanOrderId itemCount=${items.length}',
-                );
-              }
               debugPrint('[TacoPOS][OrderItems.streamCount] ${items.length}');
               if (!mounted || cleanOrderId != _boundOrderId) {
                 return;
               }
+              final previousSignature = _captureState.effectiveSignature;
+              _captureState.reconcile(items);
+              final effectiveItems = _captureState.effectiveItems;
+              final visualChanged =
+                  previousSignature != _captureState.effectiveSignature;
+              if (!visualChanged && !_itemsLoading && _itemsError == null) {
+                return;
+              }
               setState(() {
-                _loadedItems = items;
+                _loadedItems = effectiveItems;
                 _itemsLoading = false;
                 _itemsError = null;
               });
@@ -226,6 +246,7 @@ class _OrderScreenState extends State<OrderScreen> {
     });
 
     try {
+      await _repository.flushPendingMutations(_boundOrderId);
       LivePresenceService.instance.update(currentAction: 'Enviando cocina');
       final sentCount = await _repository.sendOrderToKitchen(_boundOrderId);
       if (!mounted) {
@@ -269,6 +290,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
     setState(() => _busy = true);
     try {
+      await _repository.flushPendingMutations(_boundOrderId);
       await _repository.prepareOrderForCheckout(_boundOrderId);
     } catch (error) {
       if (!mounted) return;
@@ -528,12 +550,96 @@ class _OrderScreenState extends State<OrderScreen> {
     showAppSnackBar(context, message);
   }
 
+  String _applyOptimisticProduct(
+    Product product,
+    int personNumber,
+    PosOrder? order,
+  ) {
+    final platformId = order?.orderType == 'takeout' ? order?.platformId : null;
+    final appliedPlatformId = platformId != null && platformId != 'en_persona'
+        ? platformId
+        : null;
+    final effective = _captureState.effectiveItems;
+    final existing = effective.cast<OrderItem?>().firstWhere(
+      (item) =>
+          item!.productId == product.id &&
+          item.personNumber == personNumber &&
+          item.appliedPlatformId == appliedPlatformId &&
+          itemIsAwaitingKitchenSend(item) &&
+          item.paymentStatus == 'pending',
+      orElse: () => null,
+    );
+    final item =
+        existing ??
+        OrderItem(
+          id: 'local-${DateTime.now().microsecondsSinceEpoch}-${product.id}',
+          personNumber: personNumber,
+          personName:
+              order?.personName(personNumber) ?? 'Persona $personNumber',
+          productId: product.id,
+          productName: product.name,
+          category: product.category,
+          qty: 0,
+          unitPrice: product.priceForPlatform(appliedPlatformId),
+          total: 0,
+          notes: '',
+          sendToKitchen: product.sendToKitchen,
+          kitchenStatus: product.sendToKitchen ? 'pending' : 'not_required',
+          paymentStatus: 'pending',
+          affectsKitchenStock: product.affectsKitchenStock,
+          kitchenStockItemId: product.kitchenStockItemId,
+          kitchenStockItemName: product.kitchenStockItemName,
+          kitchenStockUnit: product.kitchenStockUnit,
+          recipeItems: product.recipeItems,
+          appliedPlatformId: appliedPlatformId,
+          appliedPlatformName: order?.platformName,
+          priceSource: appliedPlatformId == null ? 'store' : 'platform',
+        );
+    final optimistic = item.copyWithQty(item.qty + 1);
+    _captureState.apply(optimistic);
+    setState(() {
+      _loadedItems = _captureState.effectiveItems;
+    });
+    return item.id;
+  }
+
+  Future<void> _handleAddProduct(Product product, bool stockedOut) async {
+    final operationId = 'op-${DateTime.now().microsecondsSinceEpoch}';
+    final itemId = _applyOptimisticProduct(
+      product,
+      _selectedPerson,
+      _latestOrder,
+    );
+    try {
+      await _repository.addProductToOrder(
+        orderId: _boundOrderId,
+        product: product,
+        personNumber: _selectedPerson,
+        knownStockedOut: stockedOut,
+        itemId: itemId,
+        operationId: operationId,
+      );
+    } catch (error) {
+      _captureState.fail(itemId);
+      if (mounted) {
+        setState(() {
+          _loadedItems = _captureState.effectiveItems;
+        });
+        _showMessage(_editErrorText(error));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<PosOrder?>(
       stream: _orderStream,
       builder: (context, orderSnapshot) {
         final order = orderSnapshot.data;
+        _latestOrder = order;
+        _platformIdNotifier.value = order?.orderType == 'takeout'
+            ? order?.platformId
+            : null;
         if (order != null) {
           _logOrderDebug(order);
         }
@@ -626,7 +732,6 @@ class _OrderScreenState extends State<OrderScreen> {
             constraints.maxWidth < 650 || constraints.maxHeight < 750;
         final twoPane = constraints.maxWidth >= 720;
         final selectedPerson = _selectedPerson < 1 ? 1 : _selectedPerson;
-        final order = orderSnapshot.data;
         final canTakeOrders =
             AppSession.instance.employee?.canTakeOrders == true;
         final summary = _OrderSummaryLoader(
@@ -659,44 +764,36 @@ class _OrderScreenState extends State<OrderScreen> {
           },
           onAddPerson: _addPerson,
           onRenamePerson: _renamePerson,
-          onQtyChanged: (item, qty) => _repository
-              .updateItemQty(orderId: _boundOrderId, item: item, qty: qty)
-              .catchError((error) => _showMessage(_editErrorText(error))),
+          onQtyChanged: (item, qty) {
+            final operationId = 'op-${DateTime.now().microsecondsSinceEpoch}';
+            final optimistic = item.copyWithQty(qty);
+            setState(() {
+              _captureState.apply(optimistic);
+              _loadedItems = _captureState.effectiveItems;
+            });
+            unawaited(
+              _repository
+                  .updateItemQty(
+                    orderId: _boundOrderId,
+                    item: item,
+                    qty: qty,
+                    operationId: operationId,
+                  )
+                  .catchError((error) {
+                    _captureState.fail(item.id);
+                    if (mounted) {
+                      setState(() {
+                        _loadedItems = _captureState.effectiveItems;
+                      });
+                      _showMessage(_editErrorText(error));
+                    }
+                  }),
+            );
+          },
           onCancelItem: _cancelOrRequestItem,
           canEditOrder: canTakeOrders,
         );
-        final menu = _ProductMenu(
-          productsStream: _productsStream,
-          categoriesStream: _productCategoriesStream,
-          stockOutsStream: _stockOutsStream,
-          selectedCategory: _selectedCategory,
-          platformId: order?.orderType == 'takeout' ? order?.platformId : null,
-          onCategoryChanged: (category) {
-            setState(() {
-              _selectedCategory = category;
-            });
-          },
-          onAddProduct: (product, stockedOut) {
-            if (kDebugMode) {
-              developer.log(
-                '[TacoPOS][orderCapture] T0 product tap '
-                'productId=${product.id} stockedOut=$stockedOut',
-              );
-            }
-            return _repository.addProductToOrder(
-              orderId: _boundOrderId,
-              product: product,
-              personNumber: selectedPerson,
-              knownStockedOut: stockedOut,
-            );
-          },
-          onMarkProductStockOut: _repository.markProductStockOut,
-          onClearProductStockOut: (product) =>
-              _repository.clearProductStockOut(product),
-          canAddProducts: canTakeOrders,
-          onBlockedAddProduct: () =>
-              _showMessage('No tienes permiso para levantar pedidos'),
-        );
+        final menu = _productMenu;
 
         if (twoPane) {
           final orderWidthFactor = constraints.maxWidth >= 960 ? 0.46 : 0.43;
@@ -2109,6 +2206,59 @@ class _OrderItemRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _StableProductMenu extends StatefulWidget {
+  const _StableProductMenu({
+    required this.productsStream,
+    required this.categoriesStream,
+    required this.stockOutsStream,
+    required this.platformIdListenable,
+    required this.onAddProduct,
+    required this.onMarkProductStockOut,
+    required this.onClearProductStockOut,
+    required this.canAddProducts,
+    required this.onBlockedAddProduct,
+  });
+
+  final Stream<List<Product>> productsStream;
+  final Stream<List<ProductCategory>> categoriesStream;
+  final Stream<Map<String, ProductStockOutRow>> stockOutsStream;
+  final ValueListenable<String?> platformIdListenable;
+  final Future<void> Function(Product product, bool stockedOut) onAddProduct;
+  final Future<void> Function(Product product) onMarkProductStockOut;
+  final Future<void> Function(Product product) onClearProductStockOut;
+  final bool canAddProducts;
+  final VoidCallback onBlockedAddProduct;
+
+  @override
+  State<_StableProductMenu> createState() => _StableProductMenuState();
+}
+
+class _StableProductMenuState extends State<_StableProductMenu> {
+  String _selectedCategory = 'tacos';
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<String?>(
+      valueListenable: widget.platformIdListenable,
+      builder: (context, platformId, _) => _ProductMenu(
+        productsStream: widget.productsStream,
+        categoriesStream: widget.categoriesStream,
+        stockOutsStream: widget.stockOutsStream,
+        selectedCategory: _selectedCategory,
+        platformId: platformId,
+        onCategoryChanged: (category) {
+          setState(() => _selectedCategory = category);
+        },
+        onAddProduct: widget.onAddProduct,
+        onMarkProductStockOut: widget.onMarkProductStockOut,
+        onClearProductStockOut: widget.onClearProductStockOut,
+        canAddProducts: widget.canAddProducts,
+        onBlockedAddProduct: widget.onBlockedAddProduct,
       ),
     );
   }

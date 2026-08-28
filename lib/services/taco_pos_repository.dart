@@ -16,6 +16,7 @@ import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/employee_benefit_checkout.dart';
 import '../core/orders/order_activity.dart';
+import '../core/orders/order_capture_queue.dart';
 import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
 import '../core/orders/payment_application_guard.dart';
@@ -1290,6 +1291,7 @@ class TacoPosRepository {
   static final YieldProfitBundleCache _yieldProfitBundleCache =
       YieldProfitBundleCache();
   static final Map<String, _CashScheduleCacheEntry> _cashScheduleCache = {};
+  static final OrderCaptureQueue _orderCaptureQueue = OrderCaptureQueue();
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
@@ -10789,9 +10791,11 @@ class TacoPosRepository {
         'qty=${existingItem.qty + 1}',
       );
       await updateItemQty(
+        skipQueue: true,
         orderId: cleanOrderId,
         item: existingItem,
         qty: existingItem.qty + 1,
+        operationId: operationId,
       );
       return;
     }
@@ -10799,7 +10803,10 @@ class TacoPosRepository {
     final primaryRecipe = product.recipeItems.isNotEmpty
         ? product.recipeItems.first
         : null;
-    final itemRef = _ordersRef.doc(cleanOrderId).collection('items').doc();
+    final itemRef = _ordersRef
+        .doc(cleanOrderId)
+        .collection('items')
+        .doc(itemId);
     await itemRef.set({
       'personNumber': personNumber,
       'personName': personName,
@@ -10845,20 +10852,14 @@ class TacoPosRepository {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
 
-    if (kDebugMode) {
-      developer.log(
-        '[TacoPOS][orderCapture] T2 item write complete '
-        'itemId=${itemRef.id} elapsedMs=${DateTime.now().difference(startedAt).inMilliseconds}',
-      );
-    }
-    await recalculateOrderTotal(cleanOrderId);
-    if (kDebugMode) {
-      developer.log(
-        '[TacoPOS][orderCapture] T3 recalculate complete '
-        'orderId=$cleanOrderId elapsedMs=${DateTime.now().difference(startedAt).inMilliseconds}',
-      );
-    }
+  Future<void> flushPendingMutations(String orderId) {
+    final cleanOrderId = orderId.trim();
+    return _orderCaptureQueue.flush(
+      cleanOrderId,
+      recalculate: () => recalculateOrderTotal(cleanOrderId),
+    );
   }
 
   Future<void> renamePerson({
@@ -10917,6 +10918,8 @@ class TacoPosRepository {
     required String orderId,
     required OrderItem item,
     required int qty,
+    bool skipQueue = false,
+    String? operationId,
   }) async {
     _requireTakeOrders();
     _ensureItemEditable(item);
@@ -10925,12 +10928,34 @@ class TacoPosRepository {
       return;
     }
 
+    Future<void> mutation() => _updateItemQtyNow(
+      orderId: orderId,
+      item: item,
+      qty: qty,
+      operationId: operationId,
+    );
+    if (!skipQueue) {
+      return _orderCaptureQueue.enqueue(
+        orderId.trim(),
+        mutation,
+        recalculate: () => recalculateOrderTotal(orderId.trim()),
+        operationId: operationId,
+      );
+    }
+    await mutation();
+  }
+
+  Future<void> _updateItemQtyNow({
+    required String orderId,
+    required OrderItem item,
+    required int qty,
+    String? operationId,
+  }) async {
     await _ordersRef.doc(orderId).collection('items').doc(item.id).update({
       'qty': qty,
       'total': qty * item.unitPrice,
       'updatedAt': FieldValue.serverTimestamp(),
     });
-    await recalculateOrderTotal(orderId);
   }
 
   Future<void> deleteItem({
