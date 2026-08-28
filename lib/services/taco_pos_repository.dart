@@ -24,6 +24,7 @@ import '../core/expenses/expense_policy.dart';
 import '../core/expenses/local_expense_policy_flow.dart';
 import '../core/payments/payment_operational_scope.dart';
 import '../core/purchases/purchase_capture_discount.dart';
+import '../core/backoffice/catalog_cache.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/cash_difference_audit.dart';
 import '../core/reports/cash_schedule_report.dart';
@@ -2445,6 +2446,7 @@ class TacoPosRepository {
       'updatedByEmployeeId': employee?.id ?? '',
       'updatedByEmployeeName': employee?.name ?? '',
     }, SetOptions(merge: true));
+    BackofficeCatalogCache.instance.invalidate('suppliers');
   }
 
   Stream<List<PurchaseItem>> watchPurchaseItems({bool activeOnly = false}) {
@@ -3347,6 +3349,7 @@ class TacoPosRepository {
     }
     if (hasUpdates) {
       await batch.commit();
+      BackofficeCatalogCache.instance.invalidate('partners');
     }
   }
 
@@ -6523,6 +6526,7 @@ class TacoPosRepository {
       if (itemId == null) 'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+    BackofficeCatalogCache.instance.invalidate('kitchen-stock-items');
     // TODO: Registrar kitchen_stock_item_created/updated en activityLog.
   }
 
@@ -6535,6 +6539,7 @@ class TacoPosRepository {
       'active': !item.active,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+    BackofficeCatalogCache.instance.invalidate('kitchen-stock-items');
     // TODO: Registrar kitchen_stock_item_disabled en activityLog.
   }
 
