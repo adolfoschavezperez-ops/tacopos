@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/backoffice/catalog_cache.dart';
+import '../../core/backoffice/local_pagination.dart';
 import '../../core/purchases/purchase_capture_discount.dart';
 import '../../core/purchases/purchases_by_supplier_report.dart';
 import '../../core/purchases/supplier_purchase_history.dart';
@@ -888,6 +889,9 @@ class _AccountsPayableTab extends StatefulWidget {
 }
 
 class _AccountsPayableTabState extends State<_AccountsPayableTab> {
+  static const _pageSize = 50;
+  final _scrollController = ScrollController();
+  int _currentPage = 1;
   String _status = 'open';
   String _supplierId = '';
   String _appliedStatus = 'open';
@@ -900,6 +904,12 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
   Object? _searchGeneration;
   String? _error;
   List<SupplierPurchase> _purchases = const [];
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -922,7 +932,13 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
           if (bDue != null) return 1;
           return b.purchaseDate.compareTo(a.purchaseDate);
         });
+    final page = LocalPage.from(
+      allItems: purchases,
+      currentPage: _currentPage,
+      pageSize: _pageSize,
+    );
     return ListView(
+      controller: _scrollController,
       key: const PageStorageKey<String>('backoffice-payables-list'),
       padding: const EdgeInsets.all(18),
       children: [
@@ -1020,7 +1036,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
             message: 'No hay cuentas por pagar para este filtro.',
           )
         else
-          ...purchases.map(
+          ...page.items.map(
             (purchase) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: GestureDetector(
@@ -1067,8 +1083,20 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
               ),
             ),
           ),
+        if (purchases.isNotEmpty)
+          _LocalPaginationControls(
+            page: page,
+            totalItems: purchases.length,
+            onPrevious: () => _goToPage(page.currentPage - 1),
+            onNext: () => _goToPage(page.currentPage + 1),
+          ),
       ],
     );
+  }
+
+  void _goToPage(int pageNumber) {
+    setState(() => _currentPage = pageNumber);
+    _scrollController.jumpTo(0);
   }
 
   Future<void> _pickPayableDate({required bool start}) async {
@@ -1089,7 +1117,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
     });
   }
 
-  Future<void> _search(bool allSuppliers) async {
+  Future<void> _search(bool allSuppliers, {bool force = false}) async {
     final key = _PurchaseListQueryKey(
       kind: 'payables',
       branchId: AppSession.instance.currentBranchId,
@@ -1099,7 +1127,8 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       status: _status,
       allSuppliers: allSuppliers,
     );
-    if (_queryKey == key && (_searched || _loading) && !_lastSearchFailed) {
+    final sameQuery = _queryKey == key;
+    if (!force && sameQuery && (_searched || _loading) && !_lastSearchFailed) {
       return;
     }
     final generation = Object();
@@ -1109,6 +1138,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       _searched = true;
       _error = null;
       _queryKey = key;
+      if (!sameQuery) _currentPage = 1;
     });
     try {
       final purchases = await widget.repository
@@ -1155,6 +1185,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       _queryKey = null;
       _lastSearchFailed = false;
       _searchGeneration = Object();
+      _currentPage = 1;
     });
   }
 
@@ -1181,7 +1212,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       ),
     );
     if (!mounted || paid != true) return;
-    await _search(_supplierId.isEmpty);
+    await _search(_supplierId.isEmpty, force: true);
     if (!mounted) return;
     showAppSnackBar(context, 'Pago registrado.', type: AppSnackBarType.success);
   }
@@ -1207,6 +1238,8 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       ),
     );
     if (!mounted || changed != true) return;
+    await _search(_supplierId.isEmpty, force: true);
+    if (!mounted) return;
     showAppSnackBar(
       context,
       'Fecha de vencimiento actualizada.',
@@ -1224,6 +1257,8 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       ),
     );
     if (!mounted || saved != true) return;
+    await _search(_supplierId.isEmpty, force: true);
+    if (!mounted) return;
     showAppSnackBar(
       context,
       'Compra actualizada.',
@@ -1262,7 +1297,7 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
         'Compra cancelada.',
         type: AppSnackBarType.success,
       );
-      await _search(_supplierId.isEmpty);
+      await _search(_supplierId.isEmpty, force: true);
     } catch (error) {
       if (!mounted) return;
       showAppSnackBar(
@@ -1369,6 +1404,9 @@ class _SupplierPaymentsTab extends StatefulWidget {
 }
 
 class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
+  static const _pageSize = 50;
+  final _scrollController = ScrollController();
+  int _currentPage = 1;
   String _method = 'all';
   String _supplierId = '';
   String _appliedMethod = 'all';
@@ -1383,6 +1421,12 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
   List<SupplierPayment> _payments = const [];
 
   @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
   }
@@ -1393,7 +1437,13 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
       if (_appliedMethod == 'all') return true;
       return payment.method == _appliedMethod;
     }).toList();
+    final page = LocalPage.from(
+      allItems: payments,
+      currentPage: _currentPage,
+      pageSize: _pageSize,
+    );
     return ListView(
+      controller: _scrollController,
       key: const PageStorageKey<String>('backoffice-supplier-payments-list'),
       padding: const EdgeInsets.all(18),
       children: [
@@ -1479,7 +1529,7 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
             message: 'Los abonos apareceran aqui.',
           )
         else
-          ...payments.map(
+          ...page.items.map(
             (payment) => Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: GlassCard(
@@ -1501,11 +1551,14 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
                         const Chip(label: Text('Cancelado'))
                       else
                         TextButton(
-                          onPressed: () => _cancelSupplierPayment(
-                            context,
-                            repository: widget.repository,
-                            payment: payment,
-                          ),
+                          onPressed: () async {
+                            await _cancelSupplierPayment(
+                              context,
+                              repository: widget.repository,
+                              payment: payment,
+                              onSuccess: () => _search(force: true),
+                            );
+                          },
                           child: const Text('Cancelar pago'),
                         ),
                       MoneyText(value: payment.amount),
@@ -1515,8 +1568,20 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
               ),
             ),
           ),
+        if (payments.isNotEmpty)
+          _LocalPaginationControls(
+            page: page,
+            totalItems: payments.length,
+            onPrevious: () => _goToPage(page.currentPage - 1),
+            onNext: () => _goToPage(page.currentPage + 1),
+          ),
       ],
     );
+  }
+
+  void _goToPage(int pageNumber) {
+    setState(() => _currentPage = pageNumber);
+    _scrollController.jumpTo(0);
   }
 
   Future<void> _pickPaymentDate({required bool start}) async {
@@ -1537,7 +1602,7 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
     });
   }
 
-  Future<void> _search() async {
+  Future<void> _search({bool force = false}) async {
     final key = _PurchaseListQueryKey(
       kind: 'supplier-payments',
       branchId: AppSession.instance.currentBranchId,
@@ -1546,7 +1611,8 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
       endDate: _endDate?.toIso8601String() ?? '',
       method: _method,
     );
-    if (_queryKey == key && (_searched || _loading) && !_lastSearchFailed) {
+    final sameQuery = _queryKey == key;
+    if (!force && sameQuery && (_searched || _loading) && !_lastSearchFailed) {
       return;
     }
     final generation = Object();
@@ -1556,6 +1622,7 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
       _error = null;
       _searched = true;
       _queryKey = key;
+      if (!sameQuery) _currentPage = 1;
     });
     try {
       final payments = await widget.repository.searchSupplierPayments(
@@ -1598,6 +1665,7 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
       _queryKey = null;
       _lastSearchFailed = false;
       _searchGeneration = Object();
+      _currentPage = 1;
     });
   }
 }
@@ -2103,6 +2171,7 @@ class _PurchaseReportsTab extends StatefulWidget {
 }
 
 class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
+  static const _pageSize = 50;
   final _scrollController = ScrollController();
   late DateTime _startDate;
   late DateTime _endDate;
@@ -2111,6 +2180,7 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
   bool _loadingSupplierReport = false;
   bool _hasConsultedSupplierReport = false;
   String? _supplierReportError;
+  int _currentPage = 1;
 
   @override
   void initState() {
@@ -2233,10 +2303,15 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
         ],
       );
     }
+    final page = LocalPage.from(
+      allItems: report.rows,
+      currentPage: _currentPage,
+      pageSize: _pageSize,
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ...report.rows.map(
+        ...page.items.map(
           (row) => Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: _SupplierReportRowCard(
@@ -2244,6 +2319,26 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
               onViewDetail: () => _openSupplierDetail(row),
             ),
           ),
+        ),
+        _LocalPaginationControls(
+          page: page,
+          totalItems: report.rows.length,
+          onPrevious: () {
+            setState(() => _currentPage = page.currentPage - 1);
+            _scrollController.animateTo(
+              0,
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+            );
+          },
+          onNext: () {
+            setState(() => _currentPage = page.currentPage + 1);
+            _scrollController.animateTo(
+              0,
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+            );
+          },
         ),
         const SizedBox(height: 4),
         _SupplierReportTotalCard(total: report.totalPurchased),
@@ -2309,6 +2404,7 @@ class _PurchaseReportsTabState extends State<_PurchaseReportsTab> {
         _supplierReport = report;
         _reportPurchases = purchases;
         _loadingSupplierReport = false;
+        _currentPage = 1;
       });
     } catch (error, stackTrace) {
       debugPrint('PURCHASES_BY_SUPPLIER_REPORT_ERROR $error\n$stackTrace');
@@ -3240,7 +3336,7 @@ class _SupplierPurchaseDatesDialogState
   }
 }
 
-class _PurchasesByItemReport extends StatelessWidget {
+class _PurchasesByItemReport extends StatefulWidget {
   const _PurchasesByItemReport({
     required this.repository,
     required this.purchases,
@@ -3256,15 +3352,51 @@ class _PurchasesByItemReport extends StatelessWidget {
   final String? reportError;
 
   @override
+  State<_PurchasesByItemReport> createState() => _PurchasesByItemReportState();
+}
+
+class _PurchasesByItemReportState extends State<_PurchasesByItemReport> {
+  static const _pageSize = 50;
+  int _currentPage = 1;
+  late Future<List<SupplierPurchaseItem>> _itemsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _itemsFuture = Future.value(const <SupplierPurchaseItem>[]);
+  }
+
+  @override
+  void didUpdateWidget(covariant _PurchasesByItemReport oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.purchases != widget.purchases) {
+      _currentPage = 1;
+      _itemsFuture = _loadItems();
+    }
+  }
+
+  Future<List<SupplierPurchaseItem>> _loadItems() {
+    final activePurchases = widget.purchases
+        .where(isSupplierPurchaseIncludedInSupplierReport)
+        .toList();
+    if (activePurchases.isEmpty) {
+      return Future.value(const <SupplierPurchaseItem>[]);
+    }
+    return widget.repository.getSupplierPurchaseItemsForPurchases(
+      activePurchases,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final activePurchases = purchases
+    final activePurchases = widget.purchases
         .where(isSupplierPurchaseIncludedInSupplierReport)
         .toList();
     const header = _PurchaseHeader(
       title: 'Compras por insumo',
       subtitle: 'Agrupado por el insumo compartido con cocina.',
     );
-    if (loading) {
+    if (widget.loading) {
       return const Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3277,7 +3409,7 @@ class _PurchasesByItemReport extends StatelessWidget {
         ],
       );
     }
-    if (reportError != null) {
+    if (widget.reportError != null) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3286,12 +3418,12 @@ class _PurchasesByItemReport extends StatelessWidget {
           EmptyState(
             icon: Icons.error_outline,
             title: 'No fue posible consultar los insumos',
-            message: reportError!,
+            message: widget.reportError!,
           ),
         ],
       );
     }
-    if (!hasConsulted) {
+    if (!widget.hasConsulted) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -3320,10 +3452,15 @@ class _PurchasesByItemReport extends StatelessWidget {
       );
     }
     return FutureBuilder<List<SupplierPurchaseItem>>(
-      future: repository.getSupplierPurchaseItemsForPurchases(activePurchases),
+      future: _itemsFuture,
       builder: (context, snapshot) {
-        final itemRows = repository.buildPurchasesByItemReport(
+        final itemRows = widget.repository.buildPurchasesByItemReport(
           items: snapshot.data ?? const [],
+        );
+        final page = LocalPage.from(
+          allItems: itemRows,
+          currentPage: _currentPage,
+          pageSize: _pageSize,
         );
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -3355,7 +3492,7 @@ class _PurchasesByItemReport extends StatelessWidget {
                 message: 'Registra compras para ver este reporte.',
               )
             else
-              ...itemRows.map(
+              ...page.items.map(
                 (row) => Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: GlassCard(
@@ -3390,6 +3527,15 @@ class _PurchasesByItemReport extends StatelessWidget {
                     ),
                   ),
                 ),
+              ),
+            if (itemRows.isNotEmpty)
+              _LocalPaginationControls(
+                page: page,
+                totalItems: itemRows.length,
+                onPrevious: () =>
+                    setState(() => _currentPage = page.currentPage - 1),
+                onNext: () =>
+                    setState(() => _currentPage = page.currentPage + 1),
               ),
           ],
         );
@@ -4837,6 +4983,7 @@ Future<void> _cancelSupplierPayment(
   required TacoPosRepository repository,
   required SupplierPayment payment,
   bool closeAfterSuccess = false,
+  Future<void> Function()? onSuccess,
 }) async {
   if (payment.isCancelled) {
     showAppSnackBar(
@@ -4853,6 +5000,8 @@ Future<void> _cancelSupplierPayment(
   if (!context.mounted || reason == null) return;
   try {
     await repository.cancelSupplierPayment(payment: payment, reason: reason);
+    if (!context.mounted) return;
+    await onSuccess?.call();
     if (!context.mounted) return;
     showAppSnackBar(context, 'Pago cancelado.', type: AppSnackBarType.success);
     if (closeAfterSuccess && context.mounted) {
@@ -5712,6 +5861,48 @@ class _StatementTable extends StatelessWidget {
               )
               .toList(),
         ),
+      ),
+    );
+  }
+}
+
+class _LocalPaginationControls<T> extends StatelessWidget {
+  const _LocalPaginationControls({
+    required this.page,
+    required this.totalItems,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final LocalPage<T> page;
+  final int totalItems;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          OutlinedButton.icon(
+            onPressed: page.hasPrevious ? onPrevious : null,
+            icon: const Icon(Icons.chevron_left),
+            label: const Text('Anterior'),
+          ),
+          const SizedBox(width: 16),
+          Text(
+            'Pagina ${page.currentPage} de ${page.totalPages} Â· $totalItems registros',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(width: 16),
+          OutlinedButton.icon(
+            onPressed: page.hasNext ? onNext : null,
+            icon: const Icon(Icons.chevron_right),
+            label: const Text('Siguiente'),
+          ),
+        ],
       ),
     );
   }
