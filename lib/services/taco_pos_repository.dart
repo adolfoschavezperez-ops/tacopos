@@ -10769,18 +10769,37 @@ class TacoPosRepository {
     required Product product,
     required int personNumber,
     bool? knownStockedOut,
+    String? itemId,
+    String? operationId,
+  }) async {
+    final cleanOrderId = orderId.trim();
+    return _orderCaptureQueue.enqueue(
+      cleanOrderId,
+      () => _addProductToOrderNow(
+        orderId: cleanOrderId,
+        product: product,
+        personNumber: personNumber,
+        knownStockedOut: knownStockedOut,
+        itemId: itemId,
+        operationId: operationId,
+      ),
+      recalculate: () => recalculateOrderTotal(cleanOrderId),
+      operationId: operationId,
+    );
+  }
+
+  Future<void> _addProductToOrderNow({
+    required String orderId,
+    required Product product,
+    required int personNumber,
+    bool? knownStockedOut,
+    String? itemId,
+    String? operationId,
   }) async {
     _requireTakeOrders();
     final cleanOrderId = orderId.trim();
     final itemsPath =
         'restaurants/${AppConstants.restaurantId}/orders/$cleanOrderId/items';
-    final startedAt = DateTime.now();
-    if (kDebugMode) {
-      developer.log(
-        '[TacoPOS][orderCapture] T1 addProduct start '
-        'orderId=$cleanOrderId productName=${product.name}',
-      );
-    }
     final orderDoc = await _ordersRef.doc(cleanOrderId).get();
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
     if (knownStockedOut ?? await isProductStockedOut(product)) {
