@@ -63,6 +63,17 @@ class _CashAdminScreenState extends State<CashAdminScreen> {
     });
   }
 
+  void _shiftSearchedDate(int days) {
+    final searched = _searchedBusinessDate;
+    if (searched == null) return;
+    final current = DateFormat('yyyy-MM-dd').parseStrict(searched);
+    final shifted = current.add(Duration(days: days));
+    setState(() {
+      _selectedDate = shifted;
+      _searchedBusinessDate = DateFormat('yyyy-MM-dd').format(shifted);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final employee = AppSession.instance.employee;
@@ -93,6 +104,9 @@ class _CashAdminScreenState extends State<CashAdminScreen> {
               onPickDate: _pickDate,
               onSearch: _search,
               onClear: _clearSearch,
+              canNavigate: _searchedBusinessDate != null,
+              onPreviousDay: () => _shiftSearchedDate(-1),
+              onNextDay: () => _shiftSearchedDate(1),
             ),
             const TabBar(
               indicatorSize: TabBarIndicatorSize.tab,
@@ -137,6 +151,9 @@ class _CutDatePanel extends StatelessWidget {
     required this.onPickDate,
     required this.onSearch,
     required this.onClear,
+    required this.canNavigate,
+    required this.onPreviousDay,
+    required this.onNextDay,
   });
 
   final String businessDate;
@@ -144,6 +161,9 @@ class _CutDatePanel extends StatelessWidget {
   final VoidCallback onPickDate;
   final VoidCallback onSearch;
   final VoidCallback onClear;
+  final bool canNavigate;
+  final VoidCallback onPreviousDay;
+  final VoidCallback onNextDay;
 
   @override
   Widget build(BuildContext context) {
@@ -175,6 +195,16 @@ class _CutDatePanel extends StatelessWidget {
               onPressed: hasSelection ? onClear : null,
               icon: const Icon(Icons.clear),
               label: const Text('Limpiar'),
+            ),
+            OutlinedButton.icon(
+              onPressed: canNavigate ? onPreviousDay : null,
+              icon: const Icon(Icons.chevron_left),
+              label: const Text('Día anterior'),
+            ),
+            OutlinedButton.icon(
+              onPressed: canNavigate ? onNextDay : null,
+              icon: const Icon(Icons.chevron_right),
+              label: const Text('Día siguiente'),
             ),
           ],
         ),
