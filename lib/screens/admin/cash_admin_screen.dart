@@ -30,75 +30,37 @@ class CashAdminScreen extends StatefulWidget {
 }
 
 class _CashAdminScreenState extends State<CashAdminScreen> {
-  late DateTime _startDate;
-  late DateTime _endDate;
+  DateTime? _selectedDate;
+  String? _searchedBusinessDate;
 
-  @override
-  void initState() {
-    super.initState();
-    final now = DateTime.now();
-    _startDate = DateTime(now.year, now.month, now.day);
-    _endDate = _startDate;
-  }
+  String get _selectedBusinessDate => _selectedDate == null
+      ? ''
+      : DateFormat('yyyy-MM-dd').format(_selectedDate!);
 
-  String get _startBusinessDate => DateFormat('yyyy-MM-dd').format(_startDate);
-  String get _endBusinessDate => DateFormat('yyyy-MM-dd').format(_endDate);
-
-  String get _rangeLabel {
-    if (_startBusinessDate == _endBusinessDate) {
-      return _isToday(_startDate) ? 'Hoy' : _startBusinessDate;
-    }
-    return '$_startBusinessDate a $_endBusinessDate';
-  }
-
-  Future<void> _pickStartDate() async {
-    final picked = await _pickDate(_startDate);
-    if (picked == null || !mounted) {
-      return;
-    }
-    setState(() {
-      _startDate = picked;
-      if (_endDate.isBefore(_startDate)) {
-        _endDate = _startDate;
-      }
-    });
-  }
-
-  Future<void> _pickEndDate() async {
-    final picked = await _pickDate(_endDate);
-    if (picked == null || !mounted) {
-      return;
-    }
-    setState(() {
-      _endDate = picked;
-      if (_startDate.isAfter(_endDate)) {
-        _startDate = _endDate;
-      }
-    });
-  }
-
-  Future<DateTime?> _pickDate(DateTime initialDate) {
-    return showDatePicker(
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
       context: context,
-      initialDate: initialDate,
+      initialDate: _selectedDate ?? DateTime.now(),
       firstDate: DateTime(2024),
       lastDate: DateTime(DateTime.now().year + 2),
     );
-  }
-
-  void _resetToday() {
-    final now = DateTime.now();
+    if (picked == null || !mounted) return;
     setState(() {
-      _startDate = DateTime(now.year, now.month, now.day);
-      _endDate = _startDate;
+      _selectedDate = DateTime(picked.year, picked.month, picked.day);
+      _searchedBusinessDate = null;
     });
   }
 
-  bool _isToday(DateTime date) {
-    final now = DateTime.now();
-    return date.year == now.year &&
-        date.month == now.month &&
-        date.day == now.day;
+  void _search() {
+    if (_selectedDate == null) return;
+    setState(() => _searchedBusinessDate = _selectedBusinessDate);
+  }
+
+  void _clearSearch() {
+    setState(() {
+      _selectedDate = null;
+      _searchedBusinessDate = null;
+    });
   }
 
   @override
@@ -125,13 +87,12 @@ class _CashAdminScreenState extends State<CashAdminScreen> {
         title: 'Caja Admin',
         body: Column(
           children: [
-            _DateRangePanel(
-              label: _rangeLabel,
-              startBusinessDate: _startBusinessDate,
-              endBusinessDate: _endBusinessDate,
-              onPickStart: _pickStartDate,
-              onPickEnd: _pickEndDate,
-              onToday: _resetToday,
+            _CutDatePanel(
+              businessDate: _selectedBusinessDate,
+              hasSelection: _selectedDate != null,
+              onPickDate: _pickDate,
+              onSearch: _search,
+              onClear: _clearSearch,
             ),
             const TabBar(
               indicatorSize: TabBarIndicatorSize.tab,
@@ -155,13 +116,9 @@ class _CashAdminScreenState extends State<CashAdminScreen> {
             Expanded(
               child: TabBarView(
                 children: [
-                  _CashSessionsTab(
-                    startBusinessDate: _startBusinessDate,
-                    endBusinessDate: _endBusinessDate,
-                  ),
+                  _CashSessionsTab(businessDate: _searchedBusinessDate),
                   _WithdrawalAuthorizationTab(
-                    startBusinessDate: _startBusinessDate,
-                    endBusinessDate: _endBusinessDate,
+                    businessDate: _searchedBusinessDate,
                   ),
                 ],
               ),
@@ -173,22 +130,20 @@ class _CashAdminScreenState extends State<CashAdminScreen> {
   }
 }
 
-class _DateRangePanel extends StatelessWidget {
-  const _DateRangePanel({
-    required this.label,
-    required this.startBusinessDate,
-    required this.endBusinessDate,
-    required this.onPickStart,
-    required this.onPickEnd,
-    required this.onToday,
+class _CutDatePanel extends StatelessWidget {
+  const _CutDatePanel({
+    required this.businessDate,
+    required this.hasSelection,
+    required this.onPickDate,
+    required this.onSearch,
+    required this.onClear,
   });
 
-  final String label;
-  final String startBusinessDate;
-  final String endBusinessDate;
-  final VoidCallback onPickStart;
-  final VoidCallback onPickEnd;
-  final VoidCallback onToday;
+  final String businessDate;
+  final bool hasSelection;
+  final VoidCallback onPickDate;
+  final VoidCallback onSearch;
+  final VoidCallback onClear;
 
   @override
   Widget build(BuildContext context) {
@@ -202,30 +157,24 @@ class _DateRangePanel extends StatelessWidget {
           runSpacing: 7,
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            ConstrainedBox(
-              constraints: const BoxConstraints(minWidth: 130),
-              child: Text(
-                'Viendo: $label',
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w900,
-                ),
+            OutlinedButton.icon(
+              onPressed: onPickDate,
+              icon: const Icon(Icons.event_outlined),
+              label: Text(
+                hasSelection
+                    ? 'Fecha de corte: $businessDate'
+                    : 'Fecha de corte',
               ),
             ),
-            OutlinedButton.icon(
-              onPressed: onPickStart,
-              icon: const Icon(Icons.event_outlined),
-              label: Text('Inicial: $startBusinessDate'),
-            ),
-            OutlinedButton.icon(
-              onPressed: onPickEnd,
-              icon: const Icon(Icons.event_available_outlined),
-              label: Text('Final: $endBusinessDate'),
+            FilledButton.icon(
+              onPressed: hasSelection ? onSearch : null,
+              icon: const Icon(Icons.search),
+              label: const Text('Buscar'),
             ),
             TextButton.icon(
-              onPressed: onToday,
-              icon: const Icon(Icons.today_outlined),
-              label: const Text('Hoy'),
+              onPressed: hasSelection ? onClear : null,
+              icon: const Icon(Icons.clear),
+              label: const Text('Limpiar'),
             ),
           ],
         ),
@@ -235,22 +184,22 @@ class _DateRangePanel extends StatelessWidget {
 }
 
 class _CashSessionsTab extends StatelessWidget {
-  const _CashSessionsTab({
-    required this.startBusinessDate,
-    required this.endBusinessDate,
-  });
+  const _CashSessionsTab({required this.businessDate});
 
-  final String startBusinessDate;
-  final String endBusinessDate;
+  final String? businessDate;
 
   @override
   Widget build(BuildContext context) {
     final repository = TacoPosRepository();
+    if (businessDate == null) {
+      return const EmptyState(
+        icon: Icons.event_outlined,
+        title: 'Selecciona una fecha de corte para consultar.',
+        message: '',
+      );
+    }
     return StreamBuilder<List<CashSession>>(
-      stream: repository.watchCashSessions(
-        startBusinessDate: startBusinessDate,
-        endBusinessDate: endBusinessDate,
-      ),
+      stream: repository.watchCashSessions(businessDate: businessDate),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return EmptyState(
@@ -284,8 +233,8 @@ class _CashSessionsTab extends StatelessWidget {
                 height: 320,
                 child: EmptyState(
                   icon: Icons.point_of_sale_outlined,
-                  title: 'Sin cortes',
-                  message: 'Aun no hay cajas registradas.',
+                  title: 'No se encontró corte para esta fecha.',
+                  message: '',
                 ),
               )
             else
@@ -3389,24 +3338,26 @@ class _CancelledItemLine {
 }
 
 class _WithdrawalAuthorizationTab extends StatelessWidget {
-  const _WithdrawalAuthorizationTab({
-    required this.startBusinessDate,
-    required this.endBusinessDate,
-  });
+  const _WithdrawalAuthorizationTab({required this.businessDate});
 
-  final String startBusinessDate;
-  final String endBusinessDate;
+  final String? businessDate;
 
   @override
   Widget build(BuildContext context) {
     final repository = TacoPosRepository();
     final canAuthorize =
         AppSession.instance.employee?.canAuthorizeCashWithdrawals == true;
+    if (businessDate == null) {
+      return const EmptyState(
+        icon: Icons.event_outlined,
+        title: 'Selecciona una fecha de corte para consultar.',
+        message: '',
+      );
+    }
 
     return StreamBuilder<List<CashWithdrawalRequest>>(
       stream: repository.watchCashWithdrawalRequests(
-        startBusinessDate: startBusinessDate,
-        endBusinessDate: endBusinessDate,
+        businessDate: businessDate,
       ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {

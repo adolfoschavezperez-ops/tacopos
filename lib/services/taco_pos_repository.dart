@@ -6065,11 +6065,14 @@ class TacoPosRepository {
   }
 
   Stream<List<CashSession>> watchCashSessions({
+    String? businessDate,
     String? startBusinessDate,
     String? endBusinessDate,
   }) {
     Query<Map<String, dynamic>> query = _cashSessionsRef;
-    if (startBusinessDate != null) {
+    if (businessDate != null) {
+      query = query.where('businessDate', isEqualTo: businessDate);
+    } else if (startBusinessDate != null) {
       query = query.where(
         'businessDate',
         isGreaterThanOrEqualTo: startBusinessDate,
