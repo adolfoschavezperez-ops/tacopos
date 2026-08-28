@@ -93,6 +93,52 @@ class _PurchaseData {
   final List<PartnerContribution> contributions;
 }
 
+class _PurchaseListQueryKey {
+  const _PurchaseListQueryKey({
+    required this.kind,
+    required this.branchId,
+    required this.supplierId,
+    required this.startDate,
+    required this.endDate,
+    this.status = '',
+    this.method = '',
+    this.allSuppliers = false,
+  });
+
+  final String kind;
+  final String branchId;
+  final String supplierId;
+  final String startDate;
+  final String endDate;
+  final String status;
+  final String method;
+  final bool allSuppliers;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _PurchaseListQueryKey &&
+      other.kind == kind &&
+      other.branchId == branchId &&
+      other.supplierId == supplierId &&
+      other.startDate == startDate &&
+      other.endDate == endDate &&
+      other.status == status &&
+      other.method == method &&
+      other.allSuppliers == allSuppliers;
+
+  @override
+  int get hashCode => Object.hash(
+    kind,
+    branchId,
+    supplierId,
+    startDate,
+    endDate,
+    status,
+    method,
+    allSuppliers,
+  );
+}
+
 class _PurchaseDataScope extends StatelessWidget {
   const _PurchaseDataScope({required this.repository, required this.builder});
 
@@ -831,10 +877,14 @@ class _AccountsPayableTab extends StatefulWidget {
 class _AccountsPayableTabState extends State<_AccountsPayableTab> {
   String _status = 'open';
   String _supplierId = '';
+  String _appliedStatus = 'open';
   DateTime? _startDate;
   DateTime? _endDate;
   bool _searched = false;
   bool _loading = false;
+  bool _lastSearchFailed = false;
+  _PurchaseListQueryKey? _queryKey;
+  Object? _searchGeneration;
   String? _error;
   List<SupplierPurchase> _purchases = const [];
 
@@ -843,11 +893,11 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
     final canCancelPurchase = _canCancelSupplierPurchase();
     final purchases =
         _purchases.where((purchase) {
-          if (_status == 'open') return purchase.hasBalance;
-          if (_status == 'paid') return purchase.status == 'paid';
-          if (_status == 'partial') return purchase.status == 'partial';
-          if (_status == 'pending') return purchase.status == 'pending';
-          if (_status == 'cancelled') return purchase.isCancelled;
+          if (_appliedStatus == 'open') return purchase.hasBalance;
+          if (_appliedStatus == 'paid') return purchase.status == 'paid';
+          if (_appliedStatus == 'partial') return purchase.status == 'partial';
+          if (_appliedStatus == 'pending') return purchase.status == 'pending';
+          if (_appliedStatus == 'cancelled') return purchase.isCancelled;
           return true;
         }).toList()..sort((a, b) {
           final aDue = a.dueDate;
@@ -889,9 +939,6 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
                 ],
                 onChanged: (value) => setState(() {
                   _supplierId = value ?? '';
-                  _searched = false;
-                  _purchases = const [];
-                  _error = null;
                 }),
               ),
             ),
@@ -1026,18 +1073,29 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
       } else {
         _endDate = picked;
       }
-      _searched = false;
-      _purchases = const [];
-      _error = null;
     });
   }
 
   Future<void> _search(bool allSuppliers) async {
+    final key = _PurchaseListQueryKey(
+      kind: 'payables',
+      branchId: AppSession.instance.currentBranchId,
+      supplierId: allSuppliers ? '' : _supplierId,
+      startDate: _startDate?.toIso8601String() ?? '',
+      endDate: _endDate?.toIso8601String() ?? '',
+      status: _status,
+      allSuppliers: allSuppliers,
+    );
+    if (_queryKey == key && (_searched || _loading) && !_lastSearchFailed) {
+      return;
+    }
+    final generation = Object();
+    _searchGeneration = generation;
     setState(() {
       _loading = true;
       _searched = true;
       _error = null;
-      _purchases = const [];
+      _queryKey = key;
     });
     try {
       final purchases = await widget.repository
@@ -1051,15 +1109,22 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
                 : _startOfDay(_endDate!).add(const Duration(days: 1)),
           );
       if (!mounted) return;
+      if (_searchGeneration != generation) return;
       setState(() {
         _purchases = purchases;
         _loading = false;
+        _searched = true;
+        _queryKey = key;
+        _lastSearchFailed = false;
+        _appliedStatus = _status;
       });
     } catch (error) {
       if (!mounted) return;
+      if (_searchGeneration != generation) return;
       setState(() {
         _error = error.toString();
         _loading = false;
+        _lastSearchFailed = true;
       });
     }
   }
@@ -1067,12 +1132,16 @@ class _AccountsPayableTabState extends State<_AccountsPayableTab> {
   void _clear() {
     setState(() {
       _supplierId = '';
+      _appliedStatus = 'open';
       _startDate = null;
       _endDate = null;
       _searched = false;
       _loading = false;
       _error = null;
       _purchases = const [];
+      _queryKey = null;
+      _lastSearchFailed = false;
+      _searchGeneration = Object();
     });
   }
 
@@ -1289,23 +1358,27 @@ class _SupplierPaymentsTab extends StatefulWidget {
 class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
   String _method = 'all';
   String _supplierId = '';
+  String _appliedMethod = 'all';
   DateTime? _startDate;
   DateTime? _endDate;
-  bool _loading = true;
+  bool _loading = false;
+  bool _searched = false;
+  bool _lastSearchFailed = false;
+  _PurchaseListQueryKey? _queryKey;
+  Object? _searchGeneration;
   String? _error;
   List<SupplierPayment> _payments = const [];
 
   @override
   void initState() {
     super.initState();
-    _search();
   }
 
   @override
   Widget build(BuildContext context) {
     final payments = _payments.where((payment) {
-      if (_method == 'all') return true;
-      return payment.method == _method;
+      if (_appliedMethod == 'all') return true;
+      return payment.method == _appliedMethod;
     }).toList();
     return ListView(
       key: const PageStorageKey<String>('backoffice-supplier-payments-list'),
@@ -1380,6 +1453,12 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
             title: 'No se pudieron consultar pagos',
             message: _error!,
           )
+        else if (!_searched)
+          const EmptyState(
+            icon: Icons.manage_search_outlined,
+            title: 'Consulta bajo demanda',
+            message: 'Selecciona filtros y presiona Buscar.',
+          )
         else if (payments.isEmpty)
           const EmptyState(
             icon: Icons.payments_outlined,
@@ -1446,9 +1525,24 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
   }
 
   Future<void> _search() async {
+    final key = _PurchaseListQueryKey(
+      kind: 'supplier-payments',
+      branchId: AppSession.instance.currentBranchId,
+      supplierId: _supplierId,
+      startDate: _startDate?.toIso8601String() ?? '',
+      endDate: _endDate?.toIso8601String() ?? '',
+      method: _method,
+    );
+    if (_queryKey == key && (_searched || _loading) && !_lastSearchFailed) {
+      return;
+    }
+    final generation = Object();
+    _searchGeneration = generation;
     setState(() {
       _loading = true;
       _error = null;
+      _searched = true;
+      _queryKey = key;
     });
     try {
       final payments = await widget.repository.searchSupplierPayments(
@@ -1459,15 +1553,20 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
             : _startOfDay(_endDate!).add(const Duration(days: 1)),
       );
       if (!mounted) return;
+      if (_searchGeneration != generation) return;
       setState(() {
         _payments = payments;
         _loading = false;
+        _lastSearchFailed = false;
+        _appliedMethod = _method;
       });
     } catch (error) {
       if (!mounted) return;
+      if (_searchGeneration != generation) return;
       setState(() {
         _error = error.toString();
         _loading = false;
+        _lastSearchFailed = true;
       });
     }
   }
@@ -1478,8 +1577,15 @@ class _SupplierPaymentsTabState extends State<_SupplierPaymentsTab> {
       _startDate = null;
       _endDate = null;
       _method = 'all';
+      _appliedMethod = 'all';
+      _searched = false;
+      _loading = false;
+      _error = null;
+      _payments = const [];
+      _queryKey = null;
+      _lastSearchFailed = false;
+      _searchGeneration = Object();
     });
-    await _search();
   }
 }
 
