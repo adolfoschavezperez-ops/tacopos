@@ -265,6 +265,12 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
                   _reportKind = _ReportKind.yieldProfit;
                   _reportsExpanded = true;
                 }),
+                onSectionChanged: (value) => setState(() => _section = value),
+                onReportSelected: (value) => setState(() {
+                  _section = _BackofficeSection.reports;
+                  _reportKind = value;
+                  _reportsExpanded = true;
+                }),
                 onSalesDataChanged: () => setState(() {}),
                 onSignOut: _signOut,
               );
@@ -860,6 +866,8 @@ class _BackofficeBody extends StatelessWidget {
     required this.onRefreshReports,
     required this.onOpenDiscountsReport,
     required this.onOpenYieldReport,
+    required this.onSectionChanged,
+    required this.onReportSelected,
     required this.onSalesDataChanged,
     required this.onSignOut,
   });
@@ -878,6 +886,8 @@ class _BackofficeBody extends StatelessWidget {
   final VoidCallback onRefreshReports;
   final VoidCallback onOpenDiscountsReport;
   final VoidCallback onOpenYieldReport;
+  final ValueChanged<_BackofficeSection> onSectionChanged;
+  final ValueChanged<_ReportKind> onReportSelected;
   final VoidCallback onSalesDataChanged;
   final VoidCallback onSignOut;
 
@@ -927,6 +937,13 @@ class _BackofficeBody extends StatelessWidget {
           repository: repository,
           onOpenYieldReport: onOpenYieldReport,
         ),
+      );
+    }
+    if (section == _BackofficeSection.dashboard) {
+      return _BackofficeHomeSection(
+        employee: AppSession.instance.employee,
+        onSectionChanged: onSectionChanged,
+        onReportSelected: onReportSelected,
       );
     }
     if (section == _BackofficeSection.reports &&
@@ -1115,6 +1132,283 @@ class _BackofficeBody extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _BackofficeHomeSection extends StatelessWidget {
+  const _BackofficeHomeSection({
+    required this.employee,
+    required this.onSectionChanged,
+    required this.onReportSelected,
+  });
+
+  final Employee? employee;
+  final ValueChanged<_BackofficeSection> onSectionChanged;
+  final ValueChanged<_ReportKind> onReportSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _navItems(
+      employee,
+    ).where((item) => item.section != _BackofficeSection.dashboard).toList();
+    final today = DateFormat('dd/MM/yyyy').format(DateTime.now());
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(22, 16, 22, 28),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: BrandColors.surfaceDark,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: BrandColors.glassBorder),
+          ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 620;
+              final contextInfo = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'TacoPOS BACKOFFICE',
+                    style: TextStyle(
+                      color: BrandColors.accentYellow,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Bienvenido${employee?.name.trim().isNotEmpty == true ? ', ${employee!.name.trim()}' : ''}',
+                    style: TextStyle(
+                      fontSize: compact ? 25 : 32,
+                      fontWeight: FontWeight.w900,
+                      height: 1.05,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Resumen general y accesos rapidos para operar tu negocio.',
+                    style: TextStyle(
+                      color: BrandColors.textSecondary,
+                      fontSize: 15,
+                    ),
+                  ),
+                ],
+              );
+              final sessionInfo = Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _HomeContextPill(
+                    icon: Icons.storefront_outlined,
+                    label: AppSession.instance.currentBranchName,
+                  ),
+                  _HomeContextPill(
+                    icon: Icons.calendar_today_outlined,
+                    label: today,
+                  ),
+                ],
+              );
+              return compact
+                  ? Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        contextInfo,
+                        const SizedBox(height: 20),
+                        sessionInfo,
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        Expanded(child: contextInfo),
+                        const SizedBox(width: 20),
+                        Flexible(
+                          child: Align(
+                            alignment: Alignment.centerRight,
+                            child: sessionInfo,
+                          ),
+                        ),
+                      ],
+                    );
+            },
+          ),
+        ),
+        const SizedBox(height: 24),
+        const Text(
+          'Accesos principales',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+        ),
+        const SizedBox(height: 5),
+        const Text(
+          'Entra directamente al modulo que necesitas.',
+          style: TextStyle(color: BrandColors.textMuted),
+        ),
+        const SizedBox(height: 14),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = constraints.maxWidth >= 1080
+                ? 4
+                : constraints.maxWidth >= 680
+                ? 3
+                : constraints.maxWidth >= 420
+                ? 2
+                : 1;
+            return GridView.builder(
+              itemCount: items.length,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                childAspectRatio: columns == 1 ? 3.2 : 1.45,
+              ),
+              itemBuilder: (context, index) {
+                final item = items[index];
+                return _HomeModuleCard(
+                  item: item,
+                  onTap: () {
+                    if (item.section == _BackofficeSection.reports &&
+                        item.children.isNotEmpty &&
+                        item.children.first.reportKind != null) {
+                      onReportSelected(item.children.first.reportKind!);
+                    } else {
+                      onSectionChanged(item.section);
+                    }
+                  },
+                );
+              },
+            );
+          },
+        ),
+        const SizedBox(height: 18),
+        Row(
+          children: [
+            const Icon(
+              Icons.info_outline,
+              size: 17,
+              color: BrandColors.textMuted,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${items.length} modulos disponibles - ${BackofficeVersion.label}',
+              style: const TextStyle(color: BrandColors.textMuted),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _HomeContextPill extends StatelessWidget {
+  const _HomeContextPill({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 9),
+      decoration: BoxDecoration(
+        color: BrandColors.glassFill,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: BrandColors.glassBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: BrandColors.accentOrange),
+          const SizedBox(width: 7),
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+}
+
+class _HomeModuleCard extends StatelessWidget {
+  const _HomeModuleCard({required this.item, required this.onTap});
+
+  final _NavItem item;
+  final VoidCallback onTap;
+
+  String get _description => switch (item.section) {
+    _BackofficeSection.live => 'Supervisa la operacion en tiempo real.',
+    _BackofficeSection.sales => 'Consulta y gestiona ventas.',
+    _BackofficeSection.reports => 'Analiza resultados y actividad.',
+    _BackofficeSection.authorizations => 'Revisa solicitudes pendientes.',
+    _BackofficeSection.cash => 'Administra cortes y movimientos.',
+    _BackofficeSection.kitchen => 'Controla cocina e inventario.',
+    _BackofficeSection.purchases => 'Gestiona compras y proveedores.',
+    _BackofficeSection.finance => 'Consulta compras, CXP y pagos.',
+    _BackofficeSection.settings => 'Configura catalogos y accesos.',
+    _BackofficeSection.dashboard => '',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Ink(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: BrandColors.surfaceDark,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: BrandColors.glassBorder),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: BrandColors.accentOrange.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(9),
+                ),
+                child: Icon(item.icon, color: BrandColors.accentOrange),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      item.label,
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: BrandColors.textMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Icon(
+                Icons.arrow_forward_ios,
+                size: 15,
+                color: BrandColors.textMuted,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
