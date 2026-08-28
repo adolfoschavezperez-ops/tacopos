@@ -110,6 +110,13 @@ class KitchenOrderBundle {
     return '';
   }
 
+  int? get kitchenSequence {
+    for (final item in items) {
+      if (item.kitchenSequence != null) return item.kitchenSequence;
+    }
+    return null;
+  }
+
   String get stableKitchenKey {
     final batchId = kitchenBatchId;
     return batchId.isEmpty ? 'order:${order.id}' : 'order:${order.id}:$batchId';
@@ -4909,6 +4916,11 @@ class TacoPosRepository {
       }
 
       bundles.sort((a, b) {
+        final sequenceCompare = _compareKitchenSequences(
+          a.kitchenSequence,
+          b.kitchenSequence,
+        );
+        if (sequenceCompare != 0) return sequenceCompare;
         final aDate =
             a.items
                 .map((item) => item.sentToKitchenAt)
@@ -4936,6 +4948,13 @@ class TacoPosRepository {
 
       return bundles;
     });
+  }
+
+  int _compareKitchenSequences(int? a, int? b) {
+    if (a != null && b != null) return a.compareTo(b);
+    if (a != null) return -1;
+    if (b != null) return 1;
+    return 0;
   }
 
   Stream<PosOrder?> watchOrder(String orderId) {
@@ -11557,6 +11576,31 @@ class TacoPosRepository {
           : 'Orden inicial';
       final kitchenBatchId = orderRef.collection('kitchenBatches').doc().id;
       final batchCreatedAt = Timestamp.now();
+      final businessDate =
+          order.businessDate ?? order.operationalDate ?? _currentBusinessDate();
+      final sequenceRef = _restaurantRef
+          .collection('branches')
+          .doc(order.branchId)
+          .collection('kitchenDailySequences')
+          .doc(businessDate);
+      final sequenceDoc = await transaction.get(sequenceRef);
+      final kitchenSequence =
+          ((sequenceDoc.data()?['lastSequence'] as num?)?.toInt() ?? 0) + 1;
+
+      if (sequenceDoc.exists) {
+        transaction.update(sequenceRef, {
+          'lastSequence': kitchenSequence,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        transaction.set(sequenceRef, {
+          'restaurantId': order.restaurantId,
+          'branchId': order.branchId,
+          'businessDate': businessDate,
+          'lastSequence': kitchenSequence,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
 
       transaction
           .set(orderRef.collection('kitchenBatches').doc(kitchenBatchId), {
@@ -11565,6 +11609,8 @@ class TacoPosRepository {
             'branchId': order.branchId,
             'branchName': order.branchName,
             'orderId': order.id,
+            'businessDate': businessDate,
+            'kitchenSequence': kitchenSequence,
             'status': 'sent',
             'type': kitchenBatchType,
             'label': kitchenBatchLabel,
@@ -11586,6 +11632,7 @@ class TacoPosRepository {
           if (isExpressBatch) 'expressCreatedAt': batchCreatedAt,
           'kitchenBatchType': kitchenBatchType,
           'kitchenBatchLabel': kitchenBatchLabel,
+          'kitchenSequence': kitchenSequence,
           'sentToKitchenAt': batchCreatedAt,
           'updatedAt': FieldValue.serverTimestamp(),
         });

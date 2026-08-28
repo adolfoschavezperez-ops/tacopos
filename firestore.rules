@@ -256,6 +256,41 @@ service cloud.firestore {
         request.resource.data.lastSequence == resource.data.lastSequence + 1;
     }
 
+    function validKitchenSequenceCreate(restaurantId, branchId, businessDate) {
+      return validCreate(restaurantId) &&
+        validOperationalDeviceBranch(restaurantId, branchId) &&
+        request.resource.data.keys().hasOnly([
+          'restaurantId',
+          'branchId',
+          'businessDate',
+          'lastSequence',
+          'updatedAt'
+        ]) &&
+        request.resource.data.restaurantId == restaurantId &&
+        request.resource.data.branchId == branchId &&
+        request.resource.data.businessDate == businessDate &&
+        request.resource.data.lastSequence == 1;
+    }
+
+    function validKitchenSequenceUpdate() {
+      return signedIn() &&
+        validOperationalDeviceBranch(
+          resource.data.restaurantId,
+          resource.data.branchId
+        ) &&
+        request.resource.data.keys().hasOnly([
+          'restaurantId',
+          'branchId',
+          'businessDate',
+          'lastSequence',
+          'updatedAt'
+        ]) &&
+        request.resource.data.restaurantId == resource.data.restaurantId &&
+        request.resource.data.branchId == resource.data.branchId &&
+        request.resource.data.businessDate == resource.data.businessDate &&
+        request.resource.data.lastSequence == resource.data.lastSequence + 1;
+    }
+
     function validSaleAuditEventType() {
       return request.resource.data.eventType in [
         'sale_folio_assigned',
@@ -322,6 +357,17 @@ service cloud.firestore {
             businessDate
           );
           allow update: if validDailySaleCounterUpdate();
+          allow delete: if false;
+        }
+
+        match /kitchenDailySequences/{businessDate} {
+          allow read: if signedIn();
+          allow create: if validKitchenSequenceCreate(
+            restaurantId,
+            branchId,
+            businessDate
+          );
+          allow update: if validKitchenSequenceUpdate();
           allow delete: if false;
         }
 

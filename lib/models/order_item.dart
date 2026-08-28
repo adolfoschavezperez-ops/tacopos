@@ -20,6 +20,7 @@ class OrderItem {
     required this.paymentStatus,
     this.kitchenBatchId,
     this.kitchenBatchCreatedAt,
+    this.kitchenSequence,
     this.isKitchenExpress = false,
     this.expressReason = '',
     this.expressPriority = false,
@@ -82,6 +83,7 @@ class OrderItem {
   final String paymentStatus;
   final String? kitchenBatchId;
   final DateTime? kitchenBatchCreatedAt;
+  final int? kitchenSequence;
   final bool isKitchenExpress;
   final String expressReason;
   final bool expressPriority;
@@ -145,6 +147,7 @@ class OrderItem {
       paymentStatus: paymentStatus,
       kitchenBatchId: kitchenBatchId,
       kitchenBatchCreatedAt: kitchenBatchCreatedAt,
+      kitchenSequence: kitchenSequence,
       isKitchenExpress: isKitchenExpress,
       expressReason: expressReason,
       expressPriority: expressPriority,
@@ -258,6 +261,7 @@ class OrderItem {
       kitchenBatchCreatedAt: _toDate(
         data['kitchenBatchCreatedAt'] ?? data['batchCreatedAt'],
       ),
+      kitchenSequence: (data['kitchenSequence'] as num?)?.toInt(),
       isKitchenExpress: data['isKitchenExpress'] as bool? ?? false,
       expressReason: data['expressReason'] as String? ?? '',
       expressPriority: data['expressPriority'] as bool? ?? false,

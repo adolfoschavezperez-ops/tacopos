@@ -66,6 +66,25 @@ function counterDoc(db) {
   return doc(db, counterPath());
 }
 
+function kitchenSequencePath() {
+  return `restaurants/${RESTAURANT_ID}/branches/${BRANCH_ID}/kitchenDailySequences/${BUSINESS_DATE}`;
+}
+
+function kitchenSequenceDoc(db) {
+  return doc(db, kitchenSequencePath());
+}
+
+function kitchenSequenceData(overrides = {}) {
+  return {
+    restaurantId: RESTAURANT_ID,
+    branchId: BRANCH_ID,
+    businessDate: BUSINESS_DATE,
+    lastSequence: 1,
+    updatedAt: new Date('2026-07-31T11:00:00.000Z'),
+    ...overrides,
+  };
+}
+
 function counterData(overrides = {}) {
   return {
     businessDate: BUSINESS_DATE,
@@ -308,6 +327,30 @@ describe('TacoPOS Firestore production guard rails', () => {
     await assertSucceeds(
       setDoc(counterDoc(authedDb('cashier-1')), counterData({ lastSequence: 1 })),
     );
+  });
+
+  it('permite crear e incrementar el contador diario de cocina', async () => {
+    await seed(devicePath('device-uid'), deviceData('device-uid'));
+    const db = authedDb('device-uid');
+    await assertSucceeds(
+      setDoc(kitchenSequenceDoc(db), kitchenSequenceData()),
+    );
+    await assertSucceeds(
+      updateDoc(kitchenSequenceDoc(db), {
+        lastSequence: 2,
+        updatedAt: new Date('2026-07-31T11:01:00.000Z'),
+      }),
+    );
+  });
+
+  it('rechaza saltar o borrar el contador diario de cocina', async () => {
+    await seed(devicePath('device-uid'), deviceData('device-uid'));
+    await seed(kitchenSequencePath(), kitchenSequenceData());
+    const db = authedDb('device-uid');
+    await assertFails(
+      updateDoc(kitchenSequenceDoc(db), { lastSequence: 4 }),
+    );
+    await assertFails(deleteDoc(kitchenSequenceDoc(db)));
   });
 
   it('permite incrementar el contador diario de 1 a 2', async () => {

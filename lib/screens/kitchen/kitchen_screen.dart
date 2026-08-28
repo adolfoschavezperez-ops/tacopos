@@ -809,6 +809,18 @@ class _KitchenOrderCard extends StatelessWidget {
         children: [
           Row(
             children: [
+              if (bundle.kitchenSequence != null) ...[
+                Text(
+                  '#${bundle.kitchenSequence}',
+                  style: TextStyle(
+                    color: BrandColors.accentYellow,
+                    fontSize: compact ? 24 : 32,
+                    fontWeight: FontWeight.w900,
+                    height: 1,
+                  ),
+                ),
+                SizedBox(width: compact ? 8 : 12),
+              ],
               Expanded(
                 child: Text(
                   order.displayName,
