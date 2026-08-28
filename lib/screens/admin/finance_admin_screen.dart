@@ -30,6 +30,15 @@ class FinanceAdminScreen extends StatefulWidget {
 
 class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
   final _repository = TacoPosRepository();
+  late DateTime _draftStartDate;
+  late DateTime _draftEndDate;
+  String? _draftSupplierId;
+  String? _appliedSupplierId;
+  _FinanceQueryKey? _appliedQueryKey;
+  Future<_FinanceLoadResult>? _appliedReportFuture;
+  bool _lastLoadFailed = false;
+  List<Supplier> _loadedSuppliers = const [];
+  bool get _useOnDemandFinance => true;
   late DateTime _startDate;
   late DateTime _endDate;
   String? _supplierId;
@@ -41,15 +50,273 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
   void initState() {
     super.initState();
     final now = DateTime.now();
+    _draftStartDate = DateTime(now.year, now.month, 1);
+    _draftEndDate = DateTime(now.year, now.month, now.day);
     _startDate = DateTime(now.year, now.month, 1);
     _endDate = DateTime(now.year, now.month, now.day);
-    _repository.ensureDefaultPartners().catchError((_) {});
+  }
+
+  Widget _buildOnDemandFinance(BuildContext context, bool canOpenDashboard) {
+    final future = _appliedReportFuture;
+    return DefaultTabController(
+      length: canOpenDashboard ? 6 : 5,
+      initialIndex: canOpenDashboard ? 1 : 0,
+      child: Column(
+        children: [
+          FinanceNavigationTabs(
+            canOpenDashboard: canOpenDashboard,
+            onOpenDashboard: () => _openDashboard(context),
+          ),
+          _FinanceFilters(
+            suppliers: _loadedSuppliers,
+            supplierId: _draftSupplierId,
+            startDate: _draftStartDate,
+            endDate: _draftEndDate,
+            onSupplierChanged: (value) =>
+                setState(() => _draftSupplierId = value),
+            onToday: _todayDraft,
+            onWeek: _weekDraft,
+            onMonth: _monthDraft,
+            onPickStart: () => _pickDraftDate(isStart: true),
+            onPickEnd: () => _pickDraftDate(isStart: false),
+            onSearch: _searchApplied,
+            onClear: _clearApplied,
+          ),
+          Expanded(
+            child: future == null
+                ? const EmptyState(
+                    icon: Icons.analytics_outlined,
+                    title:
+                        'Selecciona un rango de fechas para consultar el Dashboard financiero.',
+                    message: '',
+                  )
+                : FutureBuilder<_FinanceLoadResult>(
+                    future: future,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting &&
+                          !snapshot.hasData) {
+                        return const LoadingPanel(
+                          message: 'Cargando finanzas...',
+                        );
+                      }
+                      if (snapshot.hasError) {
+                        return EmptyState(
+                          icon: Icons.error_outline,
+                          title: 'No se pudieron cargar finanzas',
+                          message: '${snapshot.error}',
+                        );
+                      }
+                      final loaded = snapshot.data;
+                      final key = _appliedQueryKey;
+                      if (loaded == null || key == null) {
+                        return const SizedBox.shrink();
+                      }
+                      if (_loadedSuppliers.length != loaded.suppliers.length) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (mounted && _appliedQueryKey == key) {
+                            setState(() => _loadedSuppliers = loaded.suppliers);
+                          }
+                        });
+                      }
+                      final data = _FinanceData(
+                        suppliers: loaded.suppliers,
+                        purchases: loaded.purchases,
+                        supplierPayments: loaded.supplierPayments,
+                        contributions: loaded.contributions,
+                        partners: loaded.partners,
+                        cashSessions: loaded.cashSessions,
+                        withdrawals: loaded.withdrawals,
+                        customerPayments: loaded.report.payments,
+                        salesSummary: loaded.salesSummary,
+                        startDate: key.startDate,
+                        endDate: key.endDate,
+                        startBusinessDate: key.startBusinessDate,
+                        endBusinessDate: key.endBusinessDate,
+                        supplierId: _appliedSupplierId,
+                      );
+                      final summary = _FinanceSummary(data);
+                      return _financeTabContent(
+                        canOpenDashboard,
+                        data,
+                        summary,
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _financeTabContent(
+    bool canOpenDashboard,
+    _FinanceData data,
+    _FinanceSummary summary,
+  ) {
+    return TabBarView(
+      physics: const NeverScrollableScrollPhysics(),
+      children: [
+        if (canOpenDashboard) const SizedBox.shrink(),
+        _FinancialStateTab(summary: summary),
+        _CashFlowTab(summary: summary),
+        _PartnerContributionsTab(
+          repository: _repository,
+          partners: data.partners,
+          contributions: summary.contributions,
+        ),
+        _SupplierPaymentsFinanceTab(payments: summary.supplierPayments),
+        _FinanceReportsTab(repository: _repository, summary: summary),
+      ],
+    );
+  }
+
+  void _searchApplied() {
+    if (_draftEndDate.isBefore(_draftStartDate)) return;
+    final key = _FinanceQueryKey(
+      branchId: AppSession.instance.currentBranchId,
+      startDate: _draftStartDate,
+      endDate: _draftEndDate,
+      startBusinessDate: DateFormat('yyyy-MM-dd').format(_draftStartDate),
+      endBusinessDate: DateFormat('yyyy-MM-dd').format(_draftEndDate),
+      supplierId: _draftSupplierId,
+    );
+    if (_appliedQueryKey == key &&
+        _appliedReportFuture != null &&
+        !_lastLoadFailed) {
+      return;
+    }
+    _appliedQueryKey = key;
+    _appliedSupplierId = _draftSupplierId;
+    _lastLoadFailed = false;
+    _appliedReportFuture = _loadFinance(key);
+    _appliedReportFuture!.then(
+      (_) {},
+      onError: (error, stackTrace) => _markLoadFailed(key, error, stackTrace),
+    );
+    setState(() {});
+  }
+
+  void _markLoadFailed(
+    _FinanceQueryKey key,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (mounted && _appliedQueryKey == key) {
+      setState(() => _lastLoadFailed = true);
+    }
+  }
+
+  Future<_FinanceLoadResult> _loadFinance(_FinanceQueryKey key) async {
+    final values = await Future.wait<Object?>([
+      _repository.watchSuppliers().first,
+      _repository.watchSupplierPurchases().first,
+      _repository.watchSupplierPayments().first,
+      _repository.watchPartnerContributions().first,
+      _repository.watchPartners().first,
+      _repository
+          .watchCashSessions(
+            startBusinessDate: key.startBusinessDate,
+            endBusinessDate: key.endBusinessDate,
+          )
+          .first,
+      _repository
+          .watchCashWithdrawalRequests(
+            startBusinessDate: key.startBusinessDate,
+            endBusinessDate: key.endBusinessDate,
+          )
+          .first,
+      _repository.getReportDataBundle(
+        startBusinessDate: key.startBusinessDate,
+        endBusinessDate: key.endBusinessDate,
+        includeItems: true,
+        reportName: 'Finanzas',
+      ),
+      _repository.getCanonicalSalesSummary(
+        startBusinessDate: key.startBusinessDate,
+        endBusinessDate: key.endBusinessDate,
+      ),
+    ]);
+    return _FinanceLoadResult(
+      suppliers: values[0] as List<Supplier>,
+      purchases: values[1] as List<SupplierPurchase>,
+      supplierPayments: values[2] as List<SupplierPayment>,
+      contributions: values[3] as List<PartnerContribution>,
+      partners: values[4] as List<Partner>,
+      cashSessions: values[5] as List<CashSession>,
+      withdrawals: values[6] as List<CashWithdrawalRequest>,
+      report: values[7] as ReportDataBundle,
+      salesSummary: values[8] as CanonicalSalesSummary,
+    );
+  }
+
+  void _clearApplied() {
+    setState(() {
+      _draftSupplierId = null;
+      _appliedSupplierId = null;
+      _appliedQueryKey = null;
+      _appliedReportFuture = null;
+      _loadedSuppliers = const [];
+      _lastLoadFailed = false;
+    });
+  }
+
+  Future<void> _pickDraftDate({required bool isStart}) async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: isStart ? _draftStartDate : _draftEndDate,
+      firstDate: DateTime(2024),
+      lastDate: DateTime(DateTime.now().year + 2),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (isStart) {
+        _draftStartDate = picked;
+        if (_draftEndDate.isBefore(_draftStartDate)) {
+          _draftEndDate = _draftStartDate;
+        }
+      } else {
+        _draftEndDate = picked;
+        if (_draftStartDate.isAfter(_draftEndDate)) {
+          _draftStartDate = _draftEndDate;
+        }
+      }
+    });
+  }
+
+  void _todayDraft() {
+    final now = DateTime.now();
+    setState(() {
+      _draftStartDate = DateTime(now.year, now.month, now.day);
+      _draftEndDate = _draftStartDate;
+    });
+  }
+
+  void _weekDraft() {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    setState(() {
+      _draftStartDate = today.subtract(Duration(days: today.weekday - 1));
+      _draftEndDate = today;
+    });
+  }
+
+  void _monthDraft() {
+    final now = DateTime.now();
+    setState(() {
+      _draftStartDate = DateTime(now.year, now.month);
+      _draftEndDate = DateTime(now.year, now.month, now.day);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     final canOpenDashboard =
         kIsWeb && canViewFinanceDashboard(AppSession.instance.employee);
+    if (_useOnDemandFinance) {
+      return _buildOnDemandFinance(context, canOpenDashboard);
+    }
+    // The legacy tree below is retained temporarily as a compile-time guard
+    // while the on-demand tree is rolled out.
     return DefaultTabController(
       length: canOpenDashboard ? 6 : 5,
       initialIndex: canOpenDashboard ? 1 : 0,
@@ -339,6 +606,60 @@ class _FinanceAdminScreenState extends State<FinanceAdminScreen> {
       _endDate = DateTime(now.year, now.month, now.day);
     });
   }
+}
+
+class _FinanceQueryKey {
+  const _FinanceQueryKey({
+    required this.branchId,
+    required this.startDate,
+    required this.endDate,
+    required this.startBusinessDate,
+    required this.endBusinessDate,
+    required this.supplierId,
+  });
+
+  final String branchId;
+  final DateTime startDate;
+  final DateTime endDate;
+  final String startBusinessDate;
+  final String endBusinessDate;
+  final String? supplierId;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _FinanceQueryKey &&
+      other.branchId == branchId &&
+      other.startBusinessDate == startBusinessDate &&
+      other.endBusinessDate == endBusinessDate &&
+      other.supplierId == supplierId;
+
+  @override
+  int get hashCode =>
+      Object.hash(branchId, startBusinessDate, endBusinessDate, supplierId);
+}
+
+class _FinanceLoadResult {
+  const _FinanceLoadResult({
+    required this.suppliers,
+    required this.purchases,
+    required this.supplierPayments,
+    required this.contributions,
+    required this.partners,
+    required this.cashSessions,
+    required this.withdrawals,
+    required this.report,
+    required this.salesSummary,
+  });
+
+  final List<Supplier> suppliers;
+  final List<SupplierPurchase> purchases;
+  final List<SupplierPayment> supplierPayments;
+  final List<PartnerContribution> contributions;
+  final List<Partner> partners;
+  final List<CashSession> cashSessions;
+  final List<CashWithdrawalRequest> withdrawals;
+  final ReportDataBundle report;
+  final CanonicalSalesSummary salesSummary;
 }
 
 class FinanceNavigationTabs extends StatelessWidget {
@@ -675,6 +996,8 @@ class _FinanceFilters extends StatelessWidget {
     required this.onMonth,
     required this.onPickStart,
     required this.onPickEnd,
+    this.onSearch,
+    this.onClear,
   });
 
   final List<Supplier> suppliers;
@@ -687,6 +1010,8 @@ class _FinanceFilters extends StatelessWidget {
   final VoidCallback onMonth;
   final VoidCallback onPickStart;
   final VoidCallback onPickEnd;
+  final VoidCallback? onSearch;
+  final VoidCallback? onClear;
 
   @override
   Widget build(BuildContext context) {
@@ -732,6 +1057,20 @@ class _FinanceFilters extends StatelessWidget {
             TextButton(onPressed: onToday, child: const Text('Hoy')),
             TextButton(onPressed: onWeek, child: const Text('Semana')),
             TextButton(onPressed: onMonth, child: const Text('Mes')),
+            if (onSearch != null)
+              FilledButton.icon(
+                key: const ValueKey('finance-admin-search'),
+                onPressed: onSearch,
+                icon: const Icon(Icons.search),
+                label: const Text('Buscar'),
+              ),
+            if (onClear != null)
+              TextButton.icon(
+                key: const ValueKey('finance-admin-clear'),
+                onPressed: onClear,
+                icon: const Icon(Icons.clear),
+                label: const Text('Limpiar'),
+              ),
           ],
         ),
       ),
