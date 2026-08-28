@@ -20,6 +20,7 @@ class OrderItem {
     required this.paymentStatus,
     this.kitchenBatchId,
     this.kitchenBatchCreatedAt,
+    this.kitchenSequence,
     this.isKitchenExpress = false,
     this.expressReason = '',
     this.expressPriority = false,
@@ -82,6 +83,7 @@ class OrderItem {
   final String paymentStatus;
   final String? kitchenBatchId;
   final DateTime? kitchenBatchCreatedAt;
+  final int? kitchenSequence;
   final bool isKitchenExpress;
   final String expressReason;
   final bool expressPriority;
@@ -127,6 +129,72 @@ class OrderItem {
   final String restaurantName;
   final String branchId;
   final String branchName;
+
+  OrderItem copyWithQty(int newQty) {
+    return OrderItem(
+      id: id,
+      personNumber: personNumber,
+      personName: personName,
+      productId: productId,
+      productName: productName,
+      category: category,
+      qty: newQty,
+      unitPrice: unitPrice,
+      total: newQty * unitPrice,
+      notes: notes,
+      sendToKitchen: sendToKitchen,
+      kitchenStatus: kitchenStatus,
+      paymentStatus: paymentStatus,
+      kitchenBatchId: kitchenBatchId,
+      kitchenBatchCreatedAt: kitchenBatchCreatedAt,
+      kitchenSequence: kitchenSequence,
+      isKitchenExpress: isKitchenExpress,
+      expressReason: expressReason,
+      expressPriority: expressPriority,
+      expressCreatedAt: expressCreatedAt,
+      kitchenBatchType: kitchenBatchType,
+      kitchenBatchLabel: kitchenBatchLabel,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+      sentToKitchenAt: sentToKitchenAt,
+      cookingAt: cookingAt,
+      readyAt: readyAt,
+      paidAt: paidAt,
+      paymentId: paymentId,
+      appliedPlatformId: appliedPlatformId,
+      appliedPlatformName: appliedPlatformName,
+      priceSource: priceSource,
+      kitchenStockItemId: kitchenStockItemId,
+      kitchenStockItemName: kitchenStockItemName,
+      affectsKitchenStock: affectsKitchenStock,
+      kitchenStockUnit: kitchenStockUnit,
+      recipeItems: recipeItems,
+      status: status,
+      cancelStatus: cancelStatus,
+      cancelRequestedAt: cancelRequestedAt,
+      cancelRequestedByEmployeeId: cancelRequestedByEmployeeId,
+      cancelRequestedByEmployeeName: cancelRequestedByEmployeeName,
+      cancelledAt: cancelledAt,
+      cancelledByEmployeeId: cancelledByEmployeeId,
+      cancelledByEmployeeName: cancelledByEmployeeName,
+      cancelReason: cancelReason,
+      cancelRequestedReason: cancelRequestedReason,
+      cancelledReason: cancelledReason,
+      cancelNotes: cancelNotes,
+      reason: reason,
+      cancelAcceptedAt: cancelAcceptedAt,
+      cancelAcceptedByEmployeeId: cancelAcceptedByEmployeeId,
+      cancelAcceptedByEmployeeName: cancelAcceptedByEmployeeName,
+      cancelRejectedAt: cancelRejectedAt,
+      cancelRejectedByEmployeeId: cancelRejectedByEmployeeId,
+      cancelRejectedByEmployeeName: cancelRejectedByEmployeeName,
+      cancelRejectReason: cancelRejectReason,
+      restaurantId: restaurantId,
+      restaurantName: restaurantName,
+      branchId: branchId,
+      branchName: branchName,
+    );
+  }
 
   bool get isServed => kitchenStatus == 'ready';
   bool get isCancelled {
@@ -193,6 +261,7 @@ class OrderItem {
       kitchenBatchCreatedAt: _toDate(
         data['kitchenBatchCreatedAt'] ?? data['batchCreatedAt'],
       ),
+      kitchenSequence: (data['kitchenSequence'] as num?)?.toInt(),
       isKitchenExpress: data['isKitchenExpress'] as bool? ?? false,
       expressReason: data['expressReason'] as String? ?? '',
       expressPriority: data['expressPriority'] as bool? ?? false,

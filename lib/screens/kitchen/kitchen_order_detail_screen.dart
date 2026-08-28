@@ -253,6 +253,12 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                           children: [
                             _Header(
                               order: order,
+                              kitchenSequence:
+                                  personItems.first.kitchenSequence,
+                              personName: personName,
+                              isExtra: personItems.any(
+                                (item) => item.isKitchenExpress,
+                              ),
                               compact: compact,
                               onClose: () => Navigator.pop(context),
                             ),
@@ -276,43 +282,56 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                                   crossAxisAlignment:
                                       CrossAxisAlignment.stretch,
                                   children: [
-                                    _PlateHeader(
-                                      personName: personName,
-                                      current: _personIndex + 1,
-                                      total: people.length,
-                                      accent: plateAccent,
-                                      compact: compact,
-                                    ),
-                                    SizedBox(height: compact ? 6 : 8),
-                                    Container(
-                                      height: compact ? 4 : 5,
-                                      decoration: BoxDecoration(
-                                        color: plateAccent,
-                                        borderRadius: BorderRadius.circular(99),
-                                      ),
-                                    ),
-                                    SizedBox(height: compact ? 6 : 8),
                                     Expanded(
-                                      child: ListView.separated(
-                                        itemCount: personItemGroups.length,
-                                        separatorBuilder: (_, _) =>
-                                            Divider(height: compact ? 6 : 8),
-                                        itemBuilder: (context, index) {
-                                          final group = personItemGroups[index];
-                                          return _KitchenItemRow(
-                                            group: group,
-                                            compact: compact,
-                                            busy: _busy,
-                                            onAcceptCancellation: () =>
-                                                _resolveCancellationGroup(
-                                                  group,
-                                                  true,
+                                      child: LayoutBuilder(
+                                        builder: (context, gridConstraints) {
+                                          final columns = _kitchenDetailColumns(
+                                            personItemGroups.length,
+                                            gridConstraints.maxWidth,
+                                          );
+                                          final rows =
+                                              (personItemGroups.length +
+                                                  columns -
+                                                  1) ~/
+                                              columns;
+                                          final rowGap = compact ? 6.0 : 8.0;
+                                          final tileHeight =
+                                              ((gridConstraints.maxHeight -
+                                                          (rows - 1) * rowGap) /
+                                                      rows)
+                                                  .clamp(58.0, 150.0)
+                                                  .toDouble();
+                                          return GridView.builder(
+                                            physics:
+                                                const NeverScrollableScrollPhysics(),
+                                            padding: EdgeInsets.zero,
+                                            gridDelegate:
+                                                SliverGridDelegateWithFixedCrossAxisCount(
+                                                  crossAxisCount: columns,
+                                                  mainAxisExtent: tileHeight,
+                                                  crossAxisSpacing: rowGap,
+                                                  mainAxisSpacing: rowGap,
                                                 ),
-                                            onRejectCancellation: () =>
-                                                _resolveCancellationGroup(
-                                                  group,
-                                                  false,
-                                                ),
+                                            itemCount: personItemGroups.length,
+                                            itemBuilder: (context, index) {
+                                              final group =
+                                                  personItemGroups[index];
+                                              return _KitchenItemRow(
+                                                group: group,
+                                                compact: compact || columns > 1,
+                                                busy: _busy,
+                                                onAcceptCancellation: () =>
+                                                    _resolveCancellationGroup(
+                                                      group,
+                                                      true,
+                                                    ),
+                                                onRejectCancellation: () =>
+                                                    _resolveCancellationGroup(
+                                                      group,
+                                                      false,
+                                                    ),
+                                              );
+                                            },
                                           );
                                         },
                                       ),
@@ -567,6 +586,9 @@ class _ExpressOrderDialogState extends State<_ExpressOrderDialog> {
               children: [
                 _Header(
                   order: widget.bundle.order,
+                  kitchenSequence: widget.bundle.kitchenSequence,
+                  personName: widget.bundle.personLabel,
+                  isExtra: widget.bundle.isKitchenExpress,
                   compact: true,
                   onClose: () => Navigator.pop(context),
                 ),
@@ -631,6 +653,7 @@ String _expressSummary(List<OrderItem> items) {
   return '${activeItems.length} productos · $pieces piezas';
 }
 
+// ignore: unused_element
 class _PlateHeader extends StatelessWidget {
   const _PlateHeader({
     required this.personName,
@@ -765,6 +788,12 @@ class _KitchenItemGroup {
   int get qty => items.fold<int>(0, (sum, item) => sum + item.qty);
 }
 
+int _kitchenDetailColumns(int groupCount, double width) {
+  if (groupCount <= 6) return 1;
+  if (groupCount <= 12) return width >= 560 ? 2 : 1;
+  return width >= 900 ? 3 : 2;
+}
+
 class _KitchenItemRow extends StatelessWidget {
   const _KitchenItemRow({
     required this.group,
@@ -800,8 +829,8 @@ class _KitchenItemRow extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
-                width: compact ? 30 : 36,
-                height: compact ? 30 : 36,
+                width: compact ? 44 : 54,
+                height: compact ? 44 : 54,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: cancelled
@@ -812,9 +841,9 @@ class _KitchenItemRow extends StatelessWidget {
                   borderRadius: BorderRadius.circular(9),
                 ),
                 child: Text(
-                  'x${group.qty}',
+                  '${group.qty}x',
                   style: TextStyle(
-                    fontSize: compact ? 13 : 15,
+                    fontSize: compact ? 20 : 26,
                     fontWeight: FontWeight.w900,
                     decoration: textDecoration,
                     color: cancelled
@@ -1216,11 +1245,17 @@ class _KitchenElapsedBadgeState extends State<KitchenElapsedBadge> {
 class _Header extends StatelessWidget {
   const _Header({
     required this.order,
+    required this.kitchenSequence,
+    required this.personName,
+    required this.isExtra,
     required this.compact,
     required this.onClose,
   });
 
   final PosOrder order;
+  final int? kitchenSequence;
+  final String personName;
+  final bool isExtra;
   final bool compact;
   final VoidCallback onClose;
 
@@ -1234,15 +1269,67 @@ class _Header extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                order.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: compact ? 18 : 22,
-                  fontWeight: FontWeight.w900,
-                ),
+              Row(
+                children: [
+                  if (kitchenSequence != null) ...[
+                    Text(
+                      '#$kitchenSequence',
+                      style: TextStyle(
+                        color: BrandColors.accentYellow,
+                        fontSize: compact ? 24 : 30,
+                        fontWeight: FontWeight.w900,
+                        height: 1,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: Text(
+                      _headerContext,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: compact ? 18 : 22,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  if (isExtra)
+                    Container(
+                      margin: const EdgeInsets.only(left: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: BrandColors.danger.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: BrandColors.danger.withValues(alpha: 0.55),
+                        ),
+                      ),
+                      child: const Text(
+                        'EXTRA',
+                        style: TextStyle(
+                          color: BrandColors.danger,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                ],
               ),
+              if (personName.trim().isNotEmpty)
+                Text(
+                  personName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: BrandColors.accentYellow,
+                    fontSize: compact ? 14 : 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               Text(
                 _formatTime(order.sentToKitchenAt ?? order.updatedAt),
                 style: TextStyle(
@@ -1256,6 +1343,12 @@ class _Header extends StatelessWidget {
         StatusBadge(style: kitchenStatusStyle(order.kitchenStatus)),
       ],
     );
+  }
+
+  String get _headerContext {
+    if (order.orderType == 'takeout') return 'PARA LLEVAR';
+    if (order.orderType == 'standing') return 'PARADO';
+    return order.displayName;
   }
 
   String _formatTime(DateTime? date) {

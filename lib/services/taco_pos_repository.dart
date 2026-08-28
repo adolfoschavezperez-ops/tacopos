@@ -16,6 +16,7 @@ import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/employee_benefit_checkout.dart';
 import '../core/orders/order_activity.dart';
+import '../core/orders/order_capture_queue.dart';
 import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
 import '../core/orders/payment_application_guard.dart';
@@ -107,6 +108,13 @@ class KitchenOrderBundle {
       if (batchId != null && batchId.isNotEmpty) return batchId;
     }
     return '';
+  }
+
+  int? get kitchenSequence {
+    for (final item in items) {
+      if (item.kitchenSequence != null) return item.kitchenSequence;
+    }
+    return null;
   }
 
   String get stableKitchenKey {
@@ -1290,6 +1298,7 @@ class TacoPosRepository {
   static final YieldProfitBundleCache _yieldProfitBundleCache =
       YieldProfitBundleCache();
   static final Map<String, _CashScheduleCacheEntry> _cashScheduleCache = {};
+  static final OrderCaptureQueue _orderCaptureQueue = OrderCaptureQueue();
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
@@ -2243,9 +2252,12 @@ class TacoPosRepository {
     );
   }
 
-  Stream<Map<String, ProductStockOutRow>> watchActiveProductStockOuts() {
+  Stream<Map<String, ProductStockOutRow>> watchActiveProductStockOuts({
+    Future<String>? businessDateFuture,
+  }) {
     return _productStockOutsRef.snapshots().asyncMap((snapshot) async {
-      final businessDate = await currentKitchenBusinessDate();
+      final businessDate =
+          await (businessDateFuture ?? currentKitchenBusinessDate());
       final branchId = AppSession.instance.currentBranchId;
       final rows = snapshot.docs
           .map(ProductStockOutRow.fromDoc)
@@ -4904,6 +4916,11 @@ class TacoPosRepository {
       }
 
       bundles.sort((a, b) {
+        final sequenceCompare = _compareKitchenSequences(
+          a.kitchenSequence,
+          b.kitchenSequence,
+        );
+        if (sequenceCompare != 0) return sequenceCompare;
         final aDate =
             a.items
                 .map((item) => item.sentToKitchenAt)
@@ -4931,6 +4948,13 @@ class TacoPosRepository {
 
       return bundles;
     });
+  }
+
+  int _compareKitchenSequences(int? a, int? b) {
+    if (a != null && b != null) return a.compareTo(b);
+    if (a != null) return -1;
+    if (b != null) return 1;
+    return 0;
   }
 
   Stream<PosOrder?> watchOrder(String orderId) {
@@ -10744,18 +10768,22 @@ class TacoPosRepository {
     required String orderId,
     required Product product,
     required int personNumber,
+    bool? knownStockedOut,
   }) async {
     _requireTakeOrders();
     final cleanOrderId = orderId.trim();
     final itemsPath =
         'restaurants/${AppConstants.restaurantId}/orders/$cleanOrderId/items';
-    developer.log(
-      '[TacoPOS][addProduct] orderId=$cleanOrderId path=$itemsPath '
-      'productName=${product.name} qty=1',
-    );
+    final startedAt = DateTime.now();
+    if (kDebugMode) {
+      developer.log(
+        '[TacoPOS][orderCapture] T1 addProduct start '
+        'orderId=$cleanOrderId productName=${product.name}',
+      );
+    }
     final orderDoc = await _ordersRef.doc(cleanOrderId).get();
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
-    if (await isProductStockedOut(product)) {
+    if (knownStockedOut ?? await isProductStockedOut(product)) {
       throw StateError('Producto agotado hasta cierre de cocina.');
     }
     final personName =
@@ -10782,9 +10810,11 @@ class TacoPosRepository {
         'qty=${existingItem.qty + 1}',
       );
       await updateItemQty(
+        skipQueue: true,
         orderId: cleanOrderId,
         item: existingItem,
         qty: existingItem.qty + 1,
+        operationId: operationId,
       );
       return;
     }
@@ -10792,7 +10822,10 @@ class TacoPosRepository {
     final primaryRecipe = product.recipeItems.isNotEmpty
         ? product.recipeItems.first
         : null;
-    final itemRef = _ordersRef.doc(cleanOrderId).collection('items').doc();
+    final itemRef = _ordersRef
+        .doc(cleanOrderId)
+        .collection('items')
+        .doc(itemId);
     await itemRef.set({
       'personNumber': personNumber,
       'personName': personName,
@@ -10838,12 +10871,14 @@ class TacoPosRepository {
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
 
-    developer.log(
-      '[TacoPOS][addProduct] saved itemId=${itemRef.id} '
-      'path=$itemsPath/${itemRef.id} productName=${product.name} qty=1',
+  Future<void> flushPendingMutations(String orderId) {
+    final cleanOrderId = orderId.trim();
+    return _orderCaptureQueue.flush(
+      cleanOrderId,
+      recalculate: () => recalculateOrderTotal(cleanOrderId),
     );
-    await recalculateOrderTotal(cleanOrderId);
   }
 
   Future<void> renamePerson({
@@ -10902,6 +10937,8 @@ class TacoPosRepository {
     required String orderId,
     required OrderItem item,
     required int qty,
+    bool skipQueue = false,
+    String? operationId,
   }) async {
     _requireTakeOrders();
     _ensureItemEditable(item);
@@ -10910,12 +10947,34 @@ class TacoPosRepository {
       return;
     }
 
+    Future<void> mutation() => _updateItemQtyNow(
+      orderId: orderId,
+      item: item,
+      qty: qty,
+      operationId: operationId,
+    );
+    if (!skipQueue) {
+      return _orderCaptureQueue.enqueue(
+        orderId.trim(),
+        mutation,
+        recalculate: () => recalculateOrderTotal(orderId.trim()),
+        operationId: operationId,
+      );
+    }
+    await mutation();
+  }
+
+  Future<void> _updateItemQtyNow({
+    required String orderId,
+    required OrderItem item,
+    required int qty,
+    String? operationId,
+  }) async {
     await _ordersRef.doc(orderId).collection('items').doc(item.id).update({
       'qty': qty,
       'total': qty * item.unitPrice,
       'updatedAt': FieldValue.serverTimestamp(),
     });
-    await recalculateOrderTotal(orderId);
   }
 
   Future<void> deleteItem({
@@ -11517,6 +11576,31 @@ class TacoPosRepository {
           : 'Orden inicial';
       final kitchenBatchId = orderRef.collection('kitchenBatches').doc().id;
       final batchCreatedAt = Timestamp.now();
+      final businessDate =
+          order.businessDate ?? order.operationalDate ?? _currentBusinessDate();
+      final sequenceRef = _restaurantRef
+          .collection('branches')
+          .doc(order.branchId)
+          .collection('kitchenDailySequences')
+          .doc(businessDate);
+      final sequenceDoc = await transaction.get(sequenceRef);
+      final kitchenSequence =
+          ((sequenceDoc.data()?['lastSequence'] as num?)?.toInt() ?? 0) + 1;
+
+      if (sequenceDoc.exists) {
+        transaction.update(sequenceRef, {
+          'lastSequence': kitchenSequence,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      } else {
+        transaction.set(sequenceRef, {
+          'restaurantId': order.restaurantId,
+          'branchId': order.branchId,
+          'businessDate': businessDate,
+          'lastSequence': kitchenSequence,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
 
       transaction
           .set(orderRef.collection('kitchenBatches').doc(kitchenBatchId), {
@@ -11525,6 +11609,8 @@ class TacoPosRepository {
             'branchId': order.branchId,
             'branchName': order.branchName,
             'orderId': order.id,
+            'businessDate': businessDate,
+            'kitchenSequence': kitchenSequence,
             'status': 'sent',
             'type': kitchenBatchType,
             'label': kitchenBatchLabel,
@@ -11546,6 +11632,7 @@ class TacoPosRepository {
           if (isExpressBatch) 'expressCreatedAt': batchCreatedAt,
           'kitchenBatchType': kitchenBatchType,
           'kitchenBatchLabel': kitchenBatchLabel,
+          'kitchenSequence': kitchenSequence,
           'sentToKitchenAt': batchCreatedAt,
           'updatedAt': FieldValue.serverTimestamp(),
         });
