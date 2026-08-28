@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/backoffice/catalog_cache.dart';
 import '../../core/purchases/purchase_capture_discount.dart';
 import '../../core/purchases/purchases_by_supplier_report.dart';
 import '../../core/purchases/supplier_purchase_history.dart';
@@ -148,7 +149,10 @@ class _PurchaseDataScope extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<List<Supplier>>(
-      stream: repository.watchSuppliers(),
+      stream: BackofficeCatalogCache.instance.watch(
+        catalog: 'suppliers',
+        source: repository.watchSuppliers,
+      ),
       builder: (context, suppliersSnapshot) {
         if (suppliersSnapshot.hasError) {
           return EmptyState(
@@ -161,7 +165,10 @@ class _PurchaseDataScope extends StatelessWidget {
           return const LoadingPanel(message: 'Cargando compras...');
         }
         return StreamBuilder<List<KitchenStockItem>>(
-          stream: repository.watchKitchenStockItems(),
+          stream: BackofficeCatalogCache.instance.watch(
+            catalog: 'kitchen-stock-items',
+            source: repository.watchKitchenStockItems,
+          ),
           builder: (context, kitchenSnapshot) {
             if (kitchenSnapshot.hasError) {
               return EmptyState(
@@ -174,10 +181,16 @@ class _PurchaseDataScope extends StatelessWidget {
               return const LoadingPanel(message: 'Cargando insumos...');
             }
             return StreamBuilder<List<Partner>>(
-              stream: repository.watchPartners(),
+              stream: BackofficeCatalogCache.instance.watch(
+                catalog: 'partners',
+                source: repository.watchPartners,
+              ),
               builder: (context, partnersSnapshot) {
                 return StreamBuilder<List<PartnerContribution>>(
-                  stream: repository.watchPartnerContributions(),
+                  stream: BackofficeCatalogCache.instance.watch(
+                    catalog: 'partner-contributions',
+                    source: repository.watchPartnerContributions,
+                  ),
                   builder: (context, contributionsSnapshot) {
                     final nestedError =
                         partnersSnapshot.error ?? contributionsSnapshot.error;
