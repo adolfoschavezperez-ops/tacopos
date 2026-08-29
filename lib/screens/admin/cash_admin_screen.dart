@@ -272,6 +272,7 @@ class _CashSessionsTab extends StatelessWidget {
                 (session) => Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: _CashSessionDetailCard(
+                    repository: repository,
                     session: session,
                     onAddHistoricalExpense: () =>
                         _openHistoricalExpense(context, session),
@@ -1116,20 +1117,33 @@ class _HistoricalCashExpenseDialogState
 
 class _CashSessionDetailCard extends StatelessWidget {
   const _CashSessionDetailCard({
+    required this.repository,
     required this.session,
     required this.onAddHistoricalExpense,
   });
 
+  final TacoPosRepository repository;
   final CashSession session;
   final VoidCallback onAddHistoricalExpense;
 
   @override
   Widget build(BuildContext context) {
+    return FutureBuilder<CashSessionTotals>(
+      future: repository.watchCashSessionTotals(session.id).first,
+      builder: (context, snapshot) => _buildWithTotals(context, snapshot.data),
+    );
+  }
+
+  Widget _buildWithTotals(BuildContext context, CashSessionTotals? totals) {
+    final expectedCashAmount =
+        totals?.expectedCashAmount ?? session.expectedCashAmount;
+    final expectedCardAmount =
+        totals?.expectedCardChargedAmount ?? session.expectedCardChargedAmount;
     final statusColor = session.isOpen
         ? BrandColors.success
         : BrandColors.textMuted;
     final cashSalesAmount =
-        session.expectedCashAmount -
+        expectedCashAmount -
         session.openingCashAmount +
         session.approvedWithdrawalsTotal;
     final cashUserSalesAmount =
@@ -1138,16 +1152,17 @@ class _CashSessionDetailCard extends StatelessWidget {
         cashSalesAmount - session.approvedWithdrawalsTotal;
     final cashDifference =
         cashUserSalesAmount - cashSalesExpectedAfterWithdrawals;
-    final cardDifference =
-        session.terminalReportedAmount - session.expectedCardChargedAmount;
+    final cardDifference = session.terminalReportedAmount - expectedCardAmount;
     final netDifference = cashDifference + cardDifference;
     final netSalesAmount =
         cashSalesAmount +
-        session.expectedCardChargedAmount +
+        expectedCardAmount +
         session.expectedPlatformAmount +
         session.expectedEmployeeConsumptionAmount;
-    final cardCommission = _cardCommission(session.expectedCardChargedAmount);
-    final estimatedCardNet = session.expectedCardChargedAmount - cardCommission;
+    final cardCommission = session.expectedCardFeeAbsorbedAmount > 0
+        ? session.expectedCardFeeAbsorbedAmount
+        : _cardCommission(session.expectedCardChargedAmount);
+    final estimatedCardNet = expectedCardAmount - cardCommission;
     final canonicalFuture = TacoPosRepository().getCanonicalSalesSummary(
       branchId: session.branchId,
       startBusinessDate: session.businessDate,
@@ -1217,9 +1232,7 @@ class _CashSessionDetailCard extends StatelessWidget {
                     ),
                     _CashMetricCard(
                       label: 'Tarjeta cobrada real',
-                      value:
-                          summary?.cardCollected ??
-                          session.expectedCardChargedAmount,
+                      value: summary?.cardCollected ?? expectedCardAmount,
                       accent: BrandColors.info,
                     ),
                     _CashMetricCard(
@@ -1292,7 +1305,7 @@ class _CashSessionDetailCard extends StatelessWidget {
                         lines: [
                           _AmountLineData(
                             label: 'Total efectivo esperado',
-                            value: session.expectedCashAmount,
+                            value: expectedCashAmount,
                             color: BrandColors.info,
                             strong: true,
                           ),
@@ -1370,7 +1383,7 @@ class _CashSessionDetailCard extends StatelessWidget {
                         lines: [
                           _AmountLineData(
                             label: 'Tarjeta cobrada por ventas',
-                            value: session.expectedCardChargedAmount,
+                            value: expectedCardAmount,
                             color: BrandColors.info,
                             strong: true,
                           ),
