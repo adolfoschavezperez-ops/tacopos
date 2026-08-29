@@ -939,13 +939,6 @@ class _BackofficeBody extends StatelessWidget {
         ),
       );
     }
-    if (section == _BackofficeSection.dashboard) {
-      return _BackofficeHomeSection(
-        employee: AppSession.instance.employee,
-        onSectionChanged: onSectionChanged,
-        onReportSelected: onReportSelected,
-      );
-    }
     if (section == _BackofficeSection.reports &&
         reportKind == _ReportKind.cashSchedule) {
       final branchId = AppSession.instance.currentBranchId;
@@ -1101,6 +1094,8 @@ class _BackofficeBody extends StatelessWidget {
                     onWeek: onWeek,
                     onMonth: onMonth,
                     onOpenDiscountsReport: onOpenDiscountsReport,
+                    onSectionChanged: onSectionChanged,
+                    onReportSelected: onReportSelected,
                   ),
                   _BackofficeSection.sales => _SalesSection(
                     repository: repository,
@@ -1154,152 +1149,155 @@ class _BackofficeHomeSection extends StatelessWidget {
     ).where((item) => item.section != _BackofficeSection.dashboard).toList();
     final today = DateFormat('dd/MM/yyyy').format(DateTime.now());
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(22, 16, 22, 28),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: BrandColors.surfaceDark,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: BrandColors.glassBorder),
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final compact = constraints.maxWidth < 620;
-              final contextInfo = Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'TacoPOS BACKOFFICE',
-                    style: TextStyle(
-                      color: BrandColors.accentYellow,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.2,
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 0, 0, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: BrandColors.surfaceDark,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: BrandColors.glassBorder),
+            ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 620;
+                final contextInfo = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'TacoPOS BACKOFFICE',
+                      style: TextStyle(
+                        color: BrandColors.accentYellow,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 1.2,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Bienvenido${employee?.name.trim().isNotEmpty == true ? ', ${employee!.name.trim()}' : ''}',
-                    style: TextStyle(
-                      fontSize: compact ? 25 : 32,
-                      fontWeight: FontWeight.w900,
-                      height: 1.05,
+                    const SizedBox(height: 10),
+                    Text(
+                      'Bienvenido${employee?.name.trim().isNotEmpty == true ? ', ${employee!.name.trim()}' : ''}',
+                      style: TextStyle(
+                        fontSize: compact ? 25 : 32,
+                        fontWeight: FontWeight.w900,
+                        height: 1.05,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Resumen general y accesos rapidos para operar tu negocio.',
-                    style: TextStyle(
-                      color: BrandColors.textSecondary,
-                      fontSize: 15,
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Resumen general y accesos rapidos para operar tu negocio.',
+                      style: TextStyle(
+                        color: BrandColors.textSecondary,
+                        fontSize: 15,
+                      ),
                     ),
-                  ),
-                ],
-              );
-              final sessionInfo = Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _HomeContextPill(
-                    icon: Icons.storefront_outlined,
-                    label: AppSession.instance.currentBranchName,
-                  ),
-                  _HomeContextPill(
-                    icon: Icons.calendar_today_outlined,
-                    label: today,
-                  ),
-                ],
-              );
-              return compact
-                  ? Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        contextInfo,
-                        const SizedBox(height: 20),
-                        sessionInfo,
-                      ],
-                    )
-                  : Row(
-                      children: [
-                        Expanded(child: contextInfo),
-                        const SizedBox(width: 20),
-                        Flexible(
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: sessionInfo,
+                  ],
+                );
+                final sessionInfo = Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _HomeContextPill(
+                      icon: Icons.storefront_outlined,
+                      label: AppSession.instance.currentBranchName,
+                    ),
+                    _HomeContextPill(
+                      icon: Icons.calendar_today_outlined,
+                      label: today,
+                    ),
+                  ],
+                );
+                return compact
+                    ? Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          contextInfo,
+                          const SizedBox(height: 20),
+                          sessionInfo,
+                        ],
+                      )
+                    : Row(
+                        children: [
+                          Expanded(child: contextInfo),
+                          const SizedBox(width: 20),
+                          Flexible(
+                            child: Align(
+                              alignment: Alignment.centerRight,
+                              child: sessionInfo,
+                            ),
                           ),
-                        ),
-                      ],
-                    );
+                        ],
+                      );
+              },
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            'Accesos principales',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 5),
+          const Text(
+            'Entra directamente al modulo que necesitas.',
+            style: TextStyle(color: BrandColors.textMuted),
+          ),
+          const SizedBox(height: 14),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth >= 1080
+                  ? 4
+                  : constraints.maxWidth >= 680
+                  ? 3
+                  : constraints.maxWidth >= 420
+                  ? 2
+                  : 1;
+              return GridView.builder(
+                itemCount: items.length,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: columns,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: columns == 1 ? 3.2 : 1.45,
+                ),
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  return _HomeModuleCard(
+                    item: item,
+                    onTap: () {
+                      if (item.section == _BackofficeSection.reports &&
+                          item.children.isNotEmpty &&
+                          item.children.first.reportKind != null) {
+                        onReportSelected(item.children.first.reportKind!);
+                      } else {
+                        onSectionChanged(item.section);
+                      }
+                    },
+                  );
+                },
+              );
             },
           ),
-        ),
-        const SizedBox(height: 24),
-        const Text(
-          'Accesos principales',
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 5),
-        const Text(
-          'Entra directamente al modulo que necesitas.',
-          style: TextStyle(color: BrandColors.textMuted),
-        ),
-        const SizedBox(height: 14),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final columns = constraints.maxWidth >= 1080
-                ? 4
-                : constraints.maxWidth >= 680
-                ? 3
-                : constraints.maxWidth >= 420
-                ? 2
-                : 1;
-            return GridView.builder(
-              itemCount: items.length,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: columns,
-                crossAxisSpacing: 12,
-                mainAxisSpacing: 12,
-                childAspectRatio: columns == 1 ? 3.2 : 1.45,
+          const SizedBox(height: 18),
+          Row(
+            children: [
+              const Icon(
+                Icons.info_outline,
+                size: 17,
+                color: BrandColors.textMuted,
               ),
-              itemBuilder: (context, index) {
-                final item = items[index];
-                return _HomeModuleCard(
-                  item: item,
-                  onTap: () {
-                    if (item.section == _BackofficeSection.reports &&
-                        item.children.isNotEmpty &&
-                        item.children.first.reportKind != null) {
-                      onReportSelected(item.children.first.reportKind!);
-                    } else {
-                      onSectionChanged(item.section);
-                    }
-                  },
-                );
-              },
-            );
-          },
-        ),
-        const SizedBox(height: 18),
-        Row(
-          children: [
-            const Icon(
-              Icons.info_outline,
-              size: 17,
-              color: BrandColors.textMuted,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              '${items.length} modulos disponibles - ${BackofficeVersion.label}',
-              style: const TextStyle(color: BrandColors.textMuted),
-            ),
-          ],
-        ),
-      ],
+              const SizedBox(width: 8),
+              Text(
+                '${items.length} modulos disponibles - ${BackofficeVersion.label}',
+                style: const TextStyle(color: BrandColors.textMuted),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1427,6 +1425,8 @@ class _DashboardSection extends StatelessWidget {
     required this.onWeek,
     required this.onMonth,
     required this.onOpenDiscountsReport,
+    required this.onSectionChanged,
+    required this.onReportSelected,
   });
 
   final TacoPosRepository repository;
@@ -1441,6 +1441,8 @@ class _DashboardSection extends StatelessWidget {
   final VoidCallback onWeek;
   final VoidCallback onMonth;
   final VoidCallback onOpenDiscountsReport;
+  final ValueChanged<_BackofficeSection> onSectionChanged;
+  final ValueChanged<_ReportKind> onReportSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -1518,6 +1520,12 @@ class _DashboardSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        _BackofficeHomeSection(
+          employee: AppSession.instance.employee,
+          onSectionChanged: onSectionChanged,
+          onReportSelected: onReportSelected,
+        ),
+        const SizedBox(height: 18),
         ExecutiveDashboardHeader(
           title: 'Dashboard',
           subtitle:
