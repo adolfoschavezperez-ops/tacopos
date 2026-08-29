@@ -20,10 +20,16 @@ class BackofficeAdminAuthService {
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
   final FirebaseFunctions _functions;
+  String? _explicitOperatorSessionUserId;
 
   Stream<User?> get authStateChanges => _auth.authStateChanges();
 
   User? get currentUser => _auth.currentUser;
+
+  /// True only after this service instance completes a PIN login.
+  bool get hasExplicitOperatorSession =>
+      _explicitOperatorSessionUserId != null &&
+      _auth.currentUser?.uid == _explicitOperatorSessionUserId;
 
   Future<List<BackofficeLoginUser>> listBackofficeUsers({
     String restaurantId = AppConstants.restaurantId,
@@ -48,6 +54,8 @@ class BackofficeAdminAuthService {
     required String pin,
     String restaurantId = AppConstants.restaurantId,
   }) async {
+    // The Backoffice operator identity must not survive a Web reload.
+    await _auth.setPersistence(Persistence.NONE);
     final callable = _functions.httpsCallable('backofficePinLogin');
     final response = await callable.call<Map<String, dynamic>>({
       'restaurantId': restaurantId,
@@ -68,6 +76,7 @@ class BackofficeAdminAuthService {
         'No se pudo iniciar sesion administrativa.',
       );
     }
+    _explicitOperatorSessionUserId = user.uid;
     return loadCurrentAdminSession(restaurantId: restaurantId);
   }
 
@@ -117,6 +126,7 @@ class BackofficeAdminAuthService {
   }
 
   Future<void> signOut() async {
+    _explicitOperatorSessionUserId = null;
     AppSession.instance.signOut();
     await _auth.signOut();
   }

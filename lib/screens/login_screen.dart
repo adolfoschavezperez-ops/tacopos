@@ -54,7 +54,9 @@ class _BackofficePinLoginGateState extends State<BackofficePinLoginGate> {
       stream: _authService.authStateChanges,
       builder: (context, snapshot) {
         final user = snapshot.data;
-        if (user == null || user.isAnonymous) {
+        if (user == null ||
+            user.isAnonymous ||
+            !_authService.hasExplicitOperatorSession) {
           AppSession.instance.signOut();
           _sessionLoad = null;
           return LoginScreen(backofficeAuthService: _authService);
