@@ -24,6 +24,7 @@ import '../core/expenses/expense_policy.dart';
 import '../core/expenses/local_expense_policy_flow.dart';
 import '../core/payments/payment_operational_scope.dart';
 import '../core/purchases/purchase_capture_discount.dart';
+import '../core/purchases/purchases_by_item_report.dart' as item_report;
 import '../core/backoffice/catalog_cache.dart';
 import '../core/reports/canonical_sales_summary.dart';
 import '../core/reports/cash_difference_audit.dart';
@@ -4242,48 +4243,7 @@ class TacoPosRepository {
   List<PurchaseItemReportRow> buildPurchasesByItemReport({
     required Iterable<SupplierPurchaseItem> items,
   }) {
-    final totals = <String, _PurchaseItemReportAccumulator>{};
-    for (final item in items) {
-      final itemId =
-          item.kitchenStockItemId ??
-          item.purchaseItemId ??
-          item.purchaseItemName.trim().toLowerCase();
-      final itemName = item.kitchenStockItemName ?? item.purchaseItemName;
-      final key = itemId.trim().isEmpty
-          ? item.purchaseItemName.trim().toLowerCase()
-          : itemId.trim();
-      final current = totals.putIfAbsent(
-        key,
-        () => _PurchaseItemReportAccumulator(
-          itemId: key,
-          itemName: itemName.trim().isEmpty ? 'Insumo' : itemName.trim(),
-          unit: item.unit,
-          affectsKitchenPerformance: item.affectsKitchenStock,
-        ),
-      );
-      current.quantity += item.quantity;
-      current.totalCents += item.lineTotalCents;
-      current.noteCount++;
-      current.affectsKitchenPerformance =
-          current.affectsKitchenPerformance || item.affectsKitchenStock;
-    }
-    final rows =
-        totals.values
-            .map(
-              (item) => PurchaseItemReportRow(
-                itemId: item.itemId,
-                itemName: item.itemName,
-                quantity: item.quantity,
-                unit: item.unit,
-                total: item.total,
-                averageUnitCostCalculated: item.averageUnitCostCalculated,
-                noteCount: item.noteCount,
-                affectsKitchenPerformance: item.affectsKitchenPerformance,
-              ),
-            )
-            .toList()
-          ..sort((a, b) => b.total.compareTo(a.total));
-    return rows;
+    return item_report.buildPurchasesByItemReport(items: items);
   }
 
   Stream<List<ActiveSession>> watchActiveSessions() {
@@ -15425,26 +15385,6 @@ class _DefaultProductCategory {
   final String name;
   final int sortOrder;
   final String colorHex;
-}
-
-class _PurchaseItemReportAccumulator {
-  _PurchaseItemReportAccumulator({
-    required this.itemId,
-    required this.itemName,
-    required this.unit,
-    required this.affectsKitchenPerformance,
-  });
-
-  final String itemId;
-  final String itemName;
-  final String unit;
-  bool affectsKitchenPerformance;
-  double quantity = 0;
-  int totalCents = 0;
-  int noteCount = 0;
-
-  double get total => purchaseAmountFromCents(totalCents);
-  double get averageUnitCostCalculated => quantity <= 0 ? 0 : total / quantity;
 }
 
 String _readText(Object? value, String fallback) {

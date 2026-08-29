@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tacopos/core/purchases/purchases_by_item_report.dart';
 import 'package:tacopos/core/purchases/purchases_by_supplier_report.dart';
 import 'package:tacopos/models/purchase_models.dart';
 
@@ -367,6 +368,29 @@ void main() {
         expect(item.unitCostCalculated, closeTo(219.1044776119, 0.0000001));
       },
     );
+
+    test('agrupa compras por insumo sin depender de la pagina visible', () {
+      final items = [
+        _purchaseItem('a-carne-1', 'Carne', 100),
+        _purchaseItem('a-verdura', 'Verdura', 50),
+        _purchaseItem('b-carne', 'Carne', 200),
+        _purchaseItem('c-tortilla', 'Tortilla', 75),
+        ...List.generate(
+          51,
+          (index) => _purchaseItem('extra-$index', 'Extra $index', 1),
+        ),
+      ];
+
+      final rows = buildPurchasesByItemReport(items: items);
+      final byName = {for (final row in rows) row.itemName: row};
+
+      expect(byName['Carne']?.total, 300);
+      expect(byName['Verdura']?.total, 50);
+      expect(byName['Tortilla']?.total, 75);
+      expect(rows.length, 54);
+      expect(rows.take(50).length, 50);
+      expect(rows.skip(50).length, 4);
+    });
   });
 }
 
@@ -414,4 +438,13 @@ SupplierPurchase _purchase({
     cancelledAt: cancelledAt,
     createdByEmployeeName: 'Admin',
   );
+}
+
+SupplierPurchaseItem _purchaseItem(String id, String name, double total) {
+  return SupplierPurchaseItem.fromData(id, {
+    'purchaseItemName': name,
+    'quantity': 1,
+    'unit': 'pieza',
+    'lineTotalCents': (total * 100).round(),
+  });
 }

@@ -3363,13 +3363,16 @@ class _PurchasesByItemReportState extends State<_PurchasesByItemReport> {
   @override
   void initState() {
     super.initState();
-    _itemsFuture = Future.value(const <SupplierPurchaseItem>[]);
+    _itemsFuture = widget.hasConsulted
+        ? _loadItems()
+        : Future.value(const <SupplierPurchaseItem>[]);
   }
 
   @override
   void didUpdateWidget(covariant _PurchasesByItemReport oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.purchases != widget.purchases) {
+    if (oldWidget.purchases != widget.purchases ||
+        (!oldWidget.hasConsulted && widget.hasConsulted)) {
       _currentPage = 1;
       _itemsFuture = _loadItems();
     }
