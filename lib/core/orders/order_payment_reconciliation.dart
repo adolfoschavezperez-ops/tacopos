@@ -238,12 +238,31 @@ double paymentRecordedSaleAmount(Payment payment, {double? tipOverride}) {
   final tip = (tipOverride ?? payment.tipAmount)
       .clamp(0, double.infinity)
       .toDouble();
+  final discount = paymentDiscountAppliedToSale(payment);
   if (payment.appliedAmount != null && payment.appliedAmount! >= 0) {
-    return roundCheckoutMoney(
-      payment.appliedAmount!.clamp(0, double.infinity).toDouble(),
-    );
+    final applied = payment.appliedAmount!;
+    if (_isLegacyGrossDiscountedPayment(payment, applied, discount)) {
+      return roundCheckoutMoney(
+        _legacyDiscountedNetAmount(payment, applied, discount, tip),
+      );
+    }
+    return roundCheckoutMoney(applied.clamp(0, double.infinity).toDouble());
   }
   if (payment.totalAfterDiscount > 0) {
+    if (_isLegacyGrossDiscountedPayment(
+      payment,
+      payment.totalAfterDiscount,
+      discount,
+    )) {
+      return roundCheckoutMoney(
+        _legacyDiscountedNetAmount(
+          payment,
+          payment.totalAfterDiscount,
+          discount,
+          tip,
+        ),
+      );
+    }
     return roundCheckoutMoney(
       (payment.totalAfterDiscount - tip).clamp(0, double.infinity).toDouble(),
     );
@@ -255,7 +274,6 @@ double paymentRecordedSaleAmount(Payment payment, {double? tipOverride}) {
       (payment.chargedAmount - tip).clamp(0, double.infinity).toDouble(),
     );
   }
-  final discount = paymentDiscountAppliedToSale(payment);
   final baseNet = payment.baseAmount > 0
       ? (payment.baseAmount - discount).clamp(0, double.infinity).toDouble()
       : 0.0;
@@ -266,6 +284,50 @@ double paymentRecordedSaleAmount(Payment payment, {double? tipOverride}) {
   return roundCheckoutMoney(
     (payment.chargedAmount - tip - fee).clamp(0, double.infinity).toDouble(),
   );
+}
+
+bool _isLegacyGrossDiscountedPayment(
+  Payment payment,
+  double appliedAmount,
+  double discount,
+) {
+  if (discount <= 0 && payment.appliedDiscountPercent <= 0) return false;
+  final grossFieldsMatch =
+      payment.baseAmount > 0 &&
+      (appliedAmount - payment.baseAmount).abs() <= 0.02 &&
+      (payment.subtotalBeforeDiscount <= 0 ||
+          (appliedAmount - payment.subtotalBeforeDiscount).abs() <= 0.02);
+  if (!grossFieldsMatch) return false;
+
+  final hasOrderNetEvidence =
+      payment.orderGrossSubtotal > 0 &&
+      payment.orderNetTotal >= 0 &&
+      payment.orderNetTotal < payment.orderGrossSubtotal - 0.02 &&
+      (payment.type == 'full_table' ||
+          (payment.baseAmount - payment.orderGrossSubtotal).abs() <= 0.02);
+  final hasCashEvidence =
+      payment.method == 'cash' &&
+      payment.cashReceivedAmount != null &&
+      payment.cashChangeAmount != null &&
+      payment.cashReceivedAmount! - payment.cashChangeAmount! >= 0 &&
+      (payment.cashReceivedAmount! - payment.cashChangeAmount! - appliedAmount)
+              .abs() >
+          0.02;
+  return hasOrderNetEvidence || hasCashEvidence;
+}
+
+double _legacyDiscountedNetAmount(
+  Payment payment,
+  double appliedAmount,
+  double discount,
+  double tip,
+) {
+  if (payment.orderNetTotal >= 0 &&
+      payment.orderGrossSubtotal > 0 &&
+      payment.orderNetTotal < payment.orderGrossSubtotal - 0.02) {
+    return (payment.orderNetTotal - tip).clamp(0, double.infinity).toDouble();
+  }
+  return (appliedAmount - discount - tip).clamp(0, double.infinity).toDouble();
 }
 
 double paymentDiscountAppliedToSale(Payment payment) {

@@ -293,6 +293,79 @@ void main() {
     expect(summary.reconciliationDifference, 0);
   });
 
+  test('descuento empleado legacy bruto se normaliza a cobro neto', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(total: 290, fields: const {'discountAmount': 87}),
+        items: [item(total: 290)],
+        payments: [
+          payment(
+            method: 'cash',
+            base: 290,
+            charged: 290,
+            applied: 290,
+            received: 203,
+            change: 0,
+            appliedDiscountType: 'employee_30',
+            appliedDiscountPercent: 30,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.monetaryCollected, 203);
+    expect(summary.netSales, 203);
+    expect(summary.reconciliationDifference, 0);
+  });
+
+  test('descuento partner legacy bruto se normaliza a cobro neto', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(total: 374, fields: const {'discountAmount': 187}),
+        items: [item(total: 374)],
+        payments: [
+          payment(
+            method: 'card',
+            base: 374,
+            charged: 374,
+            applied: 374,
+            appliedDiscountType: 'partner_50',
+            appliedDiscountPercent: 50,
+            orderGrossSubtotal: 374,
+            orderNetTotal: 187,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.monetaryCollected, 187);
+    expect(summary.netSales, 187);
+    expect(summary.reconciliationDifference, 0);
+  });
+
+  test('payment ya neto no se descuenta dos veces', () {
+    final summary = buildCanonicalSalesSummary([
+      SalesOrderBundleInput(
+        order: order(total: 290, fields: const {'discountAmount': 87}),
+        items: [item(total: 290)],
+        payments: [
+          payment(
+            method: 'cash',
+            base: 290,
+            charged: 203,
+            applied: 203,
+            appliedDiscountType: 'employee_30',
+            appliedDiscountPercent: 30,
+          ),
+        ],
+      ),
+    ]);
+
+    expect(summary.monetaryCollected, 203);
+    expect(summary.netSales, 203);
+    expect(summary.reconciliationDifference, 0);
+  });
+
   test('orden mixta: comida gratis reduce venta neta y no cobrado real', () {
     final summary = buildCanonicalSalesSummary([
       SalesOrderBundleInput(
@@ -706,6 +779,9 @@ Payment payment({
   String status = 'active',
   DateTime? cancelledAt,
   String? appliedDiscountType,
+  double appliedDiscountPercent = 0,
+  double orderGrossSubtotal = 0,
+  double orderNetTotal = 0,
 }) {
   return Payment(
     id: 'payment-$base-$charged',
@@ -723,6 +799,9 @@ Payment payment({
     cashChangeAmount: change,
     discountAmount: discountAmount,
     appliedDiscountType: appliedDiscountType,
+    appliedDiscountPercent: appliedDiscountPercent,
+    orderGrossSubtotal: orderGrossSubtotal,
+    orderNetTotal: orderNetTotal,
     cardFeeAbsorbedAmount: cardFee,
     businessDate: businessDate,
     createdAt: createdAt,
