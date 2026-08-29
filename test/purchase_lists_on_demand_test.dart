@@ -55,4 +55,15 @@ void main() {
     expect(repositorySource, contains("'purchaseDate'"));
     expect(source, isNot(contains('purchaseFolioCounter')));
   });
+
+  test('reporte por insumo carga items al recibir compras ya consultadas', () {
+    expect(source, contains('_itemsFuture = widget.hasConsulted'));
+    expect(source, contains('? _loadItems()'));
+    expect(
+      source,
+      contains("(!oldWidget.hasConsulted && widget.hasConsulted)"),
+    );
+    expect(source, contains('allItems: itemRows'));
+    expect(source, contains('_exportItems(context, itemRows)'));
+  });
 }
