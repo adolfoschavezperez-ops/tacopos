@@ -6,6 +6,131 @@ import 'package:tacopos/models/payment.dart';
 
 void main() {
   group('buildCashDifferenceAuditReport', () {
+    test(
+      'normaliza pagos legacy descontados por metodo sin restar descuentos globales',
+      () {
+        final report = buildCashDifferenceAuditReport(
+          session: _session(
+            countedCashAmount: 1542,
+            terminalReportedAmount: 1989.05,
+            expectedCashAmount: 2429,
+            expectedCardChargedAmount: 2128,
+            approvedWithdrawalsTotal: 165,
+          ),
+          orders: [
+            _order(
+              id: 'employee-order',
+              label: 'Mesa 1',
+              total: 290,
+              netTotal: 203,
+            ),
+            _order(
+              id: 'partner-order',
+              label: 'Mesa 2',
+              total: 374,
+              netTotal: 187,
+            ),
+            _order(
+              id: 'normal-order',
+              label: 'Mesa 3',
+              total: 3802,
+              netTotal: 3558,
+            ),
+          ],
+          payments: [
+            _input(
+              _payment(
+                id: 'employee-payment',
+                orderId: 'employee-order',
+                amount: 290,
+                received: 203,
+                appliedAmount: 290,
+                appliedDiscountPercent: 30,
+                orderGrossSubtotal: 290,
+                orderNetTotal: 203,
+              ),
+            ),
+            _input(
+              _payment(
+                id: 'partner-payment',
+                orderId: 'partner-order',
+                method: 'card',
+                amount: 374,
+                appliedAmount: 374,
+                appliedDiscountPercent: 50,
+                orderGrossSubtotal: 374,
+                orderNetTotal: 187,
+              ),
+            ),
+            _input(
+              _payment(
+                id: 'normal-cash',
+                orderId: 'normal-order',
+                amount: 1804,
+              ),
+            ),
+            _input(
+              _payment(
+                id: 'normal-card',
+                orderId: 'normal-order',
+                method: 'card',
+                amount: 1754,
+              ),
+            ),
+          ],
+        );
+
+        expect(report.activeCashPayments, closeTo(2007, 0.001));
+        expect(report.activeCardPayments, closeTo(1941, 0.001));
+        expect(report.activePaymentTotal, closeTo(3948, 0.001));
+        expect(report.paymentNetDifference, closeTo(0, 0.001));
+        expect(report.cashDifference, closeTo(-800, 0.001));
+        expect(report.cardDifference, closeTo(48.05, 0.001));
+        expect(report.totalDifference, closeTo(-751.95, 0.001));
+      },
+    );
+
+    test(
+      'usa tarjeta monetaria para el arqueo y mantiene separada la comision',
+      () {
+        final withCommission = buildCashDifferenceAuditReport(
+          session: _session(
+            countedCashAmount: 1542,
+            terminalReportedAmount: 1989.05,
+            expectedCashAmount: 1842,
+            expectedCardChargedAmount: 1941,
+            expectedCardFeeAbsorbedAmount: 86.40,
+            approvedWithdrawalsTotal: 165,
+          ),
+          orders: const [],
+          payments: const [],
+        );
+        final withoutCommission = buildCashDifferenceAuditReport(
+          session: _session(
+            countedCashAmount: 1542,
+            terminalReportedAmount: 1989.05,
+            expectedCashAmount: 1842,
+            expectedCardChargedAmount: 1941,
+            expectedCardFeeAbsorbedAmount: 0,
+            approvedWithdrawalsTotal: 165,
+          ),
+          orders: const [],
+          payments: const [],
+        );
+
+        expect(withCommission.session.expectedCardFeeAbsorbedAmount, 86.40);
+        expect(withCommission.cardPos, 1941);
+        expect(withCommission.cardDifference, closeTo(48.05, 0.001));
+        expect(withCommission.cashDifference, closeTo(-300, 0.001));
+        expect(withCommission.totalDifference, closeTo(-251.95, 0.001));
+        expect(withoutCommission.cardDifference, withCommission.cardDifference);
+        expect(
+          withoutCommission.totalDifference,
+          withCommission.totalDifference,
+        );
+      },
+    );
+
     test('audits a closed cash session without changing close formulas', () {
       final session = _session();
       final orders = [
@@ -438,6 +563,7 @@ CashSession _session({
   double terminalReportedAmount = 941.76,
   double expectedCashAmount = 3465.4,
   double expectedCardChargedAmount = 281,
+  double expectedCardFeeAbsorbedAmount = 11.4086,
   double approvedWithdrawalsTotal = 0,
 }) {
   final cashDifference =
@@ -459,7 +585,7 @@ CashSession _session({
     expectedCardChargedAmount: expectedCardChargedAmount,
     expectedCardBaseAmount: 430,
     expectedCardSurchargeAmount: 0,
-    expectedCardFeeAbsorbedAmount: 11.4086,
+    expectedCardFeeAbsorbedAmount: expectedCardFeeAbsorbedAmount,
     expectedPlatformAmount: 0,
     expectedEmployeeConsumptionAmount: 0,
     totalExpectedRealMoney: expectedCashAmount + expectedCardChargedAmount,
@@ -535,6 +661,10 @@ Payment _payment({
   DateTime? cancelledAt,
   double? received,
   double? change,
+  double? appliedAmount,
+  double appliedDiscountPercent = 0,
+  double orderGrossSubtotal = 0,
+  double orderNetTotal = 0,
 }) {
   return Payment(
     id: id,
@@ -547,11 +677,15 @@ Payment _payment({
     surchargeRate: 0,
     surchargeAmount: 0,
     chargedAmount: chargedAmount ?? amount,
+    appliedAmount: appliedAmount,
     cardFeeAbsorbedAmount: cardFee,
     cashSessionId: cashSessionId,
     businessDate: businessDate,
     cashReceivedAmount: received,
     cashChangeAmount: change,
+    appliedDiscountPercent: appliedDiscountPercent,
+    orderGrossSubtotal: orderGrossSubtotal,
+    orderNetTotal: orderNetTotal,
     status: status,
     cancelledAt: cancelledAt,
     createdAt: createdAt ?? DateTime(2026, 7, 28, 3),

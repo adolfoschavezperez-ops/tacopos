@@ -438,13 +438,16 @@ double? _explicitPaymentsDiscount(List<Payment> payments, double gross) {
   }
   if (hasMoney) return total;
 
-  var percentTotal = 0.0;
+  var highestPercent = 0.0;
   for (final payment in payments) {
     if (payment.appliedDiscountPercent > 0) {
-      percentTotal += _normalizePercent(payment.appliedDiscountPercent);
+      highestPercent =
+          highestPercent > _normalizePercent(payment.appliedDiscountPercent)
+          ? highestPercent
+          : _normalizePercent(payment.appliedDiscountPercent);
     }
   }
-  if (percentTotal > 0) return gross * percentTotal.clamp(0, 1);
+  if (highestPercent > 0) return gross * highestPercent.clamp(0, 1);
   return null;
 }
 

@@ -141,6 +141,67 @@ void main() {
       expect(result.hasDiscrepancy, isFalse);
     });
 
+    test('legacy gross employee payment is not a discrepancy', () {
+      final result = auditSalesIntegrity(
+        _order(
+          total: 290,
+          paidTotal: 290,
+          explicitDiscount: 87,
+          discountPercent: 30,
+        ),
+        [_item(total: 290)],
+        [
+          _payment(
+            id: 'legacy-employee',
+            baseAmount: 290,
+            chargedAmount: 290,
+            appliedAmount: 290,
+            received: 203,
+            change: 0,
+            appliedDiscountPercent: 30,
+            appliedDiscountType: 'employee_30',
+            orderGrossSubtotal: 290,
+            orderNetTotal: 203,
+          ),
+        ],
+      );
+
+      expect(result.moneyPaymentsApplied, 203);
+      expect(result.monetaryDiscountApplied, 87);
+      expect(result.settledTotal, 290);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
+    test('legacy gross partner payment is not a discrepancy', () {
+      final result = auditSalesIntegrity(
+        _order(
+          total: 374,
+          paidTotal: 374,
+          explicitDiscount: 187,
+          discountPercent: 50,
+        ),
+        [_item(total: 374)],
+        [
+          _payment(
+            id: 'legacy-partner',
+            method: 'card',
+            baseAmount: 374,
+            chargedAmount: 374,
+            appliedAmount: 374,
+            appliedDiscountPercent: 50,
+            appliedDiscountType: 'partner_50',
+            orderGrossSubtotal: 374,
+            orderNetTotal: 187,
+          ),
+        ],
+      );
+
+      expect(result.moneyPaymentsApplied, 187);
+      expect(result.monetaryDiscountApplied, 187);
+      expect(result.settledTotal, 374);
+      expect(result.hasDiscrepancy, isFalse);
+    });
+
     test('does not flag a correct 100 percent discount settlement', () {
       final result = auditSalesIntegrity(
         _order(total: 80, paidTotal: 80),
@@ -934,6 +995,9 @@ Payment _payment({
   String? discountReason,
   String status = 'active',
   DateTime? createdAt,
+  double? appliedAmount,
+  double orderGrossSubtotal = 0,
+  double orderNetTotal = 0,
 }) {
   return Payment(
     id: id,
@@ -946,6 +1010,7 @@ Payment _payment({
     surchargeRate: 0,
     surchargeAmount: 0,
     chargedAmount: chargedAmount ?? baseAmount,
+    appliedAmount: appliedAmount,
     cardFeeAbsorbedAmount: cardFee,
     cashReceivedAmount: received,
     cashChangeAmount: change,
@@ -954,6 +1019,8 @@ Payment _payment({
     totalAfterDiscount: totalAfterDiscount,
     appliedDiscountPercent: appliedDiscountPercent,
     appliedDiscountType: appliedDiscountType,
+    orderGrossSubtotal: orderGrossSubtotal,
+    orderNetTotal: orderNetTotal,
     appliedDiscountName: appliedDiscountName,
     discountReason: discountReason,
     status: status,

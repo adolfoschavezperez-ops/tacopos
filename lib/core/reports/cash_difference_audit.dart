@@ -55,11 +55,15 @@ class CashDifferenceAuditReport {
   double get cashPos =>
       session.expectedCashAmount -
       session.openingCashAmount +
-      session.approvedWithdrawalsTotal;
+      session.approvedWithdrawalsTotal -
+      _discountedGrossOverstatement(activePayments, 'cash');
   double get countedCashLessOpening =>
       session.countedCashAmount - session.openingCashAmount;
-  double get cashDifference => countedCashLessOpening - cashPos;
-  double get cardPos => session.expectedCardChargedAmount;
+  double get cashDifference =>
+      countedCashLessOpening - cashPos + session.approvedWithdrawalsTotal;
+  double get cardPos =>
+      session.expectedCardChargedAmount -
+      _discountedGrossOverstatement(activePayments, 'card');
   double get cardDifference => session.terminalReportedAmount - cardPos;
   double get totalDifference => cashDifference + cardDifference;
   double get observedMoney =>
@@ -315,6 +319,18 @@ class CashAuditPaymentInput {
   final double tipAmount;
 }
 
+double _discountedGrossOverstatement(
+  Iterable<CashAuditPaymentRow> rows,
+  String method,
+) {
+  return rows
+      .where((row) => row.included && row.normalizedMethod == method)
+      .fold<double>(0, (sum, row) {
+        final overstatement = row.baseAmount - row.amountForAudit;
+        return sum + (overstatement > 0.02 ? overstatement : 0);
+      });
+}
+
 CashDifferenceAuditReport buildCashDifferenceAuditReport({
   required CashSession session,
   required Iterable<PosOrder> orders,
@@ -564,7 +580,9 @@ List<CashAuditIssueRow> _cardCandidates(
   List<CashAuditPaymentRow> rows,
 ) {
   final target =
-      session.terminalReportedAmount - session.expectedCardChargedAmount;
+      session.terminalReportedAmount -
+      (session.expectedCardChargedAmount -
+          _discountedGrossOverstatement(rows, 'card'));
   final candidates =
       rows.where((row) => row.included && row.normalizedMethod == 'cash').map((
         row,
@@ -603,6 +621,8 @@ List<CashAuditIssueRow> _cashCandidates(
       (session.countedCashAmount - session.openingCashAmount) -
       (session.expectedCashAmount -
           session.openingCashAmount +
+          session.approvedWithdrawalsTotal -
+          _discountedGrossOverstatement(rows, 'cash') -
           session.approvedWithdrawalsTotal);
   final netZeroRows = rows
       .where(

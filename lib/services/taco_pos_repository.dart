@@ -9243,9 +9243,7 @@ class TacoPosRepository {
           cash += saleApplied + tip;
           break;
         case 'card':
-          final customerCharged = payment.chargedAmount > 0
-              ? payment.chargedAmount
-              : saleApplied;
+          final customerCharged = saleApplied + payment.surchargeAmount;
           final terminalAmount =
               customerCharged +
               (customerCharged <= saleApplied + 0.02 ? tip : 0.0);
