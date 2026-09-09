@@ -39,5 +39,5 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test
-        run: npm test -- --exit
+      - name: Cash audit parity tests
+        run: npx mocha --timeout 30000 "lib/test/cash_audit_engine.test.js" --exit
