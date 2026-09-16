@@ -84,6 +84,8 @@ class CashSession {
   final String notes;
 
   bool get isOpen => status == 'open' && closedAt == null;
+  bool get isClosing => status == 'closing' && closedAt == null;
+  bool get isClosed => status == 'closed' || closedAt != null;
   double get estimatedCardNetAmount =>
       expectedCardChargedAmount - expectedCardFeeAbsorbedAmount;
 

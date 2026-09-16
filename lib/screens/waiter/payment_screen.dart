@@ -24,21 +24,26 @@ import '../../widgets/money_text.dart';
 import '../../widgets/status_badge.dart';
 
 class PaymentScreen extends StatefulWidget {
-  const PaymentScreen({super.key, required this.orderId});
+  const PaymentScreen({super.key, required this.orderId, this.repository});
 
   final String orderId;
+  final TacoPosRepository? repository;
 
   @override
   State<PaymentScreen> createState() => _PaymentScreenState();
 }
 
 class _PaymentScreenState extends State<PaymentScreen> {
-  final _repository = TacoPosRepository();
+  late final _repository = widget.repository ?? TacoPosRepository();
+  late Stream<PosOrder?> _orderStream;
+  late Stream<List<OrderItem>> _itemsStream;
+  late Stream<List<Payment>> _paymentsStream;
   bool _busy = false;
 
   @override
   void initState() {
     super.initState();
+    _bindCheckoutStreams();
     LivePresenceService.instance.update(
       appMode: 'cash',
       currentScreen: 'Cobro',
@@ -51,6 +56,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
   void didUpdateWidget(covariant PaymentScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.orderId == widget.orderId) return;
+    _bindCheckoutStreams();
     setState(() {
       _busy = false;
     });
@@ -68,6 +74,18 @@ class _PaymentScreenState extends State<PaymentScreen> {
       currentAction: 'Viendo mesas',
     );
     super.dispose();
+  }
+
+  void _bindCheckoutStreams() {
+    _orderStream = _repository.watchOrder(widget.orderId, requireServer: true);
+    _itemsStream = _repository.watchOrderItems(
+      widget.orderId,
+      requireServer: true,
+    );
+    _paymentsStream = _repository.watchOrderPayments(
+      widget.orderId,
+      requireServer: true,
+    );
   }
 
   bool _isCurrentOrder(String orderId) {
@@ -636,7 +654,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     return BrandedScaffold(
       title: 'Cobro',
       body: StreamBuilder<PosOrder?>(
-        stream: _repository.watchOrder(widget.orderId),
+        key: ValueKey('checkout-${widget.orderId}'),
+        stream: _orderStream,
         builder: (context, orderSnapshot) {
           if (orderSnapshot.hasError) {
             return EmptyState(
@@ -653,7 +672,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
           }
 
           return StreamBuilder<List<OrderItem>>(
-            stream: _repository.watchOrderItems(widget.orderId),
+            stream: _itemsStream,
             builder: (context, itemSnapshot) {
               if (itemSnapshot.hasError) {
                 return EmptyState(
@@ -663,7 +682,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
                 );
               }
 
-              final items = itemSnapshot.data ?? [];
+              if (!itemSnapshot.hasData) {
+                return const LoadingPanel(message: 'Cargando articulos...');
+              }
+              final items = itemSnapshot.data!;
               return StreamBuilder<List<Employee>>(
                 stream: _repository.watchEmployees(),
                 builder: (context, employeeSnapshot) {
@@ -693,7 +715,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             partnerSnapshot.data ?? const [],
                           );
                       return StreamBuilder<List<Payment>>(
-                        stream: _repository.watchOrderPayments(widget.orderId),
+                        stream: _paymentsStream,
                         builder: (context, paymentSnapshot) {
                           if (paymentSnapshot.hasError) {
                             return EmptyState(
@@ -703,7 +725,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
                             );
                           }
 
-                          final payments = paymentSnapshot.data ?? [];
+                          if (!paymentSnapshot.hasData) {
+                            return const LoadingPanel(
+                              message: 'Cargando pagos...',
+                            );
+                          }
+                          final payments = paymentSnapshot.data!;
                           final activePayments = payments
                               .where((payment) => payment.isActive)
                               .toList();

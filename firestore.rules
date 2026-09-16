@@ -38,6 +38,17 @@ service cloud.firestore {
         immutableBranchId();
     }
 
+    // Monetary documents are only mutable while their operational cash
+    // session is open. This is deliberately enforced on the server because a
+    // device may have read an old `open` snapshot just before a close starts.
+    function cashSessionAcceptsMonetaryWrite(restaurantId, cashSessionId) {
+      return cashSessionId is string &&
+        cashSessionId.size() > 0 &&
+        exists(/databases/$(database)/documents/restaurants/$(restaurantId)/cashSessions/$(cashSessionId)) &&
+        get(/databases/$(database)/documents/restaurants/$(restaurantId)/cashSessions/$(cashSessionId)).data.status == 'open' &&
+        !('closedAt' in get(/databases/$(database)/documents/restaurants/$(restaurantId)/cashSessions/$(cashSessionId)).data);
+    }
+
     function authUserPath(restaurantId) {
       return /databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid);
     }
@@ -442,8 +453,16 @@ service cloud.firestore {
 
         match /payments/{paymentId} {
           allow read: if signedIn();
-          allow create: if validCreate(restaurantId);
-          allow update: if validUpdate();
+          allow create: if validCreate(restaurantId) &&
+            (!('cashSessionId' in request.resource.data) ||
+              cashSessionAcceptsMonetaryWrite(
+                restaurantId, request.resource.data.cashSessionId
+              ));
+          allow update: if validUpdate() &&
+            (!('cashSessionId' in resource.data) ||
+              cashSessionAcceptsMonetaryWrite(
+                restaurantId, resource.data.cashSessionId
+              ));
           allow delete: if false;
         }
 
@@ -464,13 +483,29 @@ service cloud.firestore {
 
       match /cashWithdrawalRequests/{requestId} {
         allow read: if signedIn();
-        allow create: if validDeviceExpenseCreate(restaurantId, requestId) ||
-          (isBackofficeAdmin(restaurantId) && validCreate(restaurantId));
+        allow create: if (
+          validDeviceExpenseCreate(restaurantId, requestId) ||
+          (isBackofficeAdmin(restaurantId) && validCreate(restaurantId))
+        ) && (
+          cashSessionAcceptsMonetaryWrite(
+            restaurantId, request.resource.data.cashSessionId
+          ) || (isBackofficeAdmin(restaurantId) &&
+            ('isHistorical' in request.resource.data) &&
+            request.resource.data.isHistorical == true)
+        );
         allow update: if (
-          isBackofficeAdmin(restaurantId) &&
-          validUpdate() &&
-          preservesExpensePolicyApprovalFields()
-        ) || validDeviceExpenseCancel(restaurantId);
+          (
+            isBackofficeAdmin(restaurantId) &&
+            validUpdate() &&
+            preservesExpensePolicyApprovalFields()
+          ) || validDeviceExpenseCancel(restaurantId)
+        ) && (
+          cashSessionAcceptsMonetaryWrite(
+            restaurantId, resource.data.cashSessionId
+          ) || (isBackofficeAdmin(restaurantId) &&
+            ('isHistorical' in resource.data) &&
+            resource.data.isHistorical == true)
+        );
         allow delete: if false;
       }
 

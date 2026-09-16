@@ -835,6 +835,9 @@ describe('TacoPOS Firestore production guard rails', () => {
 
   it('device crea expense de su branch y no en otro branch', async () => {
     await seed(devicePath('device-uid'), deviceData('device-uid'));
+    await seed(`restaurants/${RESTAURANT_ID}/cashSessions/cash-open`, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID, status: 'open',
+    });
     const db = authedDb('device-uid');
     const base = {
       id: 'request-1',
@@ -909,6 +912,9 @@ describe('TacoPOS Firestore production guard rails', () => {
   it('device puede confirmar transaccion local-first completa de gasto aprobado', async () => {
     await seed(devicePath('device-uid'), deviceData('device-uid'));
     await seed(policyPath('hielo'), policyData({ branchId: BRANCH_ID }));
+    await seed(`restaurants/${RESTAURANT_ID}/cashSessions/cash-open`, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID, status: 'open',
+    });
     const db = authedDb('device-uid');
     const requestId = 'request-local-first';
 
@@ -1107,6 +1113,46 @@ describe('TacoPOS Firestore production guard rails', () => {
         autoApproved: false,
         wouldAutoApprove: false,
       }),
+    );
+  });
+
+  it('rechaza pagos y autorizaciones cuando la caja esta closing', async () => {
+    const sessionId = 'cash-closing';
+    await seed(`restaurants/${RESTAURANT_ID}/cashSessions/${sessionId}`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      status: 'closing',
+    });
+    await seedAdmin();
+    await seed(`restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/closing-expense`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      cashSessionId: sessionId,
+      businessDate: BUSINESS_DATE,
+      amount: 40,
+      reason: 'Hielo',
+      status: 'pending',
+      policyId: '',
+      autoApproved: false,
+      wouldAutoApprove: false,
+    });
+
+    await assertFails(
+      setDoc(
+        doc(authedDb('cashier'), `restaurants/${RESTAURANT_ID}/orders/closing-order/payments/late-payment`),
+        {
+          restaurantId: RESTAURANT_ID,
+          branchId: BRANCH_ID,
+          cashSessionId: sessionId,
+          status: 'active',
+        },
+      ),
+    );
+    await assertFails(
+      updateDoc(
+        doc(adminDb(), `restaurants/${RESTAURANT_ID}/cashWithdrawalRequests/closing-expense`),
+        { status: 'approved' },
+      ),
     );
   });
 

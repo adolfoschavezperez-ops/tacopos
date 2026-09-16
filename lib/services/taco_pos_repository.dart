@@ -2921,8 +2921,10 @@ class TacoPosRepository {
     );
   }
 
-  Future<GeneralDiscountConfig> getGeneralDiscountConfigOnce() async {
-    final doc = await _discountSettingsRef.get();
+  Future<GeneralDiscountConfig> getGeneralDiscountConfigOnce({
+    Source source = Source.serverAndCache,
+  }) async {
+    final doc = await _discountSettingsRef.get(GetOptions(source: source));
     return _generalDiscountFromData(doc.data());
   }
 
@@ -4920,24 +4922,38 @@ class TacoPosRepository {
     return 0;
   }
 
-  Stream<PosOrder?> watchOrder(String orderId) {
-    return _ordersRef.doc(orderId).snapshots().map((doc) {
-      if (!doc.exists) {
-        return null;
-      }
-      return PosOrder.fromDoc(doc);
-    });
+  Stream<PosOrder?> watchOrder(String orderId, {bool requireServer = false}) {
+    return _ordersRef
+        .doc(orderId)
+        .snapshots(includeMetadataChanges: requireServer)
+        .where(
+          (doc) =>
+              !requireServer ||
+              (!doc.metadata.isFromCache && !doc.metadata.hasPendingWrites),
+        )
+        .map((doc) {
+          if (!doc.exists) {
+            return null;
+          }
+          return PosOrder.fromDoc(doc);
+        });
   }
 
-  Future<PosOrder> getOrderOnce(String orderId) async {
-    final doc = await _ordersRef.doc(orderId).get();
+  Future<PosOrder> getOrderOnce(
+    String orderId, {
+    Source source = Source.serverAndCache,
+  }) async {
+    final doc = await _ordersRef.doc(orderId).get(GetOptions(source: source));
     if (!doc.exists) {
       throw StateError('La orden ya no existe.');
     }
     return PosOrder.fromDoc(doc);
   }
 
-  Stream<List<OrderItem>> watchOrderItems(String orderId) {
+  Stream<List<OrderItem>> watchOrderItems(
+    String orderId, {
+    bool requireServer = false,
+  }) {
     final cleanOrderId = orderId.trim();
     if (cleanOrderId.isEmpty) {
       return Stream.error(StateError('OrderId vacio al cargar articulos.'));
@@ -4948,20 +4964,28 @@ class TacoPosRepository {
       '[TacoPOS][itemsStream] watch path=$path orderId=$cleanOrderId',
     );
 
-    return _ordersRef.doc(cleanOrderId).collection('items').snapshots().map((
-      snapshot,
-    ) {
-      final items = _sortedOrderItems(snapshot.docs.map(OrderItem.fromDoc));
-      final preview = items
-          .take(5)
-          .map((item) => '${item.id}:${item.productName}')
-          .join(', ');
-      developer.log(
-        '[TacoPOS][itemsStream] orderId=$cleanOrderId path=$path '
-        'itemCount=${items.length} firstItems=[$preview]',
-      );
-      return items;
-    });
+    return _ordersRef
+        .doc(cleanOrderId)
+        .collection('items')
+        .snapshots(includeMetadataChanges: requireServer)
+        .where(
+          (snapshot) =>
+              !requireServer ||
+              (!snapshot.metadata.isFromCache &&
+                  !snapshot.metadata.hasPendingWrites),
+        )
+        .map((snapshot) {
+          final items = _sortedOrderItems(snapshot.docs.map(OrderItem.fromDoc));
+          final preview = items
+              .take(5)
+              .map((item) => '${item.id}:${item.productName}')
+              .join(', ');
+          developer.log(
+            '[TacoPOS][itemsStream] orderId=$cleanOrderId path=$path '
+            'itemCount=${items.length} firstItems=[$preview]',
+          );
+          return items;
+        });
   }
 
   Future<List<OrderItem>> getOrderItemsOnce(String orderId) async {
@@ -5074,27 +5098,44 @@ class TacoPosRepository {
     );
   }
 
-  Stream<List<Payment>> watchOrderPayments(String orderId) {
-    return _ordersRef.doc(orderId).collection('payments').snapshots().map((
-      snapshot,
-    ) {
-      final payments =
-          snapshot.docs
-              .map((doc) => Payment.fromDoc(doc).copyWith(orderId: orderId))
-              .toList()
-            ..sort((a, b) {
-              final aDate =
-                  a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              final bDate =
-                  b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              return bDate.compareTo(aDate);
-            });
-      return payments;
-    });
+  Stream<List<Payment>> watchOrderPayments(
+    String orderId, {
+    bool requireServer = false,
+  }) {
+    return _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .snapshots(includeMetadataChanges: requireServer)
+        .where(
+          (snapshot) =>
+              !requireServer ||
+              (!snapshot.metadata.isFromCache &&
+                  !snapshot.metadata.hasPendingWrites),
+        )
+        .map((snapshot) {
+          final payments =
+              snapshot.docs
+                  .map((doc) => Payment.fromDoc(doc).copyWith(orderId: orderId))
+                  .toList()
+                ..sort((a, b) {
+                  final aDate =
+                      a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                  final bDate =
+                      b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                  return bDate.compareTo(aDate);
+                });
+          return payments;
+        });
   }
 
-  Future<List<Payment>> getOrderPaymentsOnce(String orderId) async {
-    final snapshot = await _ordersRef.doc(orderId).collection('payments').get();
+  Future<List<Payment>> getOrderPaymentsOnce(
+    String orderId, {
+    Source source = Source.serverAndCache,
+  }) async {
+    final snapshot = await _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .get(GetOptions(source: source));
     final payments =
         snapshot.docs
             .map((doc) => Payment.fromDoc(doc).copyWith(orderId: orderId))
@@ -6199,6 +6240,53 @@ class TacoPosRepository {
         withdrawals: withdrawals,
       );
     });
+  }
+
+  /// Reads one complete, server-authoritative view of a cash session.
+  ///
+  /// Historical cut cards must not use the first event of a Firestore listener:
+  /// that event may be an incomplete local cache snapshot.
+  Future<CashSessionTotals> getCashSessionTotalsForCloseOrAudit(
+    String cashSessionId,
+  ) async {
+    final sessionDoc = await _cashSessionsRef
+        .doc(cashSessionId)
+        .get(const GetOptions(source: Source.server));
+    if (!sessionDoc.exists) {
+      throw StateError('La caja ya no existe.');
+    }
+    final session = CashSession.fromDoc(sessionDoc);
+    final paymentsSnapshot = await _db
+        .collectionGroup('payments')
+        .where('cashSessionId', isEqualTo: cashSessionId)
+        .get(const GetOptions(source: Source.server));
+    final withdrawalsSnapshot = await _cashWithdrawalRequestsRef
+        .where('cashSessionId', isEqualTo: cashSessionId)
+        .get(const GetOptions(source: Source.server));
+    final payments = paymentsSnapshot.docs
+        .map(Payment.fromDoc)
+        .where(
+          (payment) =>
+              payment.isActive &&
+              payment.cashSessionId == cashSessionId &&
+              payment.restaurantId == session.restaurantId &&
+              payment.branchId == session.branchId,
+        )
+        .toList();
+    final withdrawals = withdrawalsSnapshot.docs
+        .map(CashWithdrawalRequest.fromDoc)
+        .where(
+          (request) =>
+              request.cashSessionId == cashSessionId &&
+              request.restaurantId == session.restaurantId &&
+              request.branchId == session.branchId,
+        )
+        .toList();
+    return _totalsForPayments(
+      payments,
+      openingCashAmount: session.openingCashAmount,
+      withdrawals: withdrawals,
+    );
   }
 
   Stream<List<CashWithdrawalRequest>> watchCashWithdrawalRequests({
@@ -7403,37 +7491,43 @@ class TacoPosRepository {
   }) async {
     _requireCashWithdrawalAuthorizer();
     final docRef = _cashWithdrawalRequestsRef.doc(requestId);
-    final doc = await docRef.get();
-    if (!doc.exists) {
-      throw StateError('La solicitud ya no existe.');
-    }
-    final request = CashWithdrawalRequest.fromDoc(doc);
-    if (!request.isPending) {
-      throw StateError('La solicitud ya fue atendida.');
-    }
     final cleanNotes = adminNotes.trim();
     if (!approved && cleanNotes.isEmpty) {
       throw ArgumentError('Captura el motivo del rechazo.');
     }
 
     final employee = AppSession.instance.employee;
-    await docRef.update({
-      'status': approved ? 'approved' : 'rejected',
-      'authorizedByEmployeeId': employee?.id ?? '',
-      'authorizedByEmployeeName': employee?.name ?? '',
-      'authorizedAt': FieldValue.serverTimestamp(),
-      'adminNotes': cleanNotes,
-      if (approved) ...{
-        'approvedByEmployeeId': employee?.id ?? '',
-        'approvedByEmployeeName': employee?.name ?? '',
-        'approvedAt': FieldValue.serverTimestamp(),
-      } else ...{
-        'rejectedByEmployeeId': employee?.id ?? '',
-        'rejectedByEmployeeName': employee?.name ?? '',
-        'rejectedAt': FieldValue.serverTimestamp(),
-        'rejectReason': cleanNotes,
-      },
-      'updatedAt': FieldValue.serverTimestamp(),
+    await _db.runTransaction((transaction) async {
+      final doc = await transaction.get(docRef);
+      if (!doc.exists) throw StateError('La solicitud ya no existe.');
+      final request = CashWithdrawalRequest.fromDoc(doc);
+      if (!request.isPending) {
+        throw StateError('La solicitud ya fue atendida.');
+      }
+      final sessionDoc = await transaction.get(
+        _cashSessionsRef.doc(request.cashSessionId),
+      );
+      if (!sessionDoc.exists || !CashSession.fromDoc(sessionDoc).isOpen) {
+        throw StateError('La caja esta en cierre y no admite autorizaciones.');
+      }
+      transaction.update(docRef, {
+        'status': approved ? 'approved' : 'rejected',
+        'authorizedByEmployeeId': employee?.id ?? '',
+        'authorizedByEmployeeName': employee?.name ?? '',
+        'authorizedAt': FieldValue.serverTimestamp(),
+        'adminNotes': cleanNotes,
+        if (approved) ...{
+          'approvedByEmployeeId': employee?.id ?? '',
+          'approvedByEmployeeName': employee?.name ?? '',
+          'approvedAt': FieldValue.serverTimestamp(),
+        } else ...{
+          'rejectedByEmployeeId': employee?.id ?? '',
+          'rejectedByEmployeeName': employee?.name ?? '',
+          'rejectedAt': FieldValue.serverTimestamp(),
+          'rejectReason': cleanNotes,
+        },
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 
@@ -8130,160 +8224,209 @@ class TacoPosRepository {
       throw StateError('Esta caja ya fue cerrada.');
     }
 
-    final blockers = await _cashCloseStage(
-      stage: CashCloseProgressStage.validatingOrders,
-      operation: 'validate_cash_close_blockers',
-      documentPath: docRef.path,
-      onStageChanged: onStageChanged,
-      action: () =>
-          _cashCloseBlockersForSession(session, onStageChanged: onStageChanged),
-    );
-    if (!blockers.canClose) {
-      throw StateError('${blockers.message}\n${blockers.detail}');
-    }
-
-    final pendingWithdrawals = await _cashCloseStage(
-      stage: CashCloseProgressStage.validatingOrders,
-      operation: 'validate_pending_withdrawals',
-      documentPath: _cashWithdrawalRequestsRef.path,
-      onStageChanged: onStageChanged,
-      action: () => _pendingCashWithdrawalRequestsForClose(
-        cashSessionId: cashSessionId,
-        businessDate: session.businessDate,
-      ),
-    );
-    if (pendingWithdrawals.isNotEmpty) {
-      throw StateError(
-        'No puedes cerrar caja. Hay solicitudes de gasto pendientes de autorizacion.',
-      );
-    }
-
-    final totals = await _cashCloseStage(
-      stage: CashCloseProgressStage.calculating,
-      operation: 'calculate_cash_totals',
-      documentPath: docRef.path,
-      onStageChanged: onStageChanged,
-      action: () => _cashSessionTotalsOnce(cashSessionId),
-    );
-    final totalCountedRealMoney = totals.totalCountedRealMoney(
-      countedCashAmount: countedCashAmount,
-      terminalReportedAmount: terminalReportedAmount,
-    );
-    final cashDifference = totals.cashDifference(countedCashAmount);
-    final cardDifference = totals.cardDifference(terminalReportedAmount);
-    final netDifference = totals.netDifference(
-      countedCashAmount: countedCashAmount,
-      terminalReportedAmount: terminalReportedAmount,
-    );
-    final shortageAmount = totals.shortageAmount(
-      countedCashAmount: countedCashAmount,
-      terminalReportedAmount: terminalReportedAmount,
-    );
-    final overAmount = totals.overAmount(
-      countedCashAmount: countedCashAmount,
-      terminalReportedAmount: terminalReportedAmount,
-    );
-    final employee = AppSession.instance.employee;
-
-    final closeTimestamp = FieldValue.serverTimestamp();
-    final closeData = <String, Object?>{
-      ...cashSessionCloseTimestampFields(
-        currentStatus: session.status,
-        currentClosedAt: session.closedAt,
-        serverTimestamp: closeTimestamp,
-        employeeId: employee?.id ?? '',
-        employeeName: employee?.name ?? '',
-      ),
-      'countedCashAmount': countedCashAmount,
-      'terminalReportedAmount': terminalReportedAmount,
-      'expectedCashAmount': totals.expectedCashAmount,
-      'expectedCardChargedAmount': totals.expectedCardChargedAmount,
-      'expectedCardBaseAmount': totals.expectedCardBaseAmount,
-      'expectedCardSurchargeAmount': totals.expectedCardSurchargeAmount,
-      'expectedCardFeeAbsorbedAmount': totals.expectedCardFeeAbsorbedAmount,
-      'expectedPlatformAmount': totals.expectedPlatformAmount,
-      'expectedEmployeeConsumptionAmount':
-          totals.expectedEmployeeConsumptionAmount,
-      'approvedWithdrawalsTotal': totals.approvedWithdrawalsTotal,
-      'pendingWithdrawalsTotal': totals.pendingWithdrawalsTotal,
-      'withdrawalRequestCount': totals.withdrawalRequestCount,
-      'totalExpectedRealMoney': totals.totalExpectedRealMoney,
-      'totalCountedRealMoney': totalCountedRealMoney,
-      'cashDifference': cashDifference,
-      'cardDifference': cardDifference,
-      'netDifference': netDifference,
-      'shortageAmount': shortageAmount,
-      'overAmount': overAmount,
-      'notes': notes.trim(),
-    };
-    _validateCashCloseFirestoreData(closeData);
-    await _cashCloseStage(
-      stage: CashCloseProgressStage.updatingCashSession,
-      operation: 'update_cash_session',
-      documentPath: docRef.path,
-      onStageChanged: onStageChanged,
-      action: () => _db.runTransaction((transaction) async {
-        final freshDoc = await transaction.get(docRef);
-        if (!freshDoc.exists) {
-          throw StateError('La caja ya no existe.');
-        }
-        final freshSession = CashSession.fromDoc(freshDoc);
-        if (!canFinalizeCashSessionClose(
-          status: freshSession.status,
-          hasClosedAt: freshSession.closedAt != null,
-        )) {
-          throw StateError('Esta caja ya fue cerrada.');
-        }
-        transaction.update(docRef, closeData);
-      }),
-    );
-
-    if (netDifference < 0) {
-      final activityRef = _restaurantRef.collection('activityLog').doc();
-      try {
-        await _cashCloseStage(
-          stage: CashCloseProgressStage.registeringActivityLog,
-          operation: 'create_cash_close_shortage_activity_log',
-          documentPath: activityRef.path,
+    // Freeze the operational session before checking its final inputs. Rules
+    // also enforce this server-side, so a client that had read `open` just
+    // before this transaction cannot commit a late payment or withdrawal.
+    await _startCashSessionClosing(docRef);
+    var closePersisted = false;
+    try {
+      final blockers = await _cashCloseStage(
+        stage: CashCloseProgressStage.validatingOrders,
+        operation: 'validate_cash_close_blockers',
+        documentPath: docRef.path,
+        onStageChanged: onStageChanged,
+        action: () => _cashCloseBlockersForSession(
+          session,
           onStageChanged: onStageChanged,
-          action: () => activityRef.set({
-            'type': 'cash_close_shortage',
-            ..._currentBranchFields,
-            'cashSessionId': cashSessionId,
-            'businessDate': session.businessDate,
-            'shortageAmount': shortageAmount,
-            'netDifference': netDifference,
-            ..._employeeAuditFields(prefix: 'createdBy'),
-            'createdAt': FieldValue.serverTimestamp(),
-            'createdBy': _auth.currentUser?.uid ?? 'anonymous',
-          }),
-        );
-      } catch (error, stackTrace) {
-        debugPrintCashCloseFailure(
-          error: error,
-          stackTrace: stackTrace,
-          businessDate: session.businessDate,
+        ),
+      );
+      if (!blockers.canClose) {
+        throw StateError('${blockers.message}\n${blockers.detail}');
+      }
+
+      final pendingWithdrawals = await _cashCloseStage(
+        stage: CashCloseProgressStage.validatingOrders,
+        operation: 'validate_pending_withdrawals',
+        documentPath: _cashWithdrawalRequestsRef.path,
+        onStageChanged: onStageChanged,
+        action: () => _pendingCashWithdrawalRequestsForClose(
           cashSessionId: cashSessionId,
-          countedCashAmount: countedCashAmount,
-          terminalReportedAmount: terminalReportedAmount,
+          businessDate: session.businessDate,
+        ),
+      );
+      if (pendingWithdrawals.isNotEmpty) {
+        throw StateError(
+          'No puedes cerrar caja. Hay solicitudes de gasto pendientes de autorizacion.',
         );
       }
-    }
 
-    final updatedDoc = await _cashCloseStage(
-      stage: CashCloseProgressStage.updatingCashSession,
-      operation: 'read_closed_cash_session',
-      documentPath: docRef.path,
-      onStageChanged: onStageChanged,
-      action: docRef.get,
-    );
-    invalidateReportDataCache(
-      branchId: session.branchId,
-      startBusinessDate: session.businessDate,
-      endBusinessDate: session.businessDate,
-    );
-    invalidateCashScheduleCache(branchId: session.branchId);
-    return CashSession.fromDoc(updatedDoc);
+      final totals = await _cashCloseStage(
+        stage: CashCloseProgressStage.calculating,
+        operation: 'calculate_cash_totals',
+        documentPath: docRef.path,
+        onStageChanged: onStageChanged,
+        action: () => _cashSessionTotalsOnce(cashSessionId),
+      );
+      final totalCountedRealMoney = totals.totalCountedRealMoney(
+        countedCashAmount: countedCashAmount,
+        terminalReportedAmount: terminalReportedAmount,
+      );
+      final cashDifference = totals.cashDifference(countedCashAmount);
+      final cardDifference = totals.cardDifference(terminalReportedAmount);
+      final netDifference = totals.netDifference(
+        countedCashAmount: countedCashAmount,
+        terminalReportedAmount: terminalReportedAmount,
+      );
+      final shortageAmount = totals.shortageAmount(
+        countedCashAmount: countedCashAmount,
+        terminalReportedAmount: terminalReportedAmount,
+      );
+      final overAmount = totals.overAmount(
+        countedCashAmount: countedCashAmount,
+        terminalReportedAmount: terminalReportedAmount,
+      );
+      final employee = AppSession.instance.employee;
+
+      final closeTimestamp = FieldValue.serverTimestamp();
+      final closeData = <String, Object?>{
+        ...cashSessionCloseTimestampFields(
+          currentStatus: session.status,
+          currentClosedAt: session.closedAt,
+          serverTimestamp: closeTimestamp,
+          employeeId: employee?.id ?? '',
+          employeeName: employee?.name ?? '',
+        ),
+        'countedCashAmount': countedCashAmount,
+        'terminalReportedAmount': terminalReportedAmount,
+        'expectedCashAmount': totals.expectedCashAmount,
+        'expectedCardChargedAmount': totals.expectedCardChargedAmount,
+        'expectedCardBaseAmount': totals.expectedCardBaseAmount,
+        'expectedCardSurchargeAmount': totals.expectedCardSurchargeAmount,
+        'expectedCardFeeAbsorbedAmount': totals.expectedCardFeeAbsorbedAmount,
+        'expectedPlatformAmount': totals.expectedPlatformAmount,
+        'expectedEmployeeConsumptionAmount':
+            totals.expectedEmployeeConsumptionAmount,
+        'approvedWithdrawalsTotal': totals.approvedWithdrawalsTotal,
+        'pendingWithdrawalsTotal': totals.pendingWithdrawalsTotal,
+        'withdrawalRequestCount': totals.withdrawalRequestCount,
+        'totalExpectedRealMoney': totals.totalExpectedRealMoney,
+        'totalCountedRealMoney': totalCountedRealMoney,
+        'cashDifference': cashDifference,
+        'cardDifference': cardDifference,
+        'netDifference': netDifference,
+        'shortageAmount': shortageAmount,
+        'overAmount': overAmount,
+        'notes': notes.trim(),
+      };
+      _validateCashCloseFirestoreData(closeData);
+      await _cashCloseStage(
+        stage: CashCloseProgressStage.updatingCashSession,
+        operation: 'update_cash_session',
+        documentPath: docRef.path,
+        onStageChanged: onStageChanged,
+        action: () => _db.runTransaction((transaction) async {
+          final freshDoc = await transaction.get(docRef);
+          if (!freshDoc.exists) {
+            throw StateError('La caja ya no existe.');
+          }
+          final freshSession = CashSession.fromDoc(freshDoc);
+          if (!freshSession.isClosing || freshSession.closedAt != null) {
+            throw StateError('La caja ya no esta disponible para cierre.');
+          }
+          transaction.update(docRef, {
+            ...closeData,
+            'status': 'closed',
+            'closingStartedAt': FieldValue.delete(),
+          });
+        }),
+      );
+      closePersisted = true;
+
+      if (netDifference < 0) {
+        final activityRef = _restaurantRef.collection('activityLog').doc();
+        try {
+          await _cashCloseStage(
+            stage: CashCloseProgressStage.registeringActivityLog,
+            operation: 'create_cash_close_shortage_activity_log',
+            documentPath: activityRef.path,
+            onStageChanged: onStageChanged,
+            action: () => activityRef.set({
+              'type': 'cash_close_shortage',
+              ..._currentBranchFields,
+              'cashSessionId': cashSessionId,
+              'businessDate': session.businessDate,
+              'shortageAmount': shortageAmount,
+              'netDifference': netDifference,
+              ..._employeeAuditFields(prefix: 'createdBy'),
+              'createdAt': FieldValue.serverTimestamp(),
+              'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+            }),
+          );
+        } catch (error, stackTrace) {
+          debugPrintCashCloseFailure(
+            error: error,
+            stackTrace: stackTrace,
+            businessDate: session.businessDate,
+            cashSessionId: cashSessionId,
+            countedCashAmount: countedCashAmount,
+            terminalReportedAmount: terminalReportedAmount,
+          );
+        }
+      }
+
+      final updatedDoc = await _cashCloseStage(
+        stage: CashCloseProgressStage.updatingCashSession,
+        operation: 'read_closed_cash_session',
+        documentPath: docRef.path,
+        onStageChanged: onStageChanged,
+        action: docRef.get,
+      );
+      invalidateReportDataCache(
+        branchId: session.branchId,
+        startBusinessDate: session.businessDate,
+        endBusinessDate: session.businessDate,
+      );
+      invalidateCashScheduleCache(branchId: session.branchId);
+      return CashSession.fromDoc(updatedDoc);
+    } finally {
+      if (!closePersisted) {
+        await _restoreCashSessionAfterFailedClose(docRef);
+      }
+    }
+  }
+
+  Future<void> _startCashSessionClosing(
+    DocumentReference<Map<String, dynamic>> docRef,
+  ) {
+    return _db.runTransaction((transaction) async {
+      final doc = await transaction.get(docRef);
+      if (!doc.exists) throw StateError('La caja ya no existe.');
+      final session = CashSession.fromDoc(doc);
+      if (!session.isOpen) {
+        throw StateError('La caja ya no esta abierta para cierre.');
+      }
+      transaction.update(docRef, {
+        'status': 'closing',
+        'closingStartedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  Future<void> _restoreCashSessionAfterFailedClose(
+    DocumentReference<Map<String, dynamic>> docRef,
+  ) async {
+    await _db.runTransaction((transaction) async {
+      final doc = await transaction.get(docRef);
+      if (!doc.exists) return;
+      final session = CashSession.fromDoc(doc);
+      if (!session.isClosing) return;
+      transaction.update(docRef, {
+        'status': 'open',
+        'closingStartedAt': FieldValue.delete(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
   }
 
   void _validateCashCloseFirestoreData(Map<String, Object?> data) {
@@ -8374,6 +8517,14 @@ class TacoPosRepository {
     final correctionNotes = notes.trim();
     final branchFields = _branchFields(branch);
     final now = FieldValue.serverTimestamp();
+    final correctionAudit = _historicalCorrectionAuditSnapshot(
+      previous: existing,
+      preview: preview,
+      reason: correctionNotes,
+      employeeId: employee?.id ?? '',
+      employeeName: employee?.name ?? '',
+      timestamp: now,
+    );
 
     await docRef.set({
       'id': docRef.id,
@@ -8405,6 +8556,7 @@ class TacoPosRepository {
       'correctionMode': true,
       'correctionReason': correctionNotes,
       'correctionNotes': correctionNotes,
+      'lastCorrectionAudit': correctionAudit,
       'correctedAt': now,
       'correctedByEmployeeId': employee?.id ?? '',
       'correctedByEmployeeName': employee?.name ?? '',
@@ -8425,6 +8577,7 @@ class TacoPosRepository {
           'Se rehizo el corte historico de la sucursal ${branch.name} para la fecha ${preview.businessDate}',
       'employeeId': employee?.id ?? '',
       'employeeName': employee?.name ?? '',
+      'correctionAudit': correctionAudit,
       ..._employeeAuditFields(prefix: 'createdBy'),
       'createdAt': FieldValue.serverTimestamp(),
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
@@ -8438,6 +8591,57 @@ class TacoPosRepository {
     );
     invalidateCashScheduleCache(branchId: branch.id);
     return CashSession.fromDoc(updatedDoc);
+  }
+
+  Map<String, Object?> _historicalCorrectionAuditSnapshot({
+    required CashSession? previous,
+    required HistoricalCashCorrectionPreview preview,
+    required String reason,
+    required String employeeId,
+    required String employeeName,
+    required Object timestamp,
+  }) {
+    Map<String, Object?> values({
+      required double countedCash,
+      required double terminalReported,
+      required double expectedCash,
+      required double expectedCard,
+      required double cashDifference,
+      required double cardDifference,
+      required double netDifference,
+    }) => {
+      'countedCashAmount': countedCash,
+      'terminalReportedAmount': terminalReported,
+      'expectedCashAmount': expectedCash,
+      'expectedCardChargedAmount': expectedCard,
+      'cashDifference': cashDifference,
+      'cardDifference': cardDifference,
+      'netDifference': netDifference,
+    };
+    return {
+      'reason': reason,
+      'employeeId': employeeId,
+      'employeeName': employeeName,
+      'recordedAt': timestamp,
+      'before': values(
+        countedCash: previous?.countedCashAmount ?? 0,
+        terminalReported: previous?.terminalReportedAmount ?? 0,
+        expectedCash: previous?.expectedCashAmount ?? 0,
+        expectedCard: previous?.expectedCardChargedAmount ?? 0,
+        cashDifference: previous?.cashDifference ?? 0,
+        cardDifference: previous?.cardDifference ?? 0,
+        netDifference: previous?.netDifference ?? 0,
+      ),
+      'after': values(
+        countedCash: preview.countedCashAmount,
+        terminalReported: preview.terminalReportedAmount,
+        expectedCash: preview.expectedCashAmount,
+        expectedCard: preview.cardSalesAmount,
+        cashDifference: preview.cashDifference,
+        cardDifference: preview.cardDifference,
+        netDifference: preview.netDifference,
+      ),
+    };
   }
 
   Future<HistoricalCashExpenseResult> addApprovedHistoricalCashExpense({
@@ -9134,21 +9338,7 @@ class TacoPosRepository {
   }
 
   Future<CashSessionTotals> _cashSessionTotalsOnce(String cashSessionId) async {
-    final snapshot = await _db.collectionGroup('payments').get();
-    final sessionDoc = await _cashSessionsRef.doc(cashSessionId).get();
-    final session = sessionDoc.exists ? CashSession.fromDoc(sessionDoc) : null;
-    final withdrawals = await _cashWithdrawalRequestsForSessionOnce(
-      cashSessionId,
-    );
-    return _totalsForPayments(
-      snapshot.docs
-          .map(Payment.fromDoc)
-          .where((payment) => payment.cashSessionId == cashSessionId)
-          .where((payment) => payment.isActive)
-          .toList(),
-      openingCashAmount: session?.openingCashAmount ?? 0,
-      withdrawals: withdrawals,
-    );
+    return getCashSessionTotalsForCloseOrAudit(cashSessionId);
   }
 
   Future<List<CashWithdrawalRequest>> _cashWithdrawalRequestsForSessionOnce(
@@ -12622,18 +12812,25 @@ class TacoPosRepository {
     return result;
   }
 
-  Future<CheckoutPreparation> prepareOrderForCheckout(String orderId) async {
+  Future<CheckoutPreparation> prepareOrderForCheckout(
+    String orderId, {
+    Source source = Source.serverAndCache,
+  }) async {
     _requireCharge();
     final orderRef = _ordersRef.doc(orderId);
-    final orderDoc = await orderRef.get();
+    final orderDoc = await orderRef.get(GetOptions(source: source));
     if (!orderDoc.exists) {
       throw StateError('No se encontro la orden.');
     }
 
     final order = PosOrder.fromDoc(orderDoc);
     await _ensureKitchenReadyForPayment(orderId);
-    final itemsSnapshot = await orderRef.collection('items').get();
-    final paymentsSnapshot = await orderRef.collection('payments').get();
+    final itemsSnapshot = await orderRef
+        .collection('items')
+        .get(GetOptions(source: source));
+    final paymentsSnapshot = await orderRef
+        .collection('payments')
+        .get(GetOptions(source: source));
     final activeItems = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
         .where(isActiveOrderItem)
@@ -12668,7 +12865,7 @@ class TacoPosRepository {
       );
     }
 
-    final config = await getGeneralDiscountConfigOnce();
+    final config = await getGeneralDiscountConfigOnce(source: source);
     final platformOnlyPayment =
         order.orderType == takeoutOrderType &&
         order.platformId != null &&
@@ -15047,16 +15244,21 @@ class TacoPosRepository {
     }
   }
 
-  Future<void> recalculateOrderTotal(String orderId) async {
+  Future<void> recalculateOrderTotal(
+    String orderId, {
+    Source source = Source.serverAndCache,
+  }) async {
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
-        .get();
+        .get(GetOptions(source: source));
     final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
     final total = activeOrderItemsTotal(items);
-    final orderDoc = await _ordersRef.doc(orderId).get();
+    final orderDoc = await _ordersRef
+        .doc(orderId)
+        .get(GetOptions(source: source));
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
-    final payments = await getOrderPaymentsOnce(orderId);
+    final payments = await getOrderPaymentsOnce(orderId, source: source);
     final totals = reconcileOrderPayments(
       orderGrossTotal: total,
       activePayments: payments

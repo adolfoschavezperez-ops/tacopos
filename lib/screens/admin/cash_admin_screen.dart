@@ -1129,16 +1129,63 @@ class _CashSessionDetailCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<CashSessionTotals>(
-      future: repository.watchCashSessionTotals(session.id).first,
-      builder: (context, snapshot) => _buildWithTotals(context, snapshot.data),
+      future: repository.getCashSessionTotalsForCloseOrAudit(session.id),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const GlassPanel(
+            padding: EdgeInsets.all(16),
+            borderRadius: 16,
+            child: LoadingPanel(
+              message: 'Consultando movimientos del corte...',
+            ),
+          );
+        }
+        if (snapshot.hasError) {
+          return GlassPanel(
+            padding: const EdgeInsets.all(16),
+            borderRadius: 16,
+            child: EmptyState(
+              icon: Icons.error_outline,
+              title: 'No se pudo verificar el corte',
+              message: '${snapshot.error}',
+            ),
+          );
+        }
+        return _buildWithTotals(context, snapshot.data!);
+      },
     );
   }
 
-  Widget _buildWithTotals(BuildContext context, CashSessionTotals? totals) {
-    final expectedCashAmount =
-        totals?.expectedCashAmount ?? session.expectedCashAmount;
-    final expectedCardAmount =
-        totals?.expectedCardChargedAmount ?? session.expectedCardChargedAmount;
+  Widget _buildWithTotals(BuildContext context, CashSessionTotals totals) {
+    // A closed cash session is a certified snapshot. The server calculation is
+    // deliberately shown only as an audit comparison, never as a silent
+    // replacement for the official result.
+    final officialTotals = session.isClosed
+        ? CashSessionTotals(
+            expectedCashAmount: session.expectedCashAmount,
+            expectedCardChargedAmount: session.expectedCardChargedAmount,
+            expectedCardBaseAmount: session.expectedCardBaseAmount,
+            expectedCardSurchargeAmount: session.expectedCardSurchargeAmount,
+            expectedCardFeeAbsorbedAmount:
+                session.expectedCardFeeAbsorbedAmount,
+            expectedPlatformAmount: session.expectedPlatformAmount,
+            expectedEmployeeConsumptionAmount:
+                session.expectedEmployeeConsumptionAmount,
+            approvedWithdrawalsTotal: session.approvedWithdrawalsTotal,
+            pendingWithdrawalsTotal: session.pendingWithdrawalsTotal,
+            withdrawalRequestCount: session.withdrawalRequestCount,
+          )
+        : totals;
+    final expectedCashAmount = officialTotals.expectedCashAmount;
+    final expectedCardAmount = officialTotals.expectedCardChargedAmount;
+    final hasCurrentDifference =
+        session.isClosed &&
+        ((totals.expectedCashAmount - session.expectedCashAmount).abs() >
+                0.02 ||
+            (totals.expectedCardChargedAmount -
+                        session.expectedCardChargedAmount)
+                    .abs() >
+                0.02);
     final statusColor = session.isOpen
         ? BrandColors.success
         : BrandColors.textMuted;
@@ -1199,6 +1246,19 @@ class _CashSessionDetailCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 10),
+          if (hasCurrentDifference) ...[
+            _CashSection(
+              title: 'Diferencia contra datos actuales',
+              icon: Icons.warning_amber_rounded,
+              accent: BrandColors.accentOrange,
+              child: Text(
+                'Resultado oficial (snapshot): ${_moneyText(session.netDifference)}. '
+                'Recalculo actual: ${_moneyText(totals.netDifference(countedCashAmount: session.countedCashAmount, terminalReportedAmount: session.terminalReportedAmount))}.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
           _CashSection(
             title: 'Resumen de venta',
             icon: Icons.payments_outlined,
