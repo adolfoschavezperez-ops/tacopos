@@ -2921,8 +2921,10 @@ class TacoPosRepository {
     );
   }
 
-  Future<GeneralDiscountConfig> getGeneralDiscountConfigOnce() async {
-    final doc = await _discountSettingsRef.get();
+  Future<GeneralDiscountConfig> getGeneralDiscountConfigOnce({
+    Source source = Source.serverAndCache,
+  }) async {
+    final doc = await _discountSettingsRef.get(GetOptions(source: source));
     return _generalDiscountFromData(doc.data());
   }
 
@@ -4920,24 +4922,38 @@ class TacoPosRepository {
     return 0;
   }
 
-  Stream<PosOrder?> watchOrder(String orderId) {
-    return _ordersRef.doc(orderId).snapshots().map((doc) {
-      if (!doc.exists) {
-        return null;
-      }
-      return PosOrder.fromDoc(doc);
-    });
+  Stream<PosOrder?> watchOrder(String orderId, {bool requireServer = false}) {
+    return _ordersRef
+        .doc(orderId)
+        .snapshots(includeMetadataChanges: requireServer)
+        .where(
+          (doc) =>
+              !requireServer ||
+              (!doc.metadata.isFromCache && !doc.metadata.hasPendingWrites),
+        )
+        .map((doc) {
+          if (!doc.exists) {
+            return null;
+          }
+          return PosOrder.fromDoc(doc);
+        });
   }
 
-  Future<PosOrder> getOrderOnce(String orderId) async {
-    final doc = await _ordersRef.doc(orderId).get();
+  Future<PosOrder> getOrderOnce(
+    String orderId, {
+    Source source = Source.serverAndCache,
+  }) async {
+    final doc = await _ordersRef.doc(orderId).get(GetOptions(source: source));
     if (!doc.exists) {
       throw StateError('La orden ya no existe.');
     }
     return PosOrder.fromDoc(doc);
   }
 
-  Stream<List<OrderItem>> watchOrderItems(String orderId) {
+  Stream<List<OrderItem>> watchOrderItems(
+    String orderId, {
+    bool requireServer = false,
+  }) {
     final cleanOrderId = orderId.trim();
     if (cleanOrderId.isEmpty) {
       return Stream.error(StateError('OrderId vacio al cargar articulos.'));
@@ -4948,20 +4964,28 @@ class TacoPosRepository {
       '[TacoPOS][itemsStream] watch path=$path orderId=$cleanOrderId',
     );
 
-    return _ordersRef.doc(cleanOrderId).collection('items').snapshots().map((
-      snapshot,
-    ) {
-      final items = _sortedOrderItems(snapshot.docs.map(OrderItem.fromDoc));
-      final preview = items
-          .take(5)
-          .map((item) => '${item.id}:${item.productName}')
-          .join(', ');
-      developer.log(
-        '[TacoPOS][itemsStream] orderId=$cleanOrderId path=$path '
-        'itemCount=${items.length} firstItems=[$preview]',
-      );
-      return items;
-    });
+    return _ordersRef
+        .doc(cleanOrderId)
+        .collection('items')
+        .snapshots(includeMetadataChanges: requireServer)
+        .where(
+          (snapshot) =>
+              !requireServer ||
+              (!snapshot.metadata.isFromCache &&
+                  !snapshot.metadata.hasPendingWrites),
+        )
+        .map((snapshot) {
+          final items = _sortedOrderItems(snapshot.docs.map(OrderItem.fromDoc));
+          final preview = items
+              .take(5)
+              .map((item) => '${item.id}:${item.productName}')
+              .join(', ');
+          developer.log(
+            '[TacoPOS][itemsStream] orderId=$cleanOrderId path=$path '
+            'itemCount=${items.length} firstItems=[$preview]',
+          );
+          return items;
+        });
   }
 
   Future<List<OrderItem>> getOrderItemsOnce(String orderId) async {
@@ -5074,27 +5098,44 @@ class TacoPosRepository {
     );
   }
 
-  Stream<List<Payment>> watchOrderPayments(String orderId) {
-    return _ordersRef.doc(orderId).collection('payments').snapshots().map((
-      snapshot,
-    ) {
-      final payments =
-          snapshot.docs
-              .map((doc) => Payment.fromDoc(doc).copyWith(orderId: orderId))
-              .toList()
-            ..sort((a, b) {
-              final aDate =
-                  a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              final bDate =
-                  b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-              return bDate.compareTo(aDate);
-            });
-      return payments;
-    });
+  Stream<List<Payment>> watchOrderPayments(
+    String orderId, {
+    bool requireServer = false,
+  }) {
+    return _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .snapshots(includeMetadataChanges: requireServer)
+        .where(
+          (snapshot) =>
+              !requireServer ||
+              (!snapshot.metadata.isFromCache &&
+                  !snapshot.metadata.hasPendingWrites),
+        )
+        .map((snapshot) {
+          final payments =
+              snapshot.docs
+                  .map((doc) => Payment.fromDoc(doc).copyWith(orderId: orderId))
+                  .toList()
+                ..sort((a, b) {
+                  final aDate =
+                      a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                  final bDate =
+                      b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+                  return bDate.compareTo(aDate);
+                });
+          return payments;
+        });
   }
 
-  Future<List<Payment>> getOrderPaymentsOnce(String orderId) async {
-    final snapshot = await _ordersRef.doc(orderId).collection('payments').get();
+  Future<List<Payment>> getOrderPaymentsOnce(
+    String orderId, {
+    Source source = Source.serverAndCache,
+  }) async {
+    final snapshot = await _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .get(GetOptions(source: source));
     final payments =
         snapshot.docs
             .map((doc) => Payment.fromDoc(doc).copyWith(orderId: orderId))
@@ -12771,18 +12812,25 @@ class TacoPosRepository {
     return result;
   }
 
-  Future<CheckoutPreparation> prepareOrderForCheckout(String orderId) async {
+  Future<CheckoutPreparation> prepareOrderForCheckout(
+    String orderId, {
+    Source source = Source.serverAndCache,
+  }) async {
     _requireCharge();
     final orderRef = _ordersRef.doc(orderId);
-    final orderDoc = await orderRef.get();
+    final orderDoc = await orderRef.get(GetOptions(source: source));
     if (!orderDoc.exists) {
       throw StateError('No se encontro la orden.');
     }
 
     final order = PosOrder.fromDoc(orderDoc);
     await _ensureKitchenReadyForPayment(orderId);
-    final itemsSnapshot = await orderRef.collection('items').get();
-    final paymentsSnapshot = await orderRef.collection('payments').get();
+    final itemsSnapshot = await orderRef
+        .collection('items')
+        .get(GetOptions(source: source));
+    final paymentsSnapshot = await orderRef
+        .collection('payments')
+        .get(GetOptions(source: source));
     final activeItems = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
         .where(isActiveOrderItem)
@@ -12817,7 +12865,7 @@ class TacoPosRepository {
       );
     }
 
-    final config = await getGeneralDiscountConfigOnce();
+    final config = await getGeneralDiscountConfigOnce(source: source);
     final platformOnlyPayment =
         order.orderType == takeoutOrderType &&
         order.platformId != null &&
@@ -15196,16 +15244,21 @@ class TacoPosRepository {
     }
   }
 
-  Future<void> recalculateOrderTotal(String orderId) async {
+  Future<void> recalculateOrderTotal(
+    String orderId, {
+    Source source = Source.serverAndCache,
+  }) async {
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
-        .get();
+        .get(GetOptions(source: source));
     final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
     final total = activeOrderItemsTotal(items);
-    final orderDoc = await _ordersRef.doc(orderId).get();
+    final orderDoc = await _ordersRef
+        .doc(orderId)
+        .get(GetOptions(source: source));
     final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
-    final payments = await getOrderPaymentsOnce(orderId);
+    final payments = await getOrderPaymentsOnce(orderId, source: source);
     final totals = reconcileOrderPayments(
       orderGrossTotal: total,
       activePayments: payments

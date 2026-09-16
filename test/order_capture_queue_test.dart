@@ -159,4 +159,124 @@ void main() {
     expect(recalculations, 2);
     queue.dispose();
   });
+
+  test('flush includes 100 + 30 + 40 + last 20 before checkout', () async {
+    final queue = OrderCaptureQueue();
+    final releases = List.generate(3, (_) => Completer<void>());
+    var persisted = 100;
+    var total = 100;
+    var opened = false;
+    final writes = <Future<void>>[];
+    for (var i = 0; i < 3; i++) {
+      writes.add(
+        queue.enqueue('order', () async {
+          await releases[i].future;
+          persisted += [30, 40, 20][i];
+        }, recalculate: () async => total = persisted),
+      );
+    }
+    final flush = queue
+        .flush('order', recalculate: () async => total = persisted)
+        .then((_) => opened = true);
+    for (var i = 0; i < 2; i++) {
+      releases[i].complete();
+      await writes[i];
+      expect(opened, isFalse);
+      expect(total, 100);
+    }
+    releases.last.complete();
+    await flush;
+    expect(opened, isTrue);
+    expect(total, 190);
+    queue.dispose();
+  });
+
+  test('flush waits for a mutation added while it awaits a write', () async {
+    final queue = OrderCaptureQueue();
+    final first = Completer<void>();
+    final last = Completer<void>();
+    var opened = false;
+    final one = queue.enqueue(
+      'order',
+      () => first.future,
+      recalculate: () async {},
+    );
+    final flush = queue
+        .flush('order', recalculate: () async {})
+        .then((_) => opened = true);
+    final two = queue.enqueue(
+      'order',
+      () => last.future,
+      recalculate: () async {},
+    );
+    first.complete();
+    await one;
+    await Future<void>.delayed(Duration.zero);
+    expect(opened, isFalse);
+    last.complete();
+    await Future.wait([two, flush]);
+    expect(opened, isTrue);
+    queue.dispose();
+  });
+
+  test('failed write blocks flush even when a later write succeeds', () async {
+    final queue = OrderCaptureQueue();
+    final failed = queue.enqueue(
+      'order',
+      () async => throw StateError('write failed'),
+      recalculate: () async {},
+    );
+    final failure = expectLater(failed, throwsStateError);
+    final next = queue.enqueue('order', () async {}, recalculate: () async {});
+    await expectLater(
+      queue.flush('order', recalculate: () async {}),
+      throwsStateError,
+    );
+    await Future.wait([failure, next]);
+    // An explicit retry can validate the persisted state after the error.
+    await queue.flush('order', recalculate: () async {});
+    queue.dispose();
+  });
+
+  test(
+    'failed background reconciliation blocks checkout without retry loop',
+    () async {
+      final queue = OrderCaptureQueue();
+      var attempts = 0;
+      await queue.enqueue(
+        'order',
+        () async {},
+        recalculate: () async {
+          attempts++;
+          throw StateError('reconciliation failed');
+        },
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(attempts, 1);
+      await expectLater(
+        queue.flush('order', recalculate: () async {}),
+        throwsStateError,
+      );
+      await queue.flush('order', recalculate: () async {});
+      queue.dispose();
+    },
+  );
+
+  test(
+    'flush propagates its own reconciliation failure and allows retry',
+    () async {
+      final queue = OrderCaptureQueue();
+      await expectLater(
+        queue.flush(
+          'order',
+          recalculate: () async {
+            throw StateError('server unavailable');
+          },
+        ),
+        throwsStateError,
+      );
+      await queue.flush('order', recalculate: () async {});
+      queue.dispose();
+    },
+  );
 }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -32,18 +33,20 @@ class OrderScreen extends StatefulWidget {
     required this.orderId,
     required this.tableName,
     this.tableId,
+    this.repository,
   });
 
   final String orderId;
   final String tableName;
   final String? tableId;
+  final TacoPosRepository? repository;
 
   @override
   State<OrderScreen> createState() => _OrderScreenState();
 }
 
 class _OrderScreenState extends State<OrderScreen> {
-  final _repository = TacoPosRepository();
+  late final _repository = widget.repository ?? TacoPosRepository();
   final _captureState = OrderCaptureState();
   final ValueNotifier<String?> _platformIdNotifier = ValueNotifier(null);
   late Stream<PosOrder?> _orderStream;
@@ -60,6 +63,7 @@ class _OrderScreenState extends State<OrderScreen> {
   int _selectedPerson = 1;
   int _personCount = 1;
   bool _busy = false;
+  bool _openingPayment = false;
   String? _lastOrderDebugSignature;
   String? _lastItemsDebugSignature;
   PosOrder? _latestOrder;
@@ -284,31 +288,54 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _openPayment() async {
+    if (_busy) return;
     if (AppSession.instance.employee?.canCharge != true) {
       _showMessage('No tienes permiso para cobrar');
       return;
     }
-    setState(() => _busy = true);
+    final operationOrderId = _boundOrderId;
+    setState(() {
+      _busy = true;
+      _openingPayment = true;
+    });
     try {
-      await _repository.flushPendingMutations(_boundOrderId);
-      await _repository.prepareOrderForCheckout(_boundOrderId);
+      await _repository.flushPendingMutations(operationOrderId);
+      await _repository.recalculateOrderTotal(
+        operationOrderId,
+        source: Source.server,
+      );
+      await _repository.prepareOrderForCheckout(
+        operationOrderId,
+        source: Source.server,
+      );
+      await _repository.getOrderOnce(operationOrderId, source: Source.server);
+      if (!mounted ||
+          operationOrderId != _boundOrderId ||
+          ModalRoute.of(context)?.isCurrent != true) {
+        return;
+      }
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => PaymentScreen(
+            key: ValueKey('payment-$operationOrderId'),
+            orderId: operationOrderId,
+            repository: _repository,
+          ),
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       _showMessage('No se pudo validar el total: $error');
-      setState(() => _busy = false);
       return;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _openingPayment = false;
+        });
+      }
     }
-    if (!mounted) return;
-    setState(() => _busy = false);
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => PaymentScreen(
-          key: ValueKey('payment-$_boundOrderId'),
-          orderId: _boundOrderId,
-        ),
-      ),
-    );
     if (!mounted) {
       return;
     }
@@ -604,6 +631,7 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _handleAddProduct(Product product, bool stockedOut) async {
+    if (_openingPayment) return;
     final operationId = 'op-${DateTime.now().microsecondsSinceEpoch}';
     final itemId = _applyOptimisticProduct(
       product,
@@ -677,7 +705,21 @@ class _OrderScreenState extends State<OrderScreen> {
             ),
             const SizedBox(width: 10),
           ],
-          body: _buildBody(orderSnapshot),
+          body: AbsorbPointer(
+            absorbing: _openingPayment,
+            child: Stack(
+              children: [
+                _buildBody(orderSnapshot),
+                if (_openingPayment)
+                  const Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: LinearProgressIndicator(),
+                  ),
+              ],
+            ),
+          ),
         );
       },
     );
@@ -765,6 +807,7 @@ class _OrderScreenState extends State<OrderScreen> {
           onAddPerson: _addPerson,
           onRenamePerson: _renamePerson,
           onQtyChanged: (item, qty) {
+            if (_openingPayment) return;
             final operationId = 'op-${DateTime.now().microsecondsSinceEpoch}';
             final optimistic = item.copyWithQty(qty);
             setState(() {
@@ -1316,28 +1359,6 @@ class _OrderSummaryState extends State<_OrderSummary> {
                   ],
                 ),
               ),
-              SizedBox(width: compact ? 8 : 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    'TOTAL',
-                    style: TextStyle(
-                      color: BrandColors.textMuted,
-                      fontSize: compact ? 10 : 12,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  MoneyText(
-                    value: widget.order.total,
-                    style: TextStyle(
-                      color: BrandColors.accentYellow,
-                      fontSize: compact ? 22 : 28,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
             ],
           ),
         ),
@@ -1400,10 +1421,6 @@ class _OrderSummaryState extends State<_OrderSummary> {
                   itemBuilder: (context, index) {
                     final person = index + 1;
                     final personItems = grouped[person] ?? [];
-                    final subtotal = personItems.fold<double>(
-                      0,
-                      (sum, item) => item.isCancelled ? sum : sum + item.total,
-                    );
                     final personName = _personDisplayName(
                       order: widget.order,
                       person: person,
@@ -1417,7 +1434,6 @@ class _OrderSummaryState extends State<_OrderSummary> {
                       selected: widget.selectedPerson == person,
                       items: personItems,
                       batchLabels: batchLabels,
-                      subtotal: subtotal,
                       onSelect: () => widget.onSelectPerson(person),
                       onRename: () => widget.onRenamePerson(person, personName),
                       onQtyChanged: widget.onQtyChanged,
@@ -1440,7 +1456,6 @@ class _PersonItemsCard extends StatelessWidget {
     required this.selected,
     required this.items,
     required this.batchLabels,
-    required this.subtotal,
     required this.onSelect,
     required this.onRename,
     required this.onQtyChanged,
@@ -1453,7 +1468,6 @@ class _PersonItemsCard extends StatelessWidget {
   final bool selected;
   final List<OrderItem> items;
   final Map<String, _OrderBatchLabel> batchLabels;
-  final double subtotal;
   final VoidCallback onSelect;
   final VoidCallback onRename;
   final void Function(OrderItem item, int qty) onQtyChanged;
@@ -1492,15 +1506,6 @@ class _PersonItemsCard extends StatelessWidget {
                   visualDensity: compact ? VisualDensity.compact : null,
                   onPressed: canEditOrder ? onRename : null,
                   icon: const Icon(Icons.edit_outlined),
-                ),
-                SizedBox(width: compact ? 2 : 4),
-                MoneyText(
-                  value: subtotal,
-                  style: TextStyle(
-                    color: BrandColors.accentYellow,
-                    fontSize: compact ? 14 : 18,
-                    fontWeight: FontWeight.w800,
-                  ),
                 ),
               ],
             ),
