@@ -57,6 +57,7 @@ void main() {
       expect(audit.models, hasLength(1));
       final model = audit.models.single;
       expect(model.definition.key, 'bistec');
+      expect(model.alignment, PredictiveAlignment.forwardSupply);
       expect(model.trainingCycleCount, greaterThanOrEqualTo(5));
       expect(model.coefficients, isNotEmpty);
 
