@@ -610,7 +610,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     }
 
     final trainedBeforeInvestigation = training.every(
-      (cycle) => cycle.purchaseDate.compareTo(investigationStart) < 0,
+      (cycle) => cycle.endDate.compareTo(investigationStart) < 0,
     );
     final baselineMode = trainedBeforeInvestigation
         ? 'Historico previo al periodo de investigacion'
@@ -792,6 +792,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     'Sin inventario fisico no puede demostrarse una fuga: una discrepancia tambien puede ser merma, cambio de stock inicial/final, porcion distinta o captura incompleta.',
     'Las cancelaciones que tocaron cocina se muestran por separado para medir cuanto consumo podrian explicar sin contarlas como venta.',
     'El periodo de investigacion se aplica a las fechas de consumo cubiertas por cada ciclo, no solo a la fecha de compra, para no contaminar el entrenamiento con ventas posteriores al corte.',
+    'Si el patron aprendido es abastecimiento hacia adelante, la compra mas reciente queda abierta y no se califica hasta que exista la siguiente reposicion.',
     'El rango esperado usa la dispersion robusta del historico (aprox. 95%). Estar fuera del rango es una señal de investigacion, no una prueba de robo.',
   ];
 
@@ -1002,7 +1003,11 @@ List<_CycleInput> _buildCycles({
       final purchase = purchaseDays[i];
       final start = purchase.date;
       final next = i + 1 < purchaseDays.length ? purchaseDays[i + 1].date : null;
-      final end = next == null ? historyEnd : _shiftDate(next, -1);
+      // Forward supply cannot be closed until the next purchase defines where
+      // the current batch stopped covering consumption. Scoring the last open
+      // batch would create a false anomaly simply because stock remains.
+      if (next == null) continue;
+      final end = _shiftDate(next, -1);
       if (end.compareTo(start) < 0) continue;
       final days = _daysInclusive(start, end);
       if (days <= 0 || days > 21) continue;
