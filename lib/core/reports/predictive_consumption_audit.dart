@@ -329,6 +329,16 @@ class PredictiveIngredientModel {
         totalUnits;
   }
 
+  double get totalKnownOperationalBase => cycles.fold<double>(
+        0,
+        (sum, cycle) => sum + cycle.knownOperationalBase,
+      );
+
+  double get recentKnownOperationalBase => investigationCycles.fold<double>(
+        0,
+        (sum, cycle) => sum + cycle.knownOperationalBase,
+      );
+
   double? get learnedCookedPerSaleWeighted {
     final valid = coefficients
         .where((row) => row.cookedBasePerUnit != null)
@@ -382,7 +392,15 @@ class PredictiveConsumptionAudit {
       .fold<double>(
         0,
         (sum, model) =>
-            sum + math.max(0.0, model.recentResidualOperationalBase).toDouble(),
+            sum +
+            model.investigationCycles
+                .where((cycle) => !cycle.purchaseMagnitudeOutlier)
+                .fold<double>(
+                  0,
+                  (subtotal, cycle) =>
+                      subtotal +
+                      math.max(0.0, cycle.residualOperationalBase).toDouble(),
+                ),
       );
 
   double get recentPositiveResidualHighWeightGrams =>
@@ -397,6 +415,31 @@ class PredictiveConsumptionAudit {
   double get recentPositiveResidualWeightGrams =>
       recentPositiveResidualAuditableWeightGrams +
       recentPositiveResidualLowWeightGrams;
+
+  double get recentPositiveResidualBulkOutlierWeightGrams => models
+      .where((model) => model.isWeight)
+      .fold<double>(
+        0,
+        (sum, model) =>
+            sum +
+            model.investigationCycles
+                .where((cycle) => cycle.purchaseMagnitudeOutlier)
+                .fold<double>(
+                  0,
+                  (subtotal, cycle) =>
+                      subtotal +
+                      math.max(0.0, cycle.residualOperationalBase).toDouble(),
+                ),
+      );
+
+  int get recentPurchaseMagnitudeOutliers => models.fold<int>(
+        0,
+        (sum, model) =>
+            sum +
+            model.investigationCycles
+                .where((cycle) => cycle.purchaseMagnitudeOutlier)
+                .length,
+      );
 
   List<PredictiveConsumptionCycleFinding> get rankedFindings {
     final findings = <PredictiveConsumptionCycleFinding>[];
