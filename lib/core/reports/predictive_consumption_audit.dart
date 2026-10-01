@@ -1115,7 +1115,7 @@ _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
       x: x,
       y: y,
       weights: weights,
-      lambda: 0.12,
+      lambda: 0.01,
       iterations: 180,
     );
     final predictions = List<double>.generate(
