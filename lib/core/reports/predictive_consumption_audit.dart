@@ -604,23 +604,26 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       unitFamily: lines.first.unitFamily,
     );
 
-    final candidateKeys = _selectFeatureKeys(
-      cycles: [...forward, ...replenishment],
-      productNames: productNames,
-    );
-    if (candidateKeys.isEmpty) continue;
-
     final forwardTraining = _trainingCycles(forward, investigationStart);
     final replenishmentTraining = _trainingCycles(
       replenishment,
       investigationStart,
     );
-    final forwardFit = _fitCycles(forwardTraining, candidateKeys);
-    final replenishFit = _fitCycles(replenishmentTraining, candidateKeys);
+    final forwardKeys = _selectFeatureKeys(
+      cycles: forwardTraining,
+      productNames: productNames,
+    );
+    final replenishmentKeys = _selectFeatureKeys(
+      cycles: replenishmentTraining,
+      productNames: productNames,
+    );
+    final forwardFit = _fitCycles(forwardTraining, forwardKeys);
+    final replenishFit = _fitCycles(replenishmentTraining, replenishmentKeys);
 
     PredictiveAlignment alignment;
     List<_CycleInput> allCycles;
     List<_CycleInput> training;
+    List<String> candidateKeys;
     _FitResult fit;
     if (replenishFit != null &&
         (forwardFit == null ||
@@ -629,11 +632,13 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       alignment = PredictiveAlignment.replenishment;
       allCycles = replenishment;
       training = replenishmentTraining;
+      candidateKeys = replenishmentKeys;
       fit = replenishFit;
     } else if (forwardFit != null) {
       alignment = PredictiveAlignment.forwardSupply;
       allCycles = forward;
       training = forwardTraining;
+      candidateKeys = forwardKeys;
       fit = forwardFit;
     } else {
       continue;
@@ -1007,6 +1012,7 @@ List<String> _selectFeatureKeys({
   required List<_CycleInput> cycles,
   required Map<String, String> productNames,
 }) {
+  if (cycles.length < 3) return const [];
   final totals = <String, double>{};
   for (final cycle in cycles) {
     for (final entry in cycle.paid.entries) {
@@ -1017,7 +1023,11 @@ List<String> _selectFeatureKeys({
       .where((entry) => entry.value >= 3 && productNames.containsKey(entry.key))
       .toList()
     ..sort((a, b) => b.value.compareTo(a.value));
-  return keys.take(8).map((entry) => entry.key).toList(growable: false);
+  final maxFeatures = math.max(1, math.min(8, cycles.length - 2));
+  return keys
+      .take(maxFeatures)
+      .map((entry) => entry.key)
+      .toList(growable: false);
 }
 
 List<_CycleInput> _trainingCycles(
@@ -1419,16 +1429,17 @@ String _modelConfidence({
   required double normalizedMae,
   required int coefficientCount,
 }) {
-  if (trainingCount >= 10 &&
+  if (coefficientCount <= 0) return 'Baja';
+  final highMinCycles = math.max(10, coefficientCount + 6);
+  final mediumMinCycles = math.max(6, coefficientCount + 3);
+  if (trainingCount >= highMinCycles &&
       rSquared >= 0.55 &&
-      normalizedMae <= 0.30 &&
-      coefficientCount > 0) {
+      normalizedMae <= 0.30) {
     return 'Alta';
   }
-  if (trainingCount >= 6 &&
+  if (trainingCount >= mediumMinCycles &&
       rSquared >= 0.25 &&
-      normalizedMae <= 0.50 &&
-      coefficientCount > 0) {
+      normalizedMae <= 0.50) {
     return 'Media';
   }
   return 'Baja';
