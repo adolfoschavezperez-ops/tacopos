@@ -372,7 +372,7 @@ class PredictiveConsumptionAudit {
       .fold<double>(
         0,
         (sum, model) =>
-            sum + math.max(0, model.recentResidualOperationalBase),
+            sum + math.max(0.0, model.recentResidualOperationalBase),
       );
 
   List<PredictiveConsumptionCycleFinding> get rankedFindings {
@@ -635,7 +635,8 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       );
       if (raw <= 0.000001 || units <= 0) continue;
       final cooked = definition.kind == PredictiveIngredientKind.meat &&
-              yieldRate != null
+              !yieldRate.isNaN &&
+              yieldRate > 0
           ? raw * yieldRate
           : null;
       coefficients.add(
@@ -1155,7 +1156,9 @@ _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
     0,
     (sum, value) => sum + math.pow(value - meanY, 2).toDouble(),
   );
-  final r2 = sst <= 0.000001 ? 0.0 : (1 - sse / sst).clamp(-1.0, 1.0);
+  final r2 = sst <= 0.000001
+      ? 0.0
+      : (1 - sse / sst).clamp(-1.0, 1.0).toDouble();
   final mae = residuals.fold<double>(
         0,
         (sum, residual) => sum + residual.abs(),
@@ -1321,7 +1324,7 @@ double _anomalyScore({
   score += math.min(25.0, residualPercent.abs() * 35);
   if (cancelledExplained > math.max(50, predictedPaid * 0.10)) score += 10;
   if (shortage > 20) score += 10;
-  return score.clamp(0.0, 100.0);
+  return score.clamp(0.0, 100.0).toDouble();
 }
 
 String _cycleEvidence({
