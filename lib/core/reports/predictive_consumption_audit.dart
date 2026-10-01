@@ -718,7 +718,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
           family: lines.first.unitFamily,
         ),
         isInvestigationPeriod:
-            cycle.purchaseDate.compareTo(investigationStart) >= 0,
+            cycle.endDate.compareTo(investigationStart) >= 0,
       );
     }).toList()
       ..sort((a, b) => b.purchaseDate.compareTo(a.purchaseDate));
@@ -791,6 +791,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta para que dias atipicos no definan el consumo normal.',
     'Sin inventario fisico no puede demostrarse una fuga: una discrepancia tambien puede ser merma, cambio de stock inicial/final, porcion distinta o captura incompleta.',
     'Las cancelaciones que tocaron cocina se muestran por separado para medir cuanto consumo podrian explicar sin contarlas como venta.',
+    'El periodo de investigacion se aplica a las fechas de consumo cubiertas por cada ciclo, no solo a la fecha de compra, para no contaminar el entrenamiento con ventas posteriores al corte.',
     'El rango esperado usa la dispersion robusta del historico (aprox. 95%). Estar fuera del rango es una señal de investigacion, no una prueba de robo.',
   ];
 
@@ -975,7 +976,7 @@ List<_CycleInput> _trainingCycles(
   final previous = cycles
       .where(
         (cycle) =>
-            cycle.purchaseDate.compareTo(investigationStart) < 0 &&
+            cycle.endDate.compareTo(investigationStart) < 0 &&
             cycle.paidUnits > 0,
       )
       .toList();
