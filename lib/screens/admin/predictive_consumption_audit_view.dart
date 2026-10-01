@@ -71,7 +71,7 @@ class _PredictiveConsumptionAuditViewState
 
   Future<void> _recordClosingCount(ResaleProduct product) async {
     final controller = TextEditingController();
-    var selectedDate = _resaleAsOf;
+    var selectedDate = DateTime.now();
     var acknowledged = false;
     var saving = false;
     String? error;
@@ -87,12 +87,12 @@ class _PredictiveConsumptionAuditViewState
               const SizedBox(height: 8),
               const Text('El número corresponde a unidades físicas restantes DESPUÉS '
                 'de todas las compras, ventas y salidas del día operativo. '
-                'Se requiere el cierre de cocina confirmado.'),
+                'El cierre de cocina debe ser de las últimas 24 horas.'),
               TextButton.icon(
                 onPressed: saving ? null : () async {
                   final picked = await showDatePicker(context: context,
                     initialDate: selectedDate,
-                    firstDate: DateTime(2000),
+                    firstDate: DateTime.now().subtract(const Duration(days: 2)),
                     lastDate: DateTime.now());
                   if (picked != null && dialogContext.mounted) {
                     update(() => selectedDate = picked);
@@ -115,7 +115,7 @@ class _PredictiveConsumptionAuditViewState
                   'no una cifra calculada ni estimada.'),
               ),
               const Text('Se guardará con hora de registro y usuario. '
-                'El conteo es inmutable: no puede sobrescribirse.'),
+                'El conteo es inmutable; los errores se corrigen con un evento posterior.'),
               if (error != null) Text(error!,
                 style: const TextStyle(color: BrandColors.danger)),
             ],
@@ -149,6 +149,65 @@ class _PredictiveConsumptionAuditViewState
       }
     } finally {
       controller.dispose();
+    }
+  }
+
+  Future<void> _correctClosingCount(ResaleProduct product,
+      ResaleCheckpoint checkpoint) async {
+    final count = TextEditingController(text: '${checkpoint.physicalCount}');
+    final reason = TextEditingController();
+    var saving = false;
+    String? error;
+    try {
+      final saved = await showDialog<bool>(context: context, builder: (dialogContext) =>
+        StatefulBuilder(builder: (context, update) => AlertDialog(
+          title: const Text('Corregir declaración de conteo'),
+          content: SizedBox(width: 440, child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${product.key} · cierre ${checkpoint.date} · '
+                'valor anterior ${checkpoint.physicalCount} u.'),
+              const Text('Se conservará el original y cada corrección con usuario, '
+                'hora y motivo. Una corrección tardía será una declaración no '
+                'confirmada y no generará diferencias físicas confirmadas.'),
+              TextField(controller: count,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) => update(() {}),
+                decoration: const InputDecoration(labelText: 'Unidades correctas')),
+              TextField(controller: reason, maxLength: 500,
+                onChanged: (_) => update(() {}),
+                decoration: const InputDecoration(labelText: 'Motivo de corrección')),
+              if (error != null) Text(error!,
+                style: const TextStyle(color: BrandColors.danger)),
+            ])),
+          actions: [
+            TextButton(onPressed: saving ? null : () =>
+              Navigator.of(dialogContext).pop(false), child: const Text('Cancelar')),
+            FilledButton(onPressed: saving || int.tryParse(count.text) == null ||
+                reason.text.trim().length < 10 ? null : () async {
+              update(() { saving = true; error = null; });
+              try {
+                await widget.repository.correctResaleClosingCount(
+                  product: product, checkpoint: checkpoint,
+                  physicalCount: int.parse(count.text),
+                  reason: reason.text);
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop(true);
+              } catch (exception) {
+                if (dialogContext.mounted) update(() => error = '$exception');
+              } finally {
+                if (dialogContext.mounted) update(() => saving = false);
+              }
+            }, child: const Text('Registrar corrección')),
+          ],
+        )));
+      if (saved == true && mounted) {
+        setState(() => _resaleFuture = widget.repository.getResaleUnitAudit());
+        showAppSnackBar(context, 'Corrección registrada.',
+          type: AppSnackBarType.success);
+      }
+    } finally {
+      count.dispose();
+      reason.dispose();
     }
   }
 
@@ -289,6 +348,25 @@ class _PredictiveConsumptionAuditViewState
                 TextButton.icon(onPressed: () => _recordClosingCount(p),
                   icon: const Icon(Icons.fact_check_outlined),
                   label: const Text('Registrar conteo físico de cierre')),
+                if (p.checkpoint != null)
+                  ExpansionTile(title: Text('Historial de conteos (${p.checkpoints.length})'),
+                    children: [for (final checkpoint in p.checkpoints)
+                      ListTile(title: Text('${checkpoint.date}: '
+                          '${checkpoint.physicalCount} u. · '
+                          '${checkpoint.confirmed ? 'reciente confirmado' : 'declaración no confirmada'} '
+                          '· revisión ${checkpoint.correctionRevision}'),
+                        subtitle: Text([
+                          'Original: ${checkpoint.originalPhysicalCount ?? checkpoint.physicalCount} u. '
+                            '· ${checkpoint.originalRecordedAt == null ? 'sin hora' : DateFormat('dd/MM/yyyy HH:mm').format(checkpoint.originalRecordedAt!)} '
+                            '· usuario ${checkpoint.originalByUid}',
+                          for (final change in checkpoint.corrections)
+                            '#${change.revision}: ${change.physicalCount} u. '
+                              '· ${DateFormat('dd/MM/yyyy HH:mm').format(change.recordedAt)} '
+                              '· usuario ${change.recordedByUid} · ${change.reason}',
+                        ].join('\n')),
+                        trailing: IconButton(icon: const Icon(Icons.edit_note),
+                          tooltip: 'Corregir este conteo',
+                          onPressed: () => _correctClosingCount(p, checkpoint)))]),
                 Text('Compradas: ${period.bought} · Vendidas: ${period.sold} '
                   '· Otras salidas registradas: ${period.other} '
                   '· Variación: ${period.netUnits >= 0 ? '+' : ''}${period.netUnits} u.'),
@@ -303,9 +381,11 @@ class _PredictiveConsumptionAuditViewState
                   Text('Diferencia confirmada entre conteos: ${p.physicalDifference} u. '
                     '· Valor a costo medio: ${money(p.physicalDifference!.abs() * p.unitCost)}'),
                 if (p.checkpoint != null)
-                  Text('Último conteo físico de cierre: ${p.checkpoint!.physicalCount} u. '
+                  Text('${p.checkpoint!.confirmed ? 'Conteo físico reciente' : 'Declaración no confirmada'} '
+                    'de cierre: ${p.checkpoint!.physicalCount} u. '
                     'al ${p.checkpoint!.date}; registrado '
-                    '${p.checkpoint!.recordedAt == null ? 'sin hora' : DateFormat('dd/MM/yyyy HH:mm').format(p.checkpoint!.recordedAt!)}.'),
+                    '${p.checkpoint!.recordedAt == null ? 'sin hora' : DateFormat('dd/MM/yyyy HH:mm').format(p.checkpoint!.recordedAt!)}. '
+                    'Revisión ${p.checkpoint!.correctionRevision}.'),
                 if (p.hasNegativeRelativeBalance)
                   const Text('Saldo relativo negativo: revisar integridad de datos e inventario inicial.',
                     style: TextStyle(color: BrandColors.danger)),
@@ -336,8 +416,9 @@ class _PredictiveConsumptionAuditViewState
               '(${audit.unmatchedSales.length})'),
               children: [for (final row in audit.unmatchedSales) ListTile(title: Text(row))]),
           for (final note in audit.notes) Text('• $note'),
-          const Text('Los conteos sólo anclan el inventario cuando se registran '
-            'explícitamente para el SKU al cierre. Merma, daño y devolución '
+          const Text('Sólo los conteos recientes confirmados anclan el inventario; '
+            'declaraciones y correcciones tardías permanecen visibles sin '
+            'confirmar discrepancias. Merma, daño y devolución '
             'siguen sin una fuente de movimientos por SKU integrada.'),
           const Text('El importe de artículos puede diferir de la venta neta '
             'por descuentos, cortesías y cobros parciales.'),

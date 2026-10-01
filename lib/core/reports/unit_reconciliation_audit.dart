@@ -51,12 +51,66 @@ class ResaleExit {
 
 class ResaleCheckpoint {
   const ResaleCheckpoint({required this.date, required this.key,
-    required this.physicalCount, this.boundary = 'closing', this.recordedAt});
+    required this.physicalCount, this.boundary = 'closing', this.recordedAt,
+    this.confirmed = true, this.correctionRevision = 0,
+    this.correctionReason, this.originalPhysicalCount, this.originalRecordedAt,
+    this.originalByUid = '', this.corrections = const []});
   final String date, key;
   final int physicalCount;
   // The count is measured after all movements for the operational date.
   final String boundary;
   final DateTime? recordedAt;
+  // Retrospective declarations and late corrections never confirm a loss.
+  final bool confirmed;
+  final int correctionRevision;
+  final String? correctionReason;
+  final int? originalPhysicalCount;
+  final DateTime? originalRecordedAt;
+  final String originalByUid;
+  final List<ResaleCheckpointCorrection> corrections;
+}
+
+bool resaleClosingCountIsRecent(DateTime closedAt, DateTime recordedAt) {
+  final age = recordedAt.difference(closedAt);
+  return !age.isNegative && age <= const Duration(hours: 24);
+}
+
+class ResaleCheckpointCorrection {
+  const ResaleCheckpointCorrection({required this.revision,
+    required this.physicalCount, required this.reason, required this.recordedAt,
+    this.recordedByUid = ''});
+  final int revision, physicalCount;
+  final String reason;
+  final DateTime recordedAt;
+  final String recordedByUid;
+}
+
+ResaleCheckpoint resaleEffectiveCheckpoint(ResaleCheckpoint original,
+    Iterable<ResaleCheckpointCorrection> corrections) {
+  var revision = 0;
+  var count = original.physicalCount;
+  var recordedAt = original.recordedAt;
+  var confirmed = original.confirmed;
+  String? reason;
+  final applied = <ResaleCheckpointCorrection>[];
+  for (final correction in corrections.toList()
+      ..sort((a, b) => a.revision.compareTo(b.revision))) {
+    if (correction.revision != revision + 1 ||
+        correction.physicalCount < 0 || correction.reason.trim().length < 10) break;
+    revision = correction.revision;
+    applied.add(correction);
+    count = correction.physicalCount;
+    recordedAt = correction.recordedAt;
+    reason = correction.reason;
+    confirmed = confirmed && original.recordedAt != null &&
+        resaleClosingCountIsRecent(original.recordedAt!, correction.recordedAt);
+  }
+  return ResaleCheckpoint(date: original.date, key: original.key,
+    physicalCount: count, boundary: original.boundary, recordedAt: recordedAt,
+    confirmed: confirmed, correctionRevision: revision, correctionReason: reason,
+    originalPhysicalCount: original.originalPhysicalCount ?? original.physicalCount,
+    originalRecordedAt: original.originalRecordedAt ?? original.recordedAt,
+    originalByUid: original.originalByUid, corrections: applied);
 }
 
 class ResaleDay {
@@ -78,7 +132,7 @@ class ResaleProduct {
   const ResaleProduct({required this.key, required this.family,
     required this.name, required this.suppliers, required this.productIds,
     required this.days, required this.lastPurchaseDate,
-    required this.initialUnknown, required this.checkpoint,
+    required this.initialUnknown, required this.checkpoint, required this.checkpoints,
     required this.physicalDifference, required this.unprovenCancellations});
   final String key, name, lastPurchaseDate;
   final ResaleFamily family;
@@ -86,6 +140,7 @@ class ResaleProduct {
   final List<ResaleDay> days;
   final bool initialUnknown;
   final ResaleCheckpoint? checkpoint;
+  final List<ResaleCheckpoint> checkpoints;
   // physical count minus theoretical count, only available after a checkpoint.
   final int? physicalDifference;
   final int unprovenCancellations;
@@ -111,7 +166,7 @@ class ResaleProduct {
   // A zero inferred only from purchases and sales is not an inventory count.
   // Closed cycle boundaries require an actual physical starting checkpoint.
   List<String> get anchoredCycleStarts {
-    if (checkpoint == null) return const [];
+    if (checkpoint == null || initialUnknown) return const [];
     var opening = checkpoint!.physicalCount;
     final starts = <String>[];
     for (final day in days.where((d) => d.date.compareTo(checkpoint!.date) > 0)) {
@@ -160,13 +215,11 @@ ResaleFamily? resaleSupplierFamily(String supplier) {
 String _itemKey(String name) => resaleNormalize(name)
     .replaceAll(RegExp(r'\s+x\s*\d+\s*$'), '').trim();
 
-bool _isFamilyProduct(String name, ResaleFamily family) {
+bool _isExplicitlyDifferentProduct(String name, ResaleFamily family) {
   final normalized = resaleNormalize(name);
-  if (family == ResaleFamily.empanada) {
-    return RegExp(r'\bempanad(?:a|as|ita|itas)\b').hasMatch(normalized);
-  }
-  return RegExp(r'\b(?:agua|aguas)\b').hasMatch(normalized) &&
-      !RegExp(r'\b(?:refresco|soda|agua mineral)\b').hasMatch(normalized);
+  if (family != ResaleFamily.water) return false;
+  return RegExp(r'\b(?:refresco|refrescos|soda|coca cola|pepsi|sprite|fanta)\b')
+      .hasMatch(normalized) || normalized.contains('agua mineral');
 }
 
 int? _units(ResalePurchase line) {
@@ -204,7 +257,8 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
 
   for (final p in candidatePurchases) {
     final family = resaleSupplierFamily(p.supplier)!;
-    if (_units(p) == null || !_isFamilyProduct(p.name, family) ||
+    if (_units(p) == null || _itemKey(p.name).isEmpty ||
+        _isExplicitlyDifferentProduct(p.name, family) ||
         (p.purchaseItemId.isNotEmpty &&
             !RegExp(r'^[A-Za-z0-9_.-]{1,100}$').hasMatch(p.purchaseItemId))) {
       unresolvedPurchases.add('${p.id}: ${p.name} (${p.quantity} ${p.unit})');
@@ -242,8 +296,6 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
     final example = productSales.first;
     final possible = <String>{};
     for (final entry in byKey.entries) {
-      final family = families[entry.key]!;
-      if (!_isFamilyProduct(example.name, family)) continue;
       if (names[entry.key] == _itemKey(example.name)) {
         possible.add(entry.key);
       }
@@ -258,7 +310,8 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
     // A kitchen stock link alone cannot establish bottle size or flavor.
     // A single generic empanada purchase can be reconciled across flavors,
     // provided there are no separately purchased flavors to double count.
-    if (possible.isEmpty && _isFamilyProduct(example.name, ResaleFamily.empanada)) {
+    if (possible.isEmpty && RegExp(r'\bempanad(?:a|as|ita|itas)\b')
+        .hasMatch(resaleNormalize(example.name))) {
       final empanadaKeys = byKey.keys.where((k) => families[k] == ResaleFamily.empanada).toList();
       if (empanadaKeys.length == 1 &&
           const {'empanada', 'empanadas', 'empanadita', 'empanaditas'}
@@ -268,8 +321,11 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
     }
     if (possible.length == 1) {
       mappedExits.putIfAbsent(possible.single, () => []).addAll(productSales);
-    } else if (possible.isNotEmpty ||
-        ResaleFamily.values.any((f) => _isFamilyProduct(example.name, f))) {
+    } else if (possible.isNotEmpty || example.stockItemId.isNotEmpty ||
+        RegExp(r'\b(?:agua|aguas|empanad(?:a|as|ita|itas))\b')
+            .hasMatch(resaleNormalize(example.name)) ||
+        RegExp(r'\b(?:bebida|bebidas|postre|postres)\b')
+            .hasMatch(resaleNormalize(example.category))) {
       unresolvedSales.add('${example.productId}: ${example.name} (${possible.isEmpty ? 'sin compra equivalente' : 'match ambiguo'})');
     }
   }
@@ -309,7 +365,8 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
       c.date.compareTo(endDate) <= 0).toList()..sort((a,b) => a.date.compareTo(b.date));
     final checkpoint = relevantCheckpoints.isEmpty ? null : relevantCheckpoints.last;
     int? difference;
-    if (relevantCheckpoints.length >= 2) {
+    if (relevantCheckpoints.length >= 2 && checkpoint!.confirmed &&
+        relevantCheckpoints[relevantCheckpoints.length - 2].confirmed) {
       final previous = relevantCheckpoints[relevantCheckpoints.length - 2];
       final expected = previous.physicalCount + days
         .where((d) => d.date.compareTo(previous.date) > 0 &&
@@ -323,7 +380,8 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
       productIds: saleLines.map((s) => s.productId).toSet().toList()..sort(),
       days: days, lastPurchaseDate: entry.value.map((p) => p.date).reduce(
         (a,b) => a.compareTo(b) > 0 ? a : b),
-      initialUnknown: checkpoint == null, checkpoint: checkpoint,
+      initialUnknown: checkpoint?.confirmed != true, checkpoint: checkpoint,
+      checkpoints: relevantCheckpoints,
       physicalDifference: difference, unprovenCancellations: unproven));
   }
   products.sort((a,b) => a.name.compareTo(b.name));

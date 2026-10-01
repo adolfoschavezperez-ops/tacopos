@@ -20,7 +20,7 @@ const {
   where,
 } = require('firebase/firestore');
 
-const PROJECT_ID = 'tacopos-renovadev';
+const PROJECT_ID = 'demo-tacopos-pr';
 const RESTAURANT_ID = 'tacopos';
 const BRANCH_ID = 'aviacion';
 const BUSINESS_DATE = '2026-07-31';
@@ -218,23 +218,25 @@ function deviceData(deviceId = 'device-uid', overrides = {}) {
 describe('TacoPOS Firestore production guard rails', () => {
   it('restringe conteos de cierre a admin, sesión cerrada y un documento inmutable', async () => {
     await seedAdmin();
+    const recentDate = new Date().toISOString().slice(0, 10);
     await seed(`restaurants/${RESTAURANT_ID}/kitchenSessions/kitchen-close`, {
       restaurantId: RESTAURANT_ID,
       branchId: BRANCH_ID,
-      businessDate: BUSINESS_DATE,
+      businessDate: recentDate,
       status: 'closed',
-      closedAt: new Date('2026-08-01T05:00:00.000Z'),
+      closedAt: new Date(Date.now() - 60000),
     });
     const skuKey = 'water:name:agua 600 ml';
-    const checkpointId = `${BRANCH_ID}|${BUSINESS_DATE}|${skuKey}`;
+    const checkpointId = `${BRANCH_ID}|${recentDate}|${skuKey}`;
     const path = `restaurants/${RESTAURANT_ID}/resaleCheckpoints/${checkpointId}`;
     const data = {
       restaurantId: RESTAURANT_ID,
       branchId: BRANCH_ID,
-      businessDate: BUSINESS_DATE,
+      businessDate: recentDate,
       skuKey,
       skuName: 'agua 600 ml',
       boundary: 'closing',
+      verification: 'recentObserved',
       physicalCount: 12,
       kitchenSessionId: 'kitchen-close',
       recordedAt: serverTimestamp(),
@@ -260,11 +262,53 @@ describe('TacoPOS Firestore production guard rails', () => {
     await assertFails(setDoc(doc(adminDb(), path), {
       ...data, kitchenSessionId: 'unknown',
     }));
+    await seed(`restaurants/${RESTAURANT_ID}/kitchenSessions/stale-close`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      businessDate: recentDate,
+      status: 'closed',
+      closedAt: new Date(Date.now() - 3 * 86400000),
+    });
+    await assertFails(setDoc(doc(adminDb(), path), {
+      ...data, kitchenSessionId: 'stale-close',
+    }));
     await assertSucceeds(setDoc(doc(adminDb(), path), data));
     await assertFails(updateDoc(doc(adminDb(), path), { physicalCount: 13 }));
     await assertFails(deleteDoc(doc(adminDb(), path)));
     await assertFails(getDoc(doc(authedDb('cashier-1'), path)));
     await assertSucceeds(getDoc(doc(adminDb(), path)));
+    const correction = {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      businessDate: recentDate,
+      skuKey,
+      revision: 1,
+      supersedesRevision: 0,
+      physicalCount: 10,
+      reason: 'Captura inicial con dos botellas duplicadas',
+      recordedAt: serverTimestamp(),
+      recordedByUid: 'admin-uid',
+    };
+    const correctionPath = `${path}/corrections/1`;
+    await assertFails(setDoc(doc(adminDb(), `${path}/corrections/2`), {
+      ...correction, revision: 2, supersedesRevision: 1,
+    }));
+    await assertFails(setDoc(doc(adminDb(), correctionPath), {
+      ...correction, reason: 'corto',
+    }));
+    await assertFails(setDoc(doc(authedDb('cashier-1'), correctionPath), {
+      ...correction, recordedByUid: 'cashier-1',
+    }));
+    await assertSucceeds(setDoc(doc(adminDb(), correctionPath), correction));
+    await assertFails(updateDoc(doc(adminDb(), correctionPath), { physicalCount: 7 }));
+    await assertFails(deleteDoc(doc(adminDb(), correctionPath)));
+    await assertSucceeds(setDoc(doc(adminDb(), `${path}/corrections/2`), {
+      ...correction, revision: 2, supersedesRevision: 1,
+      physicalCount: 9, reason: 'Verificación posterior del registro',
+    }));
+    assert.strictEqual((await getDoc(doc(adminDb(), path))).data().physicalCount, 12);
+    assert.strictEqual((await getDoc(doc(adminDb(), correctionPath))).data().physicalCount, 10);
+    assert.strictEqual((await getDoc(doc(adminDb(), `${path}/corrections/2`))).data().physicalCount, 9);
   });
   it('rechaza usuario no autenticado', async () => {
     await assertFails(

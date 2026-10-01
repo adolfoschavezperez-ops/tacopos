@@ -572,22 +572,20 @@ service cloud.firestore {
         allow delete: if false;
       }
 
-      // Closing counts are immutable and tied to a real closed kitchen session.
-      // Server time records when the declaration was entered, including later
-      // entry of a historical closing count. The businessDate is the physical
-      // end-of-day boundary, never the timestamp of data entry.
+      // Only a recently closed kitchen session permits a new observed count.
+      // The original and every correction remain immutable audit events.
       match /resaleCheckpoints/{checkpointId} {
         allow read: if canManageResaleCheckpoints(restaurantId);
         allow create: if canManageResaleCheckpoints(restaurantId) &&
           validCreate(restaurantId) &&
           request.resource.data.keys().hasOnly([
             'restaurantId', 'branchId', 'businessDate', 'skuKey', 'skuName',
-            'boundary', 'physicalCount', 'kitchenSessionId', 'recordedAt',
+            'boundary', 'verification', 'physicalCount', 'kitchenSessionId', 'recordedAt',
             'recordedByUid'
           ]) &&
           request.resource.data.keys().hasAll([
             'restaurantId', 'branchId', 'businessDate', 'skuKey', 'skuName',
-            'boundary', 'physicalCount', 'kitchenSessionId', 'recordedAt',
+            'boundary', 'verification', 'physicalCount', 'kitchenSessionId', 'recordedAt',
             'recordedByUid'
           ]) &&
           request.resource.data.restaurantId == restaurantId &&
@@ -599,6 +597,7 @@ service cloud.firestore {
           request.resource.data.skuName is string &&
           request.resource.data.skuName.size() <= 120 &&
           request.resource.data.boundary == 'closing' &&
+          request.resource.data.verification == 'recentObserved' &&
           request.resource.data.physicalCount is int &&
           request.resource.data.physicalCount >= 0 &&
           request.resource.data.physicalCount <= 100000 &&
@@ -611,9 +610,48 @@ service cloud.firestore {
           exists(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)) &&
           get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.status == 'closed' &&
           get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.closedAt is timestamp &&
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.closedAt <= request.time &&
+          request.time - get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.closedAt <= duration.value(24, 'h') &&
           get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.branchId == request.resource.data.branchId &&
           get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.businessDate == request.resource.data.businessDate;
         allow update, delete: if false;
+
+        match /corrections/{correctionId} {
+          allow read: if canManageResaleCheckpoints(restaurantId);
+          allow create: if canManageResaleCheckpoints(restaurantId) &&
+            validCreate(restaurantId) &&
+            exists(/databases/$(database)/documents/restaurants/$(restaurantId)/resaleCheckpoints/$(checkpointId)) &&
+            request.resource.data.keys().hasOnly([
+              'restaurantId', 'branchId', 'businessDate', 'skuKey', 'revision',
+              'supersedesRevision', 'physicalCount', 'reason', 'recordedAt',
+              'recordedByUid'
+            ]) &&
+            request.resource.data.keys().hasAll([
+              'restaurantId', 'branchId', 'businessDate', 'skuKey', 'revision',
+              'supersedesRevision', 'physicalCount', 'reason', 'recordedAt',
+              'recordedByUid'
+            ]) &&
+            request.resource.data.restaurantId == restaurantId &&
+            request.resource.data.revision is int &&
+            request.resource.data.revision >= 1 &&
+            request.resource.data.revision <= 100 &&
+            correctionId == string(request.resource.data.revision) &&
+            request.resource.data.supersedesRevision == request.resource.data.revision - 1 &&
+            (request.resource.data.revision == 1 ||
+              exists(/databases/$(database)/documents/restaurants/$(restaurantId)/resaleCheckpoints/$(checkpointId)/corrections/$(string(request.resource.data.revision - 1)))) &&
+            request.resource.data.branchId == get(/databases/$(database)/documents/restaurants/$(restaurantId)/resaleCheckpoints/$(checkpointId)).data.branchId &&
+            request.resource.data.businessDate == get(/databases/$(database)/documents/restaurants/$(restaurantId)/resaleCheckpoints/$(checkpointId)).data.businessDate &&
+            request.resource.data.skuKey == get(/databases/$(database)/documents/restaurants/$(restaurantId)/resaleCheckpoints/$(checkpointId)).data.skuKey &&
+            request.resource.data.physicalCount is int &&
+            request.resource.data.physicalCount >= 0 &&
+            request.resource.data.physicalCount <= 100000 &&
+            request.resource.data.reason is string &&
+            request.resource.data.reason.size() >= 10 &&
+            request.resource.data.reason.size() <= 500 &&
+            request.resource.data.recordedByUid == request.auth.uid &&
+            request.resource.data.recordedAt == request.time;
+          allow update, delete: if false;
+        }
       }
 
       match /kitchenSessions/{sessionId} {

@@ -5699,10 +5699,32 @@ class TacoPosRepository {
       final key = data['skuKey'];
       if (date is! String || key is! String ||
           !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) continue;
-      counts.add(ResaleCheckpoint(
-        date: date, key: key, physicalCount: data['physicalCount'] as int,
-        recordedAt: (data['recordedAt'] as Timestamp?)?.toDate(),
-      ));
+      final originalRecordedAt = (data['recordedAt'] as Timestamp?)?.toDate();
+      final original = ResaleCheckpoint(date: date, key: key,
+        physicalCount: data['physicalCount'] as int,
+        recordedAt: originalRecordedAt,
+        originalByUid: data['recordedByUid'] as String? ?? '',
+        confirmed: data['verification'] == 'recentObserved' &&
+          originalRecordedAt != null);
+      final corrections = await doc.reference.collection('corrections')
+          .orderBy('revision').get();
+      final revisions = <ResaleCheckpointCorrection>[];
+      for (final correction in corrections.docs) {
+        final change = correction.data();
+        final revision = change['revision'];
+        final correctedCount = change['physicalCount'];
+        final correctedAt = (change['recordedAt'] as Timestamp?)?.toDate();
+        if (revision is! int ||
+            correction.id != '$revision' || correctedCount is! int ||
+            correctedCount < 0 || correctedAt == null ||
+            change['reason'] is! String ||
+            change['businessDate'] != date || change['skuKey'] != key) continue;
+        revisions.add(ResaleCheckpointCorrection(revision: revision,
+          physicalCount: correctedCount,
+          reason: change['reason'] as String, recordedAt: correctedAt,
+          recordedByUid: change['recordedByUid'] as String? ?? ''));
+      }
+      counts.add(resaleEffectiveCheckpoint(original, revisions));
     }
     return buildResaleAudit(purchases: lines, exits: exits,
       checkpoints: counts, endDate: end);
@@ -5728,9 +5750,10 @@ class TacoPosRepository {
       throw ArgumentError('Conteo, SKU o fecha de operación inválidos.');
     }
     final closed = (await _kitchenSessionsForBusinessDate(businessDate))
-        .where((row) => row.isClosed && row.closedAt != null).toList();
+        .where((row) => row.isClosed && row.closedAt != null &&
+          resaleClosingCountIsRecent(row.closedAt!, DateTime.now())).toList();
     if (closed.length != 1) {
-      throw StateError('Se requiere un único cierre de cocina confirmado para esta fecha y sucursal.');
+      throw StateError('Se requiere un único cierre de cocina de las últimas 24 horas para esta fecha y sucursal.');
     }
     final sessionRef = _kitchenSessionsRef.doc(closed.single.id);
     final checkpointId = '${current.currentBranchId}|$businessDate|${product.key}';
@@ -5743,7 +5766,9 @@ class TacoPosRepository {
       }
       final kitchen = kitchenDoc.data();
       if (kitchen == null || kitchen['status'] != 'closed' ||
-          kitchen['closedAt'] == null ||
+          kitchen['closedAt'] is! Timestamp ||
+          !resaleClosingCountIsRecent(
+              (kitchen['closedAt'] as Timestamp).toDate(), DateTime.now()) ||
           kitchen['branchId'] != current.currentBranchId ||
           kitchen['businessDate'] != businessDate) {
         throw StateError('El cierre de cocina cambió; vuelve a verificarlo.');
@@ -5755,8 +5780,66 @@ class TacoPosRepository {
         'skuKey': product.key,
         'skuName': product.name,
         'boundary': 'closing',
+        'verification': 'recentObserved',
         'physicalCount': physicalCount,
         'kitchenSessionId': closed.single.id,
+        'recordedAt': FieldValue.serverTimestamp(),
+        'recordedByUid': _auth.currentUser?.uid ?? '',
+      });
+    });
+  }
+
+  /// Append-only correction of the effective declaration, without modifying
+  /// the original count or any prior correction.
+  Future<void> correctResaleClosingCount({
+    required ResaleProduct product,
+    required ResaleCheckpoint checkpoint,
+    required int physicalCount,
+    required String reason,
+  }) async {
+    _requireAdminPermission(kIsWeb &&
+      (AppSession.instance.employee?.canViewAdmin == true ||
+       AppSession.instance.employee?.isSuperAdmin == true),
+      'Se requiere acceso de administración para corregir el conteo.');
+    final trimmedReason = reason.trim();
+    if (checkpoint.key != product.key ||
+        !product.checkpoints.any((row) => row.date == checkpoint.date &&
+          row.key == checkpoint.key) ||
+        physicalCount < 0 || physicalCount > 100000 ||
+        trimmedReason.length < 10 || trimmedReason.length > 500) {
+      throw ArgumentError('Selecciona un conteo y escribe un motivo de 10 a 500 caracteres.');
+    }
+    final current = AppSession.instance;
+    final id = '${current.currentBranchId}|${checkpoint.date}|${product.key}';
+    final originalRef = _resaleCheckpointsRef.doc(id);
+    final correctionsRef = originalRef.collection('corrections');
+    final latest = await correctionsRef.orderBy('revision', descending: true)
+        .limit(1).get();
+    final revision = latest.docs.isEmpty
+        ? 1 : (latest.docs.single.data()['revision'] as int) + 1;
+    if (revision > 100) throw StateError('Límite de correcciones alcanzado.');
+    final previousRef = revision == 1 ? null : correctionsRef.doc('${revision - 1}');
+    final nextRef = correctionsRef.doc('$revision');
+    await _db.runTransaction((transaction) async {
+      final original = await transaction.get(originalRef);
+      final previous = previousRef == null ? null : await transaction.get(previousRef);
+      final next = await transaction.get(nextRef);
+      if (!original.exists || next.exists ||
+          (previousRef != null && !previous!.exists) ||
+          original.data()?['branchId'] != current.currentBranchId ||
+          original.data()?['businessDate'] != checkpoint.date ||
+          original.data()?['skuKey'] != product.key) {
+        throw StateError('El conteo cambió; actualiza el reporte y vuelve a intentar.');
+      }
+      transaction.set(nextRef, {
+        'restaurantId': current.currentRestaurantId,
+        'branchId': current.currentBranchId,
+        'businessDate': checkpoint.date,
+        'skuKey': product.key,
+        'revision': revision,
+        'supersedesRevision': revision - 1,
+        'physicalCount': physicalCount,
+        'reason': trimmedReason,
         'recordedAt': FieldValue.serverTimestamp(),
         'recordedByUid': _auth.currentUser?.uid ?? '',
       });

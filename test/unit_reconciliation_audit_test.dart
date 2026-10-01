@@ -82,6 +82,34 @@ void main() {
     final a = audit([buy('2026-09-01', 30, supplier: 'Otra agua')], []);
     expect(a.products, isEmpty);
   });
+  test('supplier identifies flavor purchases without literal family words', () {
+    final a = audit([
+      buy('2026-09-01', 30, name: 'Jamaica', sku: 'jamaica'),
+      buy('2026-09-01', 20, name: 'Horchata', sku: 'horchata'),
+      buy('2026-09-01', 15, name: 'Piña', supplier: 'Empanaditas', sku: 'pina'),
+      buy('2026-09-01', 15, name: 'Cajeta', supplier: 'Empanaditas', sku: 'cajeta'),
+      buy('2026-09-01', 10, name: 'Refresco cola', id: 'soft-drink'),
+    ], [
+      out('2026-09-01', 8, name: 'Jamaica', productId: 'jamaica'),
+      out('2026-09-01', 6, name: 'Horchata', productId: 'horchata'),
+      out('2026-09-01', 5, name: 'Piña', productId: 'pina'),
+      out('2026-09-01', 4, name: 'Cajeta', productId: 'cajeta'),
+    ]);
+    expect(a.products, hasLength(4));
+    expect(a.products.firstWhere((p) => p.key == 'water:sku:jamaica').sold, 8);
+    expect(a.products.firstWhere((p) => p.key == 'empanada:sku:cajeta').sold, 4);
+    expect(a.unmatchedPurchases, hasLength(1));
+  });
+  test('flavor sold under two supplier families stays unmatched', () {
+    final a = audit([
+      buy('2026-09-01', 20, name: 'Piña', sku: 'water-pina'),
+      buy('2026-09-01', 20, name: 'Piña', supplier: 'Empanaditas',
+        sku: 'pie-pina', id: 'pie'),
+    ], [out('2026-09-01', 3, name: 'Piña', productId: 'pina')]);
+    expect(a.products, hasLength(2));
+    expect(a.products.every((p) => p.sold == 0), isTrue);
+    expect(a.unmatchedSales.single, contains('match ambiguo'));
+  });
   test('supplier spelling, accents and whitespace normalize', () {
     expect(resaleSupplierFamily(' AGUAS   FÁNNY '), ResaleFamily.water);
     expect(resaleSupplierFamily('EMPANADITAS'), ResaleFamily.empanada);
@@ -157,6 +185,56 @@ void main() {
         physicalCount: 5, boundary: 'opening'),
     ]).products.single;
     expect(p.initialUnknown, isTrue);
+    expect(p.theoreticalInventory, isNull);
+  });
+  test('historical declaration is not a confirmed physical anchor', () {
+    final p = audit([buy('2026-09-02', 30)], [out('2026-09-02', 20)],
+      checkpoints: [
+        ResaleCheckpoint(date: '2026-09-01', key: 'water:name:agua 600 ml',
+          physicalCount: 0, confirmed: false),
+        ResaleCheckpoint(date: '2026-09-03', key: 'water:name:agua 600 ml',
+          physicalCount: 8, confirmed: false),
+      ]).products.single;
+    expect(resaleClosingCountIsRecent(DateTime.utc(2026, 9, 1),
+      DateTime.utc(2026, 10, 1)), isFalse);
+    expect(p.initialUnknown, isTrue);
+    expect(p.theoreticalInventory, isNull);
+    expect(p.physicalDifference, isNull);
+  });
+  test('append-only correction chain supersedes without rewriting original', () {
+    final recorded = DateTime.utc(2026, 9, 1, 23);
+    final original = ResaleCheckpoint(date: '2026-09-01',
+      key: 'water:name:agua 600 ml', physicalCount: 12, recordedAt: recorded);
+    final effective = resaleEffectiveCheckpoint(original, [
+      ResaleCheckpointCorrection(revision: 1, physicalCount: 10,
+        reason: 'Captura duplicada de dos botellas',
+        recordedAt: recorded.add(const Duration(hours: 1))),
+      ResaleCheckpointCorrection(revision: 2, physicalCount: 9,
+        reason: 'Revisado contra hoja firmada',
+        recordedAt: recorded.add(const Duration(hours: 2))),
+    ]);
+    expect(original.physicalCount, 12);
+    expect(effective.physicalCount, 9);
+    expect(effective.correctionRevision, 2);
+    expect(effective.confirmed, isTrue);
+    expect(effective.originalPhysicalCount, 12);
+    expect(effective.corrections.map((c) => c.physicalCount), [10, 9]);
+    final pWithCorrection = audit([buy('2026-09-02', 30)],
+      [out('2026-09-02', 20)], checkpoints: [
+        effective,
+        const ResaleCheckpoint(date: '2026-09-03',
+          key: 'water:name:agua 600 ml', physicalCount: 17),
+      ]).products.single;
+    expect(pWithCorrection.checkpoints, hasLength(2));
+    expect(pWithCorrection.physicalDifference, -2);
+    final late = resaleEffectiveCheckpoint(original, [
+      ResaleCheckpointCorrection(revision: 1, physicalCount: 8,
+        reason: 'Revisión tardía del registro físico',
+        recordedAt: recorded.add(const Duration(days: 30))),
+    ]);
+    expect(late.physicalCount, 8);
+    expect(late.confirmed, isFalse);
+    final p = audit([buy('2026-09-02', 30)], [], checkpoints: [late]).products.single;
     expect(p.theoreticalInventory, isNull);
   });
   test('negative theoretical relative balance means data integrity review', () {
