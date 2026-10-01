@@ -62,10 +62,57 @@ class CancellationCashAuditRow {
   bool get strongCashCancellationCandidate =>
       fullOrderCancelled && hasNoPaymentRecord && passedThroughKitchen;
 
-  bool initiatedBy(String employeeName) {
+  bool initiatedBy(String employeeName) =>
+      cancelledAmountInitiatedBy(employeeName) > 0;
+
+  double cancelledAmountInitiatedBy(String employeeName) {
     final needle = _normalizeName(employeeName);
-    if (needle.isEmpty) return true;
-    return initiatedByNames.any((name) => _normalizeName(name).contains(needle));
+    if (needle.isEmpty) return cancelledAmount;
+
+    var amount = 0.0;
+    var attributedItems = 0;
+    for (final item in cancelledItems) {
+      final requestedBy = item.cancelRequestedByEmployeeName?.trim();
+      final directBy = item.cancelledByEmployeeName?.trim();
+      final initiator = requestedBy != null && requestedBy.isNotEmpty
+          ? requestedBy
+          : directBy ?? '';
+      if (_normalizeName(initiator).contains(needle)) {
+        amount += item.total;
+        attributedItems++;
+      }
+    }
+
+    if (attributedItems == 0) {
+      final orderActor = order.cancelledByEmployeeName?.trim() ?? '';
+      if (_normalizeName(orderActor).contains(needle)) return cancelledAmount;
+    }
+    return amount;
+  }
+
+  int cancelledQtyInitiatedBy(String employeeName) {
+    final needle = _normalizeName(employeeName);
+    if (needle.isEmpty) return cancelledQty;
+
+    var qty = 0;
+    var attributedItems = 0;
+    for (final item in cancelledItems) {
+      final requestedBy = item.cancelRequestedByEmployeeName?.trim();
+      final directBy = item.cancelledByEmployeeName?.trim();
+      final initiator = requestedBy != null && requestedBy.isNotEmpty
+          ? requestedBy
+          : directBy ?? '';
+      if (_normalizeName(initiator).contains(needle)) {
+        qty += item.qty;
+        attributedItems++;
+      }
+    }
+
+    if (attributedItems == 0) {
+      final orderActor = order.cancelledByEmployeeName?.trim() ?? '';
+      if (_normalizeName(orderActor).contains(needle)) return cancelledQty;
+    }
+    return qty;
   }
 
   String get folio {
@@ -129,16 +176,24 @@ class CancellationCashAuditDay {
   List<CancellationCashAuditRow> initiatedBy(String employeeName) =>
       rows.where((row) => row.initiatedBy(employeeName)).toList();
 
-  double cancelledBy(String employeeName) => initiatedBy(employeeName)
-      .fold<double>(0, (sum, row) => sum + row.cancelledAmount);
+  double cancelledBy(String employeeName) => rows.fold<double>(
+        0,
+        (sum, row) => sum + row.cancelledAmountInitiatedBy(employeeName),
+      );
 
-  double strongCandidateAmountBy(String employeeName) => initiatedBy(employeeName)
+  double strongCandidateAmountBy(String employeeName) => rows
       .where((row) => row.strongCashCancellationCandidate)
-      .fold<double>(0, (sum, row) => sum + row.cancelledAmount);
+      .fold<double>(
+        0,
+        (sum, row) => sum + row.cancelledAmountInitiatedBy(employeeName),
+      );
 
-  double noPaymentAmountBy(String employeeName) => initiatedBy(employeeName)
+  double noPaymentAmountBy(String employeeName) => rows
       .where((row) => row.hasNoPaymentRecord)
-      .fold<double>(0, (sum, row) => sum + row.cancelledAmount);
+      .fold<double>(
+        0,
+        (sum, row) => sum + row.cancelledAmountInitiatedBy(employeeName),
+      );
 
   /// Hypothesis-only arithmetic:
   /// if these no-payment cancellations were actually cash collected but not
@@ -289,6 +344,7 @@ List<CancellationCashAuditDay> buildCancellationCashAuditDays({
 List<CancellationAmountMatch> findCancellationAmountMatches({
   required Iterable<CancellationCashAuditRow> rows,
   required double target,
+  String employeeName = '',
   int maxItems = 4,
   int maxResults = 10,
   double tolerance = 2,
@@ -296,7 +352,7 @@ List<CancellationAmountMatch> findCancellationAmountMatches({
   if (target <= 0 || maxItems <= 0 || maxResults <= 0) return const [];
 
   final candidates = rows
-      .where((row) => row.cancelledAmount > 0)
+      .where((row) => row.cancelledAmountInitiatedBy(employeeName) > 0)
       .take(25)
       .toList(growable: false);
   final matches = <CancellationAmountMatch>[];
@@ -315,7 +371,8 @@ List<CancellationAmountMatch> findCancellationAmountMatches({
 
     for (var i = start; i < candidates.length; i++) {
       final row = candidates[i];
-      final nextTotal = total + row.cancelledAmount;
+      final nextTotal =
+          total + row.cancelledAmountInitiatedBy(employeeName);
       if (nextTotal > target + tolerance + 500) continue;
       picked.add(row);
       walk(i + 1, picked, nextTotal);
