@@ -46,6 +46,7 @@ import 'kitchen_admin_screen.dart';
 import 'live_operations_screen.dart';
 import 'order_platform_catalog_screen.dart';
 import 'operation_reset_screen.dart';
+import 'rapid_card_sales_audit_view.dart';
 import 'product_category_catalog_screen.dart';
 import 'product_catalog_screen.dart';
 import 'purchase_admin_screen.dart';
@@ -85,6 +86,7 @@ enum _ReportKind {
   productStockOuts,
   saleFolios,
   salesDiscrepancyAudit,
+  rapidCardSalesAudit,
   discountsByDay,
   visitClassification,
   cashSchedule,
@@ -101,6 +103,7 @@ bool _reportNeedsCanonicalItems(_ReportKind kind) {
     _ReportKind.cancellations ||
     _ReportKind.saleFolios ||
     _ReportKind.salesDiscrepancyAudit ||
+    _ReportKind.rapidCardSalesAudit ||
     _ReportKind.discountsByDay => true,
     _ => false,
   };
@@ -2704,6 +2707,13 @@ class _ReportsSectionState extends State<_ReportsSection> {
     }
     if (widget.reportKind == _ReportKind.salesDiscrepancyAudit) {
       return _buildSalesDiscrepancyAuditReport(context);
+    }
+    if (widget.reportKind == _ReportKind.rapidCardSalesAudit) {
+      return RapidCardSalesAuditView(
+        reportData: widget.reportData,
+        startBusinessDate: widget.startBusinessDate,
+        endBusinessDate: widget.endBusinessDate,
+      );
     }
     if (widget.reportKind == _ReportKind.discountsByDay) {
       return _DiscountsByDayReportView(
@@ -6011,6 +6021,12 @@ List<_NavItem> _reportNavItems(Employee? employee) {
     ),
     const _NavItem(
       _BackofficeSection.reports,
+      Icons.speed_outlined,
+      'Auditoria de cobros rapidos con tarjeta',
+      reportKind: _ReportKind.rapidCardSalesAudit,
+    ),
+    const _NavItem(
+      _BackofficeSection.reports,
       Icons.local_offer_outlined,
       'Descuentos por dia',
       reportKind: _ReportKind.discountsByDay,
@@ -6110,6 +6126,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.productStockOuts => 'Productos agotados',
     _ReportKind.saleFolios => 'Folios de venta',
     _ReportKind.salesDiscrepancyAudit => 'Auditoria de discrepancias de ventas',
+    _ReportKind.rapidCardSalesAudit => 'Auditoria de cobros rapidos con tarjeta',
     _ReportKind.discountsByDay => 'Descuentos por dia',
     _ReportKind.visitClassification => 'Visitas nuevas y recurrentes',
     _ReportKind.cashSchedule => 'Horarios de apertura y cierre',
@@ -6257,6 +6274,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     ],
     _ReportKind.saleFolios => _saleFolioAuditHeaders,
     _ReportKind.salesDiscrepancyAudit => _salesAuditHeaders,
+    _ReportKind.rapidCardSalesAudit => const [],
     _ReportKind.discountsByDay => _discountsByDayCsvHeaders,
     _ReportKind.visitClassification => visitClassificationCsvHeaders,
     _ReportKind.cashSchedule => const [],
@@ -6621,6 +6639,7 @@ Future<List<List<String>>> _reportRows(
     case _ReportKind.saleFolios:
       return const [];
     case _ReportKind.salesDiscrepancyAudit:
+    case _ReportKind.rapidCardSalesAudit:
       return const [];
     case _ReportKind.discountsByDay:
     case _ReportKind.visitClassification:
