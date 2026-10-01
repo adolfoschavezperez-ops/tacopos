@@ -220,6 +220,242 @@ void main() {
       }
     });
 
+    test('never uses investigation-period cycles to manufacture a baseline', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      final dates = <DateTime>[
+        DateTime(2026, 8, 30),
+        DateTime(2026, 8, 31),
+        DateTime(2026, 9, 1),
+        DateTime(2026, 9, 2),
+        DateTime(2026, 9, 3),
+        DateTime(2026, 9, 4),
+      ];
+      for (var i = 0; i < dates.length; i++) {
+        final key = _dateKey(dates[i]);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'strict-$i',
+          purchaseDate: dates[i],
+          businessDate: key,
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          stockItemId: 'bistec',
+          stockItemName: 'Bistec',
+          quantity: 1,
+          unit: 'kg',
+        ));
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'taco-bistec',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: 20,
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+
+      final audit = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-08-30',
+        historyEnd: '2026-09-04',
+        investigationStart: '2026-09-01',
+      );
+
+      expect(audit.models, isEmpty,
+          reason: 'Two pre-investigation purchase days are not enough; '
+              'September must not be reused to train normality.');
+    });
+
+    test('tortilla known consumption counts open days and excludes Sunday', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var day = 24; day <= 31; day++) {
+        final date = DateTime(2026, 8, day);
+        final key = _dateKey(date);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'tortilla-$day',
+          purchaseDate: date,
+          businessDate: key,
+          supplierName: 'NOE tortillas',
+          itemName: 'Tortilla de maiz',
+          stockItemId: 'tortilla-maiz',
+          stockItemName: 'Tortilla de maiz',
+          quantity: 2,
+          unit: 'kg',
+        ));
+        if (date.weekday != DateTime.sunday) {
+          sales.add(PredictiveSaleLine(
+            businessDate: key,
+            productId: 'taco-bistec',
+            productName: 'Taco Bistec',
+            categoryName: 'Tacos',
+            quantity: 20,
+            kind: PredictiveSaleKind.paidSale,
+            ingredientNames: const ['Tortilla de maiz'],
+          ));
+        }
+      }
+      purchases.add(PredictivePurchaseLine(
+        purchaseId: 'tortilla-sep1',
+        purchaseDate: DateTime(2026, 9, 1),
+        businessDate: '2026-09-01',
+        supplierName: 'NOE tortillas',
+        itemName: 'Tortilla de maiz',
+        stockItemId: 'tortilla-maiz',
+        stockItemName: 'Tortilla de maiz',
+        quantity: 2,
+        unit: 'kg',
+      ));
+      sales.add(const PredictiveSaleLine(
+        businessDate: '2026-09-01',
+        productId: 'taco-bistec',
+        productName: 'Taco Bistec',
+        categoryName: 'Tacos',
+        quantity: 20,
+        kind: PredictiveSaleKind.paidSale,
+        ingredientNames: ['Tortilla de maiz'],
+      ));
+
+      final audit = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-08-24',
+        historyEnd: '2026-09-01',
+        investigationStart: '2026-09-01',
+      );
+
+      expect(audit.models, hasLength(1));
+      final model = audit.models.single;
+      final sunday = model.cycles.firstWhere(
+        (cycle) =>
+            cycle.startBusinessDate == '2026-08-30' &&
+            cycle.endBusinessDate == '2026-08-30',
+      );
+      final monday = model.cycles.firstWhere(
+        (cycle) =>
+            cycle.startBusinessDate == '2026-08-31' &&
+            cycle.endBusinessDate == '2026-08-31',
+      );
+      expect(sunday.operatingDays, 0);
+      expect(sunday.knownOperationalBase, 0);
+      expect(monday.operatingDays, 1);
+      expect(monday.knownOperationalBase, closeTo(1000, 0.001));
+    });
+
+    test('low-confidence models cannot create strong audit findings', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      final quantities = <int>[18, 20, 22, 50, 50];
+      for (var i = 0; i < quantities.length; i++) {
+        final date = DateTime(2026, 8, 24 + i);
+        final key = _dateKey(date);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'low-$i',
+          purchaseDate: date,
+          businessDate: key,
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          stockItemId: 'bistec',
+          stockItemName: 'Bistec',
+          quantity: i >= 3 ? 2.5 : quantities[i] * 0.05,
+          unit: 'kg',
+        ));
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'taco-bistec',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: quantities[i],
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+
+      final audit = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-08-24',
+        historyEnd: '2026-08-28',
+        investigationStart: '2026-08-27',
+      );
+
+      expect(audit.models, hasLength(1));
+      final model = audit.models.single;
+      expect(model.confidence, 'Baja');
+      expect(model.investigationCycles, isNotEmpty);
+      expect(
+        model.investigationCycles.map((cycle) => cycle.anomalyScore).reduce(
+              (a, b) => a > b ? a : b,
+            ),
+        lessThan(35),
+      );
+      expect(audit.highAnomalyCycles, 0);
+      expect(audit.recentPositiveResidualAuditableWeightGrams, 0);
+    });
+
+    test('extreme bulk purchase is separated from auditable residual', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      final quantities = <int>[16, 20, 18, 24, 22, 26, 19, 23, 21, 25, 20, 20];
+      for (var i = 0; i < quantities.length; i++) {
+        final date = i < 10
+            ? DateTime(2026, 8, 15 + i)
+            : DateTime(2026, 9, 1 + (i - 10));
+        final key = _dateKey(date);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'bulk-$i',
+          purchaseDate: date,
+          businessDate: key,
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          stockItemId: 'bistec',
+          stockItemName: 'Bistec',
+          quantity: i >= 10 ? 75 : quantities[i] * 0.05,
+          unit: 'kg',
+        ));
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'taco-bistec',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: quantities[i],
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+
+      final audit = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-08-15',
+        historyEnd: '2026-09-02',
+        investigationStart: '2026-09-01',
+      );
+
+      expect(audit.models, hasLength(1));
+      final model = audit.models.single;
+      final bulk = model.investigationCycles.firstWhere(
+        (cycle) => cycle.purchasedBase > 70000,
+      );
+      expect(bulk.purchaseMagnitudeOutlier, isTrue);
+      expect(bulk.anomalyScore, lessThan(35));
+      expect(audit.recentPurchaseMagnitudeOutliers, greaterThanOrEqualTo(1));
+      expect(
+        audit.recentPositiveResidualBulkOutlierWeightGrams,
+        greaterThan(50000),
+      );
+    });
+
     test('recognizes tortilla and target suppliers', () {
       final tortilla = detectPredictiveIngredient(
         itemName: 'Tortilla de maíz',
