@@ -802,6 +802,7 @@ class _PredictiveConsumptionAuditViewState
       'section',
       'ingredient',
       'supplier',
+      'baseUnit',
       'confidence',
       'alignment',
       'historyStart',
@@ -812,6 +813,7 @@ class _PredictiveConsumptionAuditViewState
       'cycleEnd',
       'purchasedBase',
       'predictedPaidBase',
+      'residualPaidBase',
       'cancelledKitchenExplainedBase',
       'predictedOperationalBase',
       'expectedLowBase',
@@ -836,11 +838,13 @@ class _PredictiveConsumptionAuditViewState
           'coefficient',
           model.definition.name,
           model.supplierNames.join(' | '),
+          model.baseUnitLabel,
           model.confidence,
           _alignment(model.alignment),
           audit.historyStart,
           audit.historyEnd,
           audit.investigationStart,
+          '',
           '',
           '',
           '',
@@ -868,6 +872,7 @@ class _PredictiveConsumptionAuditViewState
           'cycle',
           model.definition.name,
           model.supplierNames.join(' | '),
+          model.baseUnitLabel,
           model.confidence,
           _alignment(model.alignment),
           audit.historyStart,
@@ -878,6 +883,7 @@ class _PredictiveConsumptionAuditViewState
           cycle.endBusinessDate,
           cycle.purchasedBase.toStringAsFixed(4),
           cycle.predictedPaidBase.toStringAsFixed(4),
+          cycle.residualPaidBase.toStringAsFixed(4),
           cycle.cancelledKitchenExplainedBase.toStringAsFixed(4),
           cycle.predictedOperationalBase.toStringAsFixed(4),
           cycle.expectedLowBase.toStringAsFixed(4),
@@ -1092,7 +1098,7 @@ String _equivalentUnits(
   if (perUnit <= 0) return '-';
   final value = cycle.residualOperationalBase / perUnit;
   final sign = value > 0 ? '+' : '';
-  return '$sign${value.toStringAsFixed(1)}';
+  return '$sign${value.toStringAsFixed(1)} equiv. estadístico';
 }
 
 String _equivalentRecentUnits(PredictiveIngredientModel model) {
@@ -1100,7 +1106,7 @@ String _equivalentRecentUnits(PredictiveIngredientModel model) {
   if (perUnit <= 0) return 'No disponible';
   final value = model.recentResidualOperationalBase / perUnit;
   final sign = value > 0 ? '+' : '';
-  return '$sign${value.toStringAsFixed(1)} unidades aprox.';
+  return '$sign${value.toStringAsFixed(1)} equiv. estadístico';
 }
 
 String _money(double value) => NumberFormat.currency(

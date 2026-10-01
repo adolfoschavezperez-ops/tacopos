@@ -1,0 +1,24 @@
+name: Predictive consumption audit validation
+
+on:
+  push:
+    branches:
+      - astra/audit-predictive-consumption
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.38.4'
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build web --release --base-href "/tacopos/" --no-wasm-dry-run

@@ -101,6 +101,12 @@ enum PredictiveIngredientKind { meat, tortillaCorn, tortillaFlour, tortillaAny }
 
 const predictiveIngredientDefinitions = <PredictiveIngredientDefinition>[
   PredictiveIngredientDefinition(
+    key: 'bistec_laminado',
+    name: 'Bistec Laminado',
+    kind: PredictiveIngredientKind.meat,
+    aliases: ['bistec laminado', 'bistek laminado', 'bisteck laminado'],
+  ),
+  PredictiveIngredientDefinition(
     key: 'bistec',
     name: 'Bistec',
     kind: PredictiveIngredientKind.meat,
@@ -575,7 +581,10 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     );
 
     final candidateKeys = _selectFeatureKeys(
-      cycles: [...forward, ...replenishment],
+      cycles: [
+        ...forward.where((cycle) => cycle.endDate.compareTo(investigationStart) < 0),
+        ...replenishment.where((cycle) => cycle.endDate.compareTo(investigationStart) < 0),
+      ],
       productNames: productNames,
     );
     if (candidateKeys.isEmpty) continue;
@@ -618,9 +627,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
         ? 'Historico previo limpio: faltante <= 20 y cancelaciones controladas'
         : trainedBeforeInvestigation
             ? 'Historico previo al periodo de investigacion'
-            : cleanTraining
-                ? 'Historico limpio disponible por falta de ciclos previos suficientes'
-                : 'Historico robusto completo por falta de ciclos previos suficientes';
+            : 'Sin historico previo suficiente para investigar';
 
     final yieldRate = _resolveYieldRate(definition, lines, yields);
     final totalTrainingUnits = candidateKeys.fold<double>(
@@ -668,6 +675,8 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       (a, b) => b.unitsInTraining.compareTo(a.unitsInTraining),
     );
 
+    final identifiable = confidenceEligible(training.length, candidateKeys.length) &&
+        _independentFeatures(training, candidateKeys);
     final outputCycles = allCycles.map((cycle) {
       final predictedPaid = _predictCycle(cycle, fit);
       final cancelledExplained = fit.coefficients.entries.fold<double>(
@@ -682,10 +691,17 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       final residualPercent = predictedOperational.abs() < 0.001
           ? 0.0
           : residualOperational / predictedOperational;
-      final robustZ = fit.residualScale <= 0
+      // In-sample residuals can be virtually zero with a small design matrix.
+      // A floor prevents tiny absolute differences from looking decisive.
+      final effectiveScale = math.max(
+        fit.residualScale,
+        training.fold<double>(0, (sum, row) => sum + row.target) /
+            training.length * 0.10,
+      );
+      final robustZ = effectiveScale <= 0
           ? 0.0
-          : residualOperational / fit.residualScale;
-      final intervalHalfWidth = fit.residualScale * 1.96;
+          : residualOperational / effectiveScale;
+      final intervalHalfWidth = effectiveScale * 1.96;
       final expectedLow = math
           .max(0.0, predictedOperational - intervalHalfWidth)
           .toDouble();
@@ -712,7 +728,10 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
         expectedLowBase: expectedLow,
         expectedHighBase: expectedHigh,
         robustZ: robustZ,
-        anomalyScore: score,
+        anomalyScore: cycle.endDate.compareTo(investigationStart) >= 0 &&
+                identifiable
+            ? score
+            : 0,
         shortageAmount: cycle.shortage,
         paidUnits: cycle.paidUnits,
         cancelledKitchenUnits: cycle.cancelledUnits,
@@ -730,12 +749,12 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       ..sort((a, b) => b.purchaseDate.compareTo(a.purchaseDate));
 
     final recent = outputCycles.where((cycle) => cycle.isInvestigationPeriod);
-    final confidence = _modelConfidence(
+    final confidence = identifiable ? _modelConfidence(
       trainingCount: training.length,
       rSquared: fit.rSquared,
       normalizedMae: fit.normalizedMae,
       coefficientCount: coefficients.length,
-    );
+    ) : 'No identificable';
 
     models.add(
       PredictiveIngredientModel(
@@ -795,7 +814,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     'El modelo aprende de ciclos de reposicion, no iguala compra del dia con venta del dia.',
     'Prueba automaticamente si la compra abastece ventas futuras o repone consumo previo y conserva la alineacion con menor error robusto.',
     'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta para que dias atipicos no definan el consumo normal.',
-    'Cuando hay al menos 3 a 5 ciclos suficientes, el entrenamiento prefiere periodos con faltante de caja <= 20 y cancelaciones de cocina controladas para construir una linea base mas limpia.',
+    'El entrenamiento requiere ciclos cerrados previos; para puntuar alertas exige al menos seis ciclos, más observaciones que coeficientes y columnas distinguibles.',
     'Sin inventario fisico no puede demostrarse una fuga: una discrepancia tambien puede ser merma, cambio de stock inicial/final, porcion distinta o captura incompleta.',
     'Las cancelaciones que tocaron cocina se muestran por separado para medir cuanto consumo podrian explicar sin contarlas como venta.',
     'El periodo de investigacion se aplica a las fechas de consumo cubiertas por cada ciclo, no solo a la fecha de compra, para no contaminar el entrenamiento con ventas posteriores al corte.',
@@ -847,7 +866,8 @@ PredictiveIngredientDefinition? detectPredictiveIngredient({
       (item) => item.kind == PredictiveIngredientKind.meat,
     )) {
       if (definition.aliases.any(
-        (alias) => item.contains(normalizeYieldName(alias)),
+        (alias) => item.contains(normalizeYieldName(alias)) &&
+            (definition.key != 'bistec' || !item.contains('laminado')),
       )) {
         return definition;
       }
@@ -858,7 +878,8 @@ PredictiveIngredientDefinition? detectPredictiveIngredient({
     (item) => item.kind == PredictiveIngredientKind.meat,
   )) {
     if (definition.aliases.any(
-      (alias) => item.contains(normalizeYieldName(alias)),
+      (alias) => item.contains(normalizeYieldName(alias)) &&
+          (definition.key != 'bistec' || !item.contains('laminado')),
     )) {
       return definition;
     }
@@ -920,24 +941,35 @@ bool _saleMatchesIngredient(
   final ingredients = sale.ingredientNames.map(normalizeYieldName).toList();
 
   bool ingredientHas(String token) =>
-      ingredients.any((name) => name.contains(token));
+      ingredients.any((name) => name == token || name.endsWith(' $token'));
 
   switch (definition.kind) {
     case PredictiveIngredientKind.meat:
+      if (definition.key == 'bistec' &&
+          (product.contains('laminado') ||
+              ingredients.any((name) => name.contains('laminado')))) {
+        return false;
+      }
       for (final alias in definition.aliases.map(normalizeYieldName)) {
-        if (product.contains(alias) || ingredientHas(alias)) return true;
+        if (ingredients.isNotEmpty
+            ? ingredientHas(alias)
+            : product.contains(alias)) {
+          return true;
+        }
       }
       return false;
     case PredictiveIngredientKind.tortillaFlour:
-      return ingredientHas('tortilla de harina') ||
-          ingredientHas('tortilla harina') ||
-          product.contains('gringa') ||
-          category.contains('gringa');
+      if (ingredients.isNotEmpty) {
+        return ingredientHas('tortilla de harina') ||
+            ingredientHas('tortilla harina');
+      }
+      return product.contains('gringa') || category.contains('gringa');
     case PredictiveIngredientKind.tortillaCorn:
       if (ingredientHas('tortilla de maiz') ||
           ingredientHas('tortilla maiz')) {
         return true;
       }
+      if (ingredients.isNotEmpty) return false;
       final isGringa = product.contains('gringa') || category.contains('gringa');
       final isTaco =
           product.contains('taco') ||
@@ -999,12 +1031,36 @@ List<_CycleInput> _trainingCycles(
   if (previous.length >= 5) return previous;
   if (cleanPrevious.length >= 3) return cleanPrevious;
 
-  final all = cycles.where((cycle) => cycle.paidUnits > 0).toList();
-  final cleanAll = all.where(_isCleanTrainingCycle).toList(growable: false);
-  if (cleanAll.length >= 3) return cleanAll;
-  if (all.length <= 3) return all;
-  final keep = math.max(3, (all.length * 0.8).floor());
-  return all.take(keep).toList(growable: false);
+  // Never fit on the very cycles being investigated. A model that cannot be
+  // trained before the cut is unavailable rather than reassuringly precise.
+  return previous;
+}
+
+bool confidenceEligible(int cycles, int features) =>
+    cycles >= 6 && cycles > features + 1;
+
+bool _independentFeatures(List<_CycleInput> cycles, List<String> keys) {
+  final columns = <List<double>>[
+    for (final key in keys)
+      [for (final cycle in cycles) cycle.paid[key] ?? 0],
+    [for (final cycle in cycles) cycle.days.toDouble()],
+  ];
+  final basis = <List<double>>[];
+  for (final column in columns) {
+    final length = math.sqrt(_dot(column, column));
+    if (length <= 0.000001) return false;
+    final residual = [for (final value in column) value / length];
+    for (final previous in basis) {
+      final projection = _dot(residual, previous);
+      for (var i = 0; i < residual.length; i++) {
+        residual[i] -= projection * previous[i];
+      }
+    }
+    final remaining = math.sqrt(_dot(residual, residual));
+    if (remaining < 0.10) return false;
+    basis.add([for (final value in residual) value / remaining]);
+  }
+  return true;
 }
 
 bool _isCleanTrainingCycle(_CycleInput cycle) {

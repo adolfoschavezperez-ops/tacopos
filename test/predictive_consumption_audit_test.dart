@@ -234,6 +234,98 @@ void main() {
       expect(meat?.key, 'bistec');
       expect(predictiveUnitFamily('kg'), 'weight');
       expect(predictiveBaseUnitLabel('weight'), 'g');
+      expect(
+        detectPredictiveIngredient(
+          itemName: 'Bisteck laminado',
+          supplierName: 'Omar',
+        )?.key,
+        'bistec_laminado',
+      );
+    });
+
+    test('never trains on a cycle after investigation begins', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var i = 0; i < 9; i++) {
+        final date = DateTime(2026, 9, 24 + i);
+        final key = _dateKey(date);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'p-$i',
+          purchaseDate: date,
+          businessDate: key,
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          quantity: i >= 4 ? 10 : 1,
+          unit: 'kg',
+        ));
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'bistec',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: 20 + i,
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+      final audit = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-09-24',
+        historyEnd: '2026-10-02',
+        investigationStart: '2026-09-28',
+      );
+      expect(audit.models, hasLength(1));
+      expect(audit.models.single.trainingCycleCount, 4);
+      expect(audit.models.single.confidence, 'No identificable');
+      expect(
+        audit.models.single.investigationCycles.every(
+          (cycle) => cycle.anomalyScore == 0,
+        ),
+        isTrue,
+      );
+    });
+
+    test('perfectly correlated product and day cannot earn an alert', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var i = 0; i < 10; i++) {
+        final date = DateTime(2026, 9, 20 + i);
+        final key = _dateKey(date);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'p-$i',
+          purchaseDate: date,
+          businessDate: key,
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          quantity: i == 8 ? 10 : 1,
+          unit: 'kg',
+        ));
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'taco-bistec',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: 20,
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+      final audit = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-09-20',
+        historyEnd: '2026-09-29',
+        investigationStart: '2026-09-28',
+      );
+      final model = audit.models.single;
+      expect(model.confidence, 'No identificable');
+      expect(model.investigationCycles.every((cycle) => cycle.anomalyScore == 0),
+          isTrue);
     });
   });
 }

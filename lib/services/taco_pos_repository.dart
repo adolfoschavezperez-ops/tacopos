@@ -5711,7 +5711,6 @@ class TacoPosRepository {
     final orderIds = orders.map((order) => order.id).toSet();
     final itemsByOrder = await _predictiveItemsByOrder(
       orderIds: orderIds,
-      branchId: session.currentBranchId,
     );
 
     // Historical order items may predate recipe snapshots. Use the current
@@ -5750,14 +5749,19 @@ class TacoPosRepository {
             item.cookingAt != null ||
             item.readyAt != null ||
             (item.kitchenBatchId?.trim().isNotEmpty ?? false);
-        final ingredientNames = <String>{
+        final historicalIngredientNames = <String>{
           if (item.kitchenStockItemName?.trim().isNotEmpty == true)
             item.kitchenStockItemName!.trim(),
           ...item.recipeItems
               .map((recipe) => recipe.kitchenStockItemName.trim())
               .where((name) => name.isNotEmpty),
-          ...?recipeIngredientNamesByProduct[item.productId],
-        }.toList(growable: false);
+        };
+        // Current recipes describe today's product, not necessarily a sale
+        // from months ago. Never combine them with an existing item snapshot.
+        final ingredientNames = historicalIngredientNames.isNotEmpty
+            ? historicalIngredientNames.toList(growable: false)
+            : (recipeIngredientNamesByProduct[item.productId] ??
+                  const <String>[]);
 
         if (item.isCancelled && kitchenTouched) {
           saleLines.add(
@@ -5814,38 +5818,22 @@ class TacoPosRepository {
         .where('businessDate', isGreaterThanOrEqualTo: historyStart)
         .where('businessDate', isLessThanOrEqualTo: historyEnd)
         .get();
-    final cashByDate = <String, CashSession>{};
+    final cashByDate = <String, PredictiveCashDay>{};
     for (final doc in cashSnapshot.docs) {
       final cash = CashSession.fromDoc(doc);
-      if (!_matchesBranch(cash.branchId, session.currentBranchId)) continue;
-      final existing = cashByDate[cash.businessDate];
-      final currentRank =
-          cash.correctedAt ??
-          cash.closedAt ??
-          cash.updatedAt ??
-          cash.openedAt ??
-          cash.createdAt ??
-          DateTime(1970);
-      final existingRank =
-          existing?.correctedAt ??
-          existing?.closedAt ??
-          existing?.updatedAt ??
-          existing?.openedAt ??
-          existing?.createdAt ??
-          DateTime(1970);
-      if (existing == null || currentRank.isAfter(existingRank)) {
-        cashByDate[cash.businessDate] = cash;
+      if (!_matchesBranch(cash.branchId, session.currentBranchId) ||
+          !cash.isClosed) {
+        continue;
       }
+      final previous = cashByDate[cash.businessDate];
+      cashByDate[cash.businessDate] = PredictiveCashDay(
+        businessDate: cash.businessDate,
+        shortageAmount:
+            (previous?.shortageAmount ?? 0) + cash.shortageAmount,
+        netDifference: (previous?.netDifference ?? 0) + cash.netDifference,
+      );
     }
-    final cashDays = cashByDate.values
-        .map(
-          (cash) => PredictiveCashDay(
-            businessDate: cash.businessDate,
-            shortageAmount: cash.shortageAmount,
-            netDifference: cash.netDifference,
-          ),
-        )
-        .toList(growable: false);
+    final cashDays = cashByDate.values.toList(growable: false);
 
     final audit = buildPredictiveConsumptionAudit(
       purchaseLines: predictivePurchases,
@@ -5878,48 +5866,15 @@ class TacoPosRepository {
 
   Future<Map<String, List<OrderItem>>> _predictiveItemsByOrder({
     required Set<String> orderIds,
-    required String branchId,
   }) async {
     if (orderIds.isEmpty) return const <String, List<OrderItem>>{};
 
     final result = <String, List<OrderItem>>{};
-    try {
-      final snapshot = await _db
-          .collectionGroup('items')
-          .where('branchId', isEqualTo: branchId)
-          .get();
-      for (final doc in snapshot.docs) {
-        final orderRef = doc.reference.parent.parent;
-        if (orderRef == null || orderRef.parent.id != 'orders') continue;
-        if (!orderIds.contains(orderRef.id)) continue;
-        result
-            .putIfAbsent(orderRef.id, () => <OrderItem>[])
-            .add(OrderItem.fromDoc(doc));
-      }
-      for (final items in result.values) {
-        items.sort((a, b) {
-          final aAt = a.createdAt ?? a.updatedAt ?? DateTime(1970);
-          final bAt = b.createdAt ?? b.updatedAt ?? DateTime(1970);
-          return aAt.compareTo(bAt);
-        });
-      }
-    } catch (error) {
-      developer.log(
-        'CollectionGroup items no disponible; completando por orden: $error',
-        name: 'TacoPOS.predictiveConsumption',
-      );
-    }
-
-    // Historical documents can predate branchId on item docs. Never treat a
-    // partially populated collectionGroup result as complete: backfill every
-    // order that did not return item documents.
-    final missingOrderIds = orderIds
-        .where((orderId) => !result.containsKey(orderId))
-        .toList(growable: false);
-    if (missingOrderIds.isEmpty) return result;
-
+    // The collection-group filter cannot prove completeness: an order with
+    // one modern item and one legacy item lacking branchId would silently lose
+    // the latter. Read each already-scoped order's items instead.
     final entries = await runInBatches<String, (String, List<OrderItem>)>(
-      missingOrderIds,
+      orderIds.toList(growable: false),
       batchSize: 15,
       action: (orderId) async {
         final snapshot = await _ordersRef.doc(orderId).collection('items').get();
