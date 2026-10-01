@@ -1363,7 +1363,7 @@ String _cycleEvidence({
   }
   if (shortage > 0.01) {
     parts.add(
-      'faltante de caja del ciclo \\$\${shortage.toStringAsFixed(2)}',
+      'faltante de caja del ciclo \$${shortage.toStringAsFixed(2)}',
     );
   }
   return parts.isEmpty ? 'Sin discrepancia material' : parts.join(' · ');
