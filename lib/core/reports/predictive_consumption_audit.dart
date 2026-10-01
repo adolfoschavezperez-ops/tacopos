@@ -200,7 +200,9 @@ class PredictiveConsumptionCycle {
     required this.startBusinessDate,
     required this.endBusinessDate,
     required this.days,
+    required this.operatingDays,
     required this.purchasedBase,
+    required this.knownOperationalBase,
     required this.predictedPaidBase,
     required this.cancelledKitchenExplainedBase,
     required this.predictedOperationalBase,
@@ -216,13 +218,16 @@ class PredictiveConsumptionCycle {
     required this.cancelledKitchenUnits,
     required this.evidence,
     required this.isInvestigationPeriod,
+    required this.purchaseMagnitudeOutlier,
   });
 
   final String purchaseDate;
   final String startBusinessDate;
   final String endBusinessDate;
   final int days;
+  final int operatingDays;
   final double purchasedBase;
+  final double knownOperationalBase;
   final double predictedPaidBase;
   final double cancelledKitchenExplainedBase;
   final double predictedOperationalBase;
@@ -238,8 +243,10 @@ class PredictiveConsumptionCycle {
   final double cancelledKitchenUnits;
   final String evidence;
   final bool isInvestigationPeriod;
+  final bool purchaseMagnitudeOutlier;
 
   bool get isHighAnomaly => anomalyScore >= 70;
+  bool get isAuditEligible => anomalyScore >= 35 && !purchaseMagnitudeOutlier;
   bool get isMediumAnomaly => anomalyScore >= 45 && anomalyScore < 70;
 }
 
@@ -294,6 +301,8 @@ class PredictiveIngredientModel {
 
   bool get isWeight => unitFamily == 'weight';
   bool get isPieces => unitFamily == 'pieces';
+  bool get isAuditUsable => confidence == 'Alta' || confidence == 'Media';
+  bool get isExploratory => !isAuditUsable;
 
   List<PredictiveConsumptionCycle> get investigationCycles => cycles
       .where((cycle) => cycle.isInvestigationPeriod)
@@ -365,22 +374,35 @@ class PredictiveConsumptionAudit {
   final List<String> notes;
 
   int get highAnomalyCycles =>
-      models.fold(0, (sum, model) => sum + model.recentHighAnomalies);
+      models.where((model) => model.isAuditUsable)
+          .fold(0, (sum, model) => sum + model.recentHighAnomalies);
 
-  double get recentPositiveResidualWeightGrams => models
-      .where((model) => model.isWeight)
+  double _positiveResidualForConfidence(String confidence) => models
+      .where((model) => model.isWeight && model.confidence == confidence)
       .fold<double>(
         0,
         (sum, model) =>
-            sum +
-            math.max(0.0, model.recentResidualOperationalBase).toDouble(),
+            sum + math.max(0.0, model.recentResidualOperationalBase).toDouble(),
       );
+
+  double get recentPositiveResidualHighWeightGrams =>
+      _positiveResidualForConfidence('Alta');
+  double get recentPositiveResidualMediumWeightGrams =>
+      _positiveResidualForConfidence('Media');
+  double get recentPositiveResidualLowWeightGrams =>
+      _positiveResidualForConfidence('Baja');
+  double get recentPositiveResidualAuditableWeightGrams =>
+      recentPositiveResidualHighWeightGrams +
+      recentPositiveResidualMediumWeightGrams;
+  double get recentPositiveResidualWeightGrams =>
+      recentPositiveResidualAuditableWeightGrams +
+      recentPositiveResidualLowWeightGrams;
 
   List<PredictiveConsumptionCycleFinding> get rankedFindings {
     final findings = <PredictiveConsumptionCycleFinding>[];
-    for (final model in models) {
+    for (final model in models.where((item) => item.isAuditUsable)) {
       for (final cycle in model.investigationCycles) {
-        if (cycle.anomalyScore < 35) continue;
+        if (!cycle.isAuditEligible) continue;
         findings.add(
           PredictiveConsumptionCycleFinding(
             ingredientName: model.definition.name,
@@ -432,7 +454,9 @@ class _CycleInput {
     required this.startDate,
     required this.endDate,
     required this.days,
+    required this.operatingDays,
     required this.target,
+    required this.knownOperationalBase,
     required this.paid,
     required this.cancelled,
     required this.shortage,
@@ -442,7 +466,9 @@ class _CycleInput {
   final String startDate;
   final String endDate;
   final int days;
+  final int operatingDays;
   final double target;
+  final double knownOperationalBase;
   final Map<String, double> paid;
   final Map<String, double> cancelled;
   final double shortage;
