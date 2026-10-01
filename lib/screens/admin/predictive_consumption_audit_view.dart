@@ -1179,6 +1179,10 @@ class _PredictiveConsumptionAuditViewState
       'cookedBasePerUnit',
       'trainingUnits',
       'plausibility',
+      'knownOperationalBase',
+      'operatingDays',
+      'purchaseMagnitudeOutlier',
+      'auditUse',
       'evidence',
     ];
 
@@ -1214,6 +1218,10 @@ class _PredictiveConsumptionAuditViewState
           coefficient.unitsInTraining.toStringAsFixed(2),
           coefficient.plausibility,
           '',
+          '',
+          '',
+          model.isAuditUsable ? 'auditable' : 'exploratory',
+          '',
         ]);
       }
       for (final cycle in model.cycles) {
@@ -1245,6 +1253,10 @@ class _PredictiveConsumptionAuditViewState
           '',
           '',
           '',
+          cycle.knownOperationalBase.toStringAsFixed(4),
+          '${cycle.operatingDays}',
+          cycle.purchaseMagnitudeOutlier ? 'true' : 'false',
+          model.isAuditUsable ? 'auditable' : 'exploratory',
           cycle.evidence,
         ]);
       }
