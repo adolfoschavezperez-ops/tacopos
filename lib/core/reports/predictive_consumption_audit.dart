@@ -639,18 +639,11 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       continue;
     }
 
-    final trainedBeforeInvestigation = training.every(
-      (cycle) => cycle.endDate.compareTo(investigationStart) < 0,
-    );
     final cleanTraining =
         training.isNotEmpty && training.every(_isCleanTrainingCycle);
-    final baselineMode = trainedBeforeInvestigation && cleanTraining
+    final baselineMode = cleanTraining
         ? 'Historico previo limpio: faltante <= 20 y cancelaciones controladas'
-        : trainedBeforeInvestigation
-            ? 'Historico previo al periodo de investigacion'
-            : cleanTraining
-                ? 'Historico limpio disponible por falta de ciclos previos suficientes'
-                : 'Historico robusto completo por falta de ciclos previos suficientes';
+        : 'Historico previo al periodo de investigacion (sin usar septiembre)';
 
     final yieldRate = _resolveYieldRate(definition, lines, yields);
     final totalTrainingUnits = candidateKeys.fold<double>(
@@ -1019,22 +1012,16 @@ List<_CycleInput> _trainingCycles(
       )
       .toList();
 
-  // Prefer historically cleaner periods when there is enough evidence.
-  // This keeps recurrent cash/cancellation anomalies from teaching the model
-  // that an abnormal operating pattern is "normal".
+  // The primary baseline is strictly pre-investigation. Never use cycles from
+  // the investigated period to manufacture enough observations: insufficient
+  // history must remain insufficient rather than teaching the anomaly as normal.
   final cleanPrevious = previous
       .where(_isCleanTrainingCycle)
       .toList(growable: false);
   if (cleanPrevious.length >= 5) return cleanPrevious;
   if (previous.length >= 5) return previous;
   if (cleanPrevious.length >= 3) return cleanPrevious;
-
-  final all = cycles.where((cycle) => cycle.paidUnits > 0).toList();
-  final cleanAll = all.where(_isCleanTrainingCycle).toList(growable: false);
-  if (cleanAll.length >= 3) return cleanAll;
-  if (all.length <= 3) return all;
-  final keep = math.max(3, (all.length * 0.8).floor());
-  return all.take(keep).toList(growable: false);
+  return previous;
 }
 
 bool _isCleanTrainingCycle(_CycleInput cycle) {
