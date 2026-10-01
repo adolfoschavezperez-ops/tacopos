@@ -33,6 +33,7 @@ import '../core/reports/finance_dashboard.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
 import '../core/reports/predictive_consumption_audit.dart';
+import '../core/reports/unit_reconciliation_audit.dart';
 import '../core/reports/report_data_bundle.dart';
 import '../core/reports/report_performance_tracer.dart';
 import '../core/reports/yield_profit_report.dart';
@@ -1363,6 +1364,9 @@ class TacoPosRepository {
 
   CollectionReference<Map<String, dynamic>> get _supplierPurchasesRef =>
       _restaurantRef.collection('supplierPurchases');
+
+  CollectionReference<Map<String, dynamic>> get _resaleCheckpointsRef =>
+      _restaurantRef.collection('resaleCheckpoints');
 
   CollectionReference<Map<String, dynamic>> get _supplierPaymentsRef =>
       _restaurantRef.collection('supplierPayments');
@@ -5579,6 +5583,281 @@ class TacoPosRepository {
       );
     }
     return bundle;
+  }
+
+  Future<ResaleAudit> getResaleUnitAudit() async {
+    _requireYieldProfitAdmin();
+    final session = AppSession.instance;
+    final purchaseSnapshot = await _supplierPurchasesRef.get();
+    final purchases = purchaseSnapshot.docs.map(SupplierPurchase.fromDoc)
+        .where((p) => !p.isCancelled &&
+            _matchesBranch(p.branchId, session.currentBranchId) &&
+            resaleSupplierFamily(p.supplierName) != null).toList();
+    if (purchases.isEmpty) {
+      return const ResaleAudit(products: [], unmatchedPurchases: [],
+        unmatchedSales: [], notes: ['No hay compras activas de Aguas Fanny o Empanaditas en esta sucursal.']);
+    }
+    final entries = await runInBatches<SupplierPurchase,
+        (SupplierPurchase, List<SupplierPurchaseItem>)>(purchases,
+      batchSize: 15, action: (purchase) async {
+        final snapshot = await _supplierPurchasesRef.doc(purchase.id)
+            .collection('items').get();
+        return (purchase, snapshot.docs.map(SupplierPurchaseItem.fromDoc)
+            .where((item) => item.isActive && item.quantity > 0).toList());
+      });
+    final lines = <ResalePurchase>[];
+    final end = _currentBusinessDate();
+    for (final entry in entries) {
+      final explicitDate = entry.$1.businessDate?.trim().isNotEmpty == true
+          ? entry.$1.businessDate!.trim()
+          : _businessDateFor(entry.$1.purchaseDate);
+      final date = RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(explicitDate)
+          ? explicitDate : _businessDateFor(entry.$1.purchaseDate);
+      if (date.compareTo(end) > 0) continue;
+      for (final item in entry.$2) {
+        lines.add(ResalePurchase(id: '${entry.$1.id}/${item.id}', date: date,
+          supplier: entry.$1.supplierName, name: item.purchaseItemName,
+          quantity: item.quantity, unit: item.unit, lineCost: item.lineTotal,
+          stockItemId: item.kitchenStockItemId ?? '',
+          purchaseItemId: item.purchaseItemId ?? ''));
+      }
+    }
+    if (lines.isEmpty) {
+      return const ResaleAudit(products: [], unmatchedPurchases: [],
+        unmatchedSales: [], notes: [
+          'Se encontraron proveedores, pero no partidas activas con cantidad positiva.',
+        ]);
+    }
+    final start = lines.map((p) => p.date).reduce(
+      (a, b) => a.compareTo(b) < 0 ? a : b);
+    // The shared historical loader caches day datasets and reads each order's
+    // complete item subcollection, including legacy items without branchId.
+    // A collectionGroup filter can return a partial order, so it is not safe
+    // to substitute here until legacy coverage is proven.
+    final report = await getReportDataBundle(
+      restaurantId: session.currentRestaurantId,
+      branchId: session.currentBranchId,
+      startBusinessDate: start,
+      endBusinessDate: end,
+      includeItems: true,
+      reportName: 'ResaleUnitAudit',
+    );
+    final orders = report.orders;
+    final byOrder = report.itemsByOrder;
+    final exits = <ResaleExit>[];
+    for (final order in orders) {
+      final date = _businessDateForOrder(order) ?? order.businessDate ??
+          order.operationalDate ?? '';
+      if (date.isEmpty) continue;
+      final orderPaid = order.status.trim().toLowerCase() == 'paid' ||
+          order.paymentStatus.trim().toLowerCase() == 'paid';
+      final payments = (report.paymentsByOrder[order.id] ?? const <Payment>[])
+          .where((payment) => payment.isActive).toList();
+      final paymentById = {for (final payment in payments) payment.id: payment};
+      for (final item in byOrder[order.id] ?? const <OrderItem>[]) {
+        if (item.qty <= 0) continue;
+        ResaleExitKind? kind;
+        if (item.isCancelled) {
+          kind = ResaleExitKind.cancellationWithoutDeliveryProof;
+        } else if (isCanonicalActiveItem(item) &&
+            (item.paymentStatus.trim().toLowerCase() == 'paid' || orderPaid)) {
+          final linkedPayment = paymentById[item.paymentId] ??
+              (payments.length == 1 ? payments.single : null);
+          kind = linkedPayment == null
+              ? (order.discountPercent != null &&
+                        order.discountPercent! >= 99.99 && orderPaid
+                    ? ResaleExitKind.recordedOther
+                    : ResaleExitKind.paid)
+              : resaleFinalizedExitKind(
+                  discountType: linkedPayment.appliedDiscountType ?? '',
+                  method: linkedPayment.method,
+                  discountPercent: linkedPayment.appliedDiscountPercent,
+                  discountAmount: linkedPayment.discountAmount,
+                  subtotal: linkedPayment.subtotalBeforeDiscount,
+                  chargedAmount: linkedPayment.totalAfterDiscount,
+                  legacyDiscountPercent: linkedPayment.discountPercent,
+                  baseAmount: linkedPayment.baseAmount,
+                );
+        }
+        if (kind == null) continue;
+        exits.add(ResaleExit(date: date, productId: item.productId,
+          name: item.productName, category: item.category, quantity: item.qty,
+          saleAmount: item.total, kind: kind,
+          stockItemId: item.kitchenStockItemId ?? ''));
+      }
+    }
+    final counts = <ResaleCheckpoint>[];
+    try {
+      final countSnapshot = await _resaleCheckpointsRef.get();
+      for (final doc in countSnapshot.docs) {
+        final data = doc.data();
+        if (data['branchId'] != session.currentBranchId ||
+            data['restaurantId'] != session.currentRestaurantId ||
+            data['boundary'] != 'closing' ||
+            data['physicalCount'] is! int ||
+            (data['physicalCount'] as int) < 0) {
+          continue;
+        }
+        final date = data['businessDate'];
+        final key = data['skuKey'];
+        if (date is! String || key is! String ||
+            !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) {
+          continue;
+        }
+        final originalRecordedAt = (data['recordedAt'] as Timestamp?)?.toDate();
+        final original = ResaleCheckpoint(date: date, key: key,
+          physicalCount: data['physicalCount'] as int,
+          recordedAt: originalRecordedAt,
+          originalByUid: data['recordedByUid'] as String? ?? '',
+          confirmed: data['verification'] == 'recentObserved' &&
+            originalRecordedAt != null);
+        final corrections = await doc.reference.collection('corrections')
+            .orderBy('revision').get();
+        final revisions = <ResaleCheckpointCorrection>[];
+        for (final correction in corrections.docs) {
+          final change = correction.data();
+          final revision = change['revision'];
+          final correctedCount = change['physicalCount'];
+          final correctedAt = (change['recordedAt'] as Timestamp?)?.toDate();
+          if (revision is! int ||
+              correction.id != '$revision' || correctedCount is! int ||
+              correctedCount < 0 || correctedAt == null ||
+              change['reason'] is! String ||
+              change['businessDate'] != date || change['skuKey'] != key) {
+            continue;
+          }
+          revisions.add(ResaleCheckpointCorrection(revision: revision,
+            physicalCount: correctedCount,
+            reason: change['reason'] as String, recordedAt: correctedAt,
+            recordedByUid: change['recordedByUid'] as String? ?? ''));
+        }
+        counts.add(resaleEffectiveCheckpoint(original, revisions));
+      }
+  
+    } on FirebaseException catch (error) {
+      if (error.code != 'permission-denied') rethrow;
+      // Keep the historical reconciliation usable while the checkpoint rules
+      // are rolled out. Physical checkpoint reads/writes still require the
+      // production Firestore rules to be deployed.
+    }
+    return buildResaleAudit(purchases: lines, exits: exits,
+      checkpoints: counts, endDate: end);
+  }
+
+  /// Records a physically observed closing count. Never derives it from sales.
+  /// One immutable checkpoint per branch, operational date and resale SKU key.
+  Future<void> saveResaleClosingCount({
+    required ResaleProduct product,
+    required String businessDate,
+    required int physicalCount,
+  }) async {
+    _requireAdminPermission(kIsWeb &&
+      (AppSession.instance.employee?.canViewAdmin == true ||
+       AppSession.instance.employee?.isSuperAdmin == true),
+      'Se requiere acceso de administración para registrar el conteo físico.');
+    final current = AppSession.instance;
+    if (physicalCount < 0 || physicalCount > 100000 ||
+        !RegExp(r'^(water|empanada):(name:[a-z0-9 ]{1,100}|sku:[A-Za-z0-9_.-]{1,100})$')
+            .hasMatch(product.key) ||
+        !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(businessDate) ||
+        businessDate.compareTo(_currentBusinessDate()) > 0) {
+      throw ArgumentError('Conteo, SKU o fecha de operación inválidos.');
+    }
+    final closed = (await _kitchenSessionsForBusinessDate(businessDate))
+        .where((row) => row.isClosed && row.closedAt != null &&
+          resaleClosingCountIsRecent(row.closedAt!, DateTime.now())).toList();
+    if (closed.length != 1) {
+      throw StateError('Se requiere un único cierre de cocina de las últimas 24 horas para esta fecha y sucursal.');
+    }
+    final sessionRef = _kitchenSessionsRef.doc(closed.single.id);
+    final checkpointId = '${current.currentBranchId}|$businessDate|${product.key}';
+    final ref = _resaleCheckpointsRef.doc(checkpointId);
+    await _db.runTransaction((transaction) async {
+      final kitchenDoc = await transaction.get(sessionRef);
+      final existing = await transaction.get(ref);
+      if (existing.exists) {
+        throw StateError('Ya existe un conteo de cierre para este SKU y fecha; no se sobrescribe.');
+      }
+      final kitchen = kitchenDoc.data();
+      if (kitchen == null || kitchen['status'] != 'closed' ||
+          kitchen['closedAt'] is! Timestamp ||
+          !resaleClosingCountIsRecent(
+              (kitchen['closedAt'] as Timestamp).toDate(), DateTime.now()) ||
+          kitchen['branchId'] != current.currentBranchId ||
+          kitchen['businessDate'] != businessDate) {
+        throw StateError('El cierre de cocina cambió; vuelve a verificarlo.');
+      }
+      transaction.set(ref, {
+        'restaurantId': current.currentRestaurantId,
+        'branchId': current.currentBranchId,
+        'businessDate': businessDate,
+        'skuKey': product.key,
+        'skuName': product.name,
+        'boundary': 'closing',
+        'verification': 'recentObserved',
+        'physicalCount': physicalCount,
+        'kitchenSessionId': closed.single.id,
+        'recordedAt': FieldValue.serverTimestamp(),
+        'recordedByUid': _auth.currentUser?.uid ?? '',
+      });
+    });
+  }
+
+  /// Append-only correction of the effective declaration, without modifying
+  /// the original count or any prior correction.
+  Future<void> correctResaleClosingCount({
+    required ResaleProduct product,
+    required ResaleCheckpoint checkpoint,
+    required int physicalCount,
+    required String reason,
+  }) async {
+    _requireAdminPermission(kIsWeb &&
+      (AppSession.instance.employee?.canViewAdmin == true ||
+       AppSession.instance.employee?.isSuperAdmin == true),
+      'Se requiere acceso de administración para corregir el conteo.');
+    final trimmedReason = reason.trim();
+    if (checkpoint.key != product.key ||
+        !product.checkpoints.any((row) => row.date == checkpoint.date &&
+          row.key == checkpoint.key) ||
+        physicalCount < 0 || physicalCount > 100000 ||
+        trimmedReason.length < 10 || trimmedReason.length > 500) {
+      throw ArgumentError('Selecciona un conteo y escribe un motivo de 10 a 500 caracteres.');
+    }
+    final current = AppSession.instance;
+    final id = '${current.currentBranchId}|${checkpoint.date}|${product.key}';
+    final originalRef = _resaleCheckpointsRef.doc(id);
+    final correctionsRef = originalRef.collection('corrections');
+    final latest = await correctionsRef.orderBy('revision', descending: true)
+        .limit(1).get();
+    final revision = latest.docs.isEmpty
+        ? 1 : (latest.docs.single.data()['revision'] as int) + 1;
+    if (revision > 100) throw StateError('Límite de correcciones alcanzado.');
+    final previousRef = revision == 1 ? null : correctionsRef.doc('${revision - 1}');
+    final nextRef = correctionsRef.doc('$revision');
+    await _db.runTransaction((transaction) async {
+      final original = await transaction.get(originalRef);
+      final previous = previousRef == null ? null : await transaction.get(previousRef);
+      final next = await transaction.get(nextRef);
+      if (!original.exists || next.exists ||
+          (previousRef != null && !previous!.exists) ||
+          original.data()?['branchId'] != current.currentBranchId ||
+          original.data()?['businessDate'] != checkpoint.date ||
+          original.data()?['skuKey'] != product.key) {
+        throw StateError('El conteo cambió; actualiza el reporte y vuelve a intentar.');
+      }
+      transaction.set(nextRef, {
+        'restaurantId': current.currentRestaurantId,
+        'branchId': current.currentBranchId,
+        'businessDate': checkpoint.date,
+        'skuKey': product.key,
+        'revision': revision,
+        'supersedesRevision': revision - 1,
+        'physicalCount': physicalCount,
+        'reason': trimmedReason,
+        'recordedAt': FieldValue.serverTimestamp(),
+        'recordedByUid': _auth.currentUser?.uid ?? '',
+      });
+    });
   }
 
   Future<PredictiveConsumptionAudit> getPredictiveConsumptionAudit({

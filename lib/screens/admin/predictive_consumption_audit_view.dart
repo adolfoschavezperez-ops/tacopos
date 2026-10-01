@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/reports/predictive_consumption_audit.dart';
+import '../../core/reports/unit_reconciliation_audit.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
@@ -26,8 +28,11 @@ class PredictiveConsumptionAuditView extends StatefulWidget {
 
 class _PredictiveConsumptionAuditViewState
     extends State<PredictiveConsumptionAuditView> {
-  DateTime _investigationStart = DateTime(2026, 9, 28);
+  DateTime _investigationStart = DateTime(2026, 9, 1);
   late Future<PredictiveConsumptionAudit> _future;
+  late Future<ResaleAudit> _resaleFuture;
+  String _resalePeriod = 'september';
+  DateTime _resaleAsOf = DateTime.now();
   String _ingredientFilter = 'all';
   bool _onlyInvestigation = true;
 
@@ -38,6 +43,7 @@ class _PredictiveConsumptionAuditViewState
   }
 
   void _load() {
+    _resaleFuture = widget.repository.getResaleUnitAudit();
     _future = widget.repository.getPredictiveConsumptionAudit(
       investigationStart: _dateKey(_investigationStart),
       forceRefresh: true,
@@ -61,6 +67,148 @@ class _PredictiveConsumptionAuditViewState
       _investigationStart = picked;
       _load();
     });
+  }
+
+  Future<void> _recordClosingCount(ResaleProduct product) async {
+    final controller = TextEditingController();
+    var selectedDate = DateTime.now();
+    var acknowledged = false;
+    var saving = false;
+    String? error;
+    try {
+      final saved = await showDialog<bool>(context: context, builder: (dialogContext) {
+        return StatefulBuilder(builder: (context, update) => AlertDialog(
+          title: const Text('Conteo físico al cierre'),
+          content: SizedBox(width: 440, child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Clave: ${product.key}\nProducto: ${product.name}'),
+              const SizedBox(height: 8),
+              const Text('El número corresponde a unidades físicas restantes DESPUÉS '
+                'de todas las compras, ventas y salidas del día operativo. '
+                'El cierre de cocina debe ser de las últimas 24 horas.'),
+              TextButton.icon(
+                onPressed: saving ? null : () async {
+                  final picked = await showDatePicker(context: context,
+                    initialDate: selectedDate,
+                    firstDate: DateTime.now().subtract(const Duration(days: 2)),
+                    lastDate: DateTime.now());
+                  if (picked != null && dialogContext.mounted) {
+                    update(() => selectedDate = picked);
+                  }
+                },
+                icon: const Icon(Icons.calendar_month),
+                label: Text('Cierre ${DateFormat('dd/MM/yyyy').format(selectedDate)}'),
+              ),
+              TextField(controller: controller,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) => update(() {}),
+                decoration: const InputDecoration(labelText: 'Unidades contadas')),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: acknowledged,
+                onChanged: saving ? null : (value) =>
+                  update(() => acknowledged = value ?? false),
+                title: const Text('Confirmo que es un conteo físico real de ese cierre; '
+                  'no una cifra calculada ni estimada.'),
+              ),
+              const Text('Se guardará con hora de registro y usuario. '
+                'El conteo es inmutable; los errores se corrigen con un evento posterior.'),
+              if (error != null) Text(error!,
+                style: const TextStyle(color: BrandColors.danger)),
+            ],
+          )),
+          actions: [
+            TextButton(onPressed: saving ? null : () =>
+              Navigator.of(dialogContext).pop(false), child: const Text('Cancelar')),
+            FilledButton(onPressed: saving || !acknowledged ||
+                  int.tryParse(controller.text) == null ? null : () async {
+              update(() { saving = true; error = null; });
+              try {
+                await widget.repository.saveResaleClosingCount(
+                  product: product,
+                  businessDate: DateFormat('yyyy-MM-dd').format(selectedDate),
+                  physicalCount: int.parse(controller.text),
+                );
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop(true);
+              } catch (exception) {
+                if (dialogContext.mounted) update(() => error = '$exception');
+              } finally {
+                if (dialogContext.mounted) update(() => saving = false);
+              }
+            }, child: const Text('Guardar conteo')),
+          ],
+        ));
+      });
+      if (saved == true && mounted) {
+        setState(() => _resaleFuture = widget.repository.getResaleUnitAudit());
+        showAppSnackBar(context, 'Conteo físico registrado.',
+          type: AppSnackBarType.success);
+      }
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _correctClosingCount(ResaleProduct product,
+      ResaleCheckpoint checkpoint) async {
+    final count = TextEditingController(text: '${checkpoint.physicalCount}');
+    final reason = TextEditingController();
+    var saving = false;
+    String? error;
+    try {
+      final saved = await showDialog<bool>(context: context, builder: (dialogContext) =>
+        StatefulBuilder(builder: (context, update) => AlertDialog(
+          title: const Text('Corregir declaración de conteo'),
+          content: SizedBox(width: 440, child: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('${product.key} · cierre ${checkpoint.date} · '
+                'valor anterior ${checkpoint.physicalCount} u.'),
+              const Text('Se conservará el original y cada corrección con usuario, '
+                'hora y motivo. Una corrección tardía será una declaración no '
+                'confirmada y no generará diferencias físicas confirmadas.'),
+              TextField(controller: count,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) => update(() {}),
+                decoration: const InputDecoration(labelText: 'Unidades correctas')),
+              TextField(controller: reason, maxLength: 500,
+                onChanged: (_) => update(() {}),
+                decoration: const InputDecoration(labelText: 'Motivo de corrección')),
+              if (error != null) Text(error!,
+                style: const TextStyle(color: BrandColors.danger)),
+            ])),
+          actions: [
+            TextButton(onPressed: saving ? null : () =>
+              Navigator.of(dialogContext).pop(false), child: const Text('Cancelar')),
+            FilledButton(onPressed: saving || int.tryParse(count.text) == null ||
+                reason.text.trim().length < 10 ? null : () async {
+              update(() { saving = true; error = null; });
+              try {
+                await widget.repository.correctResaleClosingCount(
+                  product: product, checkpoint: checkpoint,
+                  physicalCount: int.parse(count.text),
+                  reason: reason.text);
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop(true);
+              } catch (exception) {
+                if (dialogContext.mounted) update(() => error = '$exception');
+              } finally {
+                if (dialogContext.mounted) update(() => saving = false);
+              }
+            }, child: const Text('Registrar corrección')),
+          ],
+        )));
+      if (saved == true && mounted) {
+        setState(() => _resaleFuture = widget.repository.getResaleUnitAudit());
+        showAppSnackBar(context, 'Corrección registrada.',
+          type: AppSnackBarType.success);
+      }
+    } finally {
+      count.dispose();
+      reason.dispose();
+    }
   }
 
   @override
@@ -118,6 +266,8 @@ class _PredictiveConsumptionAuditViewState
             const SizedBox(height: 14),
             _summary(audit),
             const SizedBox(height: 14),
+            _resaleSection(),
+            const SizedBox(height: 14),
             _globalAnomalies(recentCycles),
             const SizedBox(height: 14),
             _modelQuality(models),
@@ -134,6 +284,148 @@ class _PredictiveConsumptionAuditViewState
       },
     );
   }
+
+  Widget _resaleSection() => FutureBuilder<ResaleAudit>(
+    future: _resaleFuture,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) {
+        return GlassPanel(child: Text('Conciliación de unidades: ${snapshot.error}',
+          style: const TextStyle(color: BrandColors.danger)));
+      }
+      if (!snapshot.hasData) {
+        return const GlassPanel(child: Text('Cargando compras y salidas unitarias...'));
+      }
+      final audit = snapshot.data!;
+      final today = _resaleAsOf;
+      String key(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+      final (start, end) = switch (_resalePeriod) {
+        'day' => (key(today), key(today)),
+        'week' => (key(today.subtract(Duration(days: today.weekday - 1))), key(today)),
+        'month' => (key(DateTime(today.year, today.month)), key(today)),
+        'september' => ('2026-09-01', key(today)),
+        _ => ('0000-01-01', key(today)),
+      };
+      String money(double value) => NumberFormat.currency(locale: 'es_MX', symbol: r'$')
+          .format(value);
+      return GlassPanel(child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Conciliación de unidades · Aguas Fanny / Empanaditas',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          const Text('Compras − ventas − otras salidas verificadas = variación de inventario teórico. '
+            'Inventario inicial desconocido hasta contar físicamente cada producto.'),
+          const SizedBox(height: 12),
+          DropdownButton<String>(value: _resalePeriod,
+            items: const [
+              DropdownMenuItem(value: 'day', child: Text('Día seleccionado')),
+              DropdownMenuItem(value: 'week', child: Text('Semana seleccionada')),
+              DropdownMenuItem(value: 'month', child: Text('Mes seleccionado')),
+              DropdownMenuItem(value: 'september', child: Text('Desde 01/09/2026')),
+              DropdownMenuItem(value: 'all', child: Text('Histórico completo cargado')),
+            ], onChanged: (value) => setState(() => _resalePeriod = value ?? 'september')),
+          TextButton.icon(onPressed: () async {
+            final picked = await showDatePicker(context: context,
+              initialDate: _resaleAsOf, firstDate: DateTime(2020),
+              lastDate: DateTime.now());
+            if (picked != null && mounted) setState(() => _resaleAsOf = picked);
+          }, icon: const Icon(Icons.calendar_month),
+            label: Text('Hasta ${DateFormat('dd/MM/yyyy').format(_resaleAsOf)}')),
+          for (final p in audit.products) Builder(builder: (_) {
+            final period = p.period(start, end);
+            final baseline = p.period('2026-07-15', '2026-08-31');
+            final september = p.period('2026-09-01', '2026-09-30');
+            final daily = p.days.where((d) => d.date.compareTo(start) >= 0 &&
+                d.date.compareTo(end) <= 0).toList();
+            return Padding(padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Divider(),
+                Text('${p.name} · ${p.family == ResaleFamily.water ? 'agua' : 'empanada'}',
+                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+                Text('Proveedor: ${p.suppliers.join(', ')} · SKU POS: '
+                  '${p.productIds.isEmpty ? 'sin vínculo seguro' : p.productIds.join(', ')} '
+                  '· Última compra en histórico: ${p.lastPurchaseDate}'),
+                TextButton.icon(onPressed: () => _recordClosingCount(p),
+                  icon: const Icon(Icons.fact_check_outlined),
+                  label: const Text('Registrar conteo físico de cierre')),
+                if (p.checkpoint != null)
+                  ExpansionTile(title: Text('Historial de conteos (${p.checkpoints.length})'),
+                    children: [for (final checkpoint in p.checkpoints)
+                      ListTile(title: Text('${checkpoint.date}: '
+                          '${checkpoint.physicalCount} u. · '
+                          '${checkpoint.confirmed ? 'reciente confirmado' : 'declaración no confirmada'} '
+                          '· revisión ${checkpoint.correctionRevision}'),
+                        subtitle: Text([
+                          'Original: ${checkpoint.originalPhysicalCount ?? checkpoint.physicalCount} u. '
+                            '· ${checkpoint.originalRecordedAt == null ? 'sin hora' : DateFormat('dd/MM/yyyy HH:mm').format(checkpoint.originalRecordedAt!)} '
+                            '· usuario ${checkpoint.originalByUid}',
+                          for (final change in checkpoint.corrections)
+                            '#${change.revision}: ${change.physicalCount} u. '
+                              '· ${DateFormat('dd/MM/yyyy HH:mm').format(change.recordedAt)} '
+                              '· usuario ${change.recordedByUid} · ${change.reason}',
+                        ].join('\n')),
+                        trailing: IconButton(icon: const Icon(Icons.edit_note),
+                          tooltip: 'Corregir este conteo',
+                          onPressed: () => _correctClosingCount(p, checkpoint)))]),
+                Text('Compradas: ${period.bought} · Vendidas: ${period.sold} '
+                  '· Otras salidas registradas: ${period.other} '
+                  '· Variación: ${period.netUnits >= 0 ? '+' : ''}${period.netUnits} u.'),
+                Text('Costo comprado: ${money(period.cost)} · Importe de artículos vendidos: '
+                  '${money(period.revenue)} · Costo unitario medio: ${money(p.unitCost)}'),
+                Text(p.initialUnknown
+                  ? 'Inventario inicial desconocido · Saldo relativo hasta $end: ${p.balanceAt(end)} u. '
+                    '· Inventario absoluto y discrepancia: no confirmables'
+                  : 'Inventario teórico: ${p.theoreticalInventory?.toStringAsFixed(0)} u. '
+                    '· Valor a costo medio: ${money(p.theoreticalValue ?? 0)}'),
+                if (p.physicalDifference != null)
+                  Text('Diferencia confirmada entre conteos: ${p.physicalDifference} u. '
+                    '· Valor a costo medio: ${money(p.physicalDifference!.abs() * p.unitCost)}'),
+                if (p.checkpoint != null)
+                  Text('${p.checkpoint!.confirmed ? 'Conteo físico reciente' : 'Declaración no confirmada'} '
+                    'de cierre: ${p.checkpoint!.physicalCount} u. '
+                    'al ${p.checkpoint!.date}; registrado '
+                    '${p.checkpoint!.recordedAt == null ? 'sin hora' : DateFormat('dd/MM/yyyy HH:mm').format(p.checkpoint!.recordedAt!)}. '
+                    'Revisión ${p.checkpoint!.correctionRevision}.'),
+                if (p.hasNegativeRelativeBalance)
+                  const Text('Saldo relativo negativo: revisar integridad de datos e inventario inicial.',
+                    style: TextStyle(color: BrandColors.danger)),
+                if (p.anchoredCycleStarts.isNotEmpty)
+                  Text('Ciclos anclados en conteo físico: compras tras saldo cero '
+                    '${p.anchoredCycleStarts.join(', ')}'),
+                if (p.unprovenCancellations > 0)
+                  Text('${p.unprovenCancellations} u. canceladas sin prueba de entrega; '
+                    'no se restaron del inventario.'),
+                Text('15 jul–31 ago: ${baseline.bought} compradas / ${baseline.sold + baseline.other} '
+                  'salidas; Δ ${baseline.netUnits}. Sep: ${september.bought} compradas / '
+                  '${september.sold + september.other} salidas; Δ ${september.netUnits}. '
+                  'Comparación sujeta a inventario arrastrado.'),
+                if (daily.isNotEmpty) ExpansionTile(title: Text('Movimientos por día (${daily.length})'),
+                  children: [for (final d in daily)
+                    ListTile(dense: true, title: Text(d.date),
+                      subtitle: Text('+${d.bought} compradas · −${d.sold} vendidas '
+                        '· −${d.other} otras · saldo relativo ${d.relativeBalance}'))]),
+              ]));
+          }),
+          if (audit.products.isEmpty) const Text('Sin líneas unitarias conciliables.'),
+          if (audit.unmatchedPurchases.isNotEmpty)
+            ExpansionTile(title: Text('Compras sin conversión o vínculo seguro '
+              '(${audit.unmatchedPurchases.length})'),
+              children: [for (final row in audit.unmatchedPurchases) ListTile(title: Text(row))]),
+          if (audit.unmatchedSales.isNotEmpty)
+            ExpansionTile(title: Text('Productos vendidos sin equivalencia segura '
+              '(${audit.unmatchedSales.length})'),
+              children: [for (final row in audit.unmatchedSales) ListTile(title: Text(row))]),
+          for (final note in audit.notes) Text('• $note'),
+          const Text('Sólo los conteos recientes confirmados anclan el inventario; '
+            'declaraciones y correcciones tardías permanecen visibles sin '
+            'confirmar discrepancias. Merma, daño y devolución '
+            'siguen sin una fuente de movimientos por SKU integrada.'),
+          const Text('El importe de artículos puede diferir de la venta neta '
+            'por descuentos, cortesías y cobros parciales.'),
+        ],
+      ));
+    },
+  );
 
   Widget _header(PredictiveConsumptionAudit audit) {
     final ingredientOptions = <String, String>{
