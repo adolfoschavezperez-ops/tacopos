@@ -200,7 +200,9 @@ class PredictiveConsumptionCycle {
     required this.startBusinessDate,
     required this.endBusinessDate,
     required this.days,
+    required this.operatingDays,
     required this.purchasedBase,
+    required this.knownOperationalBase,
     required this.predictedPaidBase,
     required this.cancelledKitchenExplainedBase,
     required this.predictedOperationalBase,
@@ -216,13 +218,16 @@ class PredictiveConsumptionCycle {
     required this.cancelledKitchenUnits,
     required this.evidence,
     required this.isInvestigationPeriod,
+    required this.purchaseMagnitudeOutlier,
   });
 
   final String purchaseDate;
   final String startBusinessDate;
   final String endBusinessDate;
   final int days;
+  final int operatingDays;
   final double purchasedBase;
+  final double knownOperationalBase;
   final double predictedPaidBase;
   final double cancelledKitchenExplainedBase;
   final double predictedOperationalBase;
@@ -238,8 +243,10 @@ class PredictiveConsumptionCycle {
   final double cancelledKitchenUnits;
   final String evidence;
   final bool isInvestigationPeriod;
+  final bool purchaseMagnitudeOutlier;
 
   bool get isHighAnomaly => anomalyScore >= 70;
+  bool get isAuditEligible => anomalyScore >= 35 && !purchaseMagnitudeOutlier;
   bool get isMediumAnomaly => anomalyScore >= 45 && anomalyScore < 70;
 }
 
@@ -294,6 +301,8 @@ class PredictiveIngredientModel {
 
   bool get isWeight => unitFamily == 'weight';
   bool get isPieces => unitFamily == 'pieces';
+  bool get isAuditUsable => confidence == 'Alta' || confidence == 'Media';
+  bool get isExploratory => !isAuditUsable;
 
   List<PredictiveConsumptionCycle> get investigationCycles => cycles
       .where((cycle) => cycle.isInvestigationPeriod)
@@ -319,6 +328,16 @@ class PredictiveIngredientModel {
         ) /
         totalUnits;
   }
+
+  double get totalKnownOperationalBase => cycles.fold<double>(
+        0,
+        (sum, cycle) => sum + cycle.knownOperationalBase,
+      );
+
+  double get recentKnownOperationalBase => investigationCycles.fold<double>(
+        0,
+        (sum, cycle) => sum + cycle.knownOperationalBase,
+      );
 
   double? get learnedCookedPerSaleWeighted {
     final valid = coefficients
@@ -365,22 +384,68 @@ class PredictiveConsumptionAudit {
   final List<String> notes;
 
   int get highAnomalyCycles =>
-      models.fold(0, (sum, model) => sum + model.recentHighAnomalies);
+      models.where((model) => model.isAuditUsable)
+          .fold(0, (sum, model) => sum + model.recentHighAnomalies);
 
-  double get recentPositiveResidualWeightGrams => models
+  double _positiveResidualForConfidence(String confidence) => models
+      .where((model) => model.isWeight && model.confidence == confidence)
+      .fold<double>(
+        0,
+        (sum, model) =>
+            sum +
+            model.investigationCycles
+                .where((cycle) => !cycle.purchaseMagnitudeOutlier)
+                .fold<double>(
+                  0,
+                  (subtotal, cycle) =>
+                      subtotal +
+                      math.max(0.0, cycle.residualOperationalBase).toDouble(),
+                ),
+      );
+
+  double get recentPositiveResidualHighWeightGrams =>
+      _positiveResidualForConfidence('Alta');
+  double get recentPositiveResidualMediumWeightGrams =>
+      _positiveResidualForConfidence('Media');
+  double get recentPositiveResidualLowWeightGrams =>
+      _positiveResidualForConfidence('Baja');
+  double get recentPositiveResidualAuditableWeightGrams =>
+      recentPositiveResidualHighWeightGrams +
+      recentPositiveResidualMediumWeightGrams;
+  double get recentPositiveResidualWeightGrams =>
+      recentPositiveResidualAuditableWeightGrams +
+      recentPositiveResidualLowWeightGrams;
+
+  double get recentPositiveResidualBulkOutlierWeightGrams => models
       .where((model) => model.isWeight)
       .fold<double>(
         0,
         (sum, model) =>
             sum +
-            math.max(0.0, model.recentResidualOperationalBase).toDouble(),
+            model.investigationCycles
+                .where((cycle) => cycle.purchaseMagnitudeOutlier)
+                .fold<double>(
+                  0,
+                  (subtotal, cycle) =>
+                      subtotal +
+                      math.max(0.0, cycle.residualOperationalBase).toDouble(),
+                ),
+      );
+
+  int get recentPurchaseMagnitudeOutliers => models.fold<int>(
+        0,
+        (sum, model) =>
+            sum +
+            model.investigationCycles
+                .where((cycle) => cycle.purchaseMagnitudeOutlier)
+                .length,
       );
 
   List<PredictiveConsumptionCycleFinding> get rankedFindings {
     final findings = <PredictiveConsumptionCycleFinding>[];
-    for (final model in models) {
+    for (final model in models.where((item) => item.isAuditUsable)) {
       for (final cycle in model.investigationCycles) {
-        if (cycle.anomalyScore < 35) continue;
+        if (!cycle.isAuditEligible) continue;
         findings.add(
           PredictiveConsumptionCycleFinding(
             ingredientName: model.definition.name,
@@ -432,7 +497,9 @@ class _CycleInput {
     required this.startDate,
     required this.endDate,
     required this.days,
+    required this.operatingDays,
     required this.target,
+    required this.knownOperationalBase,
     required this.paid,
     required this.cancelled,
     required this.shortage,
@@ -442,7 +509,9 @@ class _CycleInput {
   final String startDate;
   final String endDate;
   final int days;
+  final int operatingDays;
   final double target;
+  final double knownOperationalBase;
   final Map<String, double> paid;
   final Map<String, double> cancelled;
   final double shortage;
@@ -564,6 +633,8 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       historyStart: historyStart,
       historyEnd: historyEnd,
       alignment: PredictiveAlignment.forwardSupply,
+      definition: definition,
+      unitFamily: lines.first.unitFamily,
     );
     final replenishment = _buildCycles(
       purchaseDays: purchaseDays,
@@ -572,25 +643,30 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       historyStart: historyStart,
       historyEnd: historyEnd,
       alignment: PredictiveAlignment.replenishment,
+      definition: definition,
+      unitFamily: lines.first.unitFamily,
     );
-
-    final candidateKeys = _selectFeatureKeys(
-      cycles: [...forward, ...replenishment],
-      productNames: productNames,
-    );
-    if (candidateKeys.isEmpty) continue;
 
     final forwardTraining = _trainingCycles(forward, investigationStart);
     final replenishmentTraining = _trainingCycles(
       replenishment,
       investigationStart,
     );
-    final forwardFit = _fitCycles(forwardTraining, candidateKeys);
-    final replenishFit = _fitCycles(replenishmentTraining, candidateKeys);
+    final forwardKeys = _selectFeatureKeys(
+      cycles: forwardTraining,
+      productNames: productNames,
+    );
+    final replenishmentKeys = _selectFeatureKeys(
+      cycles: replenishmentTraining,
+      productNames: productNames,
+    );
+    final forwardFit = _fitCycles(forwardTraining, forwardKeys);
+    final replenishFit = _fitCycles(replenishmentTraining, replenishmentKeys);
 
     PredictiveAlignment alignment;
     List<_CycleInput> allCycles;
     List<_CycleInput> training;
+    List<String> candidateKeys;
     _FitResult fit;
     if (replenishFit != null &&
         (forwardFit == null ||
@@ -599,28 +675,23 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       alignment = PredictiveAlignment.replenishment;
       allCycles = replenishment;
       training = replenishmentTraining;
+      candidateKeys = replenishmentKeys;
       fit = replenishFit;
     } else if (forwardFit != null) {
       alignment = PredictiveAlignment.forwardSupply;
       allCycles = forward;
       training = forwardTraining;
+      candidateKeys = forwardKeys;
       fit = forwardFit;
     } else {
       continue;
     }
 
-    final trainedBeforeInvestigation = training.every(
-      (cycle) => cycle.endDate.compareTo(investigationStart) < 0,
-    );
     final cleanTraining =
         training.isNotEmpty && training.every(_isCleanTrainingCycle);
-    final baselineMode = trainedBeforeInvestigation && cleanTraining
+    final baselineMode = cleanTraining
         ? 'Historico previo limpio: faltante <= 20 y cancelaciones controladas'
-        : trainedBeforeInvestigation
-            ? 'Historico previo al periodo de investigacion'
-            : cleanTraining
-                ? 'Historico limpio disponible por falta de ciclos previos suficientes'
-                : 'Historico robusto completo por falta de ciclos previos suficientes';
+        : 'Historico previo al periodo de investigacion (sin usar septiembre)';
 
     final yieldRate = _resolveYieldRate(definition, lines, yields);
     final totalTrainingUnits = candidateKeys.fold<double>(
@@ -668,6 +739,19 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       (a, b) => b.unitsInTraining.compareTo(a.unitsInTraining),
     );
 
+    final confidence = _modelConfidence(
+      trainingCount: training.length,
+      rSquared: fit.rSquared,
+      normalizedMae: fit.normalizedMae,
+      coefficientCount: coefficients.length,
+    );
+    final trainingTargets = training.map((cycle) => cycle.target).toList();
+    final typicalTrainingTarget = _median(trainingTargets);
+    final auditResidualScale = math.max(
+      fit.residualScale,
+      typicalTrainingTarget > 0 ? typicalTrainingTarget * 0.05 : 0.0,
+    ).toDouble();
+
     final outputCycles = allCycles.map((cycle) {
       final predictedPaid = _predictCycle(cycle, fit);
       final cancelledExplained = fit.coefficients.entries.fold<double>(
@@ -676,33 +760,47 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
             sum +
             coefficient.value * (cycle.cancelled[coefficient.key] ?? 0),
       );
-      final predictedOperational = predictedPaid + cancelledExplained;
-      final residualPaid = cycle.target - predictedPaid;
+      final knownOperational = cycle.knownOperationalBase;
+      final predictedOperational =
+          predictedPaid + knownOperational + cancelledExplained;
+      final residualPaid =
+          cycle.target - predictedPaid - knownOperational;
       final residualOperational = cycle.target - predictedOperational;
       final residualPercent = predictedOperational.abs() < 0.001
           ? 0.0
           : residualOperational / predictedOperational;
-      final robustZ = fit.residualScale <= 0
+      final robustZ = auditResidualScale <= 0
           ? 0.0
-          : residualOperational / fit.residualScale;
-      final intervalHalfWidth = fit.residualScale * 1.96;
+          : residualOperational / auditResidualScale;
+      final intervalHalfWidth = auditResidualScale * 1.96;
       final expectedLow = math
           .max(0.0, predictedOperational - intervalHalfWidth)
           .toDouble();
       final expectedHigh = predictedOperational + intervalHalfWidth;
-      final score = _anomalyScore(
+      final rawScore = _anomalyScore(
         robustZ: robustZ,
         residualPercent: residualPercent,
         cancelledExplained: cancelledExplained,
         predictedPaid: predictedPaid,
-        shortage: cycle.shortage,
+      );
+      final purchaseMagnitudeOutlier = _isPurchaseMagnitudeOutlier(
+        cycle,
+        training,
+      );
+      final score = _qualityAdjustedAnomalyScore(
+        rawScore: rawScore,
+        confidence: confidence,
+        rSquared: fit.rSquared,
+        purchaseMagnitudeOutlier: purchaseMagnitudeOutlier,
       );
       return PredictiveConsumptionCycle(
         purchaseDate: cycle.purchaseDate,
         startBusinessDate: cycle.startDate,
         endBusinessDate: cycle.endDate,
         days: cycle.days,
+        operatingDays: cycle.operatingDays,
         purchasedBase: cycle.target,
+        knownOperationalBase: knownOperational,
         predictedPaidBase: predictedPaid,
         cancelledKitchenExplainedBase: cancelledExplained,
         predictedOperationalBase: predictedOperational,
@@ -720,22 +818,20 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
           residualPaid: residualPaid,
           residualOperational: residualOperational,
           cancelledExplained: cancelledExplained,
+          knownOperational: knownOperational,
+          purchaseMagnitudeOutlier: purchaseMagnitudeOutlier,
           shortage: cycle.shortage,
           family: lines.first.unitFamily,
         ),
         isInvestigationPeriod:
+            cycle.purchaseDate.compareTo(investigationStart) >= 0 ||
             cycle.endDate.compareTo(investigationStart) >= 0,
+        purchaseMagnitudeOutlier: purchaseMagnitudeOutlier,
       );
     }).toList()
       ..sort((a, b) => b.purchaseDate.compareTo(a.purchaseDate));
 
     final recent = outputCycles.where((cycle) => cycle.isInvestigationPeriod);
-    final confidence = _modelConfidence(
-      trainingCount: training.length,
-      rSquared: fit.rSquared,
-      normalizedMae: fit.normalizedMae,
-      coefficientCount: coefficients.length,
-    );
 
     models.add(
       PredictiveIngredientModel(
@@ -752,7 +848,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
         baselineDailyBase: fit.baselineDaily,
         rSquared: fit.rSquared,
         normalizedMae: fit.normalizedMae,
-        residualScale: fit.residualScale,
+        residualScale: auditResidualScale,
         confidence: confidence,
         coefficients: coefficients,
         cycles: outputCycles,
@@ -793,14 +889,19 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
 
   final notes = <String>[
     'El modelo aprende de ciclos de reposicion, no iguala compra del dia con venta del dia.',
-    'Prueba automaticamente si la compra abastece ventas futuras o repone consumo previo y conserva la alineacion con menor error robusto.',
-    'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta para que dias atipicos no definan el consumo normal.',
-    'Cuando hay al menos 3 a 5 ciclos suficientes, el entrenamiento prefiere periodos con faltante de caja <= 20 y cancelaciones de cocina controladas para construir una linea base mas limpia.',
+    'El baseline principal usa exclusivamente ciclos cuyo consumo termina antes del inicio de investigacion. Si no hay al menos 3 ciclos previos utilizables, no se fabrica un modelo usando el periodo investigado.',
+    'La seleccion de productos explicativos tambien se hace solo con el baseline previo para evitar fuga de informacion desde septiembre.',
+    'Un ciclo se considera investigado si su compra ocurre desde el corte o si su periodo de consumo alcanza el corte; una compra de septiembre nunca queda disfrazada como baseline por la alineacion de reposicion.',
+    'Prueba automaticamente si la compra abastece ventas futuras o repone consumo previo y conserva la alineacion con menor error robusto dentro del baseline previo.',
+    'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta. La confianza baja si hay pocos ciclos frente al numero de coeficientes.',
+    'Para tortilla de maiz se incorpora como consumo operativo conocido aproximadamente 1 kg por dia abierto de lunes a sabado para doraditas; domingo aporta 0.',
+    'Modelos de confianza Baja y compras con volumen extremo por dia abierto son exploratorios: no pueden generar una alerta fuerte en el radar principal ni inflar el residual auditable.',
+    'El Z robusto usa un piso de incertidumbre de 5% de la compra tipica del baseline para evitar valores enormes cuando la dispersion historica es casi cero.',
+    'El faltante de caja se muestra solo como contexto y ya no suma puntos al indice estadistico.',
     'Sin inventario fisico no puede demostrarse una fuga: una discrepancia tambien puede ser merma, cambio de stock inicial/final, porcion distinta o captura incompleta.',
     'Las cancelaciones que tocaron cocina se muestran por separado para medir cuanto consumo podrian explicar sin contarlas como venta.',
-    'El periodo de investigacion se aplica a las fechas de consumo cubiertas por cada ciclo, no solo a la fecha de compra, para no contaminar el entrenamiento con ventas posteriores al corte.',
     'Si el patron aprendido es abastecimiento hacia adelante, la compra mas reciente queda abierta y no se califica hasta que exista la siguiente reposicion.',
-    'El rango esperado usa la dispersion robusta del historico (aprox. 95%). Estar fuera del rango es una señal de investigacion, no una prueba de robo.',
+    'El rango mostrado es orientativo: prediccion +/- 1.96 veces la dispersion robusta historica. No es un intervalo predictivo formal de 95%.',
   ];
 
   return PredictiveConsumptionAudit(
@@ -964,6 +1065,7 @@ List<String> _selectFeatureKeys({
   required List<_CycleInput> cycles,
   required Map<String, String> productNames,
 }) {
+  if (cycles.length < 3) return const [];
   final totals = <String, double>{};
   for (final cycle in cycles) {
     for (final entry in cycle.paid.entries) {
@@ -974,7 +1076,11 @@ List<String> _selectFeatureKeys({
       .where((entry) => entry.value >= 3 && productNames.containsKey(entry.key))
       .toList()
     ..sort((a, b) => b.value.compareTo(a.value));
-  return keys.take(8).map((entry) => entry.key).toList(growable: false);
+  final maxFeatures = math.max(1, math.min(8, cycles.length - 2));
+  return keys
+      .take(maxFeatures)
+      .map((entry) => entry.key)
+      .toList(growable: false);
 }
 
 List<_CycleInput> _trainingCycles(
@@ -984,27 +1090,22 @@ List<_CycleInput> _trainingCycles(
   final previous = cycles
       .where(
         (cycle) =>
+            cycle.purchaseDate.compareTo(investigationStart) < 0 &&
             cycle.endDate.compareTo(investigationStart) < 0 &&
             cycle.paidUnits > 0,
       )
       .toList();
 
-  // Prefer historically cleaner periods when there is enough evidence.
-  // This keeps recurrent cash/cancellation anomalies from teaching the model
-  // that an abnormal operating pattern is "normal".
+  // The primary baseline is strictly pre-investigation. Never use cycles from
+  // the investigated period to manufacture enough observations: insufficient
+  // history must remain insufficient rather than teaching the anomaly as normal.
   final cleanPrevious = previous
       .where(_isCleanTrainingCycle)
       .toList(growable: false);
   if (cleanPrevious.length >= 5) return cleanPrevious;
   if (previous.length >= 5) return previous;
   if (cleanPrevious.length >= 3) return cleanPrevious;
-
-  final all = cycles.where((cycle) => cycle.paidUnits > 0).toList();
-  final cleanAll = all.where(_isCleanTrainingCycle).toList(growable: false);
-  if (cleanAll.length >= 3) return cleanAll;
-  if (all.length <= 3) return all;
-  final keep = math.max(3, (all.length * 0.8).floor());
-  return all.take(keep).toList(growable: false);
+  return previous;
 }
 
 bool _isCleanTrainingCycle(_CycleInput cycle) {
@@ -1020,6 +1121,8 @@ List<_CycleInput> _buildCycles({
   required String historyStart,
   required String historyEnd,
   required PredictiveAlignment alignment,
+  required PredictiveIngredientDefinition definition,
+  required String unitFamily,
 }) {
   final result = <_CycleInput>[];
 
@@ -1044,6 +1147,8 @@ List<_CycleInput> _buildCycles({
           days: days,
           dailySales: dailySales,
           cashByDate: cashByDate,
+          definition: definition,
+          unitFamily: unitFamily,
         ),
       );
     }
@@ -1066,6 +1171,8 @@ List<_CycleInput> _buildCycles({
         days: days,
         dailySales: dailySales,
         cashByDate: cashByDate,
+        definition: definition,
+        unitFamily: unitFamily,
       ),
     );
   }
@@ -1079,6 +1186,8 @@ _CycleInput _cycleFromRange({
   required int days,
   required Map<String, _DailyIngredientSales> dailySales,
   required Map<String, PredictiveCashDay> cashByDate,
+  required PredictiveIngredientDefinition definition,
+  required String unitFamily,
 }) {
   final paid = <String, double>{};
   final cancelled = <String, double>{};
@@ -1097,16 +1206,48 @@ _CycleInput _cycleFromRange({
     shortage += cashByDate[date]?.shortageAmount ?? 0;
   }
 
+  final operatingDays = _operatingDaysInclusive(start, end);
   return _CycleInput(
     purchaseDate: purchase.date,
     startDate: start,
     endDate: end,
     days: days,
+    operatingDays: operatingDays,
     target: purchase.quantity,
+    knownOperationalBase: _knownOperationalBase(
+      definition: definition,
+      unitFamily: unitFamily,
+      operatingDays: operatingDays,
+    ),
     paid: paid,
     cancelled: cancelled,
     shortage: shortage,
   );
+}
+
+double _knownOperationalBase({
+  required PredictiveIngredientDefinition definition,
+  required String unitFamily,
+  required int operatingDays,
+}) {
+  if (unitFamily != 'weight') return 0;
+  if (definition.kind == PredictiveIngredientKind.tortillaCorn ||
+      definition.kind == PredictiveIngredientKind.tortillaAny) {
+    // Operational rule confirmed by the business: about 1 kg of corn tortilla
+    // is used for doraditas on each open day. Sunday is closed.
+    return operatingDays * 1000.0;
+  }
+  return 0;
+}
+
+int _operatingDaysInclusive(String start, String end) {
+  var count = 0;
+  for (final key in _dateKeys(start, end)) {
+    final parts = key.split('-').map(int.parse).toList(growable: false);
+    final date = DateTime(parts[0], parts[1], parts[2]);
+    if (date.weekday != DateTime.sunday) count++;
+  }
+  return count;
 }
 
 _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
@@ -1117,13 +1258,19 @@ _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
   final featureCount = keys.length + 1;
   final x = <List<double>>[];
   final y = <double>[];
+  final knownOffsets = <double>[];
   for (final cycle in rows) {
     x.add([
       for (final key in keys) cycle.paid[key] ?? 0,
-      cycle.days.toDouble(),
+      cycle.operatingDays.toDouble(),
     ]);
     y.add(cycle.target);
+    knownOffsets.add(cycle.knownOperationalBase);
   }
+  final adjustedY = List<double>.generate(
+    y.length,
+    (i) => y[i] - knownOffsets[i],
+  );
 
   final scales = List<double>.filled(featureCount, 1);
   for (var j = 0; j < featureCount; j++) {
@@ -1143,14 +1290,14 @@ _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
   for (var robustIteration = 0; robustIteration < 5; robustIteration++) {
     beta = _nonNegativeRidge(
       x: x,
-      y: y,
+      y: adjustedY,
       weights: weights,
       lambda: 0.01,
       iterations: 180,
     );
     final predictions = List<double>.generate(
       x.length,
-      (i) => _dot(x[i], beta),
+      (i) => knownOffsets[i] + _dot(x[i], beta),
     );
     final residuals = List<double>.generate(
       x.length,
@@ -1172,7 +1319,8 @@ _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
   final predictions = <double>[
     for (final cycle in rows)
       keys.indexed.fold<double>(
-            unscaled.last * cycle.days,
+            cycle.knownOperationalBase +
+                unscaled.last * cycle.operatingDays,
             (sum, entry) =>
                 sum + unscaled[entry.$1] * (cycle.paid[entry.$2] ?? 0),
           ),
@@ -1266,7 +1414,7 @@ double _modelScore(_FitResult fit, int observations) {
 }
 
 double _predictCycle(_CycleInput cycle, _FitResult fit) {
-  var prediction = fit.baselineDaily * cycle.days;
+  var prediction = fit.baselineDaily * cycle.operatingDays;
   for (final entry in fit.coefficients.entries) {
     prediction += entry.value * (cycle.paid[entry.key] ?? 0);
   }
@@ -1337,16 +1485,17 @@ String _modelConfidence({
   required double normalizedMae,
   required int coefficientCount,
 }) {
-  if (trainingCount >= 10 &&
+  if (coefficientCount <= 0) return 'Baja';
+  final highMinCycles = math.max(10, coefficientCount + 6);
+  final mediumMinCycles = math.max(6, coefficientCount + 3);
+  if (trainingCount >= highMinCycles &&
       rSquared >= 0.55 &&
-      normalizedMae <= 0.30 &&
-      coefficientCount > 0) {
+      normalizedMae <= 0.30) {
     return 'Alta';
   }
-  if (trainingCount >= 6 &&
+  if (trainingCount >= mediumMinCycles &&
       rSquared >= 0.25 &&
-      normalizedMae <= 0.50 &&
-      coefficientCount > 0) {
+      normalizedMae <= 0.50) {
     return 'Media';
   }
   return 'Baja';
@@ -1357,7 +1506,6 @@ double _anomalyScore({
   required double residualPercent,
   required double cancelledExplained,
   required double predictedPaid,
-  required double shortage,
 }) {
   var score = math.min(55.0, robustZ.abs() * 18).toDouble();
   score += math.min(25.0, residualPercent.abs() * 35).toDouble();
@@ -1365,19 +1513,68 @@ double _anomalyScore({
       math.max(50.0, predictedPaid * 0.10).toDouble()) {
     score += 10;
   }
-  if (shortage > 20) score += 10;
   return score.clamp(0.0, 100.0).toDouble();
+}
+
+double _qualityAdjustedAnomalyScore({
+  required double rawScore,
+  required String confidence,
+  required double rSquared,
+  required bool purchaseMagnitudeOutlier,
+}) {
+  if (purchaseMagnitudeOutlier || confidence == 'Baja' || rSquared < 0) {
+    // Exploratory/data-quality signals stay visible in ingredient detail but
+    // cannot enter the main audit radar as a strong finding.
+    return math.min(rawScore, 34.0).toDouble();
+  }
+  return rawScore;
+}
+
+bool _isPurchaseMagnitudeOutlier(
+  _CycleInput cycle,
+  List<_CycleInput> training,
+) {
+  if (training.length < 3) return false;
+  double perOpenDay(_CycleInput row) =>
+      row.target / math.max(1, row.operatingDays);
+  final values = training
+      .where((row) => row.target > 0)
+      .map(perOpenDay)
+      .toList(growable: false);
+  if (values.length < 3) return false;
+  final median = _median(values);
+  if (median <= 0) return false;
+  final deviations =
+      values.map((value) => (value - median).abs()).toList(growable: false);
+  final robustScale = _median(deviations) * 1.4826;
+  final byScale = median + 6 * math.max(robustScale, median * 0.05);
+  final byRatio = median * 3.0;
+  return perOpenDay(cycle) > math.max(byScale, byRatio);
 }
 
 String _cycleEvidence({
   required double residualPaid,
   required double residualOperational,
   required double cancelledExplained,
+  required double knownOperational,
+  required bool purchaseMagnitudeOutlier,
   required double shortage,
   required String family,
 }) {
   final unit = predictiveBaseUnitLabel(family);
   final parts = <String>[];
+  if (purchaseMagnitudeOutlier) {
+    parts.add(
+      'Volumen de compra extremo frente al baseline; revisar captura, unidad '
+      'o compra para varios dias antes de interpretar el residual',
+    );
+  }
+  if (knownOperational > 0.01) {
+    parts.add(
+      'consumo operativo conocido incluido '
+      '${knownOperational.toStringAsFixed(1)} $unit',
+    );
+  }
   if (residualPaid > 0) {
     parts.add(
       'Compra excede lo esperado por ventas en '

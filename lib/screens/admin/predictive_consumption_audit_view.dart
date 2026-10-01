@@ -550,8 +550,9 @@ class _PredictiveConsumptionAuditViewState
       child: Text(
         'Histórico analizado: ${audit.historyStart} → ${audit.historyEnd}. '
         'Proveedores detectados: $suppliers. '
-        'La línea del ${audit.investigationStart} no entrena el patrón normal cuando existe '
-        'histórico suficiente anterior: se usa como periodo de investigación.',
+        'El baseline normal termina antes de ${audit.investigationStart}: '
+        'el periodo investigado nunca se usa para completar entrenamiento faltante. '
+        'Si no alcanza el histórico previo, el modelo queda sin construir o con confianza baja.',
         style: const TextStyle(
           color: BrandColors.textSecondary,
           fontWeight: FontWeight.w700,
@@ -562,9 +563,17 @@ class _PredictiveConsumptionAuditViewState
 
   Widget _summary(PredictiveConsumptionAudit audit) {
     final high = audit.highAnomalyCycles;
-    final recentExcessKg = audit.recentPositiveResidualWeightGrams / 1000;
+    final auditableKg =
+        audit.recentPositiveResidualAuditableWeightGrams / 1000;
+    final exploratoryKg =
+        audit.recentPositiveResidualLowWeightGrams / 1000;
+    final bulkOutlierKg =
+        audit.recentPositiveResidualBulkOutlierWeightGrams / 1000;
     final highConfidence = audit.models
         .where((model) => model.confidence == 'Alta')
+        .length;
+    final mediumConfidence = audit.models
+        .where((model) => model.confidence == 'Media')
         .length;
     return Wrap(
       spacing: 12,
@@ -573,7 +582,7 @@ class _PredictiveConsumptionAuditViewState
         _Metric(
           label: 'Modelos aprendidos',
           value: '${audit.models.length}',
-          detail: '$highConfidence con confianza alta',
+          detail: '$highConfidence alta · $mediumConfidence media',
         ),
         _Metric(
           label: 'Compras objetivo',
@@ -592,17 +601,29 @@ class _PredictiveConsumptionAuditViewState
           accent: BrandColors.accentOrange,
         ),
         _Metric(
-          label: 'Ciclos recientes altos',
+          label: 'Ciclos auditables altos',
           value: '$high',
-          detail: 'Índice técnico ≥ 70',
+          detail: 'Solo modelos Media/Alta · índice ≥ 70',
           accent: high > 0 ? BrandColors.danger : BrandColors.success,
         ),
         _Metric(
-          label: 'Exceso reciente no explicado',
-          value: '${recentExcessKg.toStringAsFixed(2)} kg',
-          detail: 'Solo residuos positivos en insumos por peso',
+          label: 'Residual positivo auditable',
+          value: '${auditableKg.toStringAsFixed(2)} kg',
+          detail: 'Modelos Media/Alta · sin compras de volumen extremo',
           accent:
-              recentExcessKg > 0.5 ? BrandColors.danger : BrandColors.textPrimary,
+              auditableKg > 0.5 ? BrandColors.danger : BrandColors.textPrimary,
+        ),
+        _Metric(
+          label: 'Residual exploratorio',
+          value: '${exploratoryKg.toStringAsFixed(2)} kg',
+          detail: 'Modelos de confianza Baja · no concluyente',
+          accent: BrandColors.textMuted,
+        ),
+        _Metric(
+          label: 'Volumen extremo separado',
+          value: '${bulkOutlierKg.toStringAsFixed(2)} kg',
+          detail: '${audit.recentPurchaseMagnitudeOutliers} ciclos · revisar captura/stock-up',
+          accent: BrandColors.accentOrange,
         ),
       ],
     );
@@ -613,7 +634,8 @@ class _PredictiveConsumptionAuditViewState
         rows,
   ) {
     final visible = rows
-        .where((entry) => entry.cycle.anomalyScore >= 35)
+        .where((entry) =>
+            entry.model.isAuditUsable && entry.cycle.isAuditEligible)
         .take(30)
         .toList();
     return GlassPanel(
@@ -627,8 +649,9 @@ class _PredictiveConsumptionAuditViewState
           ),
           const SizedBox(height: 5),
           const Text(
-            'Ordenado por señal estadística. “Alto” no significa robo: significa que la compra '
-            'se aleja del patrón histórico aprendido y amerita revisar inventario, merma, cancelaciones o ventas no registradas.',
+            'Solo muestra señales de modelos con confianza Media/Alta. Los modelos Baja y las '
+            'compras de volumen extremo quedan como exploratorios en el detalle y no pueden '
+            'generar una alerta fuerte. El índice no incluye el faltante de caja y no significa robo.',
             style: TextStyle(
               color: BrandColors.textMuted,
               fontWeight: FontWeight.w600,
@@ -654,11 +677,13 @@ class _PredictiveConsumptionAuditViewState
                 dataRowMaxHeight: 92,
                 columns: const [
                   DataColumn(label: Text('Insumo')),
+                  DataColumn(label: Text('Confianza')),
                   DataColumn(label: Text('Compra / ciclo')),
                   DataColumn(label: Text('Comprado')),
-                  DataColumn(label: Text('Esperado ventas')),
+                  DataColumn(label: Text('Esperado ventas/base')),
+                  DataColumn(label: Text('+ consumo operativo')),
                   DataColumn(label: Text('+ cancelaciones cocina')),
-                  DataColumn(label: Text('Rango esperado 95%')),
+                  DataColumn(label: Text('Rango robusto orientativo')),
                   DataColumn(label: Text('Residual final')),
                   DataColumn(label: Text('Equiv. unidades')),
                   DataColumn(label: Text('Residual %')),
@@ -682,6 +707,7 @@ class _PredictiveConsumptionAuditViewState
                     }),
                     cells: [
                       DataCell(Text(model.definition.name)),
+                      DataCell(_confidence(model.confidence)),
                       DataCell(
                         Text(
                           '${cycle.purchaseDate}\n'
@@ -690,6 +716,9 @@ class _PredictiveConsumptionAuditViewState
                       ),
                       DataCell(Text(_base(cycle.purchasedBase, model))),
                       DataCell(Text(_base(cycle.predictedPaidBase, model))),
+                      DataCell(
+                        Text(_base(cycle.knownOperationalBase, model)),
+                      ),
                       DataCell(
                         Text(
                           _base(cycle.cancelledKitchenExplainedBase, model),
@@ -759,7 +788,8 @@ class _PredictiveConsumptionAuditViewState
                 DataColumn(label: Text('R²')),
                 DataColumn(label: Text('Error normalizado')),
                 DataColumn(label: Text('Confianza')),
-                DataColumn(label: Text('Base no explicada / día')),
+                DataColumn(label: Text('Uso')),
+                DataColumn(label: Text('Base residual / día abierto')),
               ],
               rows: models.map((model) {
                 return DataRow(
@@ -771,6 +801,9 @@ class _PredictiveConsumptionAuditViewState
                     DataCell(Text(model.rSquared.toStringAsFixed(2))),
                     DataCell(Text(_percent(model.normalizedMae * 100))),
                     DataCell(_confidence(model.confidence)),
+                    DataCell(Text(model.isAuditUsable
+                        ? 'Auditable'
+                        : 'Exploratorio')),
                     DataCell(Text(_base(model.baselineDailyBase, model))),
                   ],
                 );
@@ -787,7 +820,7 @@ class _PredictiveConsumptionAuditViewState
         .where((cycle) => !_onlyInvestigation || cycle.isInvestigationPeriod)
         .toList();
     return GlassPanel(
-      borderColor: model.recentHighAnomalies > 0
+      borderColor: model.isAuditUsable && model.recentHighAnomalies > 0
           ? BrandColors.danger.withValues(alpha: 0.38)
           : null,
       padding: const EdgeInsets.all(14),
@@ -811,6 +844,7 @@ class _PredictiveConsumptionAuditViewState
                 spacing: 8,
                 children: [
                   _pill('Confianza ${model.confidence}'),
+                  _pill(model.isAuditUsable ? 'Auditable' : 'Exploratorio'),
                   _pill('${model.purchaseDayCount} días de compra'),
                   _pill(_alignment(model.alignment)),
                 ],
@@ -825,6 +859,17 @@ class _PredictiveConsumptionAuditViewState
               fontWeight: FontWeight.w600,
             ),
           ),
+          if (!model.isAuditUsable)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 10),
+              child: Text(
+                'Modelo exploratorio: sus residuales no alimentan el radar principal ni el total auditable.',
+                style: TextStyle(
+                  color: BrandColors.accentOrange,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 10,
@@ -838,6 +883,12 @@ class _PredictiveConsumptionAuditViewState
                 label: 'Predicho por ventas',
                 value: _base(model.totalPredictedPaidBase, model),
               ),
+              if (model.totalKnownOperationalBase > 0)
+                _Inline(
+                  label: 'Consumo operativo conocido',
+                  value: _base(model.totalKnownOperationalBase, model),
+                  accent: BrandColors.info,
+                ),
               _Inline(
                 label: 'Explicable por cancelaciones cocina',
                 value: _base(
@@ -987,9 +1038,10 @@ class _PredictiveConsumptionAuditViewState
                 DataColumn(label: Text('Compra')),
                 DataColumn(label: Text('Ventas asociadas')),
                 DataColumn(label: Text('Comprado')),
-                DataColumn(label: Text('Esperado')),
+                DataColumn(label: Text('Esperado ventas/base')),
+                DataColumn(label: Text('Consumo operativo')),
                 DataColumn(label: Text('Cancelaciones cocina')),
-                DataColumn(label: Text('Rango esperado 95%')),
+                DataColumn(label: Text('Rango robusto orientativo')),
                 DataColumn(label: Text('Residual')),
                 DataColumn(label: Text('Equiv. unidades')),
                 DataColumn(label: Text('Z')),
@@ -1001,21 +1053,30 @@ class _PredictiveConsumptionAuditViewState
               rows: cycles.map((cycle) {
                 return DataRow(
                   color: WidgetStateProperty.resolveWith((states) {
-                    if (cycle.isHighAnomaly) {
+                    if (cycle.purchaseMagnitudeOutlier) {
+                      return BrandColors.accentOrange.withValues(alpha: 0.08);
+                    }
+                    if (model.isAuditUsable && cycle.isHighAnomaly) {
                       return BrandColors.danger.withValues(alpha: 0.07);
                     }
                     return null;
                   }),
                   cells: [
-                    DataCell(Text(cycle.purchaseDate)),
+                    DataCell(Text(
+                      cycle.purchaseMagnitudeOutlier
+                          ? '${cycle.purchaseDate}\nRevisar volumen'
+                          : cycle.purchaseDate,
+                    )),
                     DataCell(
                       Text(
                         '${cycle.startBusinessDate} → '
-                        '${cycle.endBusinessDate} (${cycle.days}d)',
+                        '${cycle.endBusinessDate} (${cycle.days}d; '
+                        '${cycle.operatingDays} abiertos)',
                       ),
                     ),
                     DataCell(Text(_base(cycle.purchasedBase, model))),
                     DataCell(Text(_base(cycle.predictedPaidBase, model))),
+                    DataCell(Text(_base(cycle.knownOperationalBase, model))),
                     DataCell(
                       Text(
                         _base(
@@ -1118,6 +1179,10 @@ class _PredictiveConsumptionAuditViewState
       'cookedBasePerUnit',
       'trainingUnits',
       'plausibility',
+      'knownOperationalBase',
+      'operatingDays',
+      'purchaseMagnitudeOutlier',
+      'auditUse',
       'evidence',
     ];
 
@@ -1153,6 +1218,10 @@ class _PredictiveConsumptionAuditViewState
           coefficient.unitsInTraining.toStringAsFixed(2),
           coefficient.plausibility,
           '',
+          '',
+          '',
+          model.isAuditUsable ? 'auditable' : 'exploratory',
+          '',
         ]);
       }
       for (final cycle in model.cycles) {
@@ -1184,6 +1253,10 @@ class _PredictiveConsumptionAuditViewState
           '',
           '',
           '',
+          cycle.knownOperationalBase.toStringAsFixed(4),
+          '${cycle.operatingDays}',
+          cycle.purchaseMagnitudeOutlier ? 'true' : 'false',
+          model.isAuditUsable ? 'auditable' : 'exploratory',
           cycle.evidence,
         ]);
       }
