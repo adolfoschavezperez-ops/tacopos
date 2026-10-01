@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/reports/predictive_consumption_audit.dart';
@@ -66,6 +67,89 @@ class _PredictiveConsumptionAuditViewState
       _investigationStart = picked;
       _load();
     });
+  }
+
+  Future<void> _recordClosingCount(ResaleProduct product) async {
+    final controller = TextEditingController();
+    var selectedDate = _resaleAsOf;
+    var acknowledged = false;
+    var saving = false;
+    String? error;
+    try {
+      final saved = await showDialog<bool>(context: context, builder: (dialogContext) {
+        return StatefulBuilder(builder: (context, update) => AlertDialog(
+          title: const Text('Conteo físico al cierre'),
+          content: SizedBox(width: 440, child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Clave: ${product.key}\nProducto: ${product.name}'),
+              const SizedBox(height: 8),
+              const Text('El número corresponde a unidades físicas restantes DESPUÉS '
+                'de todas las compras, ventas y salidas del día operativo. '
+                'Se requiere el cierre de cocina confirmado.'),
+              TextButton.icon(
+                onPressed: saving ? null : () async {
+                  final picked = await showDatePicker(context: context,
+                    initialDate: selectedDate,
+                    firstDate: DateTime(2000),
+                    lastDate: DateTime.now());
+                  if (picked != null && dialogContext.mounted) {
+                    update(() => selectedDate = picked);
+                  }
+                },
+                icon: const Icon(Icons.calendar_month),
+                label: Text('Cierre ${DateFormat('dd/MM/yyyy').format(selectedDate)}'),
+              ),
+              TextField(controller: controller,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                onChanged: (_) => update(() {}),
+                decoration: const InputDecoration(labelText: 'Unidades contadas')),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: acknowledged,
+                onChanged: saving ? null : (value) =>
+                  update(() => acknowledged = value ?? false),
+                title: const Text('Confirmo que es un conteo físico real de ese cierre; '
+                  'no una cifra calculada ni estimada.'),
+              ),
+              const Text('Se guardará con hora de registro y usuario. '
+                'El conteo es inmutable: no puede sobrescribirse.'),
+              if (error != null) Text(error!,
+                style: const TextStyle(color: BrandColors.danger)),
+            ],
+          )),
+          actions: [
+            TextButton(onPressed: saving ? null : () =>
+              Navigator.of(dialogContext).pop(false), child: const Text('Cancelar')),
+            FilledButton(onPressed: saving || !acknowledged ||
+                  int.tryParse(controller.text) == null ? null : () async {
+              update(() { saving = true; error = null; });
+              try {
+                await widget.repository.saveResaleClosingCount(
+                  product: product,
+                  businessDate: DateFormat('yyyy-MM-dd').format(selectedDate),
+                  physicalCount: int.parse(controller.text),
+                );
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop(true);
+              } catch (exception) {
+                if (dialogContext.mounted) update(() => error = '$exception');
+              } finally {
+                if (dialogContext.mounted) update(() => saving = false);
+              }
+            }, child: const Text('Guardar conteo')),
+          ],
+        ));
+      });
+      if (saved == true && mounted) {
+        setState(() => _resaleFuture = widget.repository.getResaleUnitAudit());
+        showAppSnackBar(context, 'Conteo físico registrado.',
+          type: AppSnackBarType.success);
+      }
+    } finally {
+      controller.dispose();
+    }
   }
 
   @override
@@ -190,7 +274,7 @@ class _PredictiveConsumptionAuditViewState
             label: Text('Hasta ${DateFormat('dd/MM/yyyy').format(_resaleAsOf)}')),
           for (final p in audit.products) Builder(builder: (_) {
             final period = p.period(start, end);
-            final baseline = p.period('2026-07-01', '2026-08-31');
+            final baseline = p.period('2026-07-15', '2026-08-31');
             final september = p.period('2026-09-01', '2026-09-30');
             final daily = p.days.where((d) => d.date.compareTo(start) >= 0 &&
                 d.date.compareTo(end) <= 0).toList();
@@ -202,6 +286,9 @@ class _PredictiveConsumptionAuditViewState
                 Text('Proveedor: ${p.suppliers.join(', ')} · SKU POS: '
                   '${p.productIds.isEmpty ? 'sin vínculo seguro' : p.productIds.join(', ')} '
                   '· Última compra en histórico: ${p.lastPurchaseDate}'),
+                TextButton.icon(onPressed: () => _recordClosingCount(p),
+                  icon: const Icon(Icons.fact_check_outlined),
+                  label: const Text('Registrar conteo físico de cierre')),
                 Text('Compradas: ${period.bought} · Vendidas: ${period.sold} '
                   '· Otras salidas registradas: ${period.other} '
                   '· Variación: ${period.netUnits >= 0 ? '+' : ''}${period.netUnits} u.'),
@@ -215,6 +302,10 @@ class _PredictiveConsumptionAuditViewState
                 if (p.physicalDifference != null)
                   Text('Diferencia confirmada entre conteos: ${p.physicalDifference} u. '
                     '· Valor a costo medio: ${money(p.physicalDifference!.abs() * p.unitCost)}'),
+                if (p.checkpoint != null)
+                  Text('Último conteo físico de cierre: ${p.checkpoint!.physicalCount} u. '
+                    'al ${p.checkpoint!.date}; registrado '
+                    '${p.checkpoint!.recordedAt == null ? 'sin hora' : DateFormat('dd/MM/yyyy HH:mm').format(p.checkpoint!.recordedAt!)}.'),
                 if (p.hasNegativeRelativeBalance)
                   const Text('Saldo relativo negativo: revisar integridad de datos e inventario inicial.',
                     style: TextStyle(color: BrandColors.danger)),
@@ -224,7 +315,7 @@ class _PredictiveConsumptionAuditViewState
                 if (p.unprovenCancellations > 0)
                   Text('${p.unprovenCancellations} u. canceladas sin prueba de entrega; '
                     'no se restaron del inventario.'),
-                Text('Jul–ago: ${baseline.bought} compradas / ${baseline.sold + baseline.other} '
+                Text('15 jul–31 ago: ${baseline.bought} compradas / ${baseline.sold + baseline.other} '
                   'salidas; Δ ${baseline.netUnits}. Sep: ${september.bought} compradas / '
                   '${september.sold + september.other} salidas; Δ ${september.netUnits}. '
                   'Comparación sujeta a inventario arrastrado.'),
@@ -245,8 +336,9 @@ class _PredictiveConsumptionAuditViewState
               '(${audit.unmatchedSales.length})'),
               children: [for (final row in audit.unmatchedSales) ListTile(title: Text(row))]),
           for (final note in audit.notes) Text('• $note'),
-          const Text('No hay conteo físico por SKU ni movimientos explícitos de merma, '
-            'daño o devolución integrados a esta conciliación; diferencia económica confirmable: pendiente.'),
+          const Text('Los conteos sólo anclan el inventario cuando se registran '
+            'explícitamente para el SKU al cierre. Merma, daño y devolución '
+            'siguen sin una fuente de movimientos por SKU integrada.'),
           const Text('El importe de artículos puede diferir de la venta neta '
             'por descuentos, cortesías y cobros parciales.'),
         ],

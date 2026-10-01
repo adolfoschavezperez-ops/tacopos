@@ -3,11 +3,39 @@ enum ResaleFamily { water, empanada }
 
 enum ResaleExitKind { paid, recordedOther, cancellationWithoutDeliveryProof }
 
+// A zero-cash checkout is still a physical exit when the item was finalized.
+// Use the payment linked to the item, not every payment on a split order.
+ResaleExitKind resaleFinalizedExitKind({
+  required String discountType,
+  required String method,
+  required double discountPercent,
+  required double discountAmount,
+  required double subtotal,
+  required double chargedAmount,
+  double legacyDiscountPercent = 0,
+  double baseAmount = 0,
+}) {
+  final type = discountType.trim().toLowerCase();
+  final paymentMethod = method.trim().toLowerCase();
+  if (type == 'employee_free_meal') return ResaleExitKind.recordedOther;
+  if (paymentMethod == 'employee_consumption' && type.isEmpty &&
+      baseAmount > 0 && discountAmount <= 0.01 &&
+      discountPercent <= 0.01 && legacyDiscountPercent <= 0.01) {
+    // Legacy employee consumption is treated as a free meal by the canonical
+    // sales summary. The physical unit must still leave stock.
+    return ResaleExitKind.recordedOther;
+  }
+  final fullyDiscounted = chargedAmount <= 0.01 &&
+      (discountPercent >= 99.99 ||
+          (subtotal > 0 && discountAmount >= subtotal - 0.01));
+  return fullyDiscounted ? ResaleExitKind.recordedOther : ResaleExitKind.paid;
+}
+
 class ResalePurchase {
   const ResalePurchase({required this.id, required this.date, required this.supplier,
     required this.name, required this.quantity, required this.unit,
-    required this.lineCost, this.stockItemId = ''});
-  final String id, date, supplier, name, unit, stockItemId;
+    required this.lineCost, this.stockItemId = '', this.purchaseItemId = ''});
+  final String id, date, supplier, name, unit, stockItemId, purchaseItemId;
   final double quantity, lineCost;
 }
 
@@ -23,9 +51,12 @@ class ResaleExit {
 
 class ResaleCheckpoint {
   const ResaleCheckpoint({required this.date, required this.key,
-    required this.physicalCount});
+    required this.physicalCount, this.boundary = 'closing', this.recordedAt});
   final String date, key;
   final int physicalCount;
+  // The count is measured after all movements for the operational date.
+  final String boundary;
+  final DateTime? recordedAt;
 }
 
 class ResaleDay {
@@ -173,16 +204,32 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
 
   for (final p in candidatePurchases) {
     final family = resaleSupplierFamily(p.supplier)!;
-    if (_units(p) == null || !_isFamilyProduct(p.name, family)) {
+    if (_units(p) == null || !_isFamilyProduct(p.name, family) ||
+        (p.purchaseItemId.isNotEmpty &&
+            !RegExp(r'^[A-Za-z0-9_.-]{1,100}$').hasMatch(p.purchaseItemId))) {
       unresolvedPurchases.add('${p.id}: ${p.name} (${p.quantity} ${p.unit})');
       continue;
     }
     // A shared kitchen stock link must not collapse different bottle sizes.
-    final identity = 'name:${_itemKey(p.name)}';
+    // A real purchase catalog ID takes priority over a display name.
+    final identity = p.purchaseItemId.isNotEmpty
+        ? 'sku:${p.purchaseItemId}' : 'name:${_itemKey(p.name)}';
     final key = '${family.name}:$identity';
     byKey.putIfAbsent(key, () => []).add(p);
     names[key] = _itemKey(p.name);
     families[key] = family;
+  }
+  // One catalog ID reused with different presentation labels is not a
+  // trustworthy unit identity. Keep every affected purchase unresolved.
+  for (final key in byKey.keys.toList()) {
+    if (!key.contains(':sku:')) continue;
+    final variants = byKey[key]!.map((p) => _itemKey(p.name)).toSet();
+    if (variants.length <= 1) continue;
+    for (final p in byKey.remove(key)!) {
+      unresolvedPurchases.add('${p.id}: ${p.name} (SKU compartido entre presentaciones)');
+    }
+    names.remove(key);
+    families.remove(key);
   }
 
   final salesByProduct = <String, List<ResaleExit>>{};
@@ -201,15 +248,14 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
         possible.add(entry.key);
       }
     }
-    if (possible.isEmpty && example.stockItemId.isNotEmpty) {
-      for (final entry in byKey.entries) {
-        final family = families[entry.key]!;
-        if (!_isFamilyProduct(example.name, family)) continue;
-        if (entry.value.any((p) => p.stockItemId == example.stockItemId)) {
-          possible.add(entry.key);
-        }
+    if (possible.length > 1 && example.stockItemId.isNotEmpty) {
+      final linked = possible.where((key) => byKey[key]!.any(
+        (p) => p.stockItemId == example.stockItemId)).toSet();
+      if (linked.length == 1) {
+        possible..clear()..add(linked.single);
       }
     }
+    // A kitchen stock link alone cannot establish bottle size or flavor.
     // A single generic empanada purchase can be reconciled across flavors,
     // provided there are no separately purchased flavors to double count.
     if (possible.isEmpty && _isFamilyProduct(example.name, ResaleFamily.empanada)) {
@@ -259,6 +305,7 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
       days.add(ResaleDay(date, d.bought, d.sold, d.other, balance, d.cost, d.revenue));
     }
     final relevantCheckpoints = checkpoints.where((c) => c.key == entry.key &&
+      c.boundary == 'closing' && c.physicalCount >= 0 &&
       c.date.compareTo(endDate) <= 0).toList()..sort((a,b) => a.date.compareTo(b.date));
     final checkpoint = relevantCheckpoints.isEmpty ? null : relevantCheckpoints.last;
     int? difference;

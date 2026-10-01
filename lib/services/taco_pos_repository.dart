@@ -1365,6 +1365,9 @@ class TacoPosRepository {
   CollectionReference<Map<String, dynamic>> get _supplierPurchasesRef =>
       _restaurantRef.collection('supplierPurchases');
 
+  CollectionReference<Map<String, dynamic>> get _resaleCheckpointsRef =>
+      _restaurantRef.collection('resaleCheckpoints');
+
   CollectionReference<Map<String, dynamic>> get _supplierPaymentsRef =>
       _restaurantRef.collection('supplierPayments');
 
@@ -5615,7 +5618,8 @@ class TacoPosRepository {
         lines.add(ResalePurchase(id: '${entry.$1.id}/${item.id}', date: date,
           supplier: entry.$1.supplierName, name: item.purchaseItemName,
           quantity: item.quantity, unit: item.unit, lineCost: item.lineTotal,
-          stockItemId: item.kitchenStockItemId ?? ''));
+          stockItemId: item.kitchenStockItemId ?? '',
+          purchaseItemId: item.purchaseItemId ?? ''));
       }
     }
     if (lines.isEmpty) {
@@ -5626,22 +5630,20 @@ class TacoPosRepository {
     }
     final start = lines.map((p) => p.date).reduce(
       (a, b) => a.compareTo(b) < 0 ? a : b);
-    final orderLoad = await _ordersForReportRange(ReportDataKey(
+    // The shared historical loader caches day datasets and reads each order's
+    // complete item subcollection, including legacy items without branchId.
+    // A collectionGroup filter can return a partial order, so it is not safe
+    // to substitute here until legacy coverage is proven.
+    final report = await getReportDataBundle(
       restaurantId: session.currentRestaurantId,
       branchId: session.currentBranchId,
-      startBusinessDate: start, endBusinessDate: end,
-      includeItems: true));
-    final orders = orderLoad.$1;
-    // Read every selected order's items, including historical lines without
-    // branchId. A collectionGroup branch filter can silently return only a
-    // subset of an order's lines.
-    final orderItems = await runInBatches<PosOrder,
-        (String, List<OrderItem>)>(orders, batchSize: 15,
-      action: (order) async {
-        final snapshot = await _ordersRef.doc(order.id).collection('items').get();
-        return (order.id, snapshot.docs.map(OrderItem.fromDoc).toList());
-      });
-    final byOrder = {for (final row in orderItems) row.$1: row.$2};
+      startBusinessDate: start,
+      endBusinessDate: end,
+      includeItems: true,
+      reportName: 'ResaleUnitAudit',
+    );
+    final orders = report.orders;
+    final byOrder = report.itemsByOrder;
     final exits = <ResaleExit>[];
     for (final order in orders) {
       final date = _businessDateForOrder(order) ?? order.businessDate ??
@@ -5649,6 +5651,9 @@ class TacoPosRepository {
       if (date.isEmpty) continue;
       final orderPaid = order.status.trim().toLowerCase() == 'paid' ||
           order.paymentStatus.trim().toLowerCase() == 'paid';
+      final payments = (report.paymentsByOrder[order.id] ?? const <Payment>[])
+          .where((payment) => payment.isActive).toList();
+      final paymentById = {for (final payment in payments) payment.id: payment};
       for (final item in byOrder[order.id] ?? const <OrderItem>[]) {
         if (item.qty <= 0) continue;
         ResaleExitKind? kind;
@@ -5656,7 +5661,23 @@ class TacoPosRepository {
           kind = ResaleExitKind.cancellationWithoutDeliveryProof;
         } else if (isCanonicalActiveItem(item) &&
             (item.paymentStatus.trim().toLowerCase() == 'paid' || orderPaid)) {
-          kind = ResaleExitKind.paid;
+          final linkedPayment = paymentById[item.paymentId] ??
+              (payments.length == 1 ? payments.single : null);
+          kind = linkedPayment == null
+              ? (order.discountPercent != null &&
+                        order.discountPercent! >= 99.99 && orderPaid
+                    ? ResaleExitKind.recordedOther
+                    : ResaleExitKind.paid)
+              : resaleFinalizedExitKind(
+                  discountType: linkedPayment.appliedDiscountType ?? '',
+                  method: linkedPayment.method,
+                  discountPercent: linkedPayment.appliedDiscountPercent,
+                  discountAmount: linkedPayment.discountAmount,
+                  subtotal: linkedPayment.subtotalBeforeDiscount,
+                  chargedAmount: linkedPayment.totalAfterDiscount,
+                  legacyDiscountPercent: linkedPayment.discountPercent,
+                  baseAmount: linkedPayment.baseAmount,
+                );
         }
         if (kind == null) continue;
         exits.add(ResaleExit(date: date, productId: item.productId,
@@ -5665,7 +5686,81 @@ class TacoPosRepository {
           stockItemId: item.kitchenStockItemId ?? ''));
       }
     }
-    return buildResaleAudit(purchases: lines, exits: exits, endDate: end);
+    final countSnapshot = await _resaleCheckpointsRef.get();
+    final counts = <ResaleCheckpoint>[];
+    for (final doc in countSnapshot.docs) {
+      final data = doc.data();
+      if (data['branchId'] != session.currentBranchId ||
+          data['restaurantId'] != session.currentRestaurantId ||
+          data['boundary'] != 'closing' ||
+          data['physicalCount'] is! int ||
+          (data['physicalCount'] as int) < 0) continue;
+      final date = data['businessDate'];
+      final key = data['skuKey'];
+      if (date is! String || key is! String ||
+          !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) continue;
+      counts.add(ResaleCheckpoint(
+        date: date, key: key, physicalCount: data['physicalCount'] as int,
+        recordedAt: (data['recordedAt'] as Timestamp?)?.toDate(),
+      ));
+    }
+    return buildResaleAudit(purchases: lines, exits: exits,
+      checkpoints: counts, endDate: end);
+  }
+
+  /// Records a physically observed closing count. Never derives it from sales.
+  /// One immutable checkpoint per branch, operational date and resale SKU key.
+  Future<void> saveResaleClosingCount({
+    required ResaleProduct product,
+    required String businessDate,
+    required int physicalCount,
+  }) async {
+    _requireAdminPermission(kIsWeb &&
+      (AppSession.instance.employee?.canViewAdmin == true ||
+       AppSession.instance.employee?.isSuperAdmin == true),
+      'Se requiere acceso de administración para registrar el conteo físico.');
+    final current = AppSession.instance;
+    if (physicalCount < 0 || physicalCount > 100000 ||
+        !RegExp(r'^(water|empanada):(name:[a-z0-9 ]{1,100}|sku:[A-Za-z0-9_.-]{1,100})$')
+            .hasMatch(product.key) ||
+        !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(businessDate) ||
+        businessDate.compareTo(_currentBusinessDate()) > 0) {
+      throw ArgumentError('Conteo, SKU o fecha de operación inválidos.');
+    }
+    final closed = (await _kitchenSessionsForBusinessDate(businessDate))
+        .where((row) => row.isClosed && row.closedAt != null).toList();
+    if (closed.length != 1) {
+      throw StateError('Se requiere un único cierre de cocina confirmado para esta fecha y sucursal.');
+    }
+    final sessionRef = _kitchenSessionsRef.doc(closed.single.id);
+    final checkpointId = '${current.currentBranchId}|$businessDate|${product.key}';
+    final ref = _resaleCheckpointsRef.doc(checkpointId);
+    await _db.runTransaction((transaction) async {
+      final kitchenDoc = await transaction.get(sessionRef);
+      final existing = await transaction.get(ref);
+      if (existing.exists) {
+        throw StateError('Ya existe un conteo de cierre para este SKU y fecha; no se sobrescribe.');
+      }
+      final kitchen = kitchenDoc.data();
+      if (kitchen == null || kitchen['status'] != 'closed' ||
+          kitchen['closedAt'] == null ||
+          kitchen['branchId'] != current.currentBranchId ||
+          kitchen['businessDate'] != businessDate) {
+        throw StateError('El cierre de cocina cambió; vuelve a verificarlo.');
+      }
+      transaction.set(ref, {
+        'restaurantId': current.currentRestaurantId,
+        'branchId': current.currentBranchId,
+        'businessDate': businessDate,
+        'skuKey': product.key,
+        'skuName': product.name,
+        'boundary': 'closing',
+        'physicalCount': physicalCount,
+        'kitchenSessionId': closed.single.id,
+        'recordedAt': FieldValue.serverTimestamp(),
+        'recordedByUid': _auth.currentUser?.uid ?? '',
+      });
+    });
   }
 
   Future<PredictiveConsumptionAudit> getPredictiveConsumptionAudit({

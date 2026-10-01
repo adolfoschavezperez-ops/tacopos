@@ -3,9 +3,9 @@ import 'package:tacopos/core/reports/unit_reconciliation_audit.dart';
 
 ResalePurchase buy(String date, int qty, {String name = 'Agua 600 ml',
   String supplier = 'Aguas Fanny', String unit = 'pza', String id = 'p',
-  String stock = ''}) => ResalePurchase(id: '$id-$date', date: date,
+  String stock = '', String sku = ''}) => ResalePurchase(id: '$id-$date', date: date,
   supplier: supplier, name: name, quantity: qty.toDouble(), unit: unit,
-  lineCost: qty * 10.0, stockItemId: stock);
+  lineCost: qty * 10.0, stockItemId: stock, purchaseItemId: sku);
 
 ResaleExit out(String date, int qty, {String name = 'Agua 600 ml',
   String productId = 'water', ResaleExitKind kind = ResaleExitKind.paid,
@@ -53,6 +53,30 @@ void main() {
       out('2026-09-01', 20, stock: 'generic-water')]);
     expect(a.products, hasLength(2));
     expect(a.products.firstWhere((p) => p.name == 'agua 1 litro').sold, 0);
+  });
+  test('a shared stock link without a matching presentation stays unresolved', () {
+    final a = audit([buy('2026-09-01', 30, stock: 'generic-water')], [
+      out('2026-09-01', 5, name: 'Agua 1 litro', stock: 'generic-water')]);
+    expect(a.products.single.sold, 0);
+    expect(a.unmatchedSales, hasLength(1));
+  });
+  test('same display name across purchase SKUs needs a unique link', () {
+    final a = audit([buy('2026-09-01', 30, sku: 'bottle-a', stock: 'a'),
+      buy('2026-09-01', 30, sku: 'bottle-b', stock: 'b', id: 'b')], [
+      out('2026-09-01', 10),
+      out('2026-09-01', 7, productId: 'linked', stock: 'b')]);
+    expect(a.products, hasLength(2));
+    expect(a.unmatchedSales, hasLength(1));
+    expect(a.products.firstWhere((p) => p.key == 'water:sku:bottle-b').sold, 7);
+    expect(a.products.firstWhere((p) => p.key == 'water:sku:bottle-a').sold, 0);
+  });
+  test('reused purchase SKU across presentations leaves purchases unresolved', () {
+    final a = audit([buy('2026-09-01', 30, sku: 'reused'),
+      buy('2026-09-01', 12, name: 'Agua 1 litro', sku: 'reused', id: 'b')], [
+      out('2026-09-01', 5)]);
+    expect(a.products, isEmpty);
+    expect(a.unmatchedPurchases, hasLength(2));
+    expect(a.unmatchedSales, hasLength(1));
   });
   test('similar water from a different supplier is excluded', () {
     final a = audit([buy('2026-09-01', 30, supplier: 'Otra agua')], []);
@@ -127,6 +151,14 @@ void main() {
     expect(p.physicalDifference, -2);
     expect(p.theoreticalInventory, 8);
   });
+  test('a checkpoint without a closing boundary does not anchor inventory', () {
+    final p = audit([buy('2026-09-02', 30)], [], checkpoints: const [
+      ResaleCheckpoint(date: '2026-09-01', key: 'water:name:agua 600 ml',
+        physicalCount: 5, boundary: 'opening'),
+    ]).products.single;
+    expect(p.initialUnknown, isTrue);
+    expect(p.theoreticalInventory, isNull);
+  });
   test('negative theoretical relative balance means data integrity review', () {
     final p = audit([buy('2026-09-02', 3)], [
       out('2026-09-01', 7)]).products.single;
@@ -140,12 +172,36 @@ void main() {
     expect(p.days.map((d) => d.date), ['2026-09-05', '2026-09-07']);
     expect(p.relativeBalance, 10);
   });
-  test('July-August versus September shows deltas with carryover', () {
-    final p = audit([buy('2026-07-30', 30), buy('2026-09-01', 30)], [
+  test('July 15-August versus September shows deltas with carryover', () {
+    final p = audit([buy('2026-07-10', 40), buy('2026-07-30', 30),
+      buy('2026-09-01', 30)], [
       out('2026-08-01', 20), out('2026-09-03', 25)]).products.single;
-    expect(p.period('2026-07-01', '2026-08-31').netUnits, 10);
+    expect(p.period('2026-07-15', '2026-08-31').netUnits, 10);
     expect(p.period('2026-09-01', '2026-09-30').netUnits, 5);
-    expect(p.relativeBalance, 15);
+    expect(p.relativeBalance, 55);
+  });
+  test('100% employee meal and courtesy are registered other exits', () {
+    expect(resaleFinalizedExitKind(discountType: 'employee_free_meal',
+      method: 'employee_consumption', discountPercent: 100,
+      discountAmount: 25, subtotal: 25, chargedAmount: 0),
+      ResaleExitKind.recordedOther);
+    expect(resaleFinalizedExitKind(discountType: 'courtesy', method: 'cash',
+      discountPercent: 100, discountAmount: 25, subtotal: 25,
+      chargedAmount: 0), ResaleExitKind.recordedOther);
+    expect(resaleFinalizedExitKind(discountType: '',
+      method: 'employee_consumption', discountPercent: 0,
+      discountAmount: 0, subtotal: 25, chargedAmount: 25,
+      baseAmount: 25),
+      ResaleExitKind.recordedOther);
+    expect(resaleFinalizedExitKind(discountType: '',
+      method: 'employee_consumption', discountPercent: 0,
+      legacyDiscountPercent: 30, discountAmount: 0,
+      subtotal: 25, chargedAmount: 17.5, baseAmount: 25),
+      ResaleExitKind.paid);
+    expect(resaleFinalizedExitKind(discountType: 'employee_30',
+      method: 'employee_consumption', discountPercent: 30,
+      discountAmount: 7.5, subtotal: 25, chargedAmount: 17.5),
+      ResaleExitKind.paid);
   });
   test('pack x30 converts once; unsupported units stay unmatched', () {
     final a = audit([buy('2026-09-01', 1,

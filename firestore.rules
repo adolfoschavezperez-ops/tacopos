@@ -91,6 +91,13 @@ service cloud.firestore {
         );
     }
 
+    function canManageResaleCheckpoints(restaurantId) {
+      return hasAuthUser(restaurantId) &&
+        authUser(restaurantId).active == true &&
+        (authUser(restaurantId).isSuperAdmin == true ||
+          authUser(restaurantId).permissions.canViewAdmin == true);
+    }
+
     function isSensitiveSetting(settingId) {
       return settingId in ['appUpdates', 'expensePolicies'];
     }
@@ -563,6 +570,50 @@ service cloud.firestore {
         allow create: if validCreate(restaurantId);
         allow update: if validUpdate();
         allow delete: if false;
+      }
+
+      // Closing counts are immutable and tied to a real closed kitchen session.
+      // Server time records when the declaration was entered, including later
+      // entry of a historical closing count. The businessDate is the physical
+      // end-of-day boundary, never the timestamp of data entry.
+      match /resaleCheckpoints/{checkpointId} {
+        allow read: if canManageResaleCheckpoints(restaurantId);
+        allow create: if canManageResaleCheckpoints(restaurantId) &&
+          validCreate(restaurantId) &&
+          request.resource.data.keys().hasOnly([
+            'restaurantId', 'branchId', 'businessDate', 'skuKey', 'skuName',
+            'boundary', 'physicalCount', 'kitchenSessionId', 'recordedAt',
+            'recordedByUid'
+          ]) &&
+          request.resource.data.keys().hasAll([
+            'restaurantId', 'branchId', 'businessDate', 'skuKey', 'skuName',
+            'boundary', 'physicalCount', 'kitchenSessionId', 'recordedAt',
+            'recordedByUid'
+          ]) &&
+          request.resource.data.restaurantId == restaurantId &&
+          request.resource.data.branchId is string &&
+          request.resource.data.businessDate is string &&
+          request.resource.data.businessDate.size() == 10 &&
+          request.resource.data.skuKey is string &&
+          request.resource.data.skuKey.matches('^(water|empanada):(name:[a-z0-9 ]{1,100}|sku:[A-Za-z0-9_.-]{1,100})$') &&
+          request.resource.data.skuName is string &&
+          request.resource.data.skuName.size() <= 120 &&
+          request.resource.data.boundary == 'closing' &&
+          request.resource.data.physicalCount is int &&
+          request.resource.data.physicalCount >= 0 &&
+          request.resource.data.physicalCount <= 100000 &&
+          request.resource.data.kitchenSessionId is string &&
+          request.resource.data.recordedByUid == request.auth.uid &&
+          request.resource.data.recordedAt == request.time &&
+          checkpointId == request.resource.data.branchId + '|' +
+            request.resource.data.businessDate + '|' +
+            request.resource.data.skuKey &&
+          exists(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)) &&
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.status == 'closed' &&
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.closedAt is timestamp &&
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.branchId == request.resource.data.branchId &&
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(request.resource.data.kitchenSessionId)).data.businessDate == request.resource.data.businessDate;
+        allow update, delete: if false;
       }
 
       match /kitchenSessions/{sessionId} {

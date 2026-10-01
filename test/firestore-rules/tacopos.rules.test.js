@@ -216,6 +216,56 @@ function deviceData(deviceId = 'device-uid', overrides = {}) {
 }
 
 describe('TacoPOS Firestore production guard rails', () => {
+  it('restringe conteos de cierre a admin, sesión cerrada y un documento inmutable', async () => {
+    await seedAdmin();
+    await seed(`restaurants/${RESTAURANT_ID}/kitchenSessions/kitchen-close`, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      businessDate: BUSINESS_DATE,
+      status: 'closed',
+      closedAt: new Date('2026-08-01T05:00:00.000Z'),
+    });
+    const skuKey = 'water:name:agua 600 ml';
+    const checkpointId = `${BRANCH_ID}|${BUSINESS_DATE}|${skuKey}`;
+    const path = `restaurants/${RESTAURANT_ID}/resaleCheckpoints/${checkpointId}`;
+    const data = {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      businessDate: BUSINESS_DATE,
+      skuKey,
+      skuName: 'agua 600 ml',
+      boundary: 'closing',
+      physicalCount: 12,
+      kitchenSessionId: 'kitchen-close',
+      recordedAt: serverTimestamp(),
+      recordedByUid: 'admin-uid',
+    };
+    await seed(`restaurants/${RESTAURANT_ID}/authUsers/withdrawal-uid`, {
+      active: true,
+      isSuperAdmin: false,
+      permissions: {
+        canViewAdmin: false,
+        canAuthorizeCashWithdrawals: true,
+      },
+    });
+    await assertFails(setDoc(doc(authedDb('withdrawal-uid'), path), {
+      ...data, recordedByUid: 'withdrawal-uid',
+    }));
+    await assertFails(setDoc(doc(authedDb('cashier-1'), path), {
+      ...data, recordedByUid: 'cashier-1',
+    }));
+    await assertFails(setDoc(doc(adminDb(), path), {
+      ...data, physicalCount: -1,
+    }));
+    await assertFails(setDoc(doc(adminDb(), path), {
+      ...data, kitchenSessionId: 'unknown',
+    }));
+    await assertSucceeds(setDoc(doc(adminDb(), path), data));
+    await assertFails(updateDoc(doc(adminDb(), path), { physicalCount: 13 }));
+    await assertFails(deleteDoc(doc(adminDb(), path)));
+    await assertFails(getDoc(doc(authedDb('cashier-1'), path)));
+    await assertSucceeds(getDoc(doc(adminDb(), path)));
+  });
   it('rechaza usuario no autenticado', async () => {
     await assertFails(
       getDoc(doc(anonDb(), `restaurants/${RESTAURANT_ID}`)),
