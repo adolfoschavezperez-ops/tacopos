@@ -166,6 +166,29 @@ void main() {
       expect(cycle.shortageAmount, closeTo(304.90, 0.001));
       expect(cycle.evidence, contains('cancelaciones'));
       expect(cycle.evidence, contains('faltante de caja'));
+
+      final withoutCash = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [
+          PredictiveYieldInput(
+            stockItemId: 'bistec',
+            stockItemName: 'Bistec',
+            yieldRate: 0.69,
+          ),
+        ],
+        historyStart: '2026-09-20',
+        historyEnd: '2026-09-29',
+        investigationStart: '2026-09-28',
+      );
+      final physicalCycle = withoutCash.models.single.cycles.firstWhere(
+        (row) => row.purchaseDate == cycle.purchaseDate,
+      );
+      expect(cycle.residualOperationalBase,
+          closeTo(physicalCycle.residualOperationalBase, 0.000001));
+      expect(cycle.anomalyScore,
+          closeTo(physicalCycle.anomalyScore, 0.000001));
     });
 
     test('does not score an open last forward-supply batch', () {
@@ -323,6 +346,54 @@ void main() {
         investigationStart: '2026-09-28',
       );
       final model = audit.models.single;
+      expect(model.confidence, 'No identificable');
+      expect(model.investigationCycles.every((cycle) => cycle.anomalyScore == 0),
+          isTrue);
+    });
+
+    test('physically absurd grams per taco are not scored', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      const quantities = [20, 24, 18, 22, 26, 16, 28, 14, 20, 24];
+      for (var i = 0; i < quantities.length; i++) {
+        final date = DateTime(2026, 9, 20 + i);
+        final key = _dateKey(date);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'p-$i',
+          purchaseDate: date,
+          businessDate: key,
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          quantity: i == 8 ? 10 : quantities[i] * 0.30,
+          unit: 'kg',
+        ));
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'taco-bistec',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: quantities[i],
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+      final audit = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [
+          PredictiveYieldInput(
+            stockItemId: '',
+            stockItemName: 'Bistec',
+            yieldRate: 0.69,
+          ),
+        ],
+        historyStart: '2026-09-20',
+        historyEnd: '2026-09-29',
+        investigationStart: '2026-09-28',
+      );
+      final model = audit.models.single;
+      expect(model.coefficients.single.rawBasePerUnit, greaterThan(250));
       expect(model.confidence, 'No identificable');
       expect(model.investigationCycles.every((cycle) => cycle.anomalyScore == 0),
           isTrue);

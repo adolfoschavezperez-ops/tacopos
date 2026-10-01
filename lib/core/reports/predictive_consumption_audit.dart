@@ -374,7 +374,7 @@ class PredictiveConsumptionAudit {
       models.fold(0, (sum, model) => sum + model.recentHighAnomalies);
 
   double get recentPositiveResidualWeightGrams => models
-      .where((model) => model.isWeight)
+      .where((model) => model.isWeight && model.confidence != 'No identificable')
       .fold<double>(
         0,
         (sum, model) =>
@@ -676,7 +676,8 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     );
 
     final identifiable = confidenceEligible(training.length, candidateKeys.length) &&
-        _independentFeatures(training, candidateKeys);
+        _independentFeatures(training, candidateKeys) &&
+        coefficients.every((row) => row.plausibility != 'Atipico');
     final outputCycles = allCycles.map((cycle) {
       final predictedPaid = _predictCycle(cycle, fit);
       final cancelledExplained = fit.coefficients.entries.fold<double>(
@@ -709,9 +710,6 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       final score = _anomalyScore(
         robustZ: robustZ,
         residualPercent: residualPercent,
-        cancelledExplained: cancelledExplained,
-        predictedPaid: predictedPaid,
-        shortage: cycle.shortage,
       );
       return PredictiveConsumptionCycle(
         purchaseDate: cycle.purchaseDate,
@@ -819,7 +817,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     'Las cancelaciones que tocaron cocina se muestran por separado para medir cuanto consumo podrian explicar sin contarlas como venta.',
     'El periodo de investigacion se aplica a las fechas de consumo cubiertas por cada ciclo, no solo a la fecha de compra, para no contaminar el entrenamiento con ventas posteriores al corte.',
     'Si el patron aprendido es abastecimiento hacia adelante, la compra mas reciente queda abierta y no se califica hasta que exista la siguiente reposicion.',
-    'El rango esperado usa la dispersion robusta del historico (aprox. 95%). Estar fuera del rango es una señal de investigacion, no una prueba de robo.',
+    'El rango es una banda heuristica con piso del 10% de compra media; no tiene cobertura estadistica calibrada del 95%.',
   ];
 
   return PredictiveConsumptionAudit(
@@ -1372,6 +1370,8 @@ String _coefficientPlausibility({
 }) {
   if (family != 'weight') return 'Dato empirico';
   if (definition.kind == PredictiveIngredientKind.meat) {
+    if (raw > 250) return 'Atipico';
+    if (raw > 180) return 'Revisar porcion';
     final cookedValue = cooked;
     if (cookedValue == null || cookedValue.isNaN) return 'Sin rendimiento';
     if (cookedValue >= 20 && cookedValue <= 120) return 'Plausible';
@@ -1411,17 +1411,9 @@ String _modelConfidence({
 double _anomalyScore({
   required double robustZ,
   required double residualPercent,
-  required double cancelledExplained,
-  required double predictedPaid,
-  required double shortage,
 }) {
   var score = math.min(55.0, robustZ.abs() * 18).toDouble();
   score += math.min(25.0, residualPercent.abs() * 35).toDouble();
-  if (cancelledExplained >
-      math.max(50.0, predictedPaid * 0.10).toDouble()) {
-    score += 10;
-  }
-  if (shortage > 20) score += 10;
   return score.clamp(0.0, 100.0).toDouble();
 }
 

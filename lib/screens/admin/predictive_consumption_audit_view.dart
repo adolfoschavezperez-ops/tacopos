@@ -302,7 +302,7 @@ class _PredictiveConsumptionAuditViewState
         _Metric(
           label: 'Ciclos recientes altos',
           value: '$high',
-          detail: 'Índice técnico ≥ 70',
+          detail: 'Prioridad heurística ≥ 70',
           accent: high > 0 ? BrandColors.danger : BrandColors.success,
         ),
         _Metric(
@@ -366,7 +366,7 @@ class _PredictiveConsumptionAuditViewState
                   DataColumn(label: Text('Comprado')),
                   DataColumn(label: Text('Esperado ventas')),
                   DataColumn(label: Text('+ cancelaciones cocina')),
-                  DataColumn(label: Text('Rango esperado 95%')),
+                  DataColumn(label: Text('Banda heurística')),
                   DataColumn(label: Text('Residual final')),
                   DataColumn(label: Text('Equiv. unidades')),
                   DataColumn(label: Text('Residual %')),
@@ -423,7 +423,8 @@ class _PredictiveConsumptionAuditViewState
                       DataCell(Text(_equivalentUnits(cycle, model))),
                       DataCell(Text(_percent(cycle.residualPercent * 100))),
                       DataCell(Text(cycle.robustZ.toStringAsFixed(2))),
-                      DataCell(_score(cycle.anomalyScore)),
+                      DataCell(_score(cycle.anomalyScore,
+                          conclusive: model.confidence != 'No identificable')),
                       DataCell(Text(_money(cycle.shortageAmount))),
                       DataCell(
                         ConstrainedBox(
@@ -697,7 +698,7 @@ class _PredictiveConsumptionAuditViewState
                 DataColumn(label: Text('Comprado')),
                 DataColumn(label: Text('Esperado')),
                 DataColumn(label: Text('Cancelaciones cocina')),
-                DataColumn(label: Text('Rango esperado 95%')),
+                DataColumn(label: Text('Banda heurística')),
                 DataColumn(label: Text('Residual')),
                 DataColumn(label: Text('Equiv. unidades')),
                 DataColumn(label: Text('Z')),
@@ -754,7 +755,8 @@ class _PredictiveConsumptionAuditViewState
                     ),
                     DataCell(Text(_equivalentUnits(cycle, model))),
                     DataCell(Text(cycle.robustZ.toStringAsFixed(2))),
-                    DataCell(_score(cycle.anomalyScore)),
+                    DataCell(_score(cycle.anomalyScore,
+                        conclusive: model.confidence != 'No identificable')),
                     DataCell(Text(_money(cycle.shortageAmount))),
                     DataCell(Text(cycle.paidUnits.toStringAsFixed(0))),
                     DataCell(
@@ -1038,7 +1040,8 @@ Widget _pill(String text) {
   );
 }
 
-Widget _score(double value) {
+Widget _score(double value, {bool conclusive = true}) {
+  if (!conclusive) return const Text('No concluyente');
   final color = value >= 70
       ? BrandColors.danger
       : value >= 45
@@ -1094,6 +1097,7 @@ String _equivalentUnits(
   PredictiveConsumptionCycle cycle,
   PredictiveIngredientModel model,
 ) {
+  if (model.confidence == 'No identificable') return 'No concluyente';
   final perUnit = model.learnedRawPerSaleWeighted;
   if (perUnit <= 0) return '-';
   final value = cycle.residualOperationalBase / perUnit;
@@ -1102,6 +1106,7 @@ String _equivalentUnits(
 }
 
 String _equivalentRecentUnits(PredictiveIngredientModel model) {
+  if (model.confidence == 'No identificable') return 'No concluyente';
   final perUnit = model.learnedRawPerSaleWeighted;
   if (perUnit <= 0) return 'No disponible';
   final value = model.recentResidualOperationalBase / perUnit;
