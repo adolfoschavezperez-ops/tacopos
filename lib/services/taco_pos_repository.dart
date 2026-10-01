@@ -5714,6 +5714,24 @@ class TacoPosRepository {
       branchId: session.currentBranchId,
     );
 
+    // Historical order items may predate recipe snapshots. Use the current
+    // theoretical recipe only as a fallback mapping so products such as a
+    // gringa can still be linked to its meat/tortilla family.
+    final recipeSnapshot = await _productRecipesRef.get();
+    final recipeIngredientNamesByProduct = <String, List<String>>{};
+    for (final doc in recipeSnapshot.docs) {
+      final recipe = TheoreticalProductRecipe.fromDoc(doc);
+      if (!recipe.active) continue;
+      final names = recipe.ingredients
+          .map((ingredient) => ingredient.stockItemName.trim())
+          .where((name) => name.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+      if (names.isNotEmpty) {
+        recipeIngredientNamesByProduct[recipe.productId] = names;
+      }
+    }
+
     final saleLines = <PredictiveSaleLine>[];
     for (final order in orders) {
       final businessDate =
@@ -5738,6 +5756,7 @@ class TacoPosRepository {
           ...item.recipeItems
               .map((recipe) => recipe.kitchenStockItemName.trim())
               .where((name) => name.isNotEmpty),
+          ...?recipeIngredientNamesByProduct[item.productId],
         }.toList(growable: false);
 
         if (item.isCancelled && kitchenTouched) {
