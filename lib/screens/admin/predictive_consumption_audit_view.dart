@@ -1038,9 +1038,10 @@ class _PredictiveConsumptionAuditViewState
                 DataColumn(label: Text('Compra')),
                 DataColumn(label: Text('Ventas asociadas')),
                 DataColumn(label: Text('Comprado')),
-                DataColumn(label: Text('Esperado')),
+                DataColumn(label: Text('Esperado ventas/base')),
+                DataColumn(label: Text('Consumo operativo')),
                 DataColumn(label: Text('Cancelaciones cocina')),
-                DataColumn(label: Text('Rango esperado 95%')),
+                DataColumn(label: Text('Rango robusto orientativo')),
                 DataColumn(label: Text('Residual')),
                 DataColumn(label: Text('Equiv. unidades')),
                 DataColumn(label: Text('Z')),
@@ -1052,21 +1053,30 @@ class _PredictiveConsumptionAuditViewState
               rows: cycles.map((cycle) {
                 return DataRow(
                   color: WidgetStateProperty.resolveWith((states) {
-                    if (cycle.isHighAnomaly) {
+                    if (cycle.purchaseMagnitudeOutlier) {
+                      return BrandColors.accentOrange.withValues(alpha: 0.08);
+                    }
+                    if (model.isAuditUsable && cycle.isHighAnomaly) {
                       return BrandColors.danger.withValues(alpha: 0.07);
                     }
                     return null;
                   }),
                   cells: [
-                    DataCell(Text(cycle.purchaseDate)),
+                    DataCell(Text(
+                      cycle.purchaseMagnitudeOutlier
+                          ? '${cycle.purchaseDate}\nRevisar volumen'
+                          : cycle.purchaseDate,
+                    )),
                     DataCell(
                       Text(
                         '${cycle.startBusinessDate} → '
-                        '${cycle.endBusinessDate} (${cycle.days}d)',
+                        '${cycle.endBusinessDate} (${cycle.days}d; '
+                        '${cycle.operatingDays} abiertos)',
                       ),
                     ),
                     DataCell(Text(_base(cycle.purchasedBase, model))),
                     DataCell(Text(_base(cycle.predictedPaidBase, model))),
+                    DataCell(Text(_base(cycle.knownOperationalBase, model))),
                     DataCell(
                       Text(
                         _base(
