@@ -1082,6 +1082,7 @@ List<_CycleInput> _trainingCycles(
   final previous = cycles
       .where(
         (cycle) =>
+            cycle.purchaseDate.compareTo(investigationStart) < 0 &&
             cycle.endDate.compareTo(investigationStart) < 0 &&
             cycle.paidUnits > 0,
       )
