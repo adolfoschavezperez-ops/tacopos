@@ -746,6 +746,11 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       coefficientCount: coefficients.length,
     );
     final trainingTargets = training.map((cycle) => cycle.target).toList();
+    final typicalTrainingTarget = _median(trainingTargets);
+    final auditResidualScale = math.max(
+      fit.residualScale,
+      typicalTrainingTarget > 0 ? typicalTrainingTarget * 0.05 : 0.0,
+    ).toDouble();
 
     final outputCycles = allCycles.map((cycle) {
       final predictedPaid = _predictCycle(cycle, fit);
@@ -764,10 +769,10 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       final residualPercent = predictedOperational.abs() < 0.001
           ? 0.0
           : residualOperational / predictedOperational;
-      final robustZ = fit.residualScale <= 0
+      final robustZ = auditResidualScale <= 0
           ? 0.0
-          : residualOperational / fit.residualScale;
-      final intervalHalfWidth = fit.residualScale * 1.96;
+          : residualOperational / auditResidualScale;
+      final intervalHalfWidth = auditResidualScale * 1.96;
       final expectedLow = math
           .max(0.0, predictedOperational - intervalHalfWidth)
           .toDouble();
@@ -779,8 +784,8 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
         predictedPaid: predictedPaid,
       );
       final purchaseMagnitudeOutlier = _isPurchaseMagnitudeOutlier(
-        cycle.target,
-        trainingTargets,
+        cycle,
+        training,
       );
       final score = _qualityAdjustedAnomalyScore(
         rawScore: rawScore,
@@ -842,7 +847,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
         baselineDailyBase: fit.baselineDaily,
         rSquared: fit.rSquared,
         normalizedMae: fit.normalizedMae,
-        residualScale: fit.residualScale,
+        residualScale: auditResidualScale,
         confidence: confidence,
         coefficients: coefficients,
         cycles: outputCycles,
@@ -888,7 +893,8 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     'Prueba automaticamente si la compra abastece ventas futuras o repone consumo previo y conserva la alineacion con menor error robusto dentro del baseline previo.',
     'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta. La confianza baja si hay pocos ciclos frente al numero de coeficientes.',
     'Para tortilla de maiz se incorpora como consumo operativo conocido aproximadamente 1 kg por dia abierto de lunes a sabado para doraditas; domingo aporta 0.',
-    'Modelos de confianza Baja y compras de volumen extremo son exploratorios: no pueden generar una alerta fuerte en el radar principal ni inflar el residual auditable.',
+    'Modelos de confianza Baja y compras con volumen extremo por dia abierto son exploratorios: no pueden generar una alerta fuerte en el radar principal ni inflar el residual auditable.',
+    'El Z robusto usa un piso de incertidumbre de 5% de la compra tipica del baseline para evitar valores enormes cuando la dispersion historica es casi cero.',
     'El faltante de caja se muestra solo como contexto y ya no suma puntos al indice estadistico.',
     'Sin inventario fisico no puede demostrarse una fuga: una discrepancia tambien puede ser merma, cambio de stock inicial/final, porcion distinta o captura incompleta.',
     'Las cancelaciones que tocaron cocina se muestran por separado para medir cuanto consumo podrian explicar sin contarlas como venta.',
@@ -1521,10 +1527,16 @@ double _qualityAdjustedAnomalyScore({
 }
 
 bool _isPurchaseMagnitudeOutlier(
-  double target,
-  List<double> trainingTargets,
+  _CycleInput cycle,
+  List<_CycleInput> training,
 ) {
-  final values = trainingTargets.where((value) => value > 0).toList();
+  if (training.length < 3) return false;
+  double perOpenDay(_CycleInput row) =>
+      row.target / math.max(1, row.operatingDays);
+  final values = training
+      .where((row) => row.target > 0)
+      .map(perOpenDay)
+      .toList(growable: false);
   if (values.length < 3) return false;
   final median = _median(values);
   if (median <= 0) return false;
@@ -1533,7 +1545,7 @@ bool _isPurchaseMagnitudeOutlier(
   final robustScale = _median(deviations) * 1.4826;
   final byScale = median + 6 * math.max(robustScale, median * 0.05);
   final byRatio = median * 3.0;
-  return target > math.max(byScale, byRatio);
+  return perOpenDay(cycle) > math.max(byScale, byRatio);
 }
 
 String _cycleEvidence({
