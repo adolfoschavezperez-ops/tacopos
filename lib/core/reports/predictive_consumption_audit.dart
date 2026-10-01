@@ -673,13 +673,15 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       final residualPaid = cycle.target - predictedPaid;
       final residualOperational = cycle.target - predictedOperational;
       final residualPercent = predictedOperational.abs() < 0.001
-          ? 0
+          ? 0.0
           : residualOperational / predictedOperational;
       final robustZ = fit.residualScale <= 0
-          ? 0
+          ? 0.0
           : residualOperational / fit.residualScale;
       final intervalHalfWidth = fit.residualScale * 1.96;
-      final expectedLow = math.max(0.0, predictedOperational - intervalHalfWidth);
+      final expectedLow = math
+          .max(0.0, predictedOperational - intervalHalfWidth)
+          .toDouble();
       final expectedHigh = predictedOperational + intervalHalfWidth;
       final score = _anomalyScore(
         robustZ: robustZ,
@@ -1360,7 +1362,9 @@ String _cycleEvidence({
     );
   }
   if (shortage > 0.01) {
-    parts.add('faltante de caja del ciclo $${shortage.toStringAsFixed(2)}');
+    parts.add(
+      'faltante de caja del ciclo \\$\${shortage.toStringAsFixed(2)}',
+    );
   }
   return parts.isEmpty ? 'Sin discrepancia material' : parts.join(' · ');
 }
