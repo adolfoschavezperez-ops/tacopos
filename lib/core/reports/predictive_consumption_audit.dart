@@ -290,6 +290,47 @@ class PredictiveIngredientModel {
 
   bool get isWeight => unitFamily == 'weight';
   bool get isPieces => unitFamily == 'pieces';
+
+  List<PredictiveConsumptionCycle> get investigationCycles => cycles
+      .where((cycle) => cycle.isInvestigationPeriod)
+      .toList(growable: false);
+
+  PredictiveConsumptionCycle? get highestRecentAnomaly {
+    final recent = investigationCycles;
+    if (recent.isEmpty) return null;
+    return recent.reduce(
+      (a, b) => a.anomalyScore >= b.anomalyScore ? a : b,
+    );
+  }
+
+  double get learnedRawPerSaleWeighted {
+    final totalUnits = coefficients.fold<double>(
+      0,
+      (sum, row) => sum + row.unitsInTraining,
+    );
+    if (totalUnits <= 0) return 0;
+    return coefficients.fold<double>(
+          0,
+          (sum, row) => sum + row.rawBasePerUnit * row.unitsInTraining,
+        ) /
+        totalUnits;
+  }
+
+  double? get learnedCookedPerSaleWeighted {
+    final valid = coefficients
+        .where((row) => row.cookedBasePerUnit != null)
+        .toList(growable: false);
+    final totalUnits = valid.fold<double>(
+      0,
+      (sum, row) => sum + row.unitsInTraining,
+    );
+    if (totalUnits <= 0) return null;
+    return valid.fold<double>(
+          0,
+          (sum, row) => sum + row.cookedBasePerUnit! * row.unitsInTraining,
+        ) /
+        totalUnits;
+  }
 }
 
 enum PredictiveAlignment { forwardSupply, replenishment }
@@ -329,6 +370,41 @@ class PredictiveConsumptionAudit {
         (sum, model) =>
             sum + math.max(0, model.recentResidualOperationalBase),
       );
+
+  List<PredictiveConsumptionCycleFinding> get rankedFindings {
+    final findings = <PredictiveConsumptionCycleFinding>[];
+    for (final model in models) {
+      for (final cycle in model.investigationCycles) {
+        if (cycle.anomalyScore < 35) continue;
+        findings.add(
+          PredictiveConsumptionCycleFinding(
+            ingredientName: model.definition.name,
+            baseUnitLabel: model.baseUnitLabel,
+            confidence: model.confidence,
+            cycle: cycle,
+          ),
+        );
+      }
+    }
+    findings.sort(
+      (a, b) => b.cycle.anomalyScore.compareTo(a.cycle.anomalyScore),
+    );
+    return findings;
+  }
+}
+
+class PredictiveConsumptionCycleFinding {
+  const PredictiveConsumptionCycleFinding({
+    required this.ingredientName,
+    required this.baseUnitLabel,
+    required this.confidence,
+    required this.cycle,
+  });
+
+  final String ingredientName;
+  final String baseUnitLabel;
+  final String confidence;
+  final PredictiveConsumptionCycle cycle;
 }
 
 class _DailyIngredientSales {
@@ -1145,12 +1221,12 @@ double _predictCycle(_CycleInput cycle, _FitResult fit) {
   return prediction;
 }
 
-double _resolveYieldRate(
+double? _resolveYieldRate(
   PredictiveIngredientDefinition definition,
   List<PredictivePurchaseLine> purchaseLines,
   List<PredictiveYieldInput> yields,
 ) {
-  if (definition.kind != PredictiveIngredientKind.meat) return double.nan;
+  if (definition.kind != PredictiveIngredientKind.meat) return null;
   final stockIds = purchaseLines
       .map((line) => line.stockItemId.trim())
       .where((id) => id.isNotEmpty)
@@ -1177,7 +1253,7 @@ double _resolveYieldRate(
       return seed.percent / 100;
     }
   }
-  return double.nan;
+  return null;
 }
 
 String _coefficientPlausibility({
