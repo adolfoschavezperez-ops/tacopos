@@ -232,7 +232,7 @@ int? _units(ResalePurchase line) {
   if (RegExp(r'^(caja|cajas|paquete|paquetes|charola|charolas|pack)$').hasMatch(unit)) {
     if (pack == null || pack < 1) return null;
     multiplier = pack;
-  } else if (!RegExp(r'^(|pza|pzas|pieza|piezas|unidad|unidades|botella|botellas)$').hasMatch(unit)) {
+  } else if (!RegExp(r'^(|pza|pzas|pieza|piezas|piece|pieces|unidad|unidades|botella|botellas)$').hasMatch(unit)) {
     return null;
   } else if (pack != null && line.quantity != pack) {
     // A line labelled x30 with quantity 1 may be one case or one bottle.
