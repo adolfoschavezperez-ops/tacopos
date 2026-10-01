@@ -590,6 +590,8 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       historyStart: historyStart,
       historyEnd: historyEnd,
       alignment: PredictiveAlignment.forwardSupply,
+      definition: definition,
+      unitFamily: lines.first.unitFamily,
     );
     final replenishment = _buildCycles(
       purchaseDays: purchaseDays,
@@ -598,6 +600,8 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       historyStart: historyStart,
       historyEnd: historyEnd,
       alignment: PredictiveAlignment.replenishment,
+      definition: definition,
+      unitFamily: lines.first.unitFamily,
     );
 
     final candidateKeys = _selectFeatureKeys(
@@ -1046,6 +1050,8 @@ List<_CycleInput> _buildCycles({
   required String historyStart,
   required String historyEnd,
   required PredictiveAlignment alignment,
+  required PredictiveIngredientDefinition definition,
+  required String unitFamily,
 }) {
   final result = <_CycleInput>[];
 
@@ -1070,6 +1076,8 @@ List<_CycleInput> _buildCycles({
           days: days,
           dailySales: dailySales,
           cashByDate: cashByDate,
+          definition: definition,
+          unitFamily: unitFamily,
         ),
       );
     }
@@ -1105,6 +1113,8 @@ _CycleInput _cycleFromRange({
   required int days,
   required Map<String, _DailyIngredientSales> dailySales,
   required Map<String, PredictiveCashDay> cashByDate,
+  required PredictiveIngredientDefinition definition,
+  required String unitFamily,
 }) {
   final paid = <String, double>{};
   final cancelled = <String, double>{};
@@ -1123,16 +1133,48 @@ _CycleInput _cycleFromRange({
     shortage += cashByDate[date]?.shortageAmount ?? 0;
   }
 
+  final operatingDays = _operatingDaysInclusive(start, end);
   return _CycleInput(
     purchaseDate: purchase.date,
     startDate: start,
     endDate: end,
     days: days,
+    operatingDays: operatingDays,
     target: purchase.quantity,
+    knownOperationalBase: _knownOperationalBase(
+      definition: definition,
+      unitFamily: unitFamily,
+      operatingDays: operatingDays,
+    ),
     paid: paid,
     cancelled: cancelled,
     shortage: shortage,
   );
+}
+
+double _knownOperationalBase({
+  required PredictiveIngredientDefinition definition,
+  required String unitFamily,
+  required int operatingDays,
+}) {
+  if (unitFamily != 'weight') return 0;
+  if (definition.kind == PredictiveIngredientKind.tortillaCorn ||
+      definition.kind == PredictiveIngredientKind.tortillaAny) {
+    // Operational rule confirmed by the business: about 1 kg of corn tortilla
+    // is used for doraditas on each open day. Sunday is closed.
+    return operatingDays * 1000.0;
+  }
+  return 0;
+}
+
+int _operatingDaysInclusive(String start, String end) {
+  var count = 0;
+  for (final key in _dateKeys(start, end)) {
+    final parts = key.split('-').map(int.parse).toList(growable: false);
+    final date = DateTime(parts[0], parts[1], parts[2]);
+    if (date.weekday != DateTime.sunday) count++;
+  }
+  return count;
 }
 
 _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
