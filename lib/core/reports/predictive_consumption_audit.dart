@@ -1171,6 +1171,8 @@ List<_CycleInput> _buildCycles({
         days: days,
         dailySales: dailySales,
         cashByDate: cashByDate,
+        definition: definition,
+        unitFamily: unitFamily,
       ),
     );
   }
