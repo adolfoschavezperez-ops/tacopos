@@ -5653,12 +5653,14 @@ class TacoPosRepository {
             null) {
           continue;
         }
+        final explicitBusinessDate = entry.$1.businessDate?.trim() ?? '';
         predictivePurchases.add(
           PredictivePurchaseLine(
             purchaseId: entry.$1.id,
             purchaseDate: entry.$1.purchaseDate,
-            businessDate:
-                entry.$1.businessDate ?? _businessDateFor(entry.$1.purchaseDate),
+            businessDate: explicitBusinessDate.isNotEmpty
+                ? explicitBusinessDate
+                : _businessDateFor(entry.$1.purchaseDate),
             supplierName: entry.$1.supplierName,
             itemName: item.purchaseItemName,
             quantity: item.quantity,
@@ -5759,7 +5761,7 @@ class TacoPosRepository {
         }
 
         final itemPaid = item.paymentStatus.trim().toLowerCase() == 'paid';
-        if (!item.isCancelled && (itemPaid || orderPaid)) {
+        if (isCanonicalActiveItem(item) && (itemPaid || orderPaid)) {
           saleLines.add(
             PredictiveSaleLine(
               businessDate: businessDate,
