@@ -5686,51 +5686,59 @@ class TacoPosRepository {
           stockItemId: item.kitchenStockItemId ?? ''));
       }
     }
-    final countSnapshot = await _resaleCheckpointsRef.get();
     final counts = <ResaleCheckpoint>[];
-    for (final doc in countSnapshot.docs) {
-      final data = doc.data();
-      if (data['branchId'] != session.currentBranchId ||
-          data['restaurantId'] != session.currentRestaurantId ||
-          data['boundary'] != 'closing' ||
-          data['physicalCount'] is! int ||
-          (data['physicalCount'] as int) < 0) {
-        continue;
-      }
-      final date = data['businessDate'];
-      final key = data['skuKey'];
-      if (date is! String || key is! String ||
-          !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) {
-        continue;
-      }
-      final originalRecordedAt = (data['recordedAt'] as Timestamp?)?.toDate();
-      final original = ResaleCheckpoint(date: date, key: key,
-        physicalCount: data['physicalCount'] as int,
-        recordedAt: originalRecordedAt,
-        originalByUid: data['recordedByUid'] as String? ?? '',
-        confirmed: data['verification'] == 'recentObserved' &&
-          originalRecordedAt != null);
-      final corrections = await doc.reference.collection('corrections')
-          .orderBy('revision').get();
-      final revisions = <ResaleCheckpointCorrection>[];
-      for (final correction in corrections.docs) {
-        final change = correction.data();
-        final revision = change['revision'];
-        final correctedCount = change['physicalCount'];
-        final correctedAt = (change['recordedAt'] as Timestamp?)?.toDate();
-        if (revision is! int ||
-            correction.id != '$revision' || correctedCount is! int ||
-            correctedCount < 0 || correctedAt == null ||
-            change['reason'] is! String ||
-            change['businessDate'] != date || change['skuKey'] != key) {
+    try {
+      final countSnapshot = await _resaleCheckpointsRef.get();
+      for (final doc in countSnapshot.docs) {
+        final data = doc.data();
+        if (data['branchId'] != session.currentBranchId ||
+            data['restaurantId'] != session.currentRestaurantId ||
+            data['boundary'] != 'closing' ||
+            data['physicalCount'] is! int ||
+            (data['physicalCount'] as int) < 0) {
           continue;
         }
-        revisions.add(ResaleCheckpointCorrection(revision: revision,
-          physicalCount: correctedCount,
-          reason: change['reason'] as String, recordedAt: correctedAt,
-          recordedByUid: change['recordedByUid'] as String? ?? ''));
+        final date = data['businessDate'];
+        final key = data['skuKey'];
+        if (date is! String || key is! String ||
+            !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) {
+          continue;
+        }
+        final originalRecordedAt = (data['recordedAt'] as Timestamp?)?.toDate();
+        final original = ResaleCheckpoint(date: date, key: key,
+          physicalCount: data['physicalCount'] as int,
+          recordedAt: originalRecordedAt,
+          originalByUid: data['recordedByUid'] as String? ?? '',
+          confirmed: data['verification'] == 'recentObserved' &&
+            originalRecordedAt != null);
+        final corrections = await doc.reference.collection('corrections')
+            .orderBy('revision').get();
+        final revisions = <ResaleCheckpointCorrection>[];
+        for (final correction in corrections.docs) {
+          final change = correction.data();
+          final revision = change['revision'];
+          final correctedCount = change['physicalCount'];
+          final correctedAt = (change['recordedAt'] as Timestamp?)?.toDate();
+          if (revision is! int ||
+              correction.id != '$revision' || correctedCount is! int ||
+              correctedCount < 0 || correctedAt == null ||
+              change['reason'] is! String ||
+              change['businessDate'] != date || change['skuKey'] != key) {
+            continue;
+          }
+          revisions.add(ResaleCheckpointCorrection(revision: revision,
+            physicalCount: correctedCount,
+            reason: change['reason'] as String, recordedAt: correctedAt,
+            recordedByUid: change['recordedByUid'] as String? ?? ''));
+        }
+        counts.add(resaleEffectiveCheckpoint(original, revisions));
       }
-      counts.add(resaleEffectiveCheckpoint(original, revisions));
+  
+    } on FirebaseException catch (error) {
+      if (error.code != 'permission-denied') rethrow;
+      // Keep the historical reconciliation usable while the checkpoint rules
+      // are rolled out. Physical checkpoint reads/writes still require the
+      // production Firestore rules to be deployed.
     }
     return buildResaleAudit(purchases: lines, exits: exits,
       checkpoints: counts, endDate: end);
