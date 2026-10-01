@@ -612,9 +612,15 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     final trainedBeforeInvestigation = training.every(
       (cycle) => cycle.endDate.compareTo(investigationStart) < 0,
     );
-    final baselineMode = trainedBeforeInvestigation
-        ? 'Historico previo al periodo de investigacion'
-        : 'Historico robusto completo por falta de ciclos previos suficientes';
+    final cleanTraining =
+        training.isNotEmpty && training.every(_isCleanTrainingCycle);
+    final baselineMode = trainedBeforeInvestigation && cleanTraining
+        ? 'Historico previo limpio: faltante <= 20 y cancelaciones controladas'
+        : trainedBeforeInvestigation
+            ? 'Historico previo al periodo de investigacion'
+            : cleanTraining
+                ? 'Historico limpio disponible por falta de ciclos previos suficientes'
+                : 'Historico robusto completo por falta de ciclos previos suficientes';
 
     final yieldRate = _resolveYieldRate(definition, lines, yields);
     final totalTrainingUnits = candidateKeys.fold<double>(
@@ -789,6 +795,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     'El modelo aprende de ciclos de reposicion, no iguala compra del dia con venta del dia.',
     'Prueba automaticamente si la compra abastece ventas futuras o repone consumo previo y conserva la alineacion con menor error robusto.',
     'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta para que dias atipicos no definan el consumo normal.',
+    'Cuando hay al menos 3 a 5 ciclos suficientes, el entrenamiento prefiere periodos con faltante de caja <= 20 y cancelaciones de cocina controladas para construir una linea base mas limpia.',
     'Sin inventario fisico no puede demostrarse una fuga: una discrepancia tambien puede ser merma, cambio de stock inicial/final, porcion distinta o captura incompleta.',
     'Las cancelaciones que tocaron cocina se muestran por separado para medir cuanto consumo podrian explicar sin contarlas como venta.',
     'El periodo de investigacion se aplica a las fechas de consumo cubiertas por cada ciclo, no solo a la fecha de compra, para no contaminar el entrenamiento con ventas posteriores al corte.',
@@ -981,11 +988,29 @@ List<_CycleInput> _trainingCycles(
             cycle.paidUnits > 0,
       )
       .toList();
+
+  // Prefer historically cleaner periods when there is enough evidence.
+  // This keeps recurrent cash/cancellation anomalies from teaching the model
+  // that an abnormal operating pattern is "normal".
+  final cleanPrevious = previous
+      .where(_isCleanTrainingCycle)
+      .toList(growable: false);
+  if (cleanPrevious.length >= 5) return cleanPrevious;
   if (previous.length >= 5) return previous;
+  if (cleanPrevious.length >= 3) return cleanPrevious;
+
   final all = cycles.where((cycle) => cycle.paidUnits > 0).toList();
+  final cleanAll = all.where(_isCleanTrainingCycle).toList(growable: false);
+  if (cleanAll.length >= 3) return cleanAll;
   if (all.length <= 3) return all;
   final keep = math.max(3, (all.length * 0.8).floor());
   return all.take(keep).toList(growable: false);
+}
+
+bool _isCleanTrainingCycle(_CycleInput cycle) {
+  final cancellationLimit = math.max(2.0, cycle.paidUnits * 0.10).toDouble();
+  return cycle.shortage <= 20.0 &&
+      cycle.cancelledUnits <= cancellationLimit;
 }
 
 List<_CycleInput> _buildCycles({
