@@ -368,6 +368,7 @@ class _PredictiveConsumptionAuditViewState
                   DataColumn(label: Text('+ cancelaciones cocina')),
                   DataColumn(label: Text('Rango esperado 95%')),
                   DataColumn(label: Text('Residual final')),
+                  DataColumn(label: Text('Equiv. unidades')),
                   DataColumn(label: Text('Residual %')),
                   DataColumn(label: Text('Z robusto')),
                   DataColumn(label: Text('Índice')),
@@ -419,6 +420,7 @@ class _PredictiveConsumptionAuditViewState
                           ),
                         ),
                       ),
+                      DataCell(Text(_equivalentUnits(cycle, model))),
                       DataCell(Text(_percent(cycle.residualPercent * 100))),
                       DataCell(Text(cycle.robustZ.toStringAsFixed(2))),
                       DataCell(_score(cycle.anomalyScore)),
@@ -569,6 +571,13 @@ class _PredictiveConsumptionAuditViewState
                     ? BrandColors.danger
                     : BrandColors.success,
               ),
+              _Inline(
+                label: 'Equivalente no explicado',
+                value: _equivalentRecentUnits(model),
+                accent: model.recentResidualOperationalBase > 0
+                    ? BrandColors.danger
+                    : BrandColors.success,
+              ),
             ],
           ),
           const SizedBox(height: 14),
@@ -690,6 +699,7 @@ class _PredictiveConsumptionAuditViewState
                 DataColumn(label: Text('Cancelaciones cocina')),
                 DataColumn(label: Text('Rango esperado 95%')),
                 DataColumn(label: Text('Residual')),
+                DataColumn(label: Text('Equiv. unidades')),
                 DataColumn(label: Text('Z')),
                 DataColumn(label: Text('Índice')),
                 DataColumn(label: Text('Faltante caja')),
@@ -742,6 +752,7 @@ class _PredictiveConsumptionAuditViewState
                         ),
                       ),
                     ),
+                    DataCell(Text(_equivalentUnits(cycle, model))),
                     DataCell(Text(cycle.robustZ.toStringAsFixed(2))),
                     DataCell(_score(cycle.anomalyScore)),
                     DataCell(Text(_money(cycle.shortageAmount))),
@@ -1071,6 +1082,25 @@ String _base(double value, PredictiveIngredientModel model) {
 String _signedBase(double value, PredictiveIngredientModel model) {
   final sign = value > 0 ? '+' : '';
   return '$sign${_base(value, model)}';
+}
+
+String _equivalentUnits(
+  PredictiveConsumptionCycle cycle,
+  PredictiveIngredientModel model,
+) {
+  final perUnit = model.learnedRawPerSaleWeighted;
+  if (perUnit <= 0) return '-';
+  final value = cycle.residualOperationalBase / perUnit;
+  final sign = value > 0 ? '+' : '';
+  return '$sign${value.toStringAsFixed(1)}';
+}
+
+String _equivalentRecentUnits(PredictiveIngredientModel model) {
+  final perUnit = model.learnedRawPerSaleWeighted;
+  if (perUnit <= 0) return 'No disponible';
+  final value = model.recentResidualOperationalBase / perUnit;
+  final sign = value > 0 ? '+' : '';
+  return '$sign${value.toStringAsFixed(1)} unidades aprox.';
 }
 
 String _money(double value) => NumberFormat.currency(
