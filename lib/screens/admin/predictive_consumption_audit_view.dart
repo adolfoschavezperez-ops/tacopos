@@ -788,7 +788,8 @@ class _PredictiveConsumptionAuditViewState
                 DataColumn(label: Text('R²')),
                 DataColumn(label: Text('Error normalizado')),
                 DataColumn(label: Text('Confianza')),
-                DataColumn(label: Text('Base no explicada / día')),
+                DataColumn(label: Text('Uso')),
+                DataColumn(label: Text('Base residual / día abierto')),
               ],
               rows: models.map((model) {
                 return DataRow(
@@ -800,6 +801,9 @@ class _PredictiveConsumptionAuditViewState
                     DataCell(Text(model.rSquared.toStringAsFixed(2))),
                     DataCell(Text(_percent(model.normalizedMae * 100))),
                     DataCell(_confidence(model.confidence)),
+                    DataCell(Text(model.isAuditUsable
+                        ? 'Auditable'
+                        : 'Exploratorio')),
                     DataCell(Text(_base(model.baselineDailyBase, model))),
                   ],
                 );
@@ -816,7 +820,7 @@ class _PredictiveConsumptionAuditViewState
         .where((cycle) => !_onlyInvestigation || cycle.isInvestigationPeriod)
         .toList();
     return GlassPanel(
-      borderColor: model.recentHighAnomalies > 0
+      borderColor: model.isAuditUsable && model.recentHighAnomalies > 0
           ? BrandColors.danger.withValues(alpha: 0.38)
           : null,
       padding: const EdgeInsets.all(14),
@@ -840,6 +844,7 @@ class _PredictiveConsumptionAuditViewState
                 spacing: 8,
                 children: [
                   _pill('Confianza ${model.confidence}'),
+                  _pill(model.isAuditUsable ? 'Auditable' : 'Exploratorio'),
                   _pill('${model.purchaseDayCount} días de compra'),
                   _pill(_alignment(model.alignment)),
                 ],
@@ -854,6 +859,17 @@ class _PredictiveConsumptionAuditViewState
               fontWeight: FontWeight.w600,
             ),
           ),
+          if (!model.isAuditUsable)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 10),
+              child: Text(
+                'Modelo exploratorio: sus residuales no alimentan el radar principal ni el total auditable.',
+                style: TextStyle(
+                  color: BrandColors.accentOrange,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
           const SizedBox(height: 12),
           Wrap(
             spacing: 10,
@@ -867,6 +883,12 @@ class _PredictiveConsumptionAuditViewState
                 label: 'Predicho por ventas',
                 value: _base(model.totalPredictedPaidBase, model),
               ),
+              if (model.totalKnownOperationalBase > 0)
+                _Inline(
+                  label: 'Consumo operativo conocido',
+                  value: _base(model.totalKnownOperationalBase, model),
+                  accent: BrandColors.info,
+                ),
               _Inline(
                 label: 'Explicable por cancelaciones cocina',
                 value: _base(
