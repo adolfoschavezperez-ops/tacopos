@@ -883,14 +883,17 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
 
   final notes = <String>[
     'El modelo aprende de ciclos de reposicion, no iguala compra del dia con venta del dia.',
-    'Prueba automaticamente si la compra abastece ventas futuras o repone consumo previo y conserva la alineacion con menor error robusto.',
-    'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta para que dias atipicos no definan el consumo normal.',
-    'Cuando hay al menos 3 a 5 ciclos suficientes, el entrenamiento prefiere periodos con faltante de caja <= 20 y cancelaciones de cocina controladas para construir una linea base mas limpia.',
+    'El baseline principal usa exclusivamente ciclos cuyo consumo termina antes del inicio de investigacion. Si no hay al menos 3 ciclos previos utilizables, no se fabrica un modelo usando el periodo investigado.',
+    'La seleccion de productos explicativos tambien se hace solo con el baseline previo para evitar fuga de informacion desde septiembre.',
+    'Prueba automaticamente si la compra abastece ventas futuras o repone consumo previo y conserva la alineacion con menor error robusto dentro del baseline previo.',
+    'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta. La confianza baja si hay pocos ciclos frente al numero de coeficientes.',
+    'Para tortilla de maiz se incorpora como consumo operativo conocido aproximadamente 1 kg por dia abierto de lunes a sabado para doraditas; domingo aporta 0.',
+    'Modelos de confianza Baja y compras de volumen extremo son exploratorios: no pueden generar una alerta fuerte en el radar principal ni inflar el residual auditable.',
+    'El faltante de caja se muestra solo como contexto y ya no suma puntos al indice estadistico.',
     'Sin inventario fisico no puede demostrarse una fuga: una discrepancia tambien puede ser merma, cambio de stock inicial/final, porcion distinta o captura incompleta.',
     'Las cancelaciones que tocaron cocina se muestran por separado para medir cuanto consumo podrian explicar sin contarlas como venta.',
-    'El periodo de investigacion se aplica a las fechas de consumo cubiertas por cada ciclo, no solo a la fecha de compra, para no contaminar el entrenamiento con ventas posteriores al corte.',
     'Si el patron aprendido es abastecimiento hacia adelante, la compra mas reciente queda abierta y no se califica hasta que exista la siguiente reposicion.',
-    'El rango esperado usa la dispersion robusta del historico (aprox. 95%). Estar fuera del rango es una señal de investigacion, no una prueba de robo.',
+    'El rango mostrado es orientativo: prediccion +/- 1.96 veces la dispersion robusta historica. No es un intervalo predictivo formal de 95%.',
   ];
 
   return PredictiveConsumptionAudit(
