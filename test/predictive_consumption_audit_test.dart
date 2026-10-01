@@ -148,9 +148,13 @@ void main() {
 
       final model = audit.models.single;
       final cycle = model.cycles.firstWhere(
-        (row) => row.purchaseDate == '2026-09-28',
+        (row) =>
+            row.startBusinessDate.compareTo('2026-09-28') <= 0 &&
+            row.endBusinessDate.compareTo('2026-09-28') >= 0 &&
+            row.cancelledKitchenUnits > 0,
       );
 
+      expect(cycle.isInvestigationPeriod, isTrue);
       expect(cycle.cancelledKitchenUnits, 4);
       expect(cycle.cancelledKitchenExplainedBase, greaterThan(100));
       expect(cycle.predictedOperationalBase, greaterThan(cycle.predictedPaidBase));
@@ -161,6 +165,58 @@ void main() {
       expect(cycle.shortageAmount, closeTo(304.90, 0.001));
       expect(cycle.evidence, contains('cancelaciones'));
       expect(cycle.evidence, contains('faltante de caja'));
+    });
+
+    test('does not score an open last forward-supply batch', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var i = 0; i < 8; i++) {
+        final date = DateTime(2026, 9, 20 + i);
+        final key = _dateKey(date);
+        final qty = 15 + i;
+        purchases.add(
+          PredictivePurchaseLine(
+            purchaseId: 'p-$i',
+            purchaseDate: date,
+            businessDate: key,
+            supplierName: 'Carne Omar',
+            itemName: 'Bistec',
+            stockItemId: 'bistec',
+            stockItemName: 'Bistec',
+            quantity: qty * 0.05,
+            unit: 'kg',
+          ),
+        );
+        sales.add(
+          PredictiveSaleLine(
+            businessDate: key,
+            productId: 'taco-bistec',
+            productName: 'Taco Bistec',
+            categoryName: 'Tacos',
+            quantity: qty,
+            kind: PredictiveSaleKind.paidSale,
+            ingredientNames: const ['Bistec'],
+          ),
+        );
+      }
+
+      final audit = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-09-20',
+        historyEnd: '2026-09-30',
+        investigationStart: '2026-09-28',
+      );
+
+      final model = audit.models.single;
+      if (model.alignment == PredictiveAlignment.forwardSupply) {
+        expect(
+          model.cycles.any((cycle) => cycle.purchaseDate == '2026-09-27'),
+          isFalse,
+        );
+      }
     });
 
     test('recognizes tortilla and target suppliers', () {
