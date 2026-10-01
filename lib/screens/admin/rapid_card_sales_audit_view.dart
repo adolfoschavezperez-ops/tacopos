@@ -30,7 +30,7 @@ class _RapidCardSalesAuditViewState extends State<RapidCardSalesAuditView> {
   String _employee = 'all';
   String _maxSeconds = '60';
   RapidCardAuditTimingBasis _basis = RapidCardAuditTimingBasis.orderCreated;
-  bool _onlyKitchenCompleteBeforePayment = false;
+  bool _onlyKitchenCompleteBeforePayment = true;
 
   @override
   void dispose() {
@@ -163,7 +163,8 @@ class _RapidCardSalesAuditViewState extends State<RapidCardSalesAuditView> {
               const SizedBox(height: 12),
               const Text(
                 'Este reporte detecta patrones temporales; no determina por sí solo la causa. '
-                'Por defecto muestra pagos con tarjeta cuya orden fue creada y cobrada en 60 segundos o menos.',
+                'Por defecto muestra pagos con tarjeta cuya orden fue creada y cobrada en 60 segundos o menos, '
+                'con todos los productos de cocina marcados listos antes del cobro.',
                 style: TextStyle(
                   color: BrandColors.textMuted,
                   fontWeight: FontWeight.w600,
