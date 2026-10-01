@@ -96,7 +96,9 @@ ResaleCheckpoint resaleEffectiveCheckpoint(ResaleCheckpoint original,
   for (final correction in corrections.toList()
       ..sort((a, b) => a.revision.compareTo(b.revision))) {
     if (correction.revision != revision + 1 ||
-        correction.physicalCount < 0 || correction.reason.trim().length < 10) break;
+        correction.physicalCount < 0 || correction.reason.trim().length < 10) {
+      break;
+    }
     revision = correction.revision;
     applied.add(correction);
     count = correction.physicalCount;
@@ -370,9 +372,9 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
       final previous = relevantCheckpoints[relevantCheckpoints.length - 2];
       final expected = previous.physicalCount + days
         .where((d) => d.date.compareTo(previous.date) > 0 &&
-            d.date.compareTo(checkpoint!.date) <= 0)
+            d.date.compareTo(checkpoint.date) <= 0)
         .fold<int>(0, (n, d) => n + d.bought - d.sold - d.other);
-      difference = checkpoint!.physicalCount - expected;
+      difference = checkpoint.physicalCount - expected;
     }
     products.add(ResaleProduct(key: entry.key, family: families[entry.key]!,
       name: names[entry.key]!,

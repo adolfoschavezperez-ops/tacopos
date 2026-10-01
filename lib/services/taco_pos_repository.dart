@@ -5694,11 +5694,15 @@ class TacoPosRepository {
           data['restaurantId'] != session.currentRestaurantId ||
           data['boundary'] != 'closing' ||
           data['physicalCount'] is! int ||
-          (data['physicalCount'] as int) < 0) continue;
+          (data['physicalCount'] as int) < 0) {
+        continue;
+      }
       final date = data['businessDate'];
       final key = data['skuKey'];
       if (date is! String || key is! String ||
-          !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) continue;
+          !RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(date)) {
+        continue;
+      }
       final originalRecordedAt = (data['recordedAt'] as Timestamp?)?.toDate();
       final original = ResaleCheckpoint(date: date, key: key,
         physicalCount: data['physicalCount'] as int,
@@ -5718,7 +5722,9 @@ class TacoPosRepository {
             correction.id != '$revision' || correctedCount is! int ||
             correctedCount < 0 || correctedAt == null ||
             change['reason'] is! String ||
-            change['businessDate'] != date || change['skuKey'] != key) continue;
+            change['businessDate'] != date || change['skuKey'] != key) {
+          continue;
+        }
         revisions.add(ResaleCheckpointCorrection(revision: revision,
           physicalCount: correctedCount,
           reason: change['reason'] as String, recordedAt: correctedAt,
