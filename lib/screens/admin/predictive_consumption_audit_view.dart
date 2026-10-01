@@ -634,7 +634,8 @@ class _PredictiveConsumptionAuditViewState
         rows,
   ) {
     final visible = rows
-        .where((entry) => entry.cycle.anomalyScore >= 35)
+        .where((entry) =>
+            entry.model.isAuditUsable && entry.cycle.isAuditEligible)
         .take(30)
         .toList();
     return GlassPanel(
@@ -648,8 +649,9 @@ class _PredictiveConsumptionAuditViewState
           ),
           const SizedBox(height: 5),
           const Text(
-            'Ordenado por señal estadística. “Alto” no significa robo: significa que la compra '
-            'se aleja del patrón histórico aprendido y amerita revisar inventario, merma, cancelaciones o ventas no registradas.',
+            'Solo muestra señales de modelos con confianza Media/Alta. Los modelos Baja y las '
+            'compras de volumen extremo quedan como exploratorios en el detalle y no pueden '
+            'generar una alerta fuerte. El índice no incluye el faltante de caja y no significa robo.',
             style: TextStyle(
               color: BrandColors.textMuted,
               fontWeight: FontWeight.w600,
@@ -675,11 +677,13 @@ class _PredictiveConsumptionAuditViewState
                 dataRowMaxHeight: 92,
                 columns: const [
                   DataColumn(label: Text('Insumo')),
+                  DataColumn(label: Text('Confianza')),
                   DataColumn(label: Text('Compra / ciclo')),
                   DataColumn(label: Text('Comprado')),
-                  DataColumn(label: Text('Esperado ventas')),
+                  DataColumn(label: Text('Esperado ventas/base')),
+                  DataColumn(label: Text('+ consumo operativo')),
                   DataColumn(label: Text('+ cancelaciones cocina')),
-                  DataColumn(label: Text('Rango esperado 95%')),
+                  DataColumn(label: Text('Rango robusto orientativo')),
                   DataColumn(label: Text('Residual final')),
                   DataColumn(label: Text('Equiv. unidades')),
                   DataColumn(label: Text('Residual %')),
@@ -703,6 +707,7 @@ class _PredictiveConsumptionAuditViewState
                     }),
                     cells: [
                       DataCell(Text(model.definition.name)),
+                      DataCell(_confidence(model.confidence)),
                       DataCell(
                         Text(
                           '${cycle.purchaseDate}\n'
@@ -711,6 +716,9 @@ class _PredictiveConsumptionAuditViewState
                       ),
                       DataCell(Text(_base(cycle.purchasedBase, model))),
                       DataCell(Text(_base(cycle.predictedPaidBase, model))),
+                      DataCell(
+                        Text(_base(cycle.knownOperationalBase, model)),
+                      ),
                       DataCell(
                         Text(
                           _base(cycle.cancelledKitchenExplainedBase, model),
