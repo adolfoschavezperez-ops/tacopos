@@ -691,6 +691,14 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       (a, b) => b.unitsInTraining.compareTo(a.unitsInTraining),
     );
 
+    final confidence = _modelConfidence(
+      trainingCount: training.length,
+      rSquared: fit.rSquared,
+      normalizedMae: fit.normalizedMae,
+      coefficientCount: coefficients.length,
+    );
+    final trainingTargets = training.map((cycle) => cycle.target).toList();
+
     final outputCycles = allCycles.map((cycle) {
       final predictedPaid = _predictCycle(cycle, fit);
       final cancelledExplained = fit.coefficients.entries.fold<double>(
@@ -699,8 +707,11 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
             sum +
             coefficient.value * (cycle.cancelled[coefficient.key] ?? 0),
       );
-      final predictedOperational = predictedPaid + cancelledExplained;
-      final residualPaid = cycle.target - predictedPaid;
+      final knownOperational = cycle.knownOperationalBase;
+      final predictedOperational =
+          predictedPaid + knownOperational + cancelledExplained;
+      final residualPaid =
+          cycle.target - predictedPaid - knownOperational;
       final residualOperational = cycle.target - predictedOperational;
       final residualPercent = predictedOperational.abs() < 0.001
           ? 0.0
@@ -713,19 +724,31 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
           .max(0.0, predictedOperational - intervalHalfWidth)
           .toDouble();
       final expectedHigh = predictedOperational + intervalHalfWidth;
-      final score = _anomalyScore(
+      final rawScore = _anomalyScore(
         robustZ: robustZ,
         residualPercent: residualPercent,
         cancelledExplained: cancelledExplained,
         predictedPaid: predictedPaid,
         shortage: cycle.shortage,
       );
+      final purchaseMagnitudeOutlier = _isPurchaseMagnitudeOutlier(
+        cycle.target,
+        trainingTargets,
+      );
+      final score = _qualityAdjustedAnomalyScore(
+        rawScore: rawScore,
+        confidence: confidence,
+        rSquared: fit.rSquared,
+        purchaseMagnitudeOutlier: purchaseMagnitudeOutlier,
+      );
       return PredictiveConsumptionCycle(
         purchaseDate: cycle.purchaseDate,
         startBusinessDate: cycle.startDate,
         endBusinessDate: cycle.endDate,
         days: cycle.days,
+        operatingDays: cycle.operatingDays,
         purchasedBase: cycle.target,
+        knownOperationalBase: knownOperational,
         predictedPaidBase: predictedPaid,
         cancelledKitchenExplainedBase: cancelledExplained,
         predictedOperationalBase: predictedOperational,
@@ -743,22 +766,19 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
           residualPaid: residualPaid,
           residualOperational: residualOperational,
           cancelledExplained: cancelledExplained,
+          knownOperational: knownOperational,
+          purchaseMagnitudeOutlier: purchaseMagnitudeOutlier,
           shortage: cycle.shortage,
           family: lines.first.unitFamily,
         ),
         isInvestigationPeriod:
             cycle.endDate.compareTo(investigationStart) >= 0,
+        purchaseMagnitudeOutlier: purchaseMagnitudeOutlier,
       );
     }).toList()
       ..sort((a, b) => b.purchaseDate.compareTo(a.purchaseDate));
 
     final recent = outputCycles.where((cycle) => cycle.isInvestigationPeriod);
-    final confidence = _modelConfidence(
-      trainingCount: training.length,
-      rSquared: fit.rSquared,
-      normalizedMae: fit.normalizedMae,
-      coefficientCount: coefficients.length,
-    );
 
     models.add(
       PredictiveIngredientModel(
