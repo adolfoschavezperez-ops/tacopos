@@ -258,8 +258,8 @@ class _PredictiveConsumptionAuditViewState
       child: Text(
         'Histórico analizado: ${audit.historyStart} → ${audit.historyEnd}. '
         'Proveedores detectados: $suppliers. '
-        'La línea del ${audit.investigationStart} no entrena el patrón normal cuando existe '
-        'histórico suficiente anterior: se usa como periodo de investigación.',
+        'Desde ${audit.investigationStart} se investiga y nunca se entrena. '
+        'Sin ciclos anteriores suficientes, el resultado es no concluyente.',
         style: const TextStyle(
           color: BrandColors.textSecondary,
           fontWeight: FontWeight.w700,
@@ -306,9 +306,9 @@ class _PredictiveConsumptionAuditViewState
           accent: high > 0 ? BrandColors.danger : BrandColors.success,
         ),
         _Metric(
-          label: 'Exceso reciente no explicado',
+          label: 'Residual positivo estimado',
           value: '${recentExcessKg.toStringAsFixed(2)} kg',
-          detail: 'Solo residuos positivos en insumos por peso',
+          detail: 'Estimación; también puede ser cambio de inventario',
           accent:
               recentExcessKg > 0.5 ? BrandColors.danger : BrandColors.textPrimary,
         ),
@@ -573,7 +573,7 @@ class _PredictiveConsumptionAuditViewState
                     : BrandColors.success,
               ),
               _Inline(
-                label: 'Equivalente no explicado',
+                label: 'Equivalente estadístico',
                 value: _equivalentRecentUnits(model),
                 accent: model.recentResidualOperationalBase > 0
                     ? BrandColors.danger

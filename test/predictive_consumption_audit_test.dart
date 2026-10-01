@@ -398,6 +398,166 @@ void main() {
       expect(model.investigationCycles.every((cycle) => cycle.anomalyScore == 0),
           isTrue);
     });
+
+    test('separates taco and gringa coefficients for the same meat', () {
+      const tacos = [20, 15, 27, 18, 31, 13, 26, 16, 22, 29];
+      const gringas = [5, 12, 4, 10, 7, 15, 3, 13, 8, 6];
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var i = 0; i < tacos.length; i++) {
+        final date = DateTime(2026, 9, 20 + i);
+        final key = _dateKey(date);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'p-$i',
+          purchaseDate: date,
+          businessDate: key,
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          quantity: tacos[i] * 0.05 + gringas[i] * 0.09,
+          unit: 'kg',
+        ));
+        sales.addAll([
+          PredictiveSaleLine(
+            businessDate: key,
+            productId: 'taco',
+            productName: 'Taco Bistec',
+            categoryName: 'Tacos',
+            quantity: tacos[i],
+            kind: PredictiveSaleKind.paidSale,
+            ingredientNames: const ['Bistec'],
+          ),
+          PredictiveSaleLine(
+            businessDate: key,
+            productId: 'gringa',
+            productName: 'Gringa Bistec',
+            categoryName: 'Gringas',
+            quantity: gringas[i],
+            kind: PredictiveSaleKind.paidSale,
+            ingredientNames: const ['Bistec'],
+          ),
+        ]);
+      }
+      final model = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-09-20',
+        historyEnd: '2026-09-29',
+        investigationStart: '2026-09-28',
+      ).models.single;
+      final byKey = {for (final row in model.coefficients) row.productKey: row};
+      expect(byKey['taco']!.rawBasePerUnit, inInclusiveRange(35, 65));
+      expect(byKey['gringa']!.rawBasePerUnit, inInclusiveRange(70, 110));
+      expect(model.confidence, isNot('No identificable'));
+    });
+
+    test('combines purchases on the same day without duplicating sales', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var i = 0; i < 10; i++) {
+        final date = DateTime(2026, 9, 20 + i);
+        final key = _dateKey(date);
+        final qty = 15 + (i * 7) % 16;
+        for (var part = 0; part < 2; part++) {
+          purchases.add(PredictivePurchaseLine(
+            purchaseId: 'p-$i-$part',
+            purchaseDate: date,
+            businessDate: key,
+            supplierName: 'Omar',
+            itemName: 'Bistec',
+            quantity: qty * 0.025,
+            unit: 'kg',
+          ));
+        }
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'taco',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: qty,
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+      final model = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-09-20',
+        historyEnd: '2026-09-29',
+        investigationStart: '2026-09-28',
+      ).models.single;
+      expect(model.purchaseLineCount, 20);
+      expect(model.purchaseDayCount, 10);
+      expect(model.coefficients.single.rawBasePerUnit, inInclusiveRange(40, 60));
+    });
+
+    test('keeps corn taco and flour gringa purchases separate', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var i = 0; i < 10; i++) {
+        final date = DateTime(2026, 9, 20 + i);
+        final key = _dateKey(date);
+        final tacoQty = 20 + (i * 7) % 13;
+        final gringaQty = 5 + (i * 3) % 9;
+        purchases.addAll([
+          PredictivePurchaseLine(
+            purchaseId: 'corn-$i',
+            purchaseDate: date,
+            businessDate: key,
+            supplierName: 'Noé Tortillas',
+            itemName: 'Tortilla de maíz',
+            quantity: tacoQty * 0.025,
+            unit: 'kg',
+          ),
+          PredictivePurchaseLine(
+            purchaseId: 'flour-$i',
+            purchaseDate: date,
+            businessDate: key,
+            supplierName: 'Noe',
+            itemName: 'Tortilla de harina',
+            quantity: gringaQty * 0.05,
+            unit: 'kg',
+          ),
+        ]);
+        sales.addAll([
+          PredictiveSaleLine(
+            businessDate: key,
+            productId: 'taco',
+            productName: 'Taco Bistec',
+            categoryName: 'Tacos',
+            quantity: tacoQty,
+            kind: PredictiveSaleKind.paidSale,
+            ingredientNames: const ['Tortilla de maíz'],
+          ),
+          PredictiveSaleLine(
+            businessDate: key,
+            productId: 'gringa',
+            productName: 'Gringa Bistec',
+            categoryName: 'Gringas',
+            quantity: gringaQty,
+            kind: PredictiveSaleKind.paidSale,
+            ingredientNames: const ['Tortilla de harina'],
+          ),
+        ]);
+      }
+      final models = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-09-20',
+        historyEnd: '2026-09-29',
+        investigationStart: '2026-09-28',
+      ).models;
+      expect(models, hasLength(2));
+      final byKey = {for (final model in models) model.definition.key: model};
+      expect(byKey['tortilla_maiz']!.coefficients.single.productKey, 'taco');
+      expect(byKey['tortilla_harina']!.coefficients.single.productKey, 'gringa');
+      expect(byKey['tortilla_maiz']!.baseUnitLabel, 'g');
+    });
   });
 }
 

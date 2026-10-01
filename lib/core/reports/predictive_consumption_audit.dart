@@ -944,8 +944,9 @@ bool _saleMatchesIngredient(
   switch (definition.kind) {
     case PredictiveIngredientKind.meat:
       if (definition.key == 'bistec' &&
-          (product.contains('laminado') ||
-              ingredients.any((name) => name.contains('laminado')))) {
+          (ingredients.isEmpty
+              ? product.contains('laminado')
+              : ingredients.any((name) => name.contains('laminado')))) {
         return false;
       }
       for (final alias in definition.aliases.map(normalizeYieldName)) {

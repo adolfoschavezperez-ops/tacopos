@@ -5742,6 +5742,7 @@ class TacoPosRepository {
       final orderPaid =
           order.status.trim().toLowerCase() == 'paid' ||
           order.paymentStatus.trim().toLowerCase() == 'paid';
+      final orderCancelled = isCanonicalCancelledOrder(order);
 
       for (final item in itemsByOrder[order.id] ?? const <OrderItem>[]) {
         final kitchenTouched =
@@ -5763,7 +5764,7 @@ class TacoPosRepository {
             : (recipeIngredientNamesByProduct[item.productId] ??
                   const <String>[]);
 
-        if (item.isCancelled && kitchenTouched) {
+        if ((item.isCancelled || orderCancelled) && kitchenTouched) {
           saleLines.add(
             PredictiveSaleLine(
               businessDate: businessDate,
@@ -5784,7 +5785,9 @@ class TacoPosRepository {
         }
 
         final itemPaid = item.paymentStatus.trim().toLowerCase() == 'paid';
-        if (isCanonicalActiveItem(item) && (itemPaid || orderPaid)) {
+        if (!orderCancelled &&
+            isCanonicalActiveItem(item) &&
+            (itemPaid || orderPaid)) {
           saleLines.add(
             PredictiveSaleLine(
               businessDate: businessDate,
