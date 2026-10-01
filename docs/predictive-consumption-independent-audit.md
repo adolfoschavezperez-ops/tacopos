@@ -31,6 +31,8 @@ Se revisó el código desde las lecturas de Firestore en `TacoPosRepository.getP
 - **Inventario:** 2 kg comprados, 1 kg explicado por ventas y 1 kg guardado para mañana produce residual +1 kg sin pérdida alguna. El mismo registro de compras/ventas admite la explicación alternativa de 1 kg de merma. Ningún algoritmo puede distinguirlas sin medir stock/merma.
 - `purchaseDate`, `businessDate` y fechas de captura pueden diferir. Un movimiento tardío altera el ciclo sin cambiar la operación física. Las órdenes legacy sin fechas completas usan varios timestamps; los límites UTC de esas consultas pueden omitir operaciones alrededor de medianoche local.
 - Una receta actual aplicada a un item histórico sin snapshot puede atribuirle ingredientes equivocados. La pantalla no identifica por línea qué ventas usaron fallback; **pendiente** de instrumentación.
+- Las ventas se toman una vez por item, de modo que un split payment no multiplica su cantidad. Sin embargo, la condición `item.paymentStatus == paid || order.status/paymentStatus == paid` no reconcilia pagos monetarios individuales: un estado legacy obsoleto puede introducir una venta no cobrada. Esto requiere casos reales y una política explícita para descuentos/comidas gratis.
+- Las cancelaciones de cocina se reconocen por `sentToKitchenAt`, `cookingAt`, `readyAt` o `kitchenBatchId`. Una cancelación legacy que solo guarde `kitchenStatus` podría quedar fuera; no hay prueba con documentos reales antiguos.
 - La clasificación de proveedores por `contains('noe')` o `contains('omar')` acepta variaciones Noé/Noe y nombres más largos, pero también puede aceptar homónimos. Debe contrastarse con IDs de proveedor reales.
 - Tortillas compradas en kg producen gramos de compra por taco/gringa; **no** permiten inferir piezas por kilo ni número literal de tortillas sin una medición adicional.
 - La conversión cocido = coeficiente crudo × rendimiento configurado/semilla. Solo el coeficiente crudo se ajusta; el cocido depende del perfil elegido, que puede no ser el histórico.
@@ -49,7 +51,7 @@ La exportación usa `toStringAsFixed` con punto decimal y `_csvCell` escapa comi
 
 ## Pruebas
 
-El workflow `.github/workflows/audit-predictive-consumption.yml` ejecuta `flutter analyze`, `flutter test` y `flutter build web --release --base-href "/tacopos/" --no-wasm-dry-run` en cada push de la rama. Las pruebas sintéticas cubren 50 g/taco, compra alta desde 28/09, cancelaciones de cocina frente a ventas, caja contextual, lote abierto, fuga temporal, colinealidad, 300 g/taco, varios productos por carne, compras múltiples en un día y tortilla de maíz frente a harina. No son sustituto de reconciliación con datos reales ni prueban el comportamiento de Firestore con documentos legacy auténticos.
+El workflow `.github/workflows/audit-predictive-consumption.yml` ejecuta `flutter analyze`, `flutter test` y `flutter build web --release --base-href "/tacopos/" --no-wasm-dry-run` en cada push de la rama. Las pruebas sintéticas cubren 50 g/taco, compra alta desde 28/09, cancelaciones de cocina frente a ventas, caja contextual, lote abierto, fuga temporal, colinealidad, 300 g/taco, varios productos por carne, compras múltiples en un día, tortilla de maíz frente a harina, reposición pasada y días sin compras. No son sustituto de reconciliación con datos reales ni prueban el comportamiento de Firestore con documentos legacy auténticos.
 
 ## Conclusión permitida
 

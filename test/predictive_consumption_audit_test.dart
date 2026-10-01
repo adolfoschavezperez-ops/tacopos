@@ -558,6 +558,93 @@ void main() {
       expect(byKey['tortilla_harina']!.coefficients.single.productKey, 'gringa');
       expect(byKey['tortilla_maiz']!.baseUnitLabel, 'g');
     });
+
+    test('selects replenishment when purchases follow prior consumption', () {
+      const quantities = [20, 32, 16, 29, 19, 35, 14, 28, 22, 31];
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var i = 0; i < quantities.length; i++) {
+        final date = DateTime(2026, 9, 20 + i);
+        final key = _dateKey(date);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'p-$i',
+          purchaseDate: date,
+          businessDate: key,
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          quantity: i == 0 ? 1 : quantities[i - 1] * 0.05,
+          unit: 'kg',
+        ));
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'taco',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: quantities[i],
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+      final model = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-09-20',
+        historyEnd: '2026-09-29',
+        investigationStart: '2026-09-28',
+      ).models.single;
+      expect(model.alignment, PredictiveAlignment.replenishment);
+      expect(model.coefficients.single.rawBasePerUnit, inInclusiveRange(40, 60));
+    });
+
+    test('includes days without purchases in closed forward cycles', () {
+      final purchases = <PredictivePurchaseLine>[];
+      final sales = <PredictiveSaleLine>[];
+      for (var day = 0; day < 20; day++) {
+        final date = DateTime(2026, 9, 10 + day);
+        final key = _dateKey(date);
+        final qty = 14 + (day * 7) % 17;
+        sales.add(PredictiveSaleLine(
+          businessDate: key,
+          productId: 'taco',
+          productName: 'Taco Bistec',
+          categoryName: 'Tacos',
+          quantity: qty,
+          kind: PredictiveSaleKind.paidSale,
+          ingredientNames: const ['Bistec'],
+        ));
+      }
+      for (var i = 0; i < 10; i++) {
+        final day = i * 2;
+        final date = DateTime(2026, 9, 10 + day);
+        final qty = (14 + (day * 7) % 17) +
+            (14 + ((day + 1) * 7) % 17);
+        purchases.add(PredictivePurchaseLine(
+          purchaseId: 'p-$i',
+          purchaseDate: date,
+          businessDate: _dateKey(date),
+          supplierName: 'Omar',
+          itemName: 'Bistec',
+          quantity: qty * 0.05,
+          unit: 'kg',
+        ));
+      }
+      final model = buildPredictiveConsumptionAudit(
+        purchaseLines: purchases,
+        saleLines: sales,
+        cashDays: const [],
+        yieldInputs: const [],
+        historyStart: '2026-09-10',
+        historyEnd: '2026-09-29',
+        investigationStart: '2026-09-26',
+      ).models.single;
+      expect(model.alignment, PredictiveAlignment.forwardSupply);
+      expect(model.coefficients.single.rawBasePerUnit, inInclusiveRange(40, 60));
+      expect(model.cycles.any((cycle) => cycle.purchaseDate == '2026-09-28'),
+          isFalse);
+      expect(model.investigationCycles.single.days, 2);
+    });
   });
 }
 
