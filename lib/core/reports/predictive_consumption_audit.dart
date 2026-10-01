@@ -635,7 +635,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
       );
       if (raw <= 0.000001 || units <= 0) continue;
       final cooked = definition.kind == PredictiveIngredientKind.meat &&
-              !yieldRate.isNaN &&
+              yieldRate != null &&
               yieldRate > 0
           ? raw * yieldRate
           : null;
@@ -647,7 +647,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
           cookedBasePerUnit: cooked,
           unitsInTraining: units,
           shareOfTrainingUnits:
-              totalTrainingUnits <= 0 ? 0 : units / totalTrainingUnits,
+              totalTrainingUnits <= 0 ? 0.0 : units / totalTrainingUnits,
           plausibility: _coefficientPlausibility(
             definition: definition,
             family: lines.first.unitFamily,
