@@ -232,7 +232,177 @@ int? _units(ResalePurchase line) {
   if (RegExp(r'^(caja|cajas|paquete|paquetes|charola|charolas|pack)$').hasMatch(unit)) {
     if (pack == null || pack < 1) return null;
     multiplier = pack;
-  } else if (!RegExp(r'^(|pza|pzas|pieza|piezas|unidad|unidades|botella|botellas)$').hasMatch(unit)) {
+  } else if (!RegExp(r'^(|pza|pzas|pieza|piezas|piece|pieces|unidad|unidades|botella|botellas)).hasMatch(unit)) {
+    return null;
+  } else if (pack != null && line.quantity != pack) {
+    // A line labelled x30 with quantity 1 may be one case or one bottle.
+    // Only an explicit package unit establishes the conversion.
+    return null;
+  }
+  final value = line.quantity * multiplier;
+  if (!value.isFinite || value <= 0 || value != value.roundToDouble()) return null;
+  return value.toInt();
+}
+
+ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
+  required Iterable<ResaleExit> exits, Iterable<ResaleCheckpoint> checkpoints = const [],
+  required String endDate}) {
+  final candidatePurchases = purchases.where((p) =>
+    resaleSupplierFamily(p.supplier) != null && p.date.compareTo(endDate) <= 0).toList();
+  final candidateSales = exits.where((s) => s.date.compareTo(endDate) <= 0).toList();
+  final unresolvedPurchases = <String>[];
+  final unresolvedSales = <String>[];
+  final byKey = <String, List<ResalePurchase>>{};
+  final mappedExits = <String, List<ResaleExit>>{};
+  final names = <String, String>{};
+  final families = <String, ResaleFamily>{};
+
+  for (final p in candidatePurchases) {
+    final family = resaleSupplierFamily(p.supplier)!;
+    if (_units(p) == null || _itemKey(p.name).isEmpty ||
+        _isExplicitlyDifferentProduct(p.name, family) ||
+        (p.purchaseItemId.isNotEmpty &&
+            !RegExp(r'^[A-Za-z0-9_.-]{1,100}$').hasMatch(p.purchaseItemId))) {
+      unresolvedPurchases.add('${p.id}: ${p.name} (${p.quantity} ${p.unit})');
+      continue;
+    }
+    // A shared kitchen stock link must not collapse different bottle sizes.
+    // A real purchase catalog ID takes priority over a display name.
+    final identity = p.purchaseItemId.isNotEmpty
+        ? 'sku:${p.purchaseItemId}' : 'name:${_itemKey(p.name)}';
+    final key = '${family.name}:$identity';
+    byKey.putIfAbsent(key, () => []).add(p);
+    names[key] = _itemKey(p.name);
+    families[key] = family;
+  }
+  // One catalog ID reused with different presentation labels is not a
+  // trustworthy unit identity. Keep every affected purchase unresolved.
+  for (final key in byKey.keys.toList()) {
+    if (!key.contains(':sku:')) continue;
+    final variants = byKey[key]!.map((p) => _itemKey(p.name)).toSet();
+    if (variants.length <= 1) continue;
+    for (final p in byKey.remove(key)!) {
+      unresolvedPurchases.add('${p.id}: ${p.name} (SKU compartido entre presentaciones)');
+    }
+    names.remove(key);
+    families.remove(key);
+  }
+
+  final salesByProduct = <String, List<ResaleExit>>{};
+  for (final sale in candidateSales) {
+    if (sale.quantity <= 0) continue;
+    final identity = '${sale.productId}|${_itemKey(sale.name)}|${sale.stockItemId}';
+    salesByProduct.putIfAbsent(identity, () => []).add(sale);
+  }
+  for (final productSales in salesByProduct.values) {
+    final example = productSales.first;
+    final possible = <String>{};
+    for (final entry in byKey.entries) {
+      if (names[entry.key] == _itemKey(example.name)) {
+        possible.add(entry.key);
+      }
+    }
+    if (possible.length > 1 && example.stockItemId.isNotEmpty) {
+      final linked = possible.where((key) => byKey[key]!.any(
+        (p) => p.stockItemId == example.stockItemId)).toSet();
+      if (linked.length == 1) {
+        possible..clear()..add(linked.single);
+      }
+    }
+    // A kitchen stock link alone cannot establish bottle size or flavor.
+    // A single generic empanada purchase can be reconciled across flavors,
+    // provided there are no separately purchased flavors to double count.
+    if (possible.isEmpty && RegExp(r'\bempanad(?:a|as|ita|itas)\b')
+        .hasMatch(resaleNormalize(example.name))) {
+      final empanadaKeys = byKey.keys.where((k) => families[k] == ResaleFamily.empanada).toList();
+      if (empanadaKeys.length == 1 &&
+          const {'empanada', 'empanadas', 'empanadita', 'empanaditas'}
+            .contains(names[empanadaKeys.single])) {
+        possible.add(empanadaKeys.single);
+      }
+    }
+    if (possible.length == 1) {
+      mappedExits.putIfAbsent(possible.single, () => []).addAll(productSales);
+    } else if (possible.isNotEmpty || example.stockItemId.isNotEmpty ||
+        RegExp(r'\b(?:agua|aguas|empanad(?:a|as|ita|itas))\b')
+            .hasMatch(resaleNormalize(example.name)) ||
+        RegExp(r'\b(?:bebida|bebidas|postre|postres)\b')
+            .hasMatch(resaleNormalize(example.category))) {
+      unresolvedSales.add('${example.productId}: ${example.name} (${possible.isEmpty ? 'sin compra equivalente' : 'match ambiguo'})');
+    }
+  }
+
+  final products = <ResaleProduct>[];
+  for (final entry in byKey.entries) {
+    final saleLines = mappedExits[entry.key] ?? const <ResaleExit>[];
+    final daily = <String, _MutableDay>{};
+    for (final p in entry.value) {
+      final day = daily.putIfAbsent(p.date, _MutableDay.new);
+      day.bought += _units(p)!;
+      day.cost += p.lineCost;
+    }
+    var unproven = 0;
+    for (final s in saleLines) {
+      if (s.kind == ResaleExitKind.cancellationWithoutDeliveryProof) {
+        unproven += s.quantity;
+        continue;
+      }
+      final day = daily.putIfAbsent(s.date, _MutableDay.new);
+      if (s.kind == ResaleExitKind.paid) {
+        day.sold += s.quantity;
+        day.revenue += s.saleAmount;
+      } else {
+        day.other += s.quantity;
+      }
+    }
+    var balance = 0;
+    final days = <ResaleDay>[];
+    for (final date in daily.keys.toList()..sort()) {
+      final d = daily[date]!;
+      balance += d.bought - d.sold - d.other;
+      days.add(ResaleDay(date, d.bought, d.sold, d.other, balance, d.cost, d.revenue));
+    }
+    final relevantCheckpoints = checkpoints.where((c) => c.key == entry.key &&
+      c.boundary == 'closing' && c.physicalCount >= 0 &&
+      c.date.compareTo(endDate) <= 0).toList()..sort((a,b) => a.date.compareTo(b.date));
+    final checkpoint = relevantCheckpoints.isEmpty ? null : relevantCheckpoints.last;
+    int? difference;
+    if (relevantCheckpoints.length >= 2 && checkpoint!.confirmed &&
+        relevantCheckpoints[relevantCheckpoints.length - 2].confirmed) {
+      final previous = relevantCheckpoints[relevantCheckpoints.length - 2];
+      final expected = previous.physicalCount + days
+        .where((d) => d.date.compareTo(previous.date) > 0 &&
+            d.date.compareTo(checkpoint.date) <= 0)
+        .fold<int>(0, (n, d) => n + d.bought - d.sold - d.other);
+      difference = checkpoint.physicalCount - expected;
+    }
+    products.add(ResaleProduct(key: entry.key, family: families[entry.key]!,
+      name: names[entry.key]!,
+      suppliers: entry.value.map((p) => p.supplier).toSet().toList()..sort(),
+      productIds: saleLines.map((s) => s.productId).toSet().toList()..sort(),
+      days: days, lastPurchaseDate: entry.value.map((p) => p.date).reduce(
+        (a,b) => a.compareTo(b) > 0 ? a : b),
+      initialUnknown: checkpoint?.confirmed != true, checkpoint: checkpoint,
+      checkpoints: relevantCheckpoints,
+      physicalDifference: difference, unprovenCancellations: unproven));
+  }
+  products.sort((a,b) => a.name.compareTo(b.name));
+  return ResaleAudit(products: products, unmatchedPurchases: unresolvedPurchases,
+    unmatchedSales: unresolvedSales, notes: const [
+      'Inventario inicial desconocido sin conteo físico: el acumulado es relativo, no un faltante.',
+      'Saldo relativo negativo: revisar compras, captura, presentación, match o inventario inicial.',
+      'Una cancelación de cocina no demuestra entrega física y no se descuenta.',
+      'La relación compras/ventas entre periodos incluye arrastre de inventario.',
+      'El histórico de ventas se carga desde la primera compra objetivo registrada; '
+        'movimientos anteriores requieren una fecha de inventario inicial verificable.',
+    ]);
+}
+
+class _MutableDay {
+  int bought = 0, sold = 0, other = 0;
+  double cost = 0, revenue = 0;
+}
+).hasMatch(unit)) {
     return null;
   } else if (pack != null && line.quantity != pack) {
     // A line labelled x30 with quantity 1 may be one case or one bottle.
