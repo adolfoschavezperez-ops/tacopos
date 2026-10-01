@@ -1451,15 +1451,59 @@ double _anomalyScore({
   return score.clamp(0.0, 100.0).toDouble();
 }
 
+double _qualityAdjustedAnomalyScore({
+  required double rawScore,
+  required String confidence,
+  required double rSquared,
+  required bool purchaseMagnitudeOutlier,
+}) {
+  if (purchaseMagnitudeOutlier || confidence == 'Baja' || rSquared < 0) {
+    // Exploratory/data-quality signals stay visible in ingredient detail but
+    // cannot enter the main audit radar as a strong finding.
+    return math.min(rawScore, 34.0).toDouble();
+  }
+  return rawScore;
+}
+
+bool _isPurchaseMagnitudeOutlier(
+  double target,
+  List<double> trainingTargets,
+) {
+  final values = trainingTargets.where((value) => value > 0).toList();
+  if (values.length < 3) return false;
+  final median = _median(values);
+  if (median <= 0) return false;
+  final deviations =
+      values.map((value) => (value - median).abs()).toList(growable: false);
+  final robustScale = _median(deviations) * 1.4826;
+  final byScale = median + 6 * math.max(robustScale, median * 0.05);
+  final byRatio = median * 3.0;
+  return target > math.max(byScale, byRatio);
+}
+
 String _cycleEvidence({
   required double residualPaid,
   required double residualOperational,
   required double cancelledExplained,
+  required double knownOperational,
+  required bool purchaseMagnitudeOutlier,
   required double shortage,
   required String family,
 }) {
   final unit = predictiveBaseUnitLabel(family);
   final parts = <String>[];
+  if (purchaseMagnitudeOutlier) {
+    parts.add(
+      'Volumen de compra extremo frente al baseline; revisar captura, unidad '
+      'o compra para varios dias antes de interpretar el residual',
+    );
+  }
+  if (knownOperational > 0.01) {
+    parts.add(
+      'consumo operativo conocido incluido '
+      '${knownOperational.toStringAsFixed(1)} $unit',
+    );
+  }
   if (residualPaid > 0) {
     parts.add(
       'Compra excede lo esperado por ventas en '
