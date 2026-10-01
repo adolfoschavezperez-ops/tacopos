@@ -81,7 +81,7 @@ void main() {
       final purchases = <PredictivePurchaseLine>[];
       final sales = <PredictiveSaleLine>[];
 
-      final quantities = <int>[20, 24, 18, 22, 26, 16, 28, 20, 20];
+      final quantities = <int>[20, 24, 18, 22, 26, 16, 28, 20, 20, 24];
       for (var i = 0; i < quantities.length; i++) {
         final date = DateTime(2026, 9, 20 + i);
         final businessDate = _dateKey(date);
