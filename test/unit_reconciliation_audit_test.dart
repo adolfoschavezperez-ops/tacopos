@@ -281,6 +281,21 @@ void main() {
       discountAmount: 7.5, subtotal: 25, chargedAmount: 17.5),
       ResaleExitKind.paid);
   });
+  test('Firestore piece unit is treated as one resale unit', () {
+    final a = audit([
+      buy('2026-09-01', 8, name: 'Agua de Jamaica', unit: 'piece'),
+      buy('2026-09-01', 10, name: 'Empanadas', supplier: 'Empanaditas',
+        unit: 'piece', id: 'emp'),
+    ], [
+      out('2026-09-01', 5, name: 'Agua de Jamaica', productId: 'jamaica'),
+      out('2026-09-01', 6, name: 'Empanadas', productId: 'empanadas'),
+    ]);
+    expect(a.unmatchedPurchases, isEmpty);
+    expect(a.products, hasLength(2));
+    expect(a.products.firstWhere((p) => p.name == 'agua de jamaica').bought, 8);
+    expect(a.products.firstWhere((p) => p.name == 'empanadas').bought, 10);
+  });
+
   test('pack x30 converts once; unsupported units stay unmatched', () {
     final a = audit([buy('2026-09-01', 1,
       name: 'Agua 600 ml x 30', unit: 'caja'),
