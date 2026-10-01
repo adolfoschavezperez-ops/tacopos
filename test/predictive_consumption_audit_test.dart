@@ -4,7 +4,7 @@ import 'package:tacopos/core/reports/predictive_consumption_audit.dart';
 void main() {
   group('predictive consumption audit', () {
     test('learns empirical meat consumption from historical replenishment cycles', () {
-      final quantities = <int>[20, 24, 18, 22, 26, 16, 28, 20, 20];
+      final quantities = <int>[20, 24, 18, 22, 26, 16, 28, 20, 20, 14];
       final purchases = <PredictivePurchaseLine>[];
       final sales = <PredictiveSaleLine>[];
 
@@ -21,7 +21,7 @@ void main() {
             itemName: 'Bistec',
             stockItemId: 'bistec',
             stockItemName: 'Bistec',
-            quantity: i == quantities.length - 1 ? 1.6 : qty * 0.05,
+            quantity: i == 8 ? 1.6 : qty * 0.05,
             unit: 'kg',
           ),
         );
@@ -50,7 +50,7 @@ void main() {
           ),
         ],
         historyStart: '2026-09-20',
-        historyEnd: '2026-09-28',
+        historyEnd: '2026-09-29',
         investigationStart: '2026-09-28',
       );
 
@@ -66,6 +66,7 @@ void main() {
       expect(taco.rawBasePerUnit, inInclusiveRange(40, 60));
       expect(taco.cookedBasePerUnit, inInclusiveRange(27, 42));
 
+      expect(model.alignment, PredictiveAlignment.forwardSupply);
       final investigation = model.cycles.firstWhere(
         (cycle) => cycle.purchaseDate == '2026-09-28',
       );
@@ -142,7 +143,7 @@ void main() {
           ),
         ],
         historyStart: '2026-09-20',
-        historyEnd: '2026-09-28',
+        historyEnd: '2026-09-29',
         investigationStart: '2026-09-28',
       );
 
