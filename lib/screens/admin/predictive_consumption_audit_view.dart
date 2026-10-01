@@ -550,8 +550,9 @@ class _PredictiveConsumptionAuditViewState
       child: Text(
         'Histórico analizado: ${audit.historyStart} → ${audit.historyEnd}. '
         'Proveedores detectados: $suppliers. '
-        'La línea del ${audit.investigationStart} no entrena el patrón normal cuando existe '
-        'histórico suficiente anterior: se usa como periodo de investigación.',
+        'El baseline normal termina antes de ${audit.investigationStart}: '
+        'el periodo investigado nunca se usa para completar entrenamiento faltante. '
+        'Si no alcanza el histórico previo, el modelo queda sin construir o con confianza baja.',
         style: const TextStyle(
           color: BrandColors.textSecondary,
           fontWeight: FontWeight.w700,
@@ -562,9 +563,17 @@ class _PredictiveConsumptionAuditViewState
 
   Widget _summary(PredictiveConsumptionAudit audit) {
     final high = audit.highAnomalyCycles;
-    final recentExcessKg = audit.recentPositiveResidualWeightGrams / 1000;
+    final auditableKg =
+        audit.recentPositiveResidualAuditableWeightGrams / 1000;
+    final exploratoryKg =
+        audit.recentPositiveResidualLowWeightGrams / 1000;
+    final bulkOutlierKg =
+        audit.recentPositiveResidualBulkOutlierWeightGrams / 1000;
     final highConfidence = audit.models
         .where((model) => model.confidence == 'Alta')
+        .length;
+    final mediumConfidence = audit.models
+        .where((model) => model.confidence == 'Media')
         .length;
     return Wrap(
       spacing: 12,
@@ -573,7 +582,7 @@ class _PredictiveConsumptionAuditViewState
         _Metric(
           label: 'Modelos aprendidos',
           value: '${audit.models.length}',
-          detail: '$highConfidence con confianza alta',
+          detail: '$highConfidence alta · $mediumConfidence media',
         ),
         _Metric(
           label: 'Compras objetivo',
@@ -592,17 +601,29 @@ class _PredictiveConsumptionAuditViewState
           accent: BrandColors.accentOrange,
         ),
         _Metric(
-          label: 'Ciclos recientes altos',
+          label: 'Ciclos auditables altos',
           value: '$high',
-          detail: 'Índice técnico ≥ 70',
+          detail: 'Solo modelos Media/Alta · índice ≥ 70',
           accent: high > 0 ? BrandColors.danger : BrandColors.success,
         ),
         _Metric(
-          label: 'Exceso reciente no explicado',
-          value: '${recentExcessKg.toStringAsFixed(2)} kg',
-          detail: 'Solo residuos positivos en insumos por peso',
+          label: 'Residual positivo auditable',
+          value: '${auditableKg.toStringAsFixed(2)} kg',
+          detail: 'Modelos Media/Alta · sin compras de volumen extremo',
           accent:
-              recentExcessKg > 0.5 ? BrandColors.danger : BrandColors.textPrimary,
+              auditableKg > 0.5 ? BrandColors.danger : BrandColors.textPrimary,
+        ),
+        _Metric(
+          label: 'Residual exploratorio',
+          value: '${exploratoryKg.toStringAsFixed(2)} kg',
+          detail: 'Modelos de confianza Baja · no concluyente',
+          accent: BrandColors.textMuted,
+        ),
+        _Metric(
+          label: 'Volumen extremo separado',
+          value: '${bulkOutlierKg.toStringAsFixed(2)} kg',
+          detail: '${audit.recentPurchaseMagnitudeOutliers} ciclos · revisar captura/stock-up',
+          accent: BrandColors.accentOrange,
         ),
       ],
     );
