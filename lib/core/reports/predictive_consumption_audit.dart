@@ -1206,7 +1206,12 @@ List<double> _nonNegativeRidge({
         numerator += weights[i] * value * partial;
         denominator += weights[i] * value * value;
       }
-      denominator += lambda;
+      // The final feature is the per-day baseline. Penalize it much
+      // harder than product coefficients so it absorbs true fixed waste/buffer
+      // without stealing explanatory power from units sold when the two are
+      // correlated (common on one-purchase-per-day histories).
+      final featurePenalty = j == p - 1 ? lambda * 25 : lambda;
+      denominator += featurePenalty;
       final next = denominator <= 0
           ? 0.0
           : math.max(0.0, numerator / denominator).toDouble();
