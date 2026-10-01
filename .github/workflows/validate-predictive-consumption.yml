@@ -27,8 +27,8 @@ jobs:
       - name: Analyze
         run: flutter analyze
 
-      - name: Focused tests
-        run: flutter test test/predictive_consumption_audit_test.dart test/cancellation_shortage_audit_test.dart test/rapid_card_sales_audit_test.dart
+      - name: Full test suite
+        run: flutter test
 
       - name: Build web
         run: flutter build web --release --base-href "/tacopos/" --no-wasm-dry-run
