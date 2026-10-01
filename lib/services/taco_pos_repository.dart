@@ -32,6 +32,7 @@ import '../core/reports/cash_schedule_report.dart';
 import '../core/reports/finance_dashboard.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
+import '../core/reports/predictive_consumption_audit.dart';
 import '../core/reports/report_data_bundle.dart';
 import '../core/reports/report_performance_tracer.dart';
 import '../core/reports/yield_profit_report.dart';
@@ -5578,6 +5579,329 @@ class TacoPosRepository {
       );
     }
     return bundle;
+  }
+
+  Future<PredictiveConsumptionAudit> getPredictiveConsumptionAudit({
+    String investigationStart = '2026-09-28',
+    bool forceRefresh = false,
+  }) async {
+    _requireYieldProfitAdmin();
+    final session = AppSession.instance;
+    final stopwatch = Stopwatch()..start();
+
+    final purchaseSnapshot = await _supplierPurchasesRef.get();
+    final purchases = purchaseSnapshot.docs
+        .map(SupplierPurchase.fromDoc)
+        .where(
+          (purchase) =>
+              !purchase.isCancelled &&
+              _matchesBranch(purchase.branchId, session.currentBranchId) &&
+              _isPredictiveTargetSupplier(purchase.supplierName),
+        )
+        .toList()
+      ..sort((a, b) => a.purchaseDate.compareTo(b.purchaseDate));
+
+    if (purchases.isEmpty) {
+      return PredictiveConsumptionAudit(
+        historyStart: investigationStart,
+        historyEnd: _currentBusinessDate(),
+        investigationStart: investigationStart,
+        models: const [],
+        detectedSupplierNames: const [],
+        purchaseLinesLoaded: 0,
+        paidSaleLinesLoaded: 0,
+        cancelledKitchenLinesLoaded: 0,
+        cashDaysLoaded: 0,
+        notes: const [
+          'No se encontraron compras activas de proveedores que coincidan con Noe/Omar.',
+        ],
+      );
+    }
+
+    final purchaseItemEntries =
+        await runInBatches<
+          SupplierPurchase,
+          (SupplierPurchase, List<SupplierPurchaseItem>)
+        >(
+          purchases,
+          batchSize: 15,
+          action: (purchase) async {
+            final snapshot = await _supplierPurchasesRef
+                .doc(purchase.id)
+                .collection('items')
+                .get();
+            return (
+              purchase,
+              snapshot.docs
+                  .map(SupplierPurchaseItem.fromDoc)
+                  .where((item) => item.isActive && item.quantity > 0)
+                  .toList(growable: false),
+            );
+          },
+        );
+
+    final predictivePurchases = <PredictivePurchaseLine>[];
+    for (final entry in purchaseItemEntries) {
+      for (final item in entry.$2) {
+        final itemName = item.kitchenStockItemName?.trim().isNotEmpty == true
+            ? item.kitchenStockItemName!.trim()
+            : item.purchaseItemName;
+        if (detectPredictiveIngredient(
+              itemName: itemName,
+              supplierName: entry.$1.supplierName,
+            ) ==
+            null) {
+          continue;
+        }
+        predictivePurchases.add(
+          PredictivePurchaseLine(
+            purchaseId: entry.$1.id,
+            purchaseDate: entry.$1.purchaseDate,
+            businessDate:
+                entry.$1.businessDate ?? _businessDateFor(entry.$1.purchaseDate),
+            supplierName: entry.$1.supplierName,
+            itemName: item.purchaseItemName,
+            quantity: item.quantity,
+            unit: item.unit,
+            stockItemId: item.kitchenStockItemId ?? '',
+            stockItemName: itemName,
+          ),
+        );
+      }
+    }
+
+    if (predictivePurchases.isEmpty) {
+      return PredictiveConsumptionAudit(
+        historyStart: investigationStart,
+        historyEnd: _currentBusinessDate(),
+        investigationStart: investigationStart,
+        models: const [],
+        detectedSupplierNames:
+            purchases.map((purchase) => purchase.supplierName).toSet().toList(),
+        purchaseLinesLoaded: 0,
+        paidSaleLinesLoaded: 0,
+        cancelledKitchenLinesLoaded: 0,
+        cashDaysLoaded: 0,
+        notes: const [
+          'Se encontraron los proveedores, pero no lineas de tortilla/carne reconocibles para modelar.',
+        ],
+      );
+    }
+
+    predictivePurchases.sort(
+      (a, b) => a.purchaseDate.compareTo(b.purchaseDate),
+    );
+    final historyStart = predictivePurchases
+        .map((line) => line.businessDate)
+        .where((date) => date.trim().isNotEmpty)
+        .reduce((a, b) => a.compareTo(b) <= 0 ? a : b);
+    final historyEnd = _currentBusinessDate();
+
+    final reportKey = ReportDataKey(
+      restaurantId: session.currentRestaurantId,
+      branchId: session.currentBranchId,
+      startBusinessDate: historyStart,
+      endBusinessDate: historyEnd,
+      includeItems: true,
+    );
+    final orderLoad = await _ordersForReportRange(reportKey);
+    final orders = orderLoad.$1;
+    final orderIds = orders.map((order) => order.id).toSet();
+    final itemsByOrder = await _predictiveItemsByOrder(
+      orderIds: orderIds,
+      branchId: session.currentBranchId,
+    );
+
+    final saleLines = <PredictiveSaleLine>[];
+    for (final order in orders) {
+      final businessDate =
+          _businessDateForOrder(order) ??
+          order.businessDate ??
+          order.operationalDate ??
+          '';
+      if (businessDate.isEmpty) continue;
+      final orderPaid =
+          order.status.trim().toLowerCase() == 'paid' ||
+          order.paymentStatus.trim().toLowerCase() == 'paid';
+
+      for (final item in itemsByOrder[order.id] ?? const <OrderItem>[]) {
+        final kitchenTouched =
+            item.sentToKitchenAt != null ||
+            item.cookingAt != null ||
+            item.readyAt != null ||
+            (item.kitchenBatchId?.trim().isNotEmpty ?? false);
+        final ingredientNames = <String>{
+          if (item.kitchenStockItemName?.trim().isNotEmpty == true)
+            item.kitchenStockItemName!.trim(),
+          ...item.recipeItems
+              .map((recipe) => recipe.kitchenStockItemName.trim())
+              .where((name) => name.isNotEmpty),
+        }.toList(growable: false);
+
+        if (item.isCancelled && kitchenTouched) {
+          saleLines.add(
+            PredictiveSaleLine(
+              businessDate: businessDate,
+              productId: item.productId,
+              productName: item.productName,
+              categoryName: item.category,
+              quantity: item.qty,
+              kind: PredictiveSaleKind.cancelledKitchen,
+              ingredientNames: ingredientNames,
+              orderId: order.id,
+              cancelledByEmployeeName:
+                  item.cancelRequestedByEmployeeName?.trim().isNotEmpty == true
+                  ? item.cancelRequestedByEmployeeName!.trim()
+                  : item.cancelledByEmployeeName ?? '',
+            ),
+          );
+          continue;
+        }
+
+        final itemPaid = item.paymentStatus.trim().toLowerCase() == 'paid';
+        if (!item.isCancelled && (itemPaid || orderPaid)) {
+          saleLines.add(
+            PredictiveSaleLine(
+              businessDate: businessDate,
+              productId: item.productId,
+              productName: item.productName,
+              categoryName: item.category,
+              quantity: item.qty,
+              kind: PredictiveSaleKind.paidSale,
+              ingredientNames: ingredientNames,
+              orderId: order.id,
+            ),
+          );
+        }
+      }
+    }
+
+    final profileSnapshot = await _ingredientYieldProfilesRef.get();
+    final yieldInputs = profileSnapshot.docs
+        .map(IngredientYieldProfile.fromDoc)
+        .where((profile) => profile.active)
+        .map(
+          (profile) => PredictiveYieldInput(
+            stockItemId: profile.stockItemId,
+            stockItemName: profile.stockItemName,
+            yieldRate: profile.cookingYieldRate,
+          ),
+        )
+        .toList(growable: false);
+
+    final cashSnapshot = await _cashSessionsRef
+        .where('businessDate', isGreaterThanOrEqualTo: historyStart)
+        .where('businessDate', isLessThanOrEqualTo: historyEnd)
+        .get();
+    final cashByDate = <String, CashSession>{};
+    for (final doc in cashSnapshot.docs) {
+      final cash = CashSession.fromDoc(doc);
+      if (!_matchesBranch(cash.branchId, session.currentBranchId)) continue;
+      final existing = cashByDate[cash.businessDate];
+      final currentRank =
+          cash.correctedAt ??
+          cash.closedAt ??
+          cash.updatedAt ??
+          cash.openedAt ??
+          cash.createdAt ??
+          DateTime(1970);
+      final existingRank =
+          existing?.correctedAt ??
+          existing?.closedAt ??
+          existing?.updatedAt ??
+          existing?.openedAt ??
+          existing?.createdAt ??
+          DateTime(1970);
+      if (existing == null || currentRank.isAfter(existingRank)) {
+        cashByDate[cash.businessDate] = cash;
+      }
+    }
+    final cashDays = cashByDate.values
+        .map(
+          (cash) => PredictiveCashDay(
+            businessDate: cash.businessDate,
+            shortageAmount: cash.shortageAmount,
+            netDifference: cash.netDifference,
+          ),
+        )
+        .toList(growable: false);
+
+    final audit = buildPredictiveConsumptionAudit(
+      purchaseLines: predictivePurchases,
+      saleLines: saleLines,
+      cashDays: cashDays,
+      yieldInputs: yieldInputs,
+      historyStart: historyStart,
+      historyEnd: historyEnd,
+      investigationStart: investigationStart,
+    );
+    stopwatch.stop();
+    developer.log(
+      'PREDICTIVE_CONSUMPTION_AUDIT '
+      'branch=${session.currentBranchId} '
+      'history=$historyStart..$historyEnd '
+      'purchases=${predictivePurchases.length} '
+      'orders=${orders.length} '
+      'saleLines=${saleLines.length} '
+      'models=${audit.models.length} '
+      'ms=${stopwatch.elapsedMilliseconds}',
+      name: 'TacoPOS.predictiveConsumption',
+    );
+    return audit;
+  }
+
+  bool _isPredictiveTargetSupplier(String supplierName) {
+    final normalized = normalizeYieldName(supplierName);
+    return normalized.contains('noe') || normalized.contains('omar');
+  }
+
+  Future<Map<String, List<OrderItem>>> _predictiveItemsByOrder({
+    required Set<String> orderIds,
+    required String branchId,
+  }) async {
+    if (orderIds.isEmpty) return const <String, List<OrderItem>>{};
+
+    try {
+      final snapshot = await _db
+          .collectionGroup('items')
+          .where('branchId', isEqualTo: branchId)
+          .get();
+      final result = <String, List<OrderItem>>{};
+      for (final doc in snapshot.docs) {
+        final orderRef = doc.reference.parent.parent;
+        if (orderRef == null || orderRef.parent.id != 'orders') continue;
+        if (!orderIds.contains(orderRef.id)) continue;
+        result
+            .putIfAbsent(orderRef.id, () => <OrderItem>[])
+            .add(OrderItem.fromDoc(doc));
+      }
+      for (final items in result.values) {
+        items.sort((a, b) {
+          final aAt = a.createdAt ?? a.updatedAt ?? DateTime(1970);
+          final bAt = b.createdAt ?? b.updatedAt ?? DateTime(1970);
+          return aAt.compareTo(bAt);
+        });
+      }
+      if (result.isNotEmpty) return result;
+    } catch (error) {
+      developer.log(
+        'CollectionGroup items no disponible; usando fallback por orden: $error',
+        name: 'TacoPOS.predictiveConsumption',
+      );
+    }
+
+    final entries = await runInBatches<String, (String, List<OrderItem>)>(
+      orderIds.toList(growable: false),
+      batchSize: 15,
+      action: (orderId) async {
+        final snapshot = await _ordersRef.doc(orderId).collection('items').get();
+        return (
+          orderId,
+          _sortedOrderItems(snapshot.docs.map(OrderItem.fromDoc)),
+        );
+      },
+    );
+    return {for (final entry in entries) entry.$1: entry.$2};
   }
 
   Future<YieldProfitReportBundle> getYieldProfitReportBundle({
