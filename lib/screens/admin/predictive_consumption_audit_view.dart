@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/reports/predictive_consumption_audit.dart';
+import '../../core/reports/unit_reconciliation_audit.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
@@ -26,8 +27,11 @@ class PredictiveConsumptionAuditView extends StatefulWidget {
 
 class _PredictiveConsumptionAuditViewState
     extends State<PredictiveConsumptionAuditView> {
-  DateTime _investigationStart = DateTime(2026, 9, 28);
+  DateTime _investigationStart = DateTime(2026, 9, 1);
   late Future<PredictiveConsumptionAudit> _future;
+  late Future<ResaleAudit> _resaleFuture;
+  String _resalePeriod = 'september';
+  DateTime _resaleAsOf = DateTime.now();
   String _ingredientFilter = 'all';
   bool _onlyInvestigation = true;
 
@@ -38,6 +42,7 @@ class _PredictiveConsumptionAuditViewState
   }
 
   void _load() {
+    _resaleFuture = widget.repository.getResaleUnitAudit();
     _future = widget.repository.getPredictiveConsumptionAudit(
       investigationStart: _dateKey(_investigationStart),
       forceRefresh: true,
@@ -118,6 +123,8 @@ class _PredictiveConsumptionAuditViewState
             const SizedBox(height: 14),
             _summary(audit),
             const SizedBox(height: 14),
+            _resaleSection(),
+            const SizedBox(height: 14),
             _globalAnomalies(recentCycles),
             const SizedBox(height: 14),
             _modelQuality(models),
@@ -134,6 +141,118 @@ class _PredictiveConsumptionAuditViewState
       },
     );
   }
+
+  Widget _resaleSection() => FutureBuilder<ResaleAudit>(
+    future: _resaleFuture,
+    builder: (context, snapshot) {
+      if (snapshot.hasError) {
+        return GlassPanel(child: Text('Conciliación de unidades: ${snapshot.error}',
+          style: const TextStyle(color: BrandColors.danger)));
+      }
+      if (!snapshot.hasData) {
+        return const GlassPanel(child: Text('Cargando compras y salidas unitarias...'));
+      }
+      final audit = snapshot.data!;
+      final today = _resaleAsOf;
+      String key(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+      final (start, end) = switch (_resalePeriod) {
+        'day' => (key(today), key(today)),
+        'week' => (key(today.subtract(Duration(days: today.weekday - 1))), key(today)),
+        'month' => (key(DateTime(today.year, today.month)), key(today)),
+        'september' => ('2026-09-01', key(today)),
+        _ => ('0000-01-01', key(today)),
+      };
+      String money(double value) => NumberFormat.currency(locale: 'es_MX', symbol: r'$')
+          .format(value);
+      return GlassPanel(child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Conciliación de unidades · Aguas Fanny / Empanaditas',
+            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 6),
+          const Text('Compras − ventas − otras salidas verificadas = variación de inventario teórico. '
+            'Inventario inicial desconocido hasta contar físicamente cada producto.'),
+          const SizedBox(height: 12),
+          DropdownButton<String>(value: _resalePeriod,
+            items: const [
+              DropdownMenuItem(value: 'day', child: Text('Día seleccionado')),
+              DropdownMenuItem(value: 'week', child: Text('Semana seleccionada')),
+              DropdownMenuItem(value: 'month', child: Text('Mes seleccionado')),
+              DropdownMenuItem(value: 'september', child: Text('Desde 01/09/2026')),
+              DropdownMenuItem(value: 'all', child: Text('Histórico completo cargado')),
+            ], onChanged: (value) => setState(() => _resalePeriod = value ?? 'september')),
+          TextButton.icon(onPressed: () async {
+            final picked = await showDatePicker(context: context,
+              initialDate: _resaleAsOf, firstDate: DateTime(2020),
+              lastDate: DateTime.now());
+            if (picked != null && mounted) setState(() => _resaleAsOf = picked);
+          }, icon: const Icon(Icons.calendar_month),
+            label: Text('Hasta ${DateFormat('dd/MM/yyyy').format(_resaleAsOf)}')),
+          for (final p in audit.products) Builder(builder: (_) {
+            final period = p.period(start, end);
+            final baseline = p.period('2026-07-01', '2026-08-31');
+            final september = p.period('2026-09-01', '2026-09-30');
+            final daily = p.days.where((d) => d.date.compareTo(start) >= 0 &&
+                d.date.compareTo(end) <= 0).toList();
+            return Padding(padding: const EdgeInsets.symmetric(vertical: 10),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Divider(),
+                Text('${p.name} · ${p.family == ResaleFamily.water ? 'agua' : 'empanada'}',
+                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 17)),
+                Text('Proveedor: ${p.suppliers.join(', ')} · SKU POS: '
+                  '${p.productIds.isEmpty ? 'sin vínculo seguro' : p.productIds.join(', ')} '
+                  '· Última compra en histórico: ${p.lastPurchaseDate}'),
+                Text('Compradas: ${period.bought} · Vendidas: ${period.sold} '
+                  '· Otras salidas registradas: ${period.other} '
+                  '· Variación: ${period.netUnits >= 0 ? '+' : ''}${period.netUnits} u.'),
+                Text('Costo comprado: ${money(period.cost)} · Importe de artículos vendidos: '
+                  '${money(period.revenue)} · Costo unitario medio: ${money(p.unitCost)}'),
+                Text(p.initialUnknown
+                  ? 'Inventario inicial desconocido · Saldo relativo hasta $end: ${p.balanceAt(end)} u. '
+                    '· Inventario absoluto y discrepancia: no confirmables'
+                  : 'Inventario teórico: ${p.theoreticalInventory?.toStringAsFixed(0)} u. '
+                    '· Valor a costo medio: ${money(p.theoreticalValue ?? 0)}'),
+                if (p.physicalDifference != null)
+                  Text('Diferencia confirmada entre conteos: ${p.physicalDifference} u. '
+                    '· Valor a costo medio: ${money(p.physicalDifference!.abs() * p.unitCost)}'),
+                if (p.hasNegativeRelativeBalance)
+                  const Text('Saldo relativo negativo: revisar integridad de datos e inventario inicial.',
+                    style: TextStyle(color: BrandColors.danger)),
+                if (p.anchoredCycleStarts.isNotEmpty)
+                  Text('Ciclos anclados en conteo físico: compras tras saldo cero '
+                    '${p.anchoredCycleStarts.join(', ')}'),
+                if (p.unprovenCancellations > 0)
+                  Text('${p.unprovenCancellations} u. canceladas sin prueba de entrega; '
+                    'no se restaron del inventario.'),
+                Text('Jul–ago: ${baseline.bought} compradas / ${baseline.sold + baseline.other} '
+                  'salidas; Δ ${baseline.netUnits}. Sep: ${september.bought} compradas / '
+                  '${september.sold + september.other} salidas; Δ ${september.netUnits}. '
+                  'Comparación sujeta a inventario arrastrado.'),
+                if (daily.isNotEmpty) ExpansionTile(title: Text('Movimientos por día (${daily.length})'),
+                  children: [for (final d in daily)
+                    ListTile(dense: true, title: Text(d.date),
+                      subtitle: Text('+${d.bought} compradas · −${d.sold} vendidas '
+                        '· −${d.other} otras · saldo relativo ${d.relativeBalance}'))]),
+              ]));
+          }),
+          if (audit.products.isEmpty) const Text('Sin líneas unitarias conciliables.'),
+          if (audit.unmatchedPurchases.isNotEmpty)
+            ExpansionTile(title: Text('Compras sin conversión o vínculo seguro '
+              '(${audit.unmatchedPurchases.length})'),
+              children: [for (final row in audit.unmatchedPurchases) ListTile(title: Text(row))]),
+          if (audit.unmatchedSales.isNotEmpty)
+            ExpansionTile(title: Text('Productos vendidos sin equivalencia segura '
+              '(${audit.unmatchedSales.length})'),
+              children: [for (final row in audit.unmatchedSales) ListTile(title: Text(row))]),
+          for (final note in audit.notes) Text('• $note'),
+          const Text('No hay conteo físico por SKU ni movimientos explícitos de merma, '
+            'daño o devolución integrados a esta conciliación; diferencia económica confirmable: pendiente.'),
+          const Text('El importe de artículos puede diferir de la venta neta '
+            'por descuentos, cortesías y cobros parciales.'),
+        ],
+      ));
+    },
+  );
 
   Widget _header(PredictiveConsumptionAudit audit) {
     final ingredientOptions = <String, String>{

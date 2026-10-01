@@ -33,6 +33,7 @@ import '../core/reports/finance_dashboard.dart';
 import '../core/reports/hourly_sales_comparison.dart';
 import '../core/reports/operational_blockers.dart';
 import '../core/reports/predictive_consumption_audit.dart';
+import '../core/reports/unit_reconciliation_audit.dart';
 import '../core/reports/report_data_bundle.dart';
 import '../core/reports/report_performance_tracer.dart';
 import '../core/reports/yield_profit_report.dart';
@@ -5579,6 +5580,92 @@ class TacoPosRepository {
       );
     }
     return bundle;
+  }
+
+  Future<ResaleAudit> getResaleUnitAudit() async {
+    _requireYieldProfitAdmin();
+    final session = AppSession.instance;
+    final purchaseSnapshot = await _supplierPurchasesRef.get();
+    final purchases = purchaseSnapshot.docs.map(SupplierPurchase.fromDoc)
+        .where((p) => !p.isCancelled &&
+            _matchesBranch(p.branchId, session.currentBranchId) &&
+            resaleSupplierFamily(p.supplierName) != null).toList();
+    if (purchases.isEmpty) {
+      return const ResaleAudit(products: [], unmatchedPurchases: [],
+        unmatchedSales: [], notes: ['No hay compras activas de Aguas Fanny o Empanaditas en esta sucursal.']);
+    }
+    final entries = await runInBatches<SupplierPurchase,
+        (SupplierPurchase, List<SupplierPurchaseItem>)>(purchases,
+      batchSize: 15, action: (purchase) async {
+        final snapshot = await _supplierPurchasesRef.doc(purchase.id)
+            .collection('items').get();
+        return (purchase, snapshot.docs.map(SupplierPurchaseItem.fromDoc)
+            .where((item) => item.isActive && item.quantity > 0).toList());
+      });
+    final lines = <ResalePurchase>[];
+    final end = _currentBusinessDate();
+    for (final entry in entries) {
+      final explicitDate = entry.$1.businessDate?.trim().isNotEmpty == true
+          ? entry.$1.businessDate!.trim()
+          : _businessDateFor(entry.$1.purchaseDate);
+      final date = RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(explicitDate)
+          ? explicitDate : _businessDateFor(entry.$1.purchaseDate);
+      if (date.compareTo(end) > 0) continue;
+      for (final item in entry.$2) {
+        lines.add(ResalePurchase(id: '${entry.$1.id}/${item.id}', date: date,
+          supplier: entry.$1.supplierName, name: item.purchaseItemName,
+          quantity: item.quantity, unit: item.unit, lineCost: item.lineTotal,
+          stockItemId: item.kitchenStockItemId ?? ''));
+      }
+    }
+    if (lines.isEmpty) {
+      return const ResaleAudit(products: [], unmatchedPurchases: [],
+        unmatchedSales: [], notes: [
+          'Se encontraron proveedores, pero no partidas activas con cantidad positiva.',
+        ]);
+    }
+    final start = lines.map((p) => p.date).reduce(
+      (a, b) => a.compareTo(b) < 0 ? a : b);
+    final orderLoad = await _ordersForReportRange(ReportDataKey(
+      restaurantId: session.currentRestaurantId,
+      branchId: session.currentBranchId,
+      startBusinessDate: start, endBusinessDate: end,
+      includeItems: true));
+    final orders = orderLoad.$1;
+    // Read every selected order's items, including historical lines without
+    // branchId. A collectionGroup branch filter can silently return only a
+    // subset of an order's lines.
+    final orderItems = await runInBatches<PosOrder,
+        (String, List<OrderItem>)>(orders, batchSize: 15,
+      action: (order) async {
+        final snapshot = await _ordersRef.doc(order.id).collection('items').get();
+        return (order.id, snapshot.docs.map(OrderItem.fromDoc).toList());
+      });
+    final byOrder = {for (final row in orderItems) row.$1: row.$2};
+    final exits = <ResaleExit>[];
+    for (final order in orders) {
+      final date = _businessDateForOrder(order) ?? order.businessDate ??
+          order.operationalDate ?? '';
+      if (date.isEmpty) continue;
+      final orderPaid = order.status.trim().toLowerCase() == 'paid' ||
+          order.paymentStatus.trim().toLowerCase() == 'paid';
+      for (final item in byOrder[order.id] ?? const <OrderItem>[]) {
+        if (item.qty <= 0) continue;
+        ResaleExitKind? kind;
+        if (item.isCancelled) {
+          kind = ResaleExitKind.cancellationWithoutDeliveryProof;
+        } else if (isCanonicalActiveItem(item) &&
+            (item.paymentStatus.trim().toLowerCase() == 'paid' || orderPaid)) {
+          kind = ResaleExitKind.paid;
+        }
+        if (kind == null) continue;
+        exits.add(ResaleExit(date: date, productId: item.productId,
+          name: item.productName, category: item.category, quantity: item.qty,
+          saleAmount: item.total, kind: kind,
+          stockItemId: item.kitchenStockItemId ?? ''));
+      }
+    }
+    return buildResaleAudit(purchases: lines, exits: exits, endDate: end);
   }
 
   Future<PredictiveConsumptionAudit> getPredictiveConsumptionAudit({
