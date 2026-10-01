@@ -366,6 +366,7 @@ class _PredictiveConsumptionAuditViewState
                   DataColumn(label: Text('Comprado')),
                   DataColumn(label: Text('Esperado ventas')),
                   DataColumn(label: Text('+ cancelaciones cocina')),
+                  DataColumn(label: Text('Rango esperado 95%')),
                   DataColumn(label: Text('Residual final')),
                   DataColumn(label: Text('Residual %')),
                   DataColumn(label: Text('Z robusto')),
@@ -399,6 +400,12 @@ class _PredictiveConsumptionAuditViewState
                       DataCell(
                         Text(
                           _base(cycle.cancelledKitchenExplainedBase, model),
+                        ),
+                      ),
+                      DataCell(
+                        Text(
+                          '${_base(cycle.expectedLowBase, model)} – '
+                          '${_base(cycle.expectedHighBase, model)}',
                         ),
                       ),
                       DataCell(
@@ -681,6 +688,7 @@ class _PredictiveConsumptionAuditViewState
                 DataColumn(label: Text('Comprado')),
                 DataColumn(label: Text('Esperado')),
                 DataColumn(label: Text('Cancelaciones cocina')),
+                DataColumn(label: Text('Rango esperado 95%')),
                 DataColumn(label: Text('Residual')),
                 DataColumn(label: Text('Z')),
                 DataColumn(label: Text('Índice')),
@@ -712,6 +720,12 @@ class _PredictiveConsumptionAuditViewState
                           cycle.cancelledKitchenExplainedBase,
                           model,
                         ),
+                      ),
+                    ),
+                    DataCell(
+                      Text(
+                        '${_base(cycle.expectedLowBase, model)} – '
+                        '${_base(cycle.expectedHighBase, model)}',
                       ),
                     ),
                     DataCell(
@@ -789,6 +803,8 @@ class _PredictiveConsumptionAuditViewState
       'predictedPaidBase',
       'cancelledKitchenExplainedBase',
       'predictedOperationalBase',
+      'expectedLowBase',
+      'expectedHighBase',
       'residualOperationalBase',
       'residualPercent',
       'robustZ',
@@ -826,6 +842,8 @@ class _PredictiveConsumptionAuditViewState
           '',
           '',
           '',
+          '',
+          '',
           coefficient.productName,
           coefficient.rawBasePerUnit.toStringAsFixed(4),
           coefficient.cookedBasePerUnit?.toStringAsFixed(4) ?? '',
@@ -851,6 +869,8 @@ class _PredictiveConsumptionAuditViewState
           cycle.predictedPaidBase.toStringAsFixed(4),
           cycle.cancelledKitchenExplainedBase.toStringAsFixed(4),
           cycle.predictedOperationalBase.toStringAsFixed(4),
+          cycle.expectedLowBase.toStringAsFixed(4),
+          cycle.expectedHighBase.toStringAsFixed(4),
           cycle.residualOperationalBase.toStringAsFixed(4),
           cycle.residualPercent.toStringAsFixed(6),
           cycle.robustZ.toStringAsFixed(4),
