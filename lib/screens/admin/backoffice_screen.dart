@@ -6019,12 +6019,13 @@ List<_NavItem> _reportNavItems(Employee? employee) {
       'Auditoria de discrepancias de ventas',
       reportKind: _ReportKind.salesDiscrepancyAudit,
     ),
-    const _NavItem(
-      _BackofficeSection.reports,
-      Icons.speed_outlined,
-      'Auditoria de cobros rapidos con tarjeta',
-      reportKind: _ReportKind.rapidCardSalesAudit,
-    ),
+    if (employee?.hasAdminAccess == true || employee?.canViewAdmin == true)
+      const _NavItem(
+        _BackofficeSection.reports,
+        Icons.speed_outlined,
+        'Auditoria de cobros rapidos con tarjeta',
+        reportKind: _ReportKind.rapidCardSalesAudit,
+      ),
     const _NavItem(
       _BackofficeSection.reports,
       Icons.local_offer_outlined,
