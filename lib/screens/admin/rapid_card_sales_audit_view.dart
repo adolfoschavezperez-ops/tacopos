@@ -93,7 +93,8 @@ class _RapidCardSalesAuditViewState extends State<RapidCardSalesAuditView> {
                   SizedBox(
                     width: 210,
                     child: DropdownButtonFormField<String>(
-                      value: _employee,
+                      key: ValueKey(employees.join('|')),
+                      initialValue: _employee,
                       decoration: const InputDecoration(labelText: 'Cajero'),
                       items: [
                         const DropdownMenuItem(
@@ -114,7 +115,7 @@ class _RapidCardSalesAuditViewState extends State<RapidCardSalesAuditView> {
                   SizedBox(
                     width: 230,
                     child: DropdownButtonFormField<RapidCardAuditTimingBasis>(
-                      value: _basis,
+                      initialValue: _basis,
                       decoration: const InputDecoration(labelText: 'Medir desde'),
                       items: RapidCardAuditTimingBasis.values
                           .map(
@@ -132,7 +133,7 @@ class _RapidCardSalesAuditViewState extends State<RapidCardSalesAuditView> {
                   SizedBox(
                     width: 170,
                     child: DropdownButtonFormField<String>(
-                      value: _maxSeconds,
+                      initialValue: _maxSeconds,
                       decoration: const InputDecoration(labelText: 'Ventana'),
                       items: const [
                         DropdownMenuItem(value: '30', child: Text('≤ 30 s')),
