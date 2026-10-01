@@ -734,7 +734,6 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
         residualPercent: residualPercent,
         cancelledExplained: cancelledExplained,
         predictedPaid: predictedPaid,
-        shortage: cycle.shortage,
       );
       final purchaseMagnitudeOutlier = _isPurchaseMagnitudeOutlier(
         cycle.target,
@@ -1450,7 +1449,6 @@ double _anomalyScore({
   required double residualPercent,
   required double cancelledExplained,
   required double predictedPaid,
-  required double shortage,
 }) {
   var score = math.min(55.0, robustZ.abs() * 18).toDouble();
   score += math.min(25.0, residualPercent.abs() * 35).toDouble();
@@ -1458,7 +1456,6 @@ double _anomalyScore({
       math.max(50.0, predictedPaid * 0.10).toDouble()) {
     score += 10;
   }
-  if (shortage > 20) score += 10;
   return score.clamp(0.0, 100.0).toDouble();
 }
 
