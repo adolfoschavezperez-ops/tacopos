@@ -824,6 +824,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
           family: lines.first.unitFamily,
         ),
         isInvestigationPeriod:
+            cycle.purchaseDate.compareTo(investigationStart) >= 0 ||
             cycle.endDate.compareTo(investigationStart) >= 0,
         purchaseMagnitudeOutlier: purchaseMagnitudeOutlier,
       );
@@ -890,6 +891,7 @@ PredictiveConsumptionAudit buildPredictiveConsumptionAudit({
     'El modelo aprende de ciclos de reposicion, no iguala compra del dia con venta del dia.',
     'El baseline principal usa exclusivamente ciclos cuyo consumo termina antes del inicio de investigacion. Si no hay al menos 3 ciclos previos utilizables, no se fabrica un modelo usando el periodo investigado.',
     'La seleccion de productos explicativos tambien se hace solo con el baseline previo para evitar fuga de informacion desde septiembre.',
+    'Un ciclo se considera investigado si su compra ocurre desde el corte o si su periodo de consumo alcanza el corte; una compra de septiembre nunca queda disfrazada como baseline por la alineacion de reposicion.',
     'Prueba automaticamente si la compra abastece ventas futuras o repone consumo previo y conserva la alineacion con menor error robusto dentro del baseline previo.',
     'Los coeficientes se ajustan con regresion no negativa regularizada y reponderacion robusta. La confianza baja si hay pocos ciclos frente al numero de coeficientes.',
     'Para tortilla de maiz se incorpora como consumo operativo conocido aproximadamente 1 kg por dia abierto de lunes a sabado para doraditas; domingo aporta 0.',
