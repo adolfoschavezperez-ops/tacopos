@@ -13,9 +13,11 @@ class PredictiveConsumptionAuditView extends StatefulWidget {
   const PredictiveConsumptionAuditView({
     super.key,
     required this.repository,
+    this.onExit,
   });
 
   final TacoPosRepository repository;
+  final VoidCallback? onExit;
 
   @override
   State<PredictiveConsumptionAuditView> createState() =>
@@ -179,6 +181,12 @@ class _PredictiveConsumptionAuditViewState
                 spacing: 10,
                 runSpacing: 10,
                 children: [
+                  if (widget.onExit != null)
+                    OutlinedButton.icon(
+                      onPressed: widget.onExit,
+                      icon: const Icon(Icons.arrow_back),
+                      label: const Text('Volver al Backoffice'),
+                    ),
                   OutlinedButton.icon(
                     onPressed: _pickInvestigationStart,
                     icon: const Icon(Icons.flag_outlined),
