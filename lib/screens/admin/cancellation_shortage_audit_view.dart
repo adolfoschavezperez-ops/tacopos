@@ -251,14 +251,23 @@ class _CancellationShortageAuditViewState
     final shortage = days.fold<double>(0, (sum, day) => sum + day.shortage);
     final cancelled = filteredRows.fold<double>(
       0,
-      (sum, row) => sum + row.cancelledAmount,
+      (sum, row) =>
+          sum + row.cancelledAmountInitiatedBy(_employee == 'all' ? '' : _employee),
     );
     final noPayment = filteredRows
         .where((row) => row.hasNoPaymentRecord)
-        .fold<double>(0, (sum, row) => sum + row.cancelledAmount);
+        .fold<double>(
+          0,
+          (sum, row) =>
+              sum + row.cancelledAmountInitiatedBy(_employee == 'all' ? '' : _employee),
+        );
     final strong = filteredRows
         .where((row) => row.strongCashCancellationCandidate)
-        .fold<double>(0, (sum, row) => sum + row.cancelledAmount);
+        .fold<double>(
+          0,
+          (sum, row) =>
+              sum + row.cancelledAmountInitiatedBy(_employee == 'all' ? '' : _employee),
+        );
 
     return Wrap(
       spacing: 12,
@@ -337,21 +346,25 @@ class _CancellationShortageAuditViewState
                 final selected = employeeName.isEmpty
                     ? day.rows
                     : day.initiatedBy(employeeName);
+                final amountEmployee = employeeName;
                 final cancelled = selected.fold<double>(
                   0,
-                  (sum, row) => sum + row.cancelledAmount,
+                  (sum, row) =>
+                      sum + row.cancelledAmountInitiatedBy(amountEmployee),
                 );
                 final noPayment = selected
                     .where((row) => row.hasNoPaymentRecord)
                     .fold<double>(
                       0,
-                      (sum, row) => sum + row.cancelledAmount,
+                      (sum, row) =>
+                          sum + row.cancelledAmountInitiatedBy(amountEmployee),
                     );
                 final strong = selected
                     .where((row) => row.strongCashCancellationCandidate)
                     .fold<double>(
                       0,
-                      (sum, row) => sum + row.cancelledAmount,
+                      (sum, row) =>
+                          sum + row.cancelledAmountInitiatedBy(amountEmployee),
                     );
                 return DataRow(
                   cells: [
@@ -399,6 +412,7 @@ class _CancellationShortageAuditViewState
         : findCancellationAmountMatches(
             rows: employeeRows,
             target: target,
+            employeeName: _employee == 'all' ? '' : _employee,
             maxItems: 4,
             maxResults: 6,
             tolerance: 2,
@@ -517,7 +531,10 @@ class _CancellationShortageAuditViewState
                         Expanded(
                           child: Text(
                             match.rows
-                                .map((row) => '${row.folio} (${_money(row.cancelledAmount)})')
+                                .map(
+                                  (row) =>
+                                      '${row.folio} (${_money(row.cancelledAmountInitiatedBy(_employee == 'all' ? '' : _employee))})',
+                                )
                                 .join(' + '),
                             style: const TextStyle(
                               fontWeight: FontWeight.w800,
@@ -598,6 +615,9 @@ class _CancellationShortageAuditViewState
                 ],
                 rows: rows.map((row) {
                   final shortage = shortageByDate[row.businessDate] ?? 0;
+                  final rowAmount = row.cancelledAmountInitiatedBy(
+                    _employee == 'all' ? '' : _employee,
+                  );
                   return DataRow(
                     color: WidgetStateProperty.resolveWith((states) {
                       if (row.strongCashCancellationCandidate) {
@@ -613,7 +633,7 @@ class _CancellationShortageAuditViewState
                       DataCell(Text(row.initiatedByLabel)),
                       DataCell(Text(row.acceptedByLabel)),
                       DataCell(_moneyCell(
-                        row.cancelledAmount,
+                        rowAmount,
                         warning: row.hasNoPaymentRecord,
                       )),
                       DataCell(_moneyCell(
@@ -621,7 +641,7 @@ class _CancellationShortageAuditViewState
                         danger: shortage > 0,
                       )),
                       DataCell(_moneyCell(
-                        shortage + row.cancelledAmount,
+                        shortage + rowAmount,
                         warning: shortage > 0 && row.hasNoPaymentRecord,
                       )),
                       DataCell(
@@ -760,8 +780,10 @@ class _CancellationShortageAuditViewState
             row.order.displayName,
             row.initiatedByLabel,
             row.acceptedByLabel,
-            row.cancelledAmount.toStringAsFixed(2),
-            '${row.cancelledQty}',
+            row.cancelledAmountInitiatedBy(
+              _employee == 'all' ? '' : _employee,
+            ).toStringAsFixed(2),
+            '${row.cancelledQtyInitiatedBy(_employee == 'all' ? '' : _employee)}',
             row.fullOrderCancelled ? 'true' : 'false',
             '${row.payments.length}',
             '${row.activePaymentCount}',
