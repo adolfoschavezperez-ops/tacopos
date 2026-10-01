@@ -430,8 +430,8 @@ class _CancellationShortageAuditViewState
           ),
           const SizedBox(height: 6),
           const Text(
-            'Ejemplo: si salieron $500 de la caja sin registrarse y el corte solo quedó con '
-            '$285 de faltante, el efectivo compensatorio requerido es $215. Aquí buscamos '
+            r'Ejemplo: si salieron $500 de la caja sin registrarse y el corte solo quedó con '
+            r'$285 de faltante, el efectivo compensatorio requerido es $215. Aquí buscamos '
             'cancelaciones sin pago cuyo importe sume ese monto.',
             style: TextStyle(
               color: BrandColors.textMuted,
