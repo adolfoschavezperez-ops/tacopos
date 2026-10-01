@@ -80,10 +80,11 @@ void main() {
       final purchases = <PredictivePurchaseLine>[];
       final sales = <PredictiveSaleLine>[];
 
-      for (var i = 0; i < 9; i++) {
+      final quantities = <int>[20, 24, 18, 22, 26, 16, 28, 20, 20];
+      for (var i = 0; i < quantities.length; i++) {
         final date = DateTime(2026, 9, 20 + i);
         final businessDate = _dateKey(date);
-        final qty = 10 + i * 2;
+        final qty = quantities[i];
         purchases.add(
           PredictivePurchaseLine(
             purchaseId: 'p-$i',
