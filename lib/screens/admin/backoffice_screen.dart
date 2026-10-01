@@ -47,6 +47,7 @@ import 'kitchen_admin_screen.dart';
 import 'live_operations_screen.dart';
 import 'order_platform_catalog_screen.dart';
 import 'operation_reset_screen.dart';
+import 'predictive_consumption_audit_view.dart';
 import 'rapid_card_sales_audit_view.dart';
 import 'product_category_catalog_screen.dart';
 import 'product_catalog_screen.dart';
@@ -89,6 +90,7 @@ enum _ReportKind {
   salesDiscrepancyAudit,
   rapidCardSalesAudit,
   cancellationShortageAudit,
+  predictiveConsumptionAudit,
   discountsByDay,
   visitClassification,
   cashSchedule,
@@ -240,6 +242,26 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
         : navItems.first.section;
     if (effectiveSection != _section) {
       _section = effectiveSection;
+    }
+
+    final predictiveImmersive =
+        effectiveSection == _BackofficeSection.reports &&
+        _reportKind == _ReportKind.predictiveConsumptionAudit;
+    if (predictiveImmersive) {
+      return Scaffold(
+        body: PremiumBackground(
+          child: SafeArea(
+            child: PredictiveConsumptionAuditView(
+              repository: _repository,
+              onExit: () => setState(() {
+                _section = _BackofficeSection.dashboard;
+                _reportKind = _ReportKind.products;
+                _reportsExpanded = false;
+              }),
+            ),
+          ),
+        ),
+      );
     }
 
     return Scaffold(
@@ -6044,6 +6066,13 @@ List<_NavItem> _reportNavItems(Employee? employee) {
         'Cancelaciones vs faltantes de caja',
         reportKind: _ReportKind.cancellationShortageAudit,
       ),
+    if (employee?.hasAdminAccess == true || employee?.canViewAdmin == true)
+      const _NavItem(
+        _BackofficeSection.reports,
+        Icons.psychology_alt_outlined,
+        'Inteligencia de consumo',
+        reportKind: _ReportKind.predictiveConsumptionAudit,
+      ),
     const _NavItem(
       _BackofficeSection.reports,
       Icons.local_offer_outlined,
@@ -6147,6 +6176,7 @@ String _reportTitle(_ReportKind kind) {
     _ReportKind.salesDiscrepancyAudit => 'Auditoria de discrepancias de ventas',
     _ReportKind.rapidCardSalesAudit => 'Auditoria de cobros rapidos con tarjeta',
     _ReportKind.cancellationShortageAudit => 'Cancelaciones vs faltantes de caja',
+    _ReportKind.predictiveConsumptionAudit => 'Inteligencia de consumo',
     _ReportKind.discountsByDay => 'Descuentos por dia',
     _ReportKind.visitClassification => 'Visitas nuevas y recurrentes',
     _ReportKind.cashSchedule => 'Horarios de apertura y cierre',
@@ -6296,6 +6326,7 @@ List<String> _reportHeaders(_ReportKind kind) {
     _ReportKind.salesDiscrepancyAudit => _salesAuditHeaders,
     _ReportKind.rapidCardSalesAudit => const [],
     _ReportKind.cancellationShortageAudit => const [],
+    _ReportKind.predictiveConsumptionAudit => const [],
     _ReportKind.discountsByDay => _discountsByDayCsvHeaders,
     _ReportKind.visitClassification => visitClassificationCsvHeaders,
     _ReportKind.cashSchedule => const [],
@@ -6662,6 +6693,7 @@ Future<List<List<String>>> _reportRows(
     case _ReportKind.salesDiscrepancyAudit:
     case _ReportKind.rapidCardSalesAudit:
     case _ReportKind.cancellationShortageAudit:
+    case _ReportKind.predictiveConsumptionAudit:
       return const [];
     case _ReportKind.discountsByDay:
     case _ReportKind.visitClassification:
