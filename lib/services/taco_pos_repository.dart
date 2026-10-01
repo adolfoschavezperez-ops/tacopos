@@ -5861,12 +5861,12 @@ class TacoPosRepository {
   }) async {
     if (orderIds.isEmpty) return const <String, List<OrderItem>>{};
 
+    final result = <String, List<OrderItem>>{};
     try {
       final snapshot = await _db
           .collectionGroup('items')
           .where('branchId', isEqualTo: branchId)
           .get();
-      final result = <String, List<OrderItem>>{};
       for (final doc in snapshot.docs) {
         final orderRef = doc.reference.parent.parent;
         if (orderRef == null || orderRef.parent.id != 'orders') continue;
@@ -5882,16 +5882,23 @@ class TacoPosRepository {
           return aAt.compareTo(bAt);
         });
       }
-      if (result.isNotEmpty) return result;
     } catch (error) {
       developer.log(
-        'CollectionGroup items no disponible; usando fallback por orden: $error',
+        'CollectionGroup items no disponible; completando por orden: $error',
         name: 'TacoPOS.predictiveConsumption',
       );
     }
 
+    // Historical documents can predate branchId on item docs. Never treat a
+    // partially populated collectionGroup result as complete: backfill every
+    // order that did not return item documents.
+    final missingOrderIds = orderIds
+        .where((orderId) => !result.containsKey(orderId))
+        .toList(growable: false);
+    if (missingOrderIds.isEmpty) return result;
+
     final entries = await runInBatches<String, (String, List<OrderItem>)>(
-      orderIds.toList(growable: false),
+      missingOrderIds,
       batchSize: 15,
       action: (orderId) async {
         final snapshot = await _ordersRef.doc(orderId).collection('items').get();
@@ -5901,7 +5908,10 @@ class TacoPosRepository {
         );
       },
     );
-    return {for (final entry in entries) entry.$1: entry.$2};
+    for (final entry in entries) {
+      result[entry.$1] = entry.$2;
+    }
+    return result;
   }
 
   Future<YieldProfitReportBundle> getYieldProfitReportBundle({
