@@ -217,6 +217,34 @@ ResaleFamily? resaleSupplierFamily(String supplier) {
 String _itemKey(String name) => resaleNormalize(name)
     .replaceAll(RegExp(r'\s+x\s*\d+\s*$'), '').trim();
 
+String _resaleComparableName(String name) {
+  final tokens = _itemKey(name).split(' ').where((token) => token.isNotEmpty)
+      .where((token) => token != 'de')
+      .map((token) {
+    switch (token) {
+      case 'aguas':
+        return 'agua';
+      case 'empanadas':
+      case 'empanadita':
+      case 'empanaditas':
+        return 'empanada';
+      case 'jericallas':
+        return 'jericalla';
+      case 'pays':
+        return 'pay';
+      default:
+        return token;
+    }
+  });
+  return tokens.join(' ');
+}
+
+bool _looksLikeResaleSale(String name) {
+  final normalized = _resaleComparableName(name);
+  return RegExp(r'\b(?:agua|empanada|jericalla)\b').hasMatch(normalized) ||
+      RegExp(r'\bpay\b.*\bqueso\b').hasMatch(normalized);
+}
+
 bool _isExplicitlyDifferentProduct(String name, ResaleFamily family) {
   final normalized = resaleNormalize(name);
   if (family != ResaleFamily.water) return false;
@@ -298,7 +326,8 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
     final example = productSales.first;
     final possible = <String>{};
     for (final entry in byKey.entries) {
-      if (names[entry.key] == _itemKey(example.name)) {
+      if (_resaleComparableName(names[entry.key]!) ==
+          _resaleComparableName(example.name)) {
         possible.add(entry.key);
       }
     }
@@ -323,11 +352,7 @@ ResaleAudit buildResaleAudit({required Iterable<ResalePurchase> purchases,
     }
     if (possible.length == 1) {
       mappedExits.putIfAbsent(possible.single, () => []).addAll(productSales);
-    } else if (possible.isNotEmpty || example.stockItemId.isNotEmpty ||
-        RegExp(r'\b(?:agua|aguas|empanad(?:a|as|ita|itas))\b')
-            .hasMatch(resaleNormalize(example.name)) ||
-        RegExp(r'\b(?:bebida|bebidas|postre|postres)\b')
-            .hasMatch(resaleNormalize(example.category))) {
+    } else if (possible.isNotEmpty || _looksLikeResaleSale(example.name)) {
       unresolvedSales.add('${example.productId}: ${example.name} (${possible.isEmpty ? 'sin compra equivalente' : 'match ambiguo'})');
     }
   }

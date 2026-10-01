@@ -78,6 +78,40 @@ void main() {
     expect(a.unmatchedPurchases, hasLength(2));
     expect(a.unmatchedSales, hasLength(1));
   });
+  test('safe resale name aliases match real POS names', () {
+    final a = audit([
+      buy('2026-09-01', 20, name: 'Agua de Jamaica', sku: 'jamaica'),
+      buy('2026-09-01', 18, name: 'Agua de Horchata', sku: 'horchata',
+        id: 'horchata'),
+      buy('2026-09-01', 10, name: 'Empanadas', supplier: 'Empanaditas',
+        sku: 'empanadas', id: 'empanadas'),
+    ], [
+      out('2026-09-01', 7, name: 'Agua Jamaica', productId: 'jamaica-sale'),
+      out('2026-09-01', 6, name: 'Agua Horchata', productId: 'horchata-sale'),
+      out('2026-09-01', 4, name: 'Empanada', productId: 'empanada-sale'),
+    ]);
+    expect(a.unmatchedSales, isEmpty);
+    expect(a.products.firstWhere((p) => p.name == 'agua de jamaica').sold, 7);
+    expect(a.products.firstWhere((p) => p.name == 'agua de horchata').sold, 6);
+    expect(a.products.firstWhere((p) => p.name == 'empanadas').sold, 4);
+  });
+
+  test('irrelevant meats and soft drinks are not resale unmatched noise', () {
+    final a = audit([
+      buy('2026-09-01', 20, name: 'Agua de Jamaica', sku: 'jamaica'),
+    ], [
+      out('2026-09-01', 2, name: 'Bistec', productId: 'bistec',
+        stock: 'meat-stock'),
+      out('2026-09-01', 2, name: 'Coca Regular', productId: 'coca',
+        stock: 'drink-stock'),
+      out('2026-09-01', 2, name: 'Refresco Sabor', productId: 'refresco',
+        stock: 'drink-stock-2'),
+      out('2026-09-01', 2, name: 'Agua Piña', productId: 'pina'),
+    ]);
+    expect(a.unmatchedSales, hasLength(1));
+    expect(a.unmatchedSales.single, contains('Agua Piña'));
+  });
+
   test('similar water from a different supplier is excluded', () {
     final a = audit([buy('2026-09-01', 30, supplier: 'Otra agua')], []);
     expect(a.products, isEmpty);
