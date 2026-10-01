@@ -372,7 +372,8 @@ class PredictiveConsumptionAudit {
       .fold<double>(
         0,
         (sum, model) =>
-            sum + math.max(0.0, model.recentResidualOperationalBase),
+            sum +
+            math.max(0.0, model.recentResidualOperationalBase).toDouble(),
       );
 
   List<PredictiveConsumptionCycleFinding> get rankedFindings {
@@ -1207,14 +1208,14 @@ List<double> _nonNegativeRidge({
       denominator += lambda;
       final next = denominator <= 0
           ? 0.0
-          : math.max(0.0, numerator / denominator);
+          : math.max(0.0, numerator / denominator).toDouble();
       final delta = next - beta[j];
       if (delta != 0) {
         for (var i = 0; i < x.length; i++) {
           prediction[i] += delta * x[i][j];
         }
       }
-      maxChange = math.max(maxChange, delta.abs());
+      maxChange = math.max(maxChange, delta.abs()).toDouble();
       beta[j] = next;
     }
     if (maxChange < 1e-7) break;
@@ -1322,9 +1323,12 @@ double _anomalyScore({
   required double predictedPaid,
   required double shortage,
 }) {
-  var score = math.min(55.0, robustZ.abs() * 18);
-  score += math.min(25.0, residualPercent.abs() * 35);
-  if (cancelledExplained > math.max(50, predictedPaid * 0.10)) score += 10;
+  var score = math.min(55.0, robustZ.abs() * 18).toDouble();
+  score += math.min(25.0, residualPercent.abs() * 35).toDouble();
+  if (cancelledExplained >
+      math.max(50.0, predictedPaid * 0.10).toDouble()) {
+    score += 10;
+  }
   if (shortage > 20) score += 10;
   return score.clamp(0.0, 100.0).toDouble();
 }
