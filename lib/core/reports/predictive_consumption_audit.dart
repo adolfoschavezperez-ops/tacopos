@@ -1172,13 +1172,19 @@ _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
   final featureCount = keys.length + 1;
   final x = <List<double>>[];
   final y = <double>[];
+  final knownOffsets = <double>[];
   for (final cycle in rows) {
     x.add([
       for (final key in keys) cycle.paid[key] ?? 0,
-      cycle.days.toDouble(),
+      cycle.operatingDays.toDouble(),
     ]);
     y.add(cycle.target);
+    knownOffsets.add(cycle.knownOperationalBase);
   }
+  final adjustedY = List<double>.generate(
+    y.length,
+    (i) => y[i] - knownOffsets[i],
+  );
 
   final scales = List<double>.filled(featureCount, 1);
   for (var j = 0; j < featureCount; j++) {
@@ -1198,14 +1204,14 @@ _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
   for (var robustIteration = 0; robustIteration < 5; robustIteration++) {
     beta = _nonNegativeRidge(
       x: x,
-      y: y,
+      y: adjustedY,
       weights: weights,
       lambda: 0.01,
       iterations: 180,
     );
     final predictions = List<double>.generate(
       x.length,
-      (i) => _dot(x[i], beta),
+      (i) => knownOffsets[i] + _dot(x[i], beta),
     );
     final residuals = List<double>.generate(
       x.length,
@@ -1227,7 +1233,8 @@ _FitResult? _fitCycles(List<_CycleInput> cycles, List<String> keys) {
   final predictions = <double>[
     for (final cycle in rows)
       keys.indexed.fold<double>(
-            unscaled.last * cycle.days,
+            cycle.knownOperationalBase +
+                unscaled.last * cycle.operatingDays,
             (sum, entry) =>
                 sum + unscaled[entry.$1] * (cycle.paid[entry.$2] ?? 0),
           ),
@@ -1321,7 +1328,7 @@ double _modelScore(_FitResult fit, int observations) {
 }
 
 double _predictCycle(_CycleInput cycle, _FitResult fit) {
-  var prediction = fit.baselineDaily * cycle.days;
+  var prediction = fit.baselineDaily * cycle.operatingDays;
   for (final entry in fit.coefficients.entries) {
     prediction += entry.value * (cycle.paid[entry.key] ?? 0);
   }
