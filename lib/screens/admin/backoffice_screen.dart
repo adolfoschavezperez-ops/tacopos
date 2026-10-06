@@ -8,6 +8,7 @@ import '../../core/reports/canonical_sales_summary.dart';
 import '../../core/reports/discounts_by_day_report.dart';
 import '../../core/reports/hourly_sales_comparison.dart' as hourly;
 import '../../core/reports/operational_blockers.dart';
+import '../../core/reports/product_sales_cost_report.dart';
 import '../../core/reports/report_data_bundle.dart';
 import '../../core/reports/sales_discrepancy_audit.dart';
 import '../../core/reports/visit_classification_report.dart';
@@ -2790,12 +2791,25 @@ class _ReportsSectionState extends State<_ReportsSection> {
             ],
           );
         }
+        if (snapshot.hasError) {
+          return const _FriendlyError(
+            message: 'No se pudo cargar la informacion del reporte.',
+          );
+        }
         final rows = snapshot.data ?? const <List<String>>[];
         final headers = _reportHeaders(widget.reportKind);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _reportToolbar(rows: rows, headers: headers),
+            if (widget.reportKind == _ReportKind.products) ...[
+              const SizedBox(height: 10),
+              const Text(
+                'Costos actuales del catalogo. Sin costo capturado = \$0.00. '
+                'Utilidad = venta neta - costo total vendido.',
+                style: TextStyle(color: BrandColors.textMuted),
+              ),
+            ],
             const SizedBox(height: 14),
             _ReportTable(headers: headers, rows: rows),
           ],
@@ -6186,16 +6200,7 @@ String _reportTitle(_ReportKind kind) {
 
 List<String> _reportHeaders(_ReportKind kind) {
   return switch (kind) {
-    _ReportKind.products => [
-      'Producto',
-      'Categoria',
-      'Cantidad',
-      'Venta bruta',
-      'Descuento asignado',
-      'Venta neta',
-      'Precio promedio neto',
-      'Participacion %',
-    ],
+    _ReportKind.products => productSalesCostReportHeaders,
     _ReportKind.hourly => [
       'Hora',
       'Ordenes',
@@ -6346,21 +6351,12 @@ Future<List<List<String>>> _reportRows(
   switch (kind) {
     case _ReportKind.products:
       final summary = reportData.canonicalSummary!;
-      return summary.productRows.map((row) {
-        final percent = summary.netSales <= 0
-            ? 0
-            : (row.netSales / summary.netSales) * 100;
-        return [
-          row.productName,
-          row.categoryName,
-          '${row.qty} vendidos',
-          _money(row.grossSales),
-          _money(row.discountAllocated),
-          _money(row.netSales),
-          _money(row.averageNetPrice),
-          '${percent.toStringAsFixed(1)}%',
-        ];
-      }).toList();
+      if (summary.productRows.isEmpty) return const [];
+      final products = await repository.watchProducts(activeOnly: false).first;
+      return buildProductSalesCostRows(
+        salesRows: summary.productRows,
+        products: products,
+      ).map((row) => row.toReportCells(totalNetSales: summary.netSales)).toList();
     case _ReportKind.hourly:
       return _salesByHour(payments)
           .map((row) => [row.label, '-', '-', row.displayValue, '-', '-'])
