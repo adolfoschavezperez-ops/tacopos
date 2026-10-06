@@ -2791,7 +2791,7 @@ class _ReportsSectionState extends State<_ReportsSection> {
             ],
           );
         }
-        if (snapshot.hasError) {
+        if (widget.reportKind == _ReportKind.products && snapshot.hasError) {
           return const _FriendlyError(
             message: 'No se pudo cargar la informacion del reporte.',
           );
