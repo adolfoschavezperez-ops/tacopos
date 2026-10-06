@@ -67,6 +67,52 @@ List<ProductSalesCostRow> buildProductSalesCostRows({
       .toList(growable: false);
 }
 
+List<List<String>> buildProductSalesCostReportCells({
+  required Iterable<ProductSalesCostRow> rows,
+  required double totalNetSales,
+}) {
+  final products = rows.toList(growable: false);
+  if (products.isEmpty) return const [];
+  return [
+    ...products.map((row) => row.toReportCells(totalNetSales: totalNetSales)),
+    buildProductSalesCostTotalsCells(products),
+  ];
+}
+
+/// Adds the amounts displayed on each product row, using integer cents.
+/// Unit prices and averages are not additive and remain blank in the footer.
+List<String> buildProductSalesCostTotalsCells(
+  Iterable<ProductSalesCostRow> rows,
+) {
+  var qty = 0;
+  var grossCents = 0;
+  var discountCents = 0;
+  var netCents = 0;
+  var costCents = 0;
+  var profitCents = 0;
+  for (final row in rows) {
+    qty += row.sales.qty;
+    grossCents += (row.sales.grossSales * 100).round();
+    discountCents += (row.sales.discountAllocated * 100).round();
+    netCents += (row.sales.netSales * 100).round();
+    costCents += (row.totalCost * 100).round();
+    profitCents += (row.profit * 100).round();
+  }
+  return [
+    'TOTAL',
+    '',
+    '$qty vendidos',
+    _money(grossCents / 100),
+    _money(discountCents / 100),
+    _money(netCents / 100),
+    '',
+    '',
+    '',
+    _money(costCents / 100),
+    _money(profitCents / 100),
+  ];
+}
+
 double _roundMoney(double value) => (value * 100).roundToDouble() / 100;
 
 String _money(double value) => '\$${value.toStringAsFixed(2)}';

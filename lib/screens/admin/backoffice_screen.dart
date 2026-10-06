@@ -2798,6 +2798,8 @@ class _ReportsSectionState extends State<_ReportsSection> {
         }
         final rows = snapshot.data ?? const <List<String>>[];
         final headers = _reportHeaders(widget.reportKind);
+        final hasProductTotals =
+            widget.reportKind == _ReportKind.products && rows.isNotEmpty;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -2811,7 +2813,11 @@ class _ReportsSectionState extends State<_ReportsSection> {
               ),
             ],
             const SizedBox(height: 14),
-            _ReportTable(headers: headers, rows: rows),
+            _ReportTable(
+              headers: headers,
+              rows: hasProductTotals ? rows.sublist(0, rows.length - 1) : rows,
+              footerRow: hasProductTotals ? rows.last : null,
+            ),
           ],
         );
       },
@@ -5294,10 +5300,15 @@ class _BackofficeBranchSelector extends StatelessWidget {
 }
 
 class _ReportTable extends StatefulWidget {
-  const _ReportTable({required this.headers, required this.rows});
+  const _ReportTable({
+    required this.headers,
+    required this.rows,
+    this.footerRow,
+  });
 
   final List<String> headers;
   final List<List<String>> rows;
+  final List<String>? footerRow;
 
   @override
   State<_ReportTable> createState() => _ReportTableState();
@@ -5317,6 +5328,7 @@ class _ReportTableState extends State<_ReportTable> {
       );
     }
     final sortedRows = [...widget.rows];
+    final footerRow = widget.footerRow;
     final sortColumnIndex = _sortColumnIndex;
     if (sortColumnIndex != null) {
       sortedRows.sort((a, b) {
@@ -5357,21 +5369,39 @@ class _ReportTableState extends State<_ReportTable> {
                     ),
                   )
                   .toList(),
-              rows: sortedRows
-                  .map(
-                    (row) => DataRow(
-                      cells: widget.headers
-                          .asMap()
-                          .keys
-                          .map(
-                            (index) => DataCell(
-                              Text(index < row.length ? row[index] : ''),
+              rows: [
+                ...sortedRows.map(
+                  (row) => DataRow(
+                    cells: widget.headers
+                        .asMap()
+                        .keys
+                        .map(
+                          (index) => DataCell(
+                            Text(index < row.length ? row[index] : ''),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                ),
+                if (footerRow != null)
+                  DataRow(
+                    cells: widget.headers
+                        .asMap()
+                        .keys
+                        .map(
+                          (index) => DataCell(
+                            Text(
+                              index < footerRow.length ? footerRow[index] : '',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                                color: BrandColors.accentYellow,
+                              ),
                             ),
-                          )
-                          .toList(),
-                    ),
-                  )
-                  .toList(),
+                          ),
+                        )
+                        .toList(),
+                  ),
+              ],
             ),
           ),
         ),
@@ -6353,10 +6383,14 @@ Future<List<List<String>>> _reportRows(
       final summary = reportData.canonicalSummary!;
       if (summary.productRows.isEmpty) return const [];
       final products = await repository.watchProducts(activeOnly: false).first;
-      return buildProductSalesCostRows(
+      final rows = buildProductSalesCostRows(
         salesRows: summary.productRows,
         products: products,
-      ).map((row) => row.toReportCells(totalNetSales: summary.netSales)).toList();
+      );
+      return buildProductSalesCostReportCells(
+        rows: rows,
+        totalNetSales: summary.netSales,
+      );
     case _ReportKind.hourly:
       return _salesByHour(payments)
           .map((row) => [row.label, '-', '-', row.displayValue, '-', '-'])

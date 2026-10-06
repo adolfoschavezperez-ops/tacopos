@@ -165,6 +165,118 @@ void main() {
       '\$282.50',
     ]);
   });
+
+  test('TOTAL suma ventas, descuentos, costos y utilidad de todos los articulos', () {
+    final rows = buildProductSalesCostRows(
+      salesRows: [
+        _sales(id: 'taco', qty: 25, gross: 625, discount: 87.50),
+        _sales(id: 'gringa', qty: 2, gross: 120),
+        _sales(id: 'sin-costo', qty: 1, gross: 25),
+      ],
+      products: [
+        _product(id: 'taco', cost: 10.20),
+        _product(id: 'gringa', cost: 22),
+      ],
+    );
+    final cells = buildProductSalesCostReportCells(
+      rows: rows,
+      totalNetSales: 682.50,
+    );
+
+    expect(cells, hasLength(4));
+    expect(cells.last, [
+      'TOTAL',
+      '',
+      '28 vendidos',
+      '\$770.00',
+      '\$87.50',
+      '\$682.50',
+      '',
+      '',
+      '',
+      '\$299.00',
+      '\$383.50',
+    ]);
+    expect(cells.last, hasLength(productSalesCostReportHeaders.length));
+  });
+
+  test('TOTAL conserva utilidad negativa y costos de comidas gratis', () {
+    final rows = buildProductSalesCostRows(
+      salesRows: [
+        _sales(id: 'gratis', qty: 4, gross: 100, discount: 100),
+        _sales(id: 'perdida', gross: 50, discount: 40),
+      ],
+      products: [
+        _product(id: 'gratis', cost: 8),
+        _product(id: 'perdida', cost: 10),
+      ],
+    );
+    final cells = buildProductSalesCostReportCells(
+      rows: rows,
+      totalNetSales: 10,
+    );
+
+    expect(cells.last[2], '6 vendidos');
+    expect(cells.last[3], '\$150.00');
+    expect(cells.last[4], '\$140.00');
+    expect(cells.last[5], '\$10.00');
+    expect(cells.last[9], '\$52.00');
+    expect(cells.last[10], '\$-42.00');
+  });
+
+  test('TOTAL suma los centavos mostrados sin volver a redondear costo crudo', () {
+    final rows = buildProductSalesCostRows(
+      salesRows: [
+        _sales(id: 'primero', qty: 1, gross: 0.30),
+        _sales(id: 'segundo', qty: 1, gross: 0.30),
+      ],
+      products: [
+        _product(id: 'primero', cost: 0.004),
+        _product(id: 'segundo', cost: 0.004),
+      ],
+    );
+    final cells = buildProductSalesCostReportCells(
+      rows: rows,
+      totalNetSales: 0.60,
+    );
+
+    expect(cells[0][9], '\$0.00');
+    expect(cells[1][9], '\$0.00');
+    expect(cells.last[5], '\$0.60');
+    expect(cells.last[9], '\$0.00');
+    expect(cells.last[10], '\$0.60');
+  });
+
+  test('TOTAL permanece al final del CSV sin depender del orden de productos', () {
+    final rows = buildProductSalesCostRows(
+      salesRows: [
+        _sales(id: 'primero', qty: 1, gross: 25),
+        _sales(id: 'segundo', qty: 3, gross: 75),
+      ],
+      products: [_product(id: 'primero', cost: 8)],
+    );
+    final ascending = buildProductSalesCostReportCells(
+      rows: rows,
+      totalNetSales: 100,
+    );
+    final descending = buildProductSalesCostReportCells(
+      rows: rows.reversed,
+      totalNetSales: 100,
+    );
+
+    expect(ascending.last.first, 'TOTAL');
+    expect(descending.last, ascending.last);
+    expect(descending.first[2], '3 vendidos');
+    expect(rows.first.sales.qty, 1);
+    expect(ascending.where((row) => row.first == 'TOTAL'), hasLength(1));
+  });
+
+  test('sin ventas no se agrega un total ficticio ni se habilita el CSV', () {
+    expect(
+      buildProductSalesCostReportCells(rows: const [], totalNetSales: 0),
+      isEmpty,
+    );
+  });
 }
 
 CanonicalProductSalesRow _sales({
