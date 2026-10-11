@@ -54,6 +54,8 @@ class Payment {
     this.discountReason,
     this.createdAt,
     this.createdBy,
+    this.createdByEmployeeId,
+    this.createdByEmployeeName,
     this.status = 'active',
     this.cancelledAt,
     this.cancelledByEmployeeId,
@@ -118,6 +120,8 @@ class Payment {
   final String? discountReason;
   final DateTime? createdAt;
   final String? createdBy;
+  final String? createdByEmployeeId;
+  final String? createdByEmployeeName;
   final String status;
   final DateTime? cancelledAt;
   final String? cancelledByEmployeeId;
@@ -134,6 +138,13 @@ class Payment {
   double get amount => baseAmount;
   bool get isActive => status == 'active';
   bool get isCancelled => status == 'cancelled';
+
+  /// El empleado que registró el cobro, no el beneficiario de un descuento.
+  /// El UID de [createdBy] identifica al dispositivo y no al cajero.
+  String get registeredByName {
+    final name = createdByEmployeeName?.trim() ?? '';
+    return name.isEmpty ? 'No identificado' : name;
+  }
 
   Payment copyWith({
     String? orderId,
@@ -199,6 +210,8 @@ class Payment {
       discountReason: discountReason,
       createdAt: createdAt,
       createdBy: createdBy,
+      createdByEmployeeId: createdByEmployeeId,
+      createdByEmployeeName: createdByEmployeeName,
       status: status,
       cancelledAt: cancelledAt,
       cancelledByEmployeeId: cancelledByEmployeeId,
@@ -308,6 +321,8 @@ class Payment {
       discountReason: data['discountReason'] as String?,
       createdAt: _toDate(data['createdAt']),
       createdBy: data['createdBy'] as String?,
+      createdByEmployeeId: data['createdByEmployeeId'] as String?,
+      createdByEmployeeName: data['createdByEmployeeName'] as String?,
       status: data['status'] as String? ?? 'active',
       cancelledAt: _toDate(data['cancelledAt']),
       cancelledByEmployeeId: data['cancelledByEmployeeId'] as String?,
