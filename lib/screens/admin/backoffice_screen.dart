@@ -4637,7 +4637,7 @@ class _SalesAuditDetailDialog extends StatelessWidget {
                     _money(payment.surchargeAmount),
                     _money(payment.cardFeeAbsorbedAmount),
                     _dateTimeText(payment.createdAt),
-                    payment.employeeName ?? payment.createdBy ?? '-',
+                    payment.registeredByName,
                   ];
                 }).toList(),
               ),
@@ -8010,7 +8010,7 @@ Future<bool> _showPaymentCancellationDialog(
             ),
             _InfoText(
               'Usuario que lo registró',
-              payment.employeeName ?? payment.createdBy ?? '-',
+              payment.registeredByName,
             ),
           ],
           warnings: warnings,
@@ -8402,7 +8402,7 @@ class _SalePaymentRow extends StatelessWidget {
             ),
             _PaymentDetailText(
               label: 'Usuario',
-              value: payment.employeeName ?? payment.createdBy ?? '-',
+              value: payment.registeredByName,
             ),
           ],
         ),
