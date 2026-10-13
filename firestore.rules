@@ -38,6 +38,61 @@ service cloud.firestore {
         immutableBranchId();
     }
 
+    function orderIsTerminal(data) {
+      return data.get('status', '') in ['paid', 'cancelled', 'closed'] ||
+        data.get('paymentStatus', '') in ['paid', 'cancelled'] ||
+        data.get('kitchenStatus', '') == 'cancelled' ||
+        ('paidAt' in data && data.paidAt != null) ||
+        ('closedAt' in data && data.closedAt != null) ||
+        ('cancelledAt' in data && data.cancelledAt != null);
+    }
+
+    function terminalOrderFieldsUnchanged() {
+      return request.resource.data.get('status', '') in ['paid', 'cancelled', 'closed'] &&
+        request.resource.data.get('paymentStatus', '') in ['paid', 'cancelled'] &&
+          request.resource.data.get('total', 0) == resource.data.get('total', 0) &&
+          request.resource.data.get('grossSubtotal', 0) == resource.data.get('grossSubtotal', 0) &&
+          request.resource.data.get('netTotal', 0) == resource.data.get('netTotal', 0) &&
+          request.resource.data.get('discountAmount', 0) == resource.data.get('discountAmount', 0) &&
+          request.resource.data.get('totalDiscountAmount', 0) == resource.data.get('totalDiscountAmount', 0) &&
+          request.resource.data.get('monetaryPaid', 0) == resource.data.get('monetaryPaid', 0) &&
+          request.resource.data.get('totalLiquidated', 0) == resource.data.get('totalLiquidated', 0) &&
+          request.resource.data.get('paidTotal', 0) == resource.data.get('paidTotal', 0) &&
+          request.resource.data.get('pendingTotal', 0) == resource.data.get('pendingTotal', 0);
+    }
+
+    function terminalOrderAdminCorrection(restaurantId) {
+      return isBackofficeAdmin(restaurantId) &&
+        request.resource.data.get('status', '') in ['open', 'sent', 'ready', 'cooking'] &&
+        request.resource.data.get('paymentStatus', '') in ['pending', 'partial'];
+    }
+
+    // Item mutations must be authorized by the current parent state.  This is
+    // intentionally server-side so an old APK with a stale cached order cannot
+    // append or edit items after checkout/cancellation.
+    function parentOrderIsEditable(restaurantId, orderId) {
+      return exists(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)) &&
+        !orderIsTerminal(get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data);
+    }
+
+    function tableReleaseClosesCurrentOrder(restaurantId) {
+      let currentOrderId = resource.data.get('currentOrderId', '');
+      let currentOrderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(currentOrderId);
+      return currentOrderId is string && currentOrderId.size() > 0 &&
+        existsAfter(currentOrderPath) &&
+        getAfter(currentOrderPath).data.get('status', '') in ['paid', 'cancelled', 'closed'];
+    }
+
+    function tableAssignmentKeepsCurrentOwner(restaurantId) {
+      let newOrderId = request.resource.data.get('currentOrderId', null);
+      let oldOrderId = resource.data.get('currentOrderId', null);
+      let newOrderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(newOrderId);
+      return newOrderId is string && newOrderId.size() > 0 &&
+        (oldOrderId == null || oldOrderId == '' || oldOrderId == newOrderId) &&
+        existsAfter(newOrderPath) &&
+        getAfter(newOrderPath).data.get('status', '') in ['open', 'sent', 'ready', 'cooking'];
+    }
+
     // Monetary documents are only mutable while their operational cash
     // session is open. This is deliberately enforced on the server because a
     // device may have read an old `open` snapshot just before a close starts.
@@ -406,7 +461,11 @@ service cloud.firestore {
       match /tables/{tableId} {
         allow read: if signedIn();
         allow create: if validCreate(restaurantId);
-        allow update: if validUpdate();
+        allow update: if validUpdate() &&
+          (request.resource.data.get('currentOrderId', null) ==
+            resource.data.get('currentOrderId', null) ||
+            tableAssignmentKeepsCurrentOwner(restaurantId) ||
+            tableReleaseClosesCurrentOrder(restaurantId));
         allow delete: if false;
       }
 
@@ -448,14 +507,30 @@ service cloud.firestore {
       match /orders/{orderId} {
         allow read: if signedIn();
         allow create: if validCreate(restaurantId);
-        allow update: if validUpdate();
+        // A terminal order may receive only the same terminal state in a
+        // legitimate atomic close; it can never be reopened by a stale client.
+        allow update: if validUpdate() &&
+          (!orderIsTerminal(resource.data) ||
+            terminalOrderFieldsUnchanged() ||
+            terminalOrderAdminCorrection(restaurantId));
         allow delete: if false;
 
         match /items/{itemId} {
           allow read: if signedIn();
-          allow create: if validCreate(restaurantId);
-          allow update: if validUpdate();
-          allow delete: if signedIn();
+          allow create: if validCreate(restaurantId) &&
+            parentOrderIsEditable(restaurantId, orderId);
+          allow update: if validUpdate() &&
+            (parentOrderIsEditable(restaurantId, orderId) ||
+              (isBackofficeAdmin(restaurantId) &&
+                resource.data.get('paymentStatus', '') == 'paid' &&
+                request.resource.data.get('paymentStatus', '') == 'pending' &&
+                resource.data.get('paymentId', '') is string &&
+                getAfter(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)/payments/$(resource.data.get('paymentId', ''))).data.get('status', '') == 'cancelled') ||
+              (isBackofficeAdmin(restaurantId) &&
+                request.resource.data.get('status', '') == 'cancelled' &&
+                getAfter(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.get('status', '') == 'cancelled'));
+          allow delete: if signedIn() &&
+            parentOrderIsEditable(restaurantId, orderId);
         }
 
         match /payments/{paymentId} {

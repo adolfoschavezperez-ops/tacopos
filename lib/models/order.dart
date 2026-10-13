@@ -27,6 +27,7 @@ class PosOrder {
     this.tableGroupLabel,
     this.createdAt,
     this.updatedAt,
+    this.captureRevision = 0,
     this.sentToKitchenAt,
     this.paidAt,
     this.cancelledAt,
@@ -107,6 +108,7 @@ class PosOrder {
   final String? tableGroupLabel;
   final DateTime? createdAt;
   final DateTime? updatedAt;
+  final int captureRevision;
   final DateTime? sentToKitchenAt;
   final DateTime? paidAt;
   final DateTime? cancelledAt;
@@ -190,6 +192,7 @@ class PosOrder {
       tableGroupLabel: _readOptionalString(data['tableGroupLabel']),
       createdAt: _toDate(data['createdAt']),
       updatedAt: _toDate(data['updatedAt']),
+      captureRevision: (data['captureRevision'] as num?)?.toInt() ?? 0,
       sentToKitchenAt: _toDate(data['sentToKitchenAt']),
       paidAt: _toDate(data['paidAt']),
       cancelledAt: _toDate(data['cancelledAt']),
