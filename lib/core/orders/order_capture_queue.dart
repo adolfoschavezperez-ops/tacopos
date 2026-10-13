@@ -29,9 +29,22 @@ class OrderCaptureState {
     final byId = {for (final item in snapshot) item.id: item};
     _pending.removeWhere((id, pending) {
       final remote = byId[id];
+      // A terminal server transition wins over an optimistic local edit.  It
+      // prevents a queued quantity overlay from making a paid/cancelled item
+      // look editable until the screen is reopened.
+      final remoteIsTerminal =
+          remote != null &&
+          (remote.paymentStatus == 'paid' ||
+              remote.status == 'cancelled' ||
+              remote.cancelStatus == 'accepted');
       return remote != null &&
-          remote.qty == pending.qty &&
-          (remote.total - pending.total).abs() < 0.005;
+          (remoteIsTerminal ||
+              (remote.qty == pending.qty &&
+                  (remote.total - pending.total).abs() < 0.005 &&
+                  remote.status == pending.status &&
+                  remote.cancelStatus == pending.cancelStatus &&
+                  remote.paymentStatus == pending.paymentStatus &&
+                  remote.kitchenStatus == pending.kitchenStatus));
     });
   }
 

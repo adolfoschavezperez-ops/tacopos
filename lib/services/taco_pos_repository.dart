@@ -217,10 +217,39 @@ class LiveStandingOrderBundle {
 }
 
 class PaymentResult {
-  const PaymentResult({required this.allPaid, this.saleFolioDisplay});
+  const PaymentResult({
+    required this.allPaid,
+    this.saleFolioDisplay,
+    this.paymentId,
+    this.authoritativePendingTotal,
+  });
 
   final bool allPaid;
   final String? saleFolioDisplay;
+  final String? paymentId;
+  final double? authoritativePendingTotal;
+}
+
+class PaymentFinalizationDecision {
+  const PaymentFinalizationDecision({
+    required this.alreadyPaid,
+    required this.reuseExistingFolio,
+  });
+
+  final bool alreadyPaid;
+  final bool reuseExistingFolio;
+}
+
+@visibleForTesting
+PaymentFinalizationDecision decidePaymentFinalization({
+  required double pendingTotal,
+  required String? existingFolio,
+}) {
+  final hasExistingFolio = existingFolio?.trim().isNotEmpty == true;
+  return PaymentFinalizationDecision(
+    alreadyPaid: pendingTotal <= 0.01,
+    reuseExistingFolio: hasExistingFolio && pendingTotal > 0.01,
+  );
 }
 
 class RepositoryPaymentPersistencePreview {
@@ -241,18 +270,23 @@ RepositoryPaymentPersistencePreview buildRepositoryPaymentPersistencePreview({
   double? freshPendingAmount,
   String newPaymentId = '',
 }) {
+  final priorPayments = previousActivePayments
+      .where(
+        (payment) =>
+            payment.isActive &&
+            (newPaymentId.isEmpty || payment.id != newPaymentId),
+      )
+      .toList();
   final guardedPaymentData = normalizePaymentDataForRemaining(
     paymentData: paymentData,
     orderNetAmount: order.netTotal ?? order.total,
-    previousActivePayments: previousActivePayments,
+    previousActivePayments: priorPayments,
     freshPendingAmount: freshPendingAmount,
   );
   final totals = reconcileOrderPayments(
     orderGrossTotal: order.grossSubtotal ?? order.total,
     activePayments: [
-      ...previousActivePayments
-          .where((payment) => payment.isActive)
-          .map(PaymentSettlementInput.fromPayment),
+      ...priorPayments.map(PaymentSettlementInput.fromPayment),
       PaymentSettlementInput.fromPaymentData(newPaymentId, guardedPaymentData),
     ],
   );
@@ -10957,15 +10991,22 @@ class TacoPosRepository {
     final itemsPath =
         'restaurants/${AppConstants.restaurantId}/orders/$cleanOrderId/items';
     final orderDoc = await _ordersRef.doc(cleanOrderId).get();
-    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
+    if (!orderDoc.exists) {
+      throw StateError('La orden ya no existe. Inicia una cuenta nueva.');
+    }
+    final order = PosOrder.fromDoc(orderDoc);
+    if (!isActiveOrderState(order)) {
+      throw StateError(
+        'La cuenta ya fue cerrada o cancelada y no admite productos.',
+      );
+    }
     if (knownStockedOut ?? await isProductStockedOut(product)) {
       throw StateError('Producto agotado hasta cierre de cocina.');
     }
-    final personName =
-        order?.personName(personNumber) ?? 'Persona $personNumber';
-    final platformId = order?.orderType == 'takeout' ? order?.platformId : null;
-    final platformName = order?.orderType == 'takeout'
-        ? order?.platformName
+    final personName = order.personName(personNumber);
+    final platformId = order.orderType == 'takeout' ? order.platformId : null;
+    final platformName = order.orderType == 'takeout'
+        ? order.platformName
         : null;
     final usePlatformPrice = platformId != null && platformId != 'en_persona';
     final appliedPrice = usePlatformPrice
@@ -11001,50 +11042,68 @@ class TacoPosRepository {
         .doc(cleanOrderId)
         .collection('items')
         .doc(itemId);
-    await itemRef.set({
-      'personNumber': personNumber,
-      'personName': personName,
-      'productId': product.id,
-      'productName': product.name,
-      'categoryId': product.categoryId,
-      'categoryName': product.categoryName,
-      'category': product.category,
-      'qty': 1,
-      'unitPrice': appliedPrice,
-      'total': appliedPrice,
-      'appliedPlatformId': usePlatformPrice ? platformId : null,
-      'appliedPlatformName': usePlatformPrice ? platformName : null,
-      'priceSource': usePlatformPrice ? 'platform' : 'store',
-      'notes': '',
-      ..._currentBranchFields,
-      ..._employeeAuditFields(prefix: 'createdBy'),
-      'sendToKitchen': product.sendToKitchen,
-      'affectsKitchenStock': product.affectsKitchenStock,
-      'recipeItems': product.affectsKitchenStock
-          ? ProductRecipeItem.toMapList(product.recipeItems.take(1).toList())
-          : const [],
-      'kitchenStockItemId': product.affectsKitchenStock
-          ? primaryRecipe?.kitchenStockItemId ?? product.kitchenStockItemId
-          : null,
-      'kitchenStockItemName': product.affectsKitchenStock
-          ? primaryRecipe?.kitchenStockItemName ?? product.kitchenStockItemName
-          : null,
-      'kitchenStockUnit': product.affectsKitchenStock
-          ? primaryRecipe?.kitchenStockUnit ?? product.kitchenStockUnit
-          : null,
-      'stockConsumptionQty': product.affectsKitchenStock
-          ? primaryRecipe?.consumptionFactor ?? product.stockConsumptionQty
-          : null,
-      'kitchenConsumptionFactor': product.affectsKitchenStock
-          ? primaryRecipe?.consumptionFactor ?? product.stockConsumptionQty
-          : null,
-      'kitchenStatus': product.sendToKitchen ? 'pending' : 'not_required',
-      'kitchenBatchId': null,
-      'paymentStatus': 'pending',
-      'status': 'active',
-      'cancelStatus': 'none',
-      'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
+    // The parent is read again in the transaction.  A cached/open screen must
+    // never append an item after another terminal has finalized the account.
+    await _db.runTransaction((transaction) async {
+      final freshOrderDoc = await transaction.get(_ordersRef.doc(cleanOrderId));
+      if (!freshOrderDoc.exists ||
+          !isActiveOrderState(PosOrder.fromDoc(freshOrderDoc))) {
+        throw StateError(
+          'La cuenta ya fue cerrada o cancelada y no admite productos.',
+        );
+      }
+      transaction.set(itemRef, {
+        'personNumber': personNumber,
+        'personName': personName,
+        'productId': product.id,
+        'productName': product.name,
+        'categoryId': product.categoryId,
+        'categoryName': product.categoryName,
+        'category': product.category,
+        'qty': 1,
+        'unitPrice': appliedPrice,
+        'total': appliedPrice,
+        'appliedPlatformId': usePlatformPrice ? platformId : null,
+        'appliedPlatformName': usePlatformPrice ? platformName : null,
+        'priceSource': usePlatformPrice ? 'platform' : 'store',
+        'notes': '',
+        ..._currentBranchFields,
+        ..._employeeAuditFields(prefix: 'createdBy'),
+        'sendToKitchen': product.sendToKitchen,
+        'affectsKitchenStock': product.affectsKitchenStock,
+        'recipeItems': product.affectsKitchenStock
+            ? ProductRecipeItem.toMapList(product.recipeItems.take(1).toList())
+            : const [],
+        'kitchenStockItemId': product.affectsKitchenStock
+            ? primaryRecipe?.kitchenStockItemId ?? product.kitchenStockItemId
+            : null,
+        'kitchenStockItemName': product.affectsKitchenStock
+            ? primaryRecipe?.kitchenStockItemName ??
+                  product.kitchenStockItemName
+            : null,
+        'kitchenStockUnit': product.affectsKitchenStock
+            ? primaryRecipe?.kitchenStockUnit ?? product.kitchenStockUnit
+            : null,
+        'stockConsumptionQty': product.affectsKitchenStock
+            ? primaryRecipe?.consumptionFactor ?? product.stockConsumptionQty
+            : null,
+        'kitchenConsumptionFactor': product.affectsKitchenStock
+            ? primaryRecipe?.consumptionFactor ?? product.stockConsumptionQty
+            : null,
+        'kitchenStatus': product.sendToKitchen ? 'pending' : 'not_required',
+        'kitchenBatchId': null,
+        'paymentStatus': 'pending',
+        'status': 'active',
+        'cancelStatus': 'none',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      transaction.update(_ordersRef.doc(cleanOrderId), {
+        // A shared revision makes aggregate/payment transactions retry when a
+        // late capture arrives from another terminal.
+        'captureRevision': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 
@@ -11145,10 +11204,28 @@ class TacoPosRepository {
     required int qty,
     String? operationId,
   }) async {
-    await _ordersRef.doc(orderId).collection('items').doc(item.id).update({
-      'qty': qty,
-      'total': qty * item.unitPrice,
-      'updatedAt': FieldValue.serverTimestamp(),
+    final orderRef = _ordersRef.doc(orderId.trim());
+    final itemRef = orderRef.collection('items').doc(item.id);
+    await _db.runTransaction((transaction) async {
+      final orderDoc = await transaction.get(orderRef);
+      final itemDoc = await transaction.get(itemRef);
+      if (!orderDoc.exists || !isActiveOrderState(PosOrder.fromDoc(orderDoc))) {
+        throw StateError(
+          'La cuenta ya fue cerrada o cancelada y no admite cambios.',
+        );
+      }
+      if (!itemDoc.exists) throw StateError('El articulo ya no existe.');
+      final freshItem = OrderItem.fromDoc(itemDoc);
+      _ensureItemEditable(freshItem);
+      transaction.update(itemRef, {
+        'qty': qty,
+        'total': qty * freshItem.unitPrice,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      transaction.update(orderRef, {
+        'captureRevision': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 
@@ -11170,11 +11247,14 @@ class TacoPosRepository {
     if (cleanReason.isEmpty) {
       throw ArgumentError('Captura el motivo de cancelacion.');
     }
-    final itemDoc = await _ordersRef
-        .doc(orderId)
-        .collection('items')
-        .doc(itemId)
-        .get();
+    final orderRef = _ordersRef.doc(orderId);
+    final itemRef = orderRef.collection('items').doc(itemId);
+    final orderSnapshot = await orderRef.get(
+      const GetOptions(source: Source.server),
+    );
+    if (!orderSnapshot.exists) throw StateError('La orden ya no existe.');
+    final expectedRevision = PosOrder.fromDoc(orderSnapshot).captureRevision;
+    final itemDoc = await itemRef.get(const GetOptions(source: Source.server));
     if (!itemDoc.exists) {
       throw StateError('El articulo ya no existe.');
     }
@@ -11196,15 +11276,48 @@ class TacoPosRepository {
       throw StateError('Este producto ya fue pagado y no puede cancelarse.');
     }
     await _ensureCancellationKeepsPaymentsValid(orderId, item);
-    await itemDoc.reference.update({
-      'status': 'cancelled',
-      'kitchenStatus': 'cancelled',
-      'paymentStatus': 'cancelled',
-      'cancelStatus': 'accepted',
-      'cancelReason': cleanReason,
-      'cancelledAt': FieldValue.serverTimestamp(),
-      ..._employeeAuditFields(prefix: 'cancelledBy'),
-      'updatedAt': FieldValue.serverTimestamp(),
+    await _db.runTransaction((transaction) async {
+      final freshOrderDoc = await transaction.get(orderRef);
+      final freshItemDoc = await transaction.get(itemRef);
+      if (!freshOrderDoc.exists || !freshItemDoc.exists) {
+        throw StateError('La cuenta o el articulo ya no existe.');
+      }
+      final freshOrder = PosOrder.fromDoc(freshOrderDoc);
+      if (!isActiveOrderState(freshOrder)) {
+        throw StateError('La cuenta ya fue cerrada o cancelada.');
+      }
+      if (freshOrder.captureRevision != expectedRevision) {
+        throw StateError(
+          'La orden cambio durante la cancelacion. Actualiza y reintenta.',
+        );
+      }
+      final freshItem = OrderItem.fromDoc(freshItemDoc);
+      if (freshItem.isCancelled) return;
+      if (freshItem.paymentStatus == 'paid' ||
+          [
+            'ready',
+            'sent',
+            'cooking',
+            'cancel_requested',
+          ].contains(freshItem.kitchenStatus)) {
+        throw StateError(
+          'El articulo cambio de estado; actualiza antes de cancelar.',
+        );
+      }
+      transaction.update(itemRef, {
+        'status': 'cancelled',
+        'kitchenStatus': 'cancelled',
+        'paymentStatus': 'cancelled',
+        'cancelStatus': 'accepted',
+        'cancelReason': cleanReason,
+        'cancelledAt': FieldValue.serverTimestamp(),
+        ..._employeeAuditFields(prefix: 'cancelledBy'),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      transaction.update(orderRef, {
+        'captureRevision': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
     await _reconcileOrderAfterItemCancellation(
       orderId,
@@ -11334,14 +11447,19 @@ class TacoPosRepository {
     final activeItems = activeOrderItems(items);
 
     if (activeItems.isEmpty) {
+      // Keep the account as an editable empty draft.  Auto-cancelling the
+      // parent here made the same open screen unusable after its last item was
+      // cancelled, leaving staff to cancel and recreate the whole sale.
       await recalculateOrderTotal(orderId);
-      final ghostRepair = await _autoCancelGhostOrderIfNeeded(
-        orderId,
-        triggeredBy: reason,
-      );
-      if (ghostRepair == null) {
-        await _syncOrderKitchenStateAfterItemChange(orderId);
-      }
+      await _syncOrderKitchenStateAfterItemChange(orderId);
+      await _restaurantRef.collection('activityLog').add({
+        'type': 'empty_order_draft_preserved',
+        ..._currentBranchFields,
+        'orderId': orderId,
+        'reason': reason,
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      });
       return;
     }
 
@@ -11490,20 +11608,26 @@ class TacoPosRepository {
       hasActiveBillableItems: activeBillableItems.isNotEmpty,
     );
 
-    final batch = _db.batch();
-    batch.update(orderRef, {
-      'status': nextOrderStatus,
-      'kitchenStatus': nextKitchenStatus,
-      'updatedAt': FieldValue.serverTimestamp(),
+    await _db.runTransaction((transaction) async {
+      final freshOrderDoc = await transaction.get(orderRef);
+      if (!freshOrderDoc.exists) return;
+      final freshOrder = PosOrder.fromDoc(freshOrderDoc);
+      if (!isActiveOrderState(freshOrder)) return;
+      if (freshOrder.captureRevision != order.captureRevision) {
+        throw StateError('La orden cambio durante la actualizacion de cocina.');
+      }
+      transaction.update(orderRef, {
+        'status': nextOrderStatus,
+        'kitchenStatus': nextKitchenStatus,
+        'captureRevision': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      _setLinkedTablesStateInTransaction(
+        transaction,
+        freshOrder,
+        status: _tableStatusForKitchenState(),
+      );
     });
-
-    _setLinkedTablesStateInBatch(
-      batch,
-      order,
-      status: _tableStatusForKitchenState(),
-    );
-
-    await batch.commit();
   }
 
   String _kitchenStatusForActiveItems(
@@ -11698,9 +11822,27 @@ class TacoPosRepository {
   Future<int> sendOrderToKitchen(String orderId) async {
     _requireTakeOrders();
     final orderRef = _ordersRef.doc(orderId);
-    final itemRefs = (await orderRef.collection('items').get()).docs
-        .map((doc) => doc.reference)
-        .toList(growable: false);
+    final expectedOrderSnapshot = await orderRef.get(
+      const GetOptions(source: Source.server),
+    );
+    if (!expectedOrderSnapshot.exists) {
+      throw StateError('La orden ya no existe.');
+    }
+    final expectedOrder = PosOrder.fromDoc(expectedOrderSnapshot);
+    if (isCancelledOrder(expectedOrder)) {
+      throw StateError('La cuenta esta cancelada; no puede enviarse a cocina.');
+    }
+    if (isPaidOrder(expectedOrder)) {
+      throw StateError('La cuenta ya fue cobrada; no puede enviarse a cocina.');
+    }
+    final expectedRevision = expectedOrder.captureRevision;
+    final itemRefs =
+        (await orderRef
+                .collection('items')
+                .get(const GetOptions(source: Source.server)))
+            .docs
+            .map((doc) => doc.reference)
+            .toList(growable: false);
     if (itemRefs.isEmpty) return 0;
 
     final result = await _db.runTransaction<_KitchenSendTransactionResult>((
@@ -11711,8 +11853,20 @@ class TacoPosRepository {
         throw StateError('La orden ya no existe.');
       }
       final order = PosOrder.fromDoc(orderDoc);
-      if (isCancelledOrder(order) || isPaidOrder(order)) {
-        return _KitchenSendTransactionResult(order: order, sentCount: 0);
+      if (order.captureRevision != expectedRevision) {
+        throw StateError(
+          'La orden cambio mientras se preparaba el envio. Actualiza y reintenta.',
+        );
+      }
+      if (isCancelledOrder(order)) {
+        throw StateError(
+          'La cuenta esta cancelada; no puede enviarse a cocina.',
+        );
+      }
+      if (isPaidOrder(order)) {
+        throw StateError(
+          'La cuenta ya fue cobrada; no puede enviarse a cocina.',
+        );
       }
 
       final itemDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
@@ -11821,6 +11975,7 @@ class TacoPosRepository {
         'lastKitchenBatchLabel': kitchenBatchLabel,
         if (order.sentToKitchenAt == null) 'sentToKitchenAt': batchCreatedAt,
         'lastSentToKitchenAt': batchCreatedAt,
+        'captureRevision': FieldValue.increment(1),
         'updatedAt': FieldValue.serverTimestamp(),
       });
 
@@ -12237,6 +12392,7 @@ class TacoPosRepository {
   Future<PaymentResult> payFullTable({
     required String orderId,
     required String method,
+    String? paymentAttemptId,
     String? employeeId,
     String? employeeName,
     CashPaymentDetails? cashDetails,
@@ -12251,12 +12407,14 @@ class TacoPosRepository {
       employeeId: employeeId,
     );
     await _ensureKitchenReadyForPayment(orderId);
-    final orderDoc = await _ordersRef.doc(orderId).get();
+    final orderDoc = await _ordersRef
+        .doc(orderId)
+        .get(const GetOptions(source: Source.server));
     final order = PosOrder.fromDoc(orderDoc);
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
-        .get();
+        .get(const GetOptions(source: Source.server));
     final pendingItems = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
         .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
@@ -12267,7 +12425,11 @@ class TacoPosRepository {
     );
 
     if (baseAmount <= 0) {
-      return const PaymentResult(allPaid: true);
+      return PaymentResult(
+        allPaid: order.pendingTotal <= 0.01,
+        saleFolioDisplay: order.saleFolioDisplay,
+        authoritativePendingTotal: order.pendingTotal,
+      );
     }
 
     final effectiveDiscount = await _resolvePreparedGlobalDiscount(
@@ -12283,8 +12445,13 @@ class TacoPosRepository {
     );
     final previousActivePayments = (await getOrderPaymentsOnce(
       order.id,
+      source: Source.server,
     )).where((payment) => payment.isActive).toList();
-    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final resolvedAttemptId = _resolvePaymentAttemptId(paymentAttemptId);
+    final paymentRef = _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .doc(resolvedAttemptId);
     final paymentData = _paymentData(
       order: order,
       cashSession: cashSession,
@@ -12295,6 +12462,7 @@ class TacoPosRepository {
       employeeName: employeeName,
       cashDetails: cashDetails,
       discount: effectiveDiscount,
+      paymentAttemptId: resolvedAttemptId,
     );
     final result = await _finalizeSaleWithDailyFolio(
       order: order,
@@ -12320,6 +12488,7 @@ class TacoPosRepository {
     required String orderId,
     required int personNumber,
     required String method,
+    String? paymentAttemptId,
     String? employeeId,
     String? employeeName,
     CashPaymentDetails? cashDetails,
@@ -12334,12 +12503,14 @@ class TacoPosRepository {
       employeeId: employeeId,
     );
     await _ensureKitchenReadyForPayment(orderId);
-    final orderDoc = await _ordersRef.doc(orderId).get();
+    final orderDoc = await _ordersRef
+        .doc(orderId)
+        .get(const GetOptions(source: Source.server));
     final order = PosOrder.fromDoc(orderDoc);
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
-        .get();
+        .get(const GetOptions(source: Source.server));
     final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
     final personItems = items
         .where(
@@ -12377,8 +12548,21 @@ class TacoPosRepository {
     );
     final previousActivePayments = (await getOrderPaymentsOnce(
       order.id,
+      source: Source.server,
     )).where((payment) => payment.isActive).toList();
-    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final resolvedAttemptId = _resolvePaymentAttemptId(paymentAttemptId);
+    final paymentRef = _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .doc(resolvedAttemptId);
+    if ((await paymentRef.get(
+      const GetOptions(source: Source.server),
+    )).exists) {
+      return _authoritativePaymentResult(
+        orderId: orderId,
+        paymentId: paymentRef.id,
+      );
+    }
     final selectedItemDocs = itemsSnapshot.docs.where((doc) {
       final item = OrderItem.fromDoc(doc);
       return item.personNumber == personNumber &&
@@ -12400,6 +12584,7 @@ class TacoPosRepository {
         employeeName: employeeName,
         cashDetails: cashDetails,
         discount: effectiveDiscount,
+        paymentAttemptId: resolvedAttemptId,
       );
       final result = await _finalizeSaleWithDailyFolio(
         order: order,
@@ -12417,10 +12602,7 @@ class TacoPosRepository {
       );
       return result;
     }
-    final batch = _db.batch();
-    final paymentData = _setPayment(
-      batch: batch,
-      paymentRef: paymentRef,
+    final paymentData = _paymentData(
       order: order,
       cashSession: cashSession,
       type: 'person',
@@ -12432,48 +12614,42 @@ class TacoPosRepository {
       employeeName: employeeName,
       cashDetails: cashDetails,
       discount: effectiveDiscount,
+      paymentAttemptId: resolvedAttemptId,
     );
 
-    for (final doc in selectedItemDocs) {
-      batch.update(doc.reference, {
-        'paymentStatus': 'paid',
-        'paidAt': FieldValue.serverTimestamp(),
-        'paymentId': paymentRef.id,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    }
-
-    final allPaid = _updateOrderPaymentTotalsInBatch(
-      batch,
-      order,
-      baseAmount: baseAmount,
-      closeItemsSnapshot: itemsSnapshot,
-      discount: effectiveDiscount,
+    final paymentTotals = _reconcileOrderPayments(
+      order: order,
       previousActivePayments: previousActivePayments,
       newPaymentData: paymentData,
       newPaymentId: paymentRef.id,
     );
-    _recordDiscountUsageInBatch(
-      batch,
-      usageRef: _discountUsageRef.doc(),
-      order: order,
-      paymentId: paymentRef.id,
+    final created = await _commitNonFinalPaymentTransaction(
+      expectedOrder: order,
+      paymentRef: paymentRef,
+      paymentData: paymentData,
+      totals: paymentTotals,
+      itemDocs: selectedItemDocs,
+      markItemsPaid: true,
+      discount: effectiveDiscount,
       cashSession: cashSession,
-      discount: effectiveDiscount,
     );
-    _markDiscountAuthorizationUsedInBatch(
-      batch,
-      discount: effectiveDiscount,
+    if (!created) {
+      return _authoritativePaymentResult(
+        orderId: orderId,
+        paymentId: paymentRef.id,
+      );
+    }
+    return _authoritativePaymentResult(
+      orderId: orderId,
       paymentId: paymentRef.id,
     );
-    await batch.commit();
-    return PaymentResult(allPaid: allPaid);
   }
 
   Future<PaymentResult> payPeople({
     required String orderId,
     required List<int> personNumbers,
     required String method,
+    String? paymentAttemptId,
     String? employeeId,
     String? employeeName,
     CashPaymentDetails? cashDetails,
@@ -12488,6 +12664,7 @@ class TacoPosRepository {
         orderId: orderId,
         personNumber: selectedPeople.first,
         method: method,
+        paymentAttemptId: paymentAttemptId,
         employeeId: employeeId,
         employeeName: employeeName,
         cashDetails: cashDetails,
@@ -12504,12 +12681,14 @@ class TacoPosRepository {
       employeeId: employeeId,
     );
     await _ensureKitchenReadyForPayment(orderId);
-    final orderDoc = await _ordersRef.doc(orderId).get();
+    final orderDoc = await _ordersRef
+        .doc(orderId)
+        .get(const GetOptions(source: Source.server));
     final order = PosOrder.fromDoc(orderDoc);
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
-        .get();
+        .get(const GetOptions(source: Source.server));
     final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
     final personItems = items
         .where(
@@ -12545,8 +12724,21 @@ class TacoPosRepository {
     );
     final previousActivePayments = (await getOrderPaymentsOnce(
       order.id,
+      source: Source.server,
     )).where((payment) => payment.isActive).toList();
-    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final resolvedAttemptId = _resolvePaymentAttemptId(paymentAttemptId);
+    final paymentRef = _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .doc(resolvedAttemptId);
+    if ((await paymentRef.get(
+      const GetOptions(source: Source.server),
+    )).exists) {
+      return _authoritativePaymentResult(
+        orderId: orderId,
+        paymentId: paymentRef.id,
+      );
+    }
     final selectedItemDocs = itemsSnapshot.docs.where((doc) {
       final item = OrderItem.fromDoc(doc);
       return selectedPeople.contains(item.personNumber) &&
@@ -12567,6 +12759,7 @@ class TacoPosRepository {
         employeeName: employeeName,
         cashDetails: cashDetails,
         discount: effectiveDiscount,
+        paymentAttemptId: resolvedAttemptId,
       );
       final result = await _finalizeSaleWithDailyFolio(
         order: order,
@@ -12584,10 +12777,7 @@ class TacoPosRepository {
       );
       return result;
     }
-    final batch = _db.batch();
-    final paymentData = _setPayment(
-      batch: batch,
-      paymentRef: paymentRef,
+    final paymentData = _paymentData(
       order: order,
       cashSession: cashSession,
       type: 'person',
@@ -12598,48 +12788,42 @@ class TacoPosRepository {
       employeeName: employeeName,
       cashDetails: cashDetails,
       discount: effectiveDiscount,
+      paymentAttemptId: resolvedAttemptId,
     );
 
-    for (final doc in selectedItemDocs) {
-      batch.update(doc.reference, {
-        'paymentStatus': 'paid',
-        'paidAt': FieldValue.serverTimestamp(),
-        'paymentId': paymentRef.id,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    }
-
-    final allPaid = _updateOrderPaymentTotalsInBatch(
-      batch,
-      order,
-      baseAmount: baseAmount,
-      closeItemsSnapshot: itemsSnapshot,
-      discount: effectiveDiscount,
+    final paymentTotals = _reconcileOrderPayments(
+      order: order,
       previousActivePayments: previousActivePayments,
       newPaymentData: paymentData,
       newPaymentId: paymentRef.id,
     );
-    _recordDiscountUsageInBatch(
-      batch,
-      usageRef: _discountUsageRef.doc(),
-      order: order,
-      paymentId: paymentRef.id,
+    final created = await _commitNonFinalPaymentTransaction(
+      expectedOrder: order,
+      paymentRef: paymentRef,
+      paymentData: paymentData,
+      totals: paymentTotals,
+      itemDocs: selectedItemDocs,
+      markItemsPaid: true,
+      discount: effectiveDiscount,
       cashSession: cashSession,
-      discount: effectiveDiscount,
     );
-    _markDiscountAuthorizationUsedInBatch(
-      batch,
-      discount: effectiveDiscount,
+    if (!created) {
+      return _authoritativePaymentResult(
+        orderId: orderId,
+        paymentId: paymentRef.id,
+      );
+    }
+    return _authoritativePaymentResult(
+      orderId: orderId,
       paymentId: paymentRef.id,
     );
-    await batch.commit();
-    return PaymentResult(allPaid: allPaid);
   }
 
   Future<PaymentResult> payPartialAmount({
     required String orderId,
     required double baseAmount,
     required String method,
+    String? paymentAttemptId,
     String? employeeId,
     String? employeeName,
     CashPaymentDetails? cashDetails,
@@ -12654,8 +12838,23 @@ class TacoPosRepository {
       employeeId: employeeId,
     );
     await _ensureKitchenReadyForPayment(orderId);
-    final orderDoc = await _ordersRef.doc(orderId).get();
+    final orderDoc = await _ordersRef
+        .doc(orderId)
+        .get(const GetOptions(source: Source.server));
     final order = PosOrder.fromDoc(orderDoc);
+    final resolvedAttemptId = _resolvePaymentAttemptId(paymentAttemptId);
+    final paymentRef = _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .doc(resolvedAttemptId);
+    if ((await paymentRef.get(
+      const GetOptions(source: Source.server),
+    )).exists) {
+      return _authoritativePaymentResult(
+        orderId: orderId,
+        paymentId: paymentRef.id,
+      );
+    }
 
     if (baseAmount <= 0 || baseAmount > order.pendingTotal + 0.01) {
       throw ArgumentError('Monto parcial invalido.');
@@ -12664,7 +12863,7 @@ class TacoPosRepository {
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
-        .get();
+        .get(const GetOptions(source: Source.server));
     final effectiveDiscount = await _resolvePreparedGlobalDiscount(
       order: order,
       requestedDiscount: discount,
@@ -12678,8 +12877,8 @@ class TacoPosRepository {
     );
     final previousActivePayments = (await getOrderPaymentsOnce(
       order.id,
+      source: Source.server,
     )).where((payment) => payment.isActive).toList();
-    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
     final paidTotal = (order.paidTotal + baseAmount).clamp(0, order.total);
     final pendingTotal = (order.total - paidTotal).clamp(0, double.infinity);
     if (pendingTotal <= 0.01) {
@@ -12693,6 +12892,7 @@ class TacoPosRepository {
         employeeName: employeeName,
         cashDetails: cashDetails,
         discount: effectiveDiscount,
+        paymentAttemptId: resolvedAttemptId,
       );
       final result = await _finalizeSaleWithDailyFolio(
         order: order,
@@ -12710,10 +12910,7 @@ class TacoPosRepository {
       );
       return result;
     }
-    final batch = _db.batch();
-    final paymentData = _setPayment(
-      batch: batch,
-      paymentRef: paymentRef,
+    final paymentData = _paymentData(
       order: order,
       cashSession: cashSession,
       type: 'partial',
@@ -12723,41 +12920,47 @@ class TacoPosRepository {
       employeeName: employeeName,
       cashDetails: cashDetails,
       discount: effectiveDiscount,
+      paymentAttemptId: resolvedAttemptId,
     );
 
-    final allPaid = _updateOrderPaymentTotalsInBatch(
-      batch,
-      order,
-      baseAmount: baseAmount,
-      closeItemsSnapshot: itemsSnapshot,
-      markItemsOnlyIfClosed: true,
-      discount: effectiveDiscount,
+    final paymentTotals = _reconcileOrderPayments(
+      order: order,
       previousActivePayments: previousActivePayments,
       newPaymentData: paymentData,
       newPaymentId: paymentRef.id,
     );
-    _recordDiscountUsageInBatch(
-      batch,
-      usageRef: _discountUsageRef.doc(),
-      order: order,
-      paymentId: paymentRef.id,
+    final created = await _commitNonFinalPaymentTransaction(
+      expectedOrder: order,
+      paymentRef: paymentRef,
+      paymentData: paymentData,
+      totals: paymentTotals,
+      itemDocs: const [],
+      markItemsPaid: false,
+      discount: effectiveDiscount,
       cashSession: cashSession,
-      discount: effectiveDiscount,
     );
-    _markDiscountAuthorizationUsedInBatch(
-      batch,
-      discount: effectiveDiscount,
+    if (!created) {
+      return _authoritativePaymentResult(
+        orderId: orderId,
+        paymentId: paymentRef.id,
+      );
+    }
+    return _authoritativePaymentResult(
+      orderId: orderId,
       paymentId: paymentRef.id,
     );
-    await batch.commit();
-    return PaymentResult(allPaid: allPaid);
   }
 
-  Future<PaymentResult> payPlatformOrder({required String orderId}) async {
+  Future<PaymentResult> payPlatformOrder({
+    required String orderId,
+    String? paymentAttemptId,
+  }) async {
     _requireCharge();
     final cashSession = await _requireOpenCashSessionForPayment();
     await _ensureKitchenReadyForPayment(orderId);
-    final orderDoc = await _ordersRef.doc(orderId).get();
+    final orderDoc = await _ordersRef
+        .doc(orderId)
+        .get(const GetOptions(source: Source.server));
     final order = PosOrder.fromDoc(orderDoc);
     if (order.orderType != 'takeout' || order.platformId == 'en_persona') {
       throw StateError('Este pedido no aplica para pago en plataforma.');
@@ -12766,7 +12969,7 @@ class TacoPosRepository {
     final itemsSnapshot = await _ordersRef
         .doc(orderId)
         .collection('items')
-        .get();
+        .get(const GetOptions(source: Source.server));
     final pendingItems = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
         .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
@@ -12777,13 +12980,22 @@ class TacoPosRepository {
     );
 
     if (baseAmount <= 0) {
-      return const PaymentResult(allPaid: true);
+      return PaymentResult(
+        allPaid: order.pendingTotal <= 0.01,
+        saleFolioDisplay: order.saleFolioDisplay,
+        authoritativePendingTotal: order.pendingTotal,
+      );
     }
 
     final previousActivePayments = (await getOrderPaymentsOnce(
       order.id,
+      source: Source.server,
     )).where((payment) => payment.isActive).toList();
-    final paymentRef = _ordersRef.doc(orderId).collection('payments').doc();
+    final resolvedAttemptId = _resolvePaymentAttemptId(paymentAttemptId);
+    final paymentRef = _ordersRef
+        .doc(orderId)
+        .collection('payments')
+        .doc(resolvedAttemptId);
     final paymentData = _paymentData(
       order: order,
       cashSession: cashSession,
@@ -12792,6 +13004,7 @@ class TacoPosRepository {
       baseAmount: baseAmount,
       platformId: order.platformId,
       platformName: order.platformName,
+      paymentAttemptId: resolvedAttemptId,
     );
     final result = await _finalizeSaleWithDailyFolio(
       order: order,
@@ -13369,57 +13582,118 @@ class TacoPosRepository {
 
   String _shortLogFolio(String id) => id.length <= 6 ? id : id.substring(0, 6);
 
-  bool _updateOrderPaymentTotalsInBatch(
-    WriteBatch batch,
-    PosOrder order, {
-    required double baseAmount,
-    required QuerySnapshot<Map<String, dynamic>> closeItemsSnapshot,
-    bool markItemsOnlyIfClosed = false,
+  Future<bool> _commitNonFinalPaymentTransaction({
+    required PosOrder expectedOrder,
+    required DocumentReference<Map<String, dynamic>> paymentRef,
+    required Map<String, Object?> paymentData,
+    required OrderPaymentReconciliationTotals totals,
+    required List<QueryDocumentSnapshot<Map<String, dynamic>>> itemDocs,
+    required bool markItemsPaid,
     AppliedDiscountDetails? discount,
-    Iterable<Payment> previousActivePayments = const [],
-    Map<String, Object?>? newPaymentData,
-    String? newPaymentId,
-  }) {
-    final totals = _reconcileOrderPayments(
-      order: order,
-      previousActivePayments: previousActivePayments,
-      newPaymentData: newPaymentData,
-      newPaymentId: newPaymentId,
-    );
-    final allPaid = totals.pendingTotal <= 0.01;
-
-    if (allPaid) {
-      for (final doc in closeItemsSnapshot.docs) {
-        batch.update(doc.reference, {
-          'paymentStatus': 'paid',
-          'paidAt': FieldValue.serverTimestamp(),
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
+    required CashSession cashSession,
+  }) async {
+    final orderRef = _ordersRef.doc(expectedOrder.id);
+    final usageRef = _discountUsageRef.doc(paymentRef.id);
+    final authRequestId = discount?.discountAuthorizationRequestId?.trim();
+    final authRef = authRequestId == null || authRequestId.isEmpty
+        ? null
+        : _discountAuthorizationRequestsRef.doc(authRequestId);
+    return _db.runTransaction<bool>((transaction) async {
+      final orderDoc = await transaction.get(orderRef);
+      final paymentDoc = await transaction.get(paymentRef);
+      final freshItemDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final item in itemDocs) {
+        freshItemDocs.add(await transaction.get(item.reference));
       }
-      _closeOrderInBatch(
-        batch,
-        order,
-        discount: discount,
-        reconciliationTotals: totals,
-      );
-    } else {
-      batch.update(_ordersRef.doc(order.id), {
-        'paymentStatus': 'partial',
+      final authDoc = authRef == null ? null : await transaction.get(authRef);
+      if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+      if (paymentDoc.exists) return false;
+      final freshOrder = PosOrder.fromDoc(orderDoc);
+      if (!isActiveOrderState(freshOrder)) {
+        throw StateError('La cuenta ya fue cerrada o cancelada.');
+      }
+      if (freshOrder.captureRevision != expectedOrder.captureRevision) {
+        throw StateError(
+          'La orden cambio durante el cobro. Actualiza y reintenta el pago.',
+        );
+      }
+      if (freshItemDocs.any((item) => !item.exists)) {
+        throw StateError(
+          'Un articulo cambio durante el cobro. Actualiza y reintenta.',
+        );
+      }
+      if (authRef != null && authDoc?.exists != true) {
+        throw StateError('La autorizacion ya no existe.');
+      }
+
+      transaction.set(paymentRef, paymentData);
+      if (markItemsPaid) {
+        for (final itemDoc in freshItemDocs) {
+          final item = OrderItem.fromDoc(itemDoc);
+          if (!isActiveOrderItem(item) || item.paymentStatus == 'paid') {
+            throw StateError('Un articulo ya cambio de estado de pago.');
+          }
+          transaction.update(itemDoc.reference, {
+            'paymentStatus': 'paid',
+            'paidAt': FieldValue.serverTimestamp(),
+            'paymentId': paymentRef.id,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        }
+      }
+      transaction.update(orderRef, {
+        'paymentStatus': totals.paymentStatus,
         'paidTotal': totals.paidTotal,
         'pendingTotal': totals.pendingTotal,
         ..._orderAggregateSnapshotFromPayments(
           totals: totals,
-          order: order,
+          order: freshOrder,
           discount: discount,
         ),
+        'captureRevision': FieldValue.increment(1),
         'updatedAt': FieldValue.serverTimestamp(),
       });
-      if (!markItemsOnlyIfClosed) {
-        // Person payments already updated their own items before this method.
+      if (discount != null && discount.discountAmount > 0) {
+        transaction.set(usageRef, {
+          'restaurantId': freshOrder.restaurantId,
+          'restaurantName': freshOrder.restaurantName,
+          'branchId': freshOrder.branchId,
+          'branchName': freshOrder.branchName,
+          'businessDate': cashSession.businessDate,
+          'employeeId': discount.employeeBeneficiaryId,
+          'employeeName': discount.employeeBeneficiaryName,
+          'partnerId': discount.authorizedByPartnerId,
+          'partnerName': discount.authorizedByPartnerName,
+          'linkedEmployeeId': discount.authorizedByPartnerLinkedEmployeeId,
+          'linkedEmployeeName': discount.authorizedByPartnerLinkedEmployeeName,
+          'discountAuthorizationRequestId':
+              discount.discountAuthorizationRequestId,
+          'authorizationMode': discount.authorizationMode,
+          'authorizationStatus': discount.authorizationStatus,
+          'discountType': discount.type,
+          'discountName': discount.name,
+          'discountPercent': discount.percent,
+          'orderId': freshOrder.id,
+          'paymentId': paymentRef.id,
+          'amountBeforeDiscount': discount.amountBeforeDiscount,
+          'discountAmount': discount.discountAmount,
+          'totalAfterDiscount': discount.totalAfterDiscount,
+          'reason': discount.reason,
+          'status': 'active',
+          'createdAt': FieldValue.serverTimestamp(),
+          ..._employeeAuditFields(prefix: 'createdBy'),
+        });
       }
-    }
-
-    return allPaid;
+      if (authRef != null) {
+        transaction.update(authRef, {
+          'status': 'used',
+          'usedAt': FieldValue.serverTimestamp(),
+          'usedPaymentId': paymentRef.id,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+      return true;
+    });
   }
 
   Future<PaymentResult> _finalizeSaleWithDailyFolio({
@@ -13433,7 +13707,7 @@ class TacoPosRepository {
   }) async {
     final config = await _loadSaleFolioConfig();
     final orderRef = _ordersRef.doc(order.id);
-    final usageRef = _discountUsageRef.doc();
+    final usageRef = _discountUsageRef.doc(paymentRef.id);
     final employee = AppSession.instance.employee;
     final actorId = employee?.id ?? _auth.currentUser?.uid ?? 'anonymous';
     final actorName = employee?.name ?? actorId;
@@ -13441,21 +13715,46 @@ class TacoPosRepository {
     var transactionStage = 'iniciar cobro con folio diario';
 
     try {
-      return await _db.runTransaction<PaymentResult>((transaction) async {
+      final transactionResult = await _db.runTransaction<PaymentResult>((
+        transaction,
+      ) async {
         transactionStage = 'leer orden';
         final freshOrderDoc = await transaction.get(orderRef);
         if (!freshOrderDoc.exists) {
           throw StateError('La orden ya no existe.');
         }
         final freshOrder = PosOrder.fromDoc(freshOrderDoc);
+        if (freshOrder.captureRevision != order.captureRevision) {
+          throw StateError(
+            'La orden cambio durante el cobro. Actualiza y reintenta el pago.',
+          );
+        }
         final existingFolio = freshOrder.saleFolioDisplay?.trim();
-        if (existingFolio != null && existingFolio.isNotEmpty) {
-          return PaymentResult(allPaid: true, saleFolioDisplay: existingFolio);
+        final decision = decidePaymentFinalization(
+          pendingTotal: freshOrder.pendingTotal,
+          existingFolio: existingFolio,
+        );
+        if (decision.alreadyPaid) {
+          return PaymentResult(
+            allPaid: true,
+            saleFolioDisplay: existingFolio,
+            authoritativePendingTotal: freshOrder.pendingTotal,
+          );
         }
 
         final businessDate =
             _businessDateForOrder(freshOrder) ??
             businessDateForOpenCashSession(cashSession);
+        transactionStage = 'verificar intento de pago';
+        final existingPaymentDoc = await transaction.get(paymentRef);
+        if (existingPaymentDoc.exists) {
+          return PaymentResult(
+            allPaid: false,
+            saleFolioDisplay: existingFolio,
+            paymentId: paymentRef.id,
+            authoritativePendingTotal: freshOrder.pendingTotal,
+          );
+        }
         final persistencePreview = buildRepositoryPaymentPersistencePreview(
           order: freshOrder,
           paymentData: paymentData,
@@ -13468,7 +13767,8 @@ class TacoPosRepository {
         if (freshOrder.total - totals.paidTotal > 0.01) {
           throw StateError('La venta aun tiene saldo pendiente.');
         }
-        if (!config.appliesToBusinessDate(businessDate)) {
+        final folioControlApplies = config.appliesToBusinessDate(businessDate);
+        if (!folioControlApplies && !decision.reuseExistingFolio) {
           transaction.set(paymentRef, guardedPaymentData);
           for (final doc in itemDocs) {
             transaction.update(doc.reference, {
@@ -13489,40 +13789,56 @@ class TacoPosRepository {
               discount: discount,
             ),
             'paidAt': FieldValue.serverTimestamp(),
+            'captureRevision': FieldValue.increment(1),
             ..._currentBranchFields,
             'updatedAt': FieldValue.serverTimestamp(),
           });
           _releaseLinkedTablesInTransaction(transaction, freshOrder);
-          return const PaymentResult(allPaid: true);
+          return PaymentResult(
+            allPaid: true,
+            paymentId: paymentRef.id,
+            authoritativePendingTotal: totals.pendingTotal,
+          );
         }
 
-        transactionStage = 'leer contador diario';
-        final counterRef = _dailySaleCountersRef(
-          freshOrder.branchId,
-        ).doc(businessDate);
-        final counterDoc = await transaction.get(counterRef);
-        final lastSequence =
-            (counterDoc.data()?['lastSequence'] as num?)?.toInt() ?? 0;
-        final nextSequence = lastSequence + 1;
-        final assignment = buildSaleFolioAssignment(
-          sequence: nextSequence,
-          businessDate: businessDate,
-          branchId: freshOrder.branchId,
-          branchName: freshOrder.branchName,
-          restaurantId: freshOrder.restaurantId,
-          config: config,
-        );
         final now = FieldValue.serverTimestamp();
-        final folioFields = {
-          'saleFolioSequence': assignment.sequence,
-          'saleFolioDisplay': assignment.display,
-          'saleFolioFull': assignment.full,
-          'saleFolioBusinessDate': assignment.businessDate,
-          'saleFolioBranchId': assignment.branchId,
-          'saleFolioRestaurantId': assignment.restaurantId,
-          'saleFolioAssignedAt': now,
-          'saleFolioVersion': saleFolioVersion,
-        };
+        late final SaleFolioAssignment assignment;
+        final folioFields = <String, Object?>{};
+        DocumentReference<Map<String, dynamic>>? counterRef;
+        var nextSequence = 0;
+        if (decision.reuseExistingFolio) {
+          assignment = _existingSaleFolioAssignment(
+            freshOrder,
+            fallbackBusinessDate: businessDate,
+          );
+        } else {
+          transactionStage = 'leer contador diario';
+          counterRef = _dailySaleCountersRef(
+            freshOrder.branchId,
+          ).doc(businessDate);
+          final counterDoc = await transaction.get(counterRef);
+          final lastSequence =
+              (counterDoc.data()?['lastSequence'] as num?)?.toInt() ?? 0;
+          nextSequence = lastSequence + 1;
+          assignment = buildSaleFolioAssignment(
+            sequence: nextSequence,
+            businessDate: businessDate,
+            branchId: freshOrder.branchId,
+            branchName: freshOrder.branchName,
+            restaurantId: freshOrder.restaurantId,
+            config: config,
+          );
+          folioFields.addAll({
+            'saleFolioSequence': assignment.sequence,
+            'saleFolioDisplay': assignment.display,
+            'saleFolioFull': assignment.full,
+            'saleFolioBusinessDate': assignment.businessDate,
+            'saleFolioBranchId': assignment.branchId,
+            'saleFolioRestaurantId': assignment.restaurantId,
+            'saleFolioAssignedAt': now,
+            'saleFolioVersion': saleFolioVersion,
+          });
+        }
         final paymentWithFolio = {
           ...guardedPaymentData,
           'saleFolioSequence': assignment.sequence,
@@ -13535,16 +13851,18 @@ class TacoPosRepository {
           assignment: assignment,
         );
 
-        transactionStage = 'guardar contador diario';
-        transaction.set(counterRef, {
-          'businessDate': businessDate,
-          'restaurantId': freshOrder.restaurantId,
-          'branchId': freshOrder.branchId,
-          'lastSequence': nextSequence,
-          'updatedAt': now,
-          'updatedByDeviceId': deviceId,
-          'version': saleFolioVersion,
-        }, SetOptions(merge: true));
+        if (counterRef != null) {
+          transactionStage = 'guardar contador diario';
+          transaction.set(counterRef, {
+            'businessDate': businessDate,
+            'restaurantId': freshOrder.restaurantId,
+            'branchId': freshOrder.branchId,
+            'lastSequence': nextSequence,
+            'updatedAt': now,
+            'updatedByDeviceId': deviceId,
+            'version': saleFolioVersion,
+          }, SetOptions(merge: true));
+        }
         transactionStage = 'guardar pago final';
         transaction.set(paymentRef, paymentWithFolio);
         for (final doc in itemDocs) {
@@ -13609,27 +13927,30 @@ class TacoPosRepository {
           ),
           ...folioFields,
           'paidAt': now,
+          'captureRevision': FieldValue.increment(1),
           ..._currentBranchFields,
           'updatedAt': now,
         });
         _releaseLinkedTablesInTransaction(transaction, freshOrder);
-        transactionStage = 'registrar auditoria de folio asignado';
-        _setSaleAuditEventInTransaction(
-          transaction,
-          branchId: freshOrder.branchId,
-          eventType: 'sale_folio_assigned',
-          order: freshOrder,
-          assignment: assignment,
-          amount: freshOrder.total,
-          paymentSnapshot: auditPaymentSnapshot,
-          previousStatus: freshOrder.paymentStatus,
-          newStatus: 'paid',
-          reason: 'Folio diario asignado al cerrar venta',
-          performedBy: actorName,
-          authorizedBy: actorId,
-          deviceId: deviceId,
-          createdAt: now,
-        );
+        if (!decision.reuseExistingFolio) {
+          transactionStage = 'registrar auditoria de folio asignado';
+          _setSaleAuditEventInTransaction(
+            transaction,
+            branchId: freshOrder.branchId,
+            eventType: 'sale_folio_assigned',
+            order: freshOrder,
+            assignment: assignment,
+            amount: freshOrder.total,
+            paymentSnapshot: auditPaymentSnapshot,
+            previousStatus: freshOrder.paymentStatus,
+            newStatus: 'paid',
+            reason: 'Folio diario asignado al cerrar venta',
+            performedBy: actorName,
+            authorizedBy: actorId,
+            deviceId: deviceId,
+            createdAt: now,
+          );
+        }
         transactionStage = 'registrar auditoria de venta completada';
         _setSaleAuditEventInTransaction(
           transaction,
@@ -13651,8 +13972,16 @@ class TacoPosRepository {
         return PaymentResult(
           allPaid: true,
           saleFolioDisplay: assignment.display,
+          paymentId: paymentRef.id,
+          authoritativePendingTotal: totals.pendingTotal,
         );
       });
+      transactionStage = 'confirmar estado autoritativo';
+      return _authoritativePaymentResult(
+        orderId: order.id,
+        paymentId: transactionResult.paymentId,
+        fallbackSaleFolioDisplay: transactionResult.saleFolioDisplay,
+      );
     } on StateError {
       rethrow;
     } on FirebaseException catch (error, stackTrace) {
@@ -13722,6 +14051,37 @@ class TacoPosRepository {
       );
       return const SaleFolioConfig();
     }
+  }
+
+  SaleFolioAssignment _existingSaleFolioAssignment(
+    PosOrder order, {
+    required String fallbackBusinessDate,
+  }) {
+    final display = order.saleFolioDisplay?.trim();
+    if (display == null || display.isEmpty) {
+      throw StateError('La orden no tiene un folio de venta reutilizable.');
+    }
+    final sequence = order.saleFolioSequence ?? int.tryParse(display) ?? 0;
+    final businessDate = order.saleFolioBusinessDate?.trim().isNotEmpty == true
+        ? order.saleFolioBusinessDate!.trim()
+        : fallbackBusinessDate;
+    final branchId = order.saleFolioBranchId?.trim().isNotEmpty == true
+        ? order.saleFolioBranchId!.trim()
+        : order.branchId;
+    final restaurantId = order.saleFolioRestaurantId?.trim().isNotEmpty == true
+        ? order.saleFolioRestaurantId!.trim()
+        : order.restaurantId;
+    final full = order.saleFolioFull?.trim();
+    return SaleFolioAssignment(
+      sequence: sequence,
+      display: display,
+      full: full == null || full.isEmpty
+          ? '${saleFolioPrefixForBranch(branchId: branchId, name: order.branchName)}-$businessDate-$display'
+          : full,
+      businessDate: businessDate,
+      branchId: branchId,
+      restaurantId: restaurantId,
+    );
   }
 
   void _releaseLinkedTablesInTransaction(
@@ -13802,35 +14162,6 @@ class TacoPosRepository {
     );
   }
 
-  void _closeOrderInBatch(
-    WriteBatch batch,
-    PosOrder order, {
-    AppliedDiscountDetails? discount,
-    OrderPaymentReconciliationTotals? reconciliationTotals,
-  }) {
-    final totals =
-        reconciliationTotals ??
-        reconcileOrderPayments(
-          orderGrossTotal: order.total,
-          activePayments: const [],
-        );
-    batch.update(_ordersRef.doc(order.id), {
-      'status': 'paid',
-      'paymentStatus': 'paid',
-      'paidTotal': totals.paidTotal,
-      'pendingTotal': totals.pendingTotal,
-      ..._orderAggregateSnapshotFromPayments(
-        totals: totals,
-        order: order,
-        discount: discount,
-      ),
-      'paidAt': FieldValue.serverTimestamp(),
-      ..._currentBranchFields,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-    _setLinkedTablesStateInBatch(batch, order, release: true);
-  }
-
   void _setLinkedTablesStateInBatch(
     WriteBatch batch,
     PosOrder order, {
@@ -13887,42 +14218,6 @@ class TacoPosRepository {
     }
   }
 
-  Map<String, Object?> _setPayment({
-    required WriteBatch batch,
-    required DocumentReference<Map<String, dynamic>> paymentRef,
-    required PosOrder order,
-    required CashSession cashSession,
-    required String type,
-    required String method,
-    required double baseAmount,
-    int? personNumber,
-    String? personName,
-    String? employeeId,
-    String? employeeName,
-    String? platformId,
-    String? platformName,
-    CashPaymentDetails? cashDetails,
-    AppliedDiscountDetails? discount,
-  }) {
-    final data = _paymentData(
-      order: order,
-      cashSession: cashSession,
-      type: type,
-      method: method,
-      baseAmount: baseAmount,
-      personNumber: personNumber,
-      personName: personName,
-      employeeId: employeeId,
-      employeeName: employeeName,
-      platformId: platformId,
-      platformName: platformName,
-      cashDetails: cashDetails,
-      discount: discount,
-    );
-    batch.set(paymentRef, data);
-    return data;
-  }
-
   Map<String, Object?> _paymentData({
     required PosOrder order,
     required CashSession cashSession,
@@ -13937,6 +14232,7 @@ class TacoPosRepository {
     String? platformName,
     CashPaymentDetails? cashDetails,
     AppliedDiscountDetails? discount,
+    String? paymentAttemptId,
   }) {
     if (method == 'employee_consumption' &&
         (employeeId == null || employeeName == null)) {
@@ -13989,6 +14285,10 @@ class TacoPosRepository {
       'personName': personName,
       'method': method,
       'status': 'active',
+      if (paymentAttemptId != null) ...{
+        'paymentAttemptId': paymentAttemptId,
+        'operationId': paymentAttemptId,
+      },
       'subtotalBeforeDiscount': baseAmount,
       'discountAmount': discountAmount,
       'totalAfterDiscount': chargedAmount,
@@ -14048,6 +14348,48 @@ class TacoPosRepository {
       'createdBy': _auth.currentUser?.uid ?? 'anonymous',
       ..._employeeAuditFields(prefix: 'createdBy'),
     };
+  }
+
+  String _resolvePaymentAttemptId(String? paymentAttemptId) {
+    final clean = paymentAttemptId?.trim();
+    if (clean == null || clean.isEmpty) {
+      return const Uuid().v4();
+    }
+    if (clean.contains('/') || clean.length > 240) {
+      throw ArgumentError('Identificador de intento de pago invalido.');
+    }
+    return clean;
+  }
+
+  Future<PaymentResult> _authoritativePaymentResult({
+    required String orderId,
+    String? paymentId,
+    String? fallbackSaleFolioDisplay,
+  }) async {
+    final orderRef = _ordersRef.doc(orderId);
+    final paymentRef = paymentId == null
+        ? null
+        : orderRef.collection('payments').doc(paymentId);
+    final reads = await Future.wait<DocumentSnapshot<Map<String, dynamic>>>([
+      orderRef.get(const GetOptions(source: Source.server)),
+      if (paymentRef != null)
+        paymentRef.get(const GetOptions(source: Source.server)),
+    ]);
+    final orderDoc = reads.first;
+    if (!orderDoc.exists) {
+      throw StateError('La orden ya no existe despues del cobro.');
+    }
+    if (paymentRef != null && !reads.last.exists) {
+      throw StateError('El pago no fue confirmado por el servidor.');
+    }
+    final authoritativeOrder = PosOrder.fromDoc(orderDoc);
+    return PaymentResult(
+      allPaid: authoritativeOrder.pendingTotal <= 0.01,
+      saleFolioDisplay:
+          authoritativeOrder.saleFolioDisplay ?? fallbackSaleFolioDisplay,
+      paymentId: paymentId,
+      authoritativePendingTotal: authoritativeOrder.pendingTotal,
+    );
   }
 
   OrderPaymentReconciliationTotals _reconcileOrderPayments({
@@ -14153,47 +14495,6 @@ class TacoPosRepository {
     };
   }
 
-  void _recordDiscountUsageInBatch(
-    WriteBatch batch, {
-    required DocumentReference<Map<String, dynamic>> usageRef,
-    required PosOrder order,
-    required String paymentId,
-    required CashSession cashSession,
-    required AppliedDiscountDetails? discount,
-  }) {
-    if (discount == null || discount.discountAmount <= 0) {
-      return;
-    }
-    batch.set(usageRef, {
-      'restaurantId': order.restaurantId,
-      'restaurantName': order.restaurantName,
-      'branchId': order.branchId,
-      'branchName': order.branchName,
-      'businessDate': cashSession.businessDate,
-      'employeeId': discount.employeeBeneficiaryId,
-      'employeeName': discount.employeeBeneficiaryName,
-      'partnerId': discount.authorizedByPartnerId,
-      'partnerName': discount.authorizedByPartnerName,
-      'linkedEmployeeId': discount.authorizedByPartnerLinkedEmployeeId,
-      'linkedEmployeeName': discount.authorizedByPartnerLinkedEmployeeName,
-      'discountAuthorizationRequestId': discount.discountAuthorizationRequestId,
-      'authorizationMode': discount.authorizationMode,
-      'authorizationStatus': discount.authorizationStatus,
-      'discountType': discount.type,
-      'discountName': discount.name,
-      'discountPercent': discount.percent,
-      'orderId': order.id,
-      'paymentId': paymentId,
-      'amountBeforeDiscount': discount.amountBeforeDiscount,
-      'discountAmount': discount.discountAmount,
-      'totalAfterDiscount': discount.totalAfterDiscount,
-      'reason': discount.reason,
-      'status': 'active',
-      'createdAt': FieldValue.serverTimestamp(),
-      ..._employeeAuditFields(prefix: 'createdBy'),
-    });
-  }
-
   Future<void> _ensureDiscountAuthorizationStillUsable(
     AppliedDiscountDetails? discount,
     PosOrder order,
@@ -14246,23 +14547,6 @@ class TacoPosRepository {
         0.02) {
       throw StateError(checkoutScopeMismatchMessage);
     }
-  }
-
-  void _markDiscountAuthorizationUsedInBatch(
-    WriteBatch batch, {
-    required AppliedDiscountDetails? discount,
-    required String paymentId,
-  }) {
-    final requestId = discount?.discountAuthorizationRequestId?.trim();
-    if (requestId == null || requestId.isEmpty) {
-      return;
-    }
-    batch.update(_discountAuthorizationRequestsRef.doc(requestId), {
-      'status': 'used',
-      'usedAt': FieldValue.serverTimestamp(),
-      'usedPaymentId': paymentId,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
   }
 
   Future<void> cancelPayment({
@@ -14356,6 +14640,7 @@ class TacoPosRepository {
       'pendingTotal': totals.pendingTotal,
       ..._orderAggregateSnapshotFromPayments(totals: totals, order: order),
       'paidAt': FieldValue.delete(),
+      'captureRevision': FieldValue.increment(1),
       'updatedAt': FieldValue.serverTimestamp(),
     });
     _logActivityInBatch(
@@ -14448,6 +14733,11 @@ class TacoPosRepository {
       }
 
       final order = PosOrder.fromDoc(freshOrderDoc);
+      if (order.captureRevision != initialOrder.captureRevision) {
+        throw StateError(
+          'La orden cambio durante la cancelacion del pago. Actualiza y reintenta.',
+        );
+      }
       final payment = Payment.fromDoc(freshPaymentDoc);
       if (isTerminalCancellationStatus(payment.status) ||
           payment.cancelledAt != null) {
@@ -14523,6 +14813,7 @@ class TacoPosRepository {
           'paidAt': FieldValue.delete(),
           'closedAt': FieldValue.delete(),
         },
+        'captureRevision': FieldValue.increment(1),
         'updatedAt': now,
       });
       transaction.set(activityRef, {
@@ -14633,6 +14924,11 @@ class TacoPosRepository {
       }
 
       final order = PosOrder.fromDoc(freshOrderDoc);
+      if (order.captureRevision != initialOrder.captureRevision) {
+        throw StateError(
+          'La orden cambio durante la cancelacion administrativa. Actualiza y reintenta.',
+        );
+      }
       if (isTerminalCancellationStatus(order.status) ||
           order.cancelledAt != null ||
           order.canceledAt != null) {
@@ -14676,6 +14972,7 @@ class TacoPosRepository {
         'cancelReason': cleanReason,
         'pendingTotal': 0.0,
         'paidTotal': 0.0,
+        'captureRevision': FieldValue.increment(1),
         'updatedAt': now,
       });
       for (final doc in activeItemDocs) {
@@ -15174,14 +15471,17 @@ class TacoPosRepository {
         .doc(orderId)
         .collection('items')
         .get();
-    final pendingCount = itemsSnapshot.docs
+    final awaitingSendCount = itemsSnapshot.docs
         .map(OrderItem.fromDoc)
-        .where(isKitchenPendingItem)
+        .where(
+          (item) =>
+              isKitchenPendingItem(item) || itemIsAwaitingKitchenSend(item),
+        )
         .length;
 
-    if (pendingCount > 0) {
+    if (awaitingSendCount > 0) {
       throw StateError(
-        'No se puede cobrar todavia. Hay $pendingCount ${pendingCount == 1 ? 'producto pendiente' : 'productos pendientes'} en Cocina.',
+        'No se puede cobrar todavia. Hay $awaitingSendCount ${awaitingSendCount == 1 ? 'producto pendiente' : 'productos pendientes'} de cocina por enviar o preparar.',
       );
     }
   }
@@ -15248,38 +15548,56 @@ class TacoPosRepository {
     String orderId, {
     Source source = Source.serverAndCache,
   }) async {
-    final itemsSnapshot = await _ordersRef
-        .doc(orderId)
+    final orderRef = _ordersRef.doc(orderId);
+    final expectedOrderDoc = await orderRef.get(GetOptions(source: source));
+    if (!expectedOrderDoc.exists) throw StateError('La orden ya no existe.');
+    final expectedRevision = PosOrder.fromDoc(expectedOrderDoc).captureRevision;
+    final itemsSnapshot = await orderRef
         .collection('items')
         .get(GetOptions(source: source));
-    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
-    final total = activeOrderItemsTotal(items);
-    final orderDoc = await _ordersRef
-        .doc(orderId)
-        .get(GetOptions(source: source));
-    final order = orderDoc.exists ? PosOrder.fromDoc(orderDoc) : null;
+    final itemRefs = itemsSnapshot.docs
+        .map((doc) => orderRef.collection('items').doc(doc.id))
+        .toList();
     final payments = await getOrderPaymentsOnce(orderId, source: source);
-    final totals = reconcileOrderPayments(
-      orderGrossTotal: total,
-      activePayments: payments
-          .where(isCanonicalActivePayment)
-          .map(PaymentSettlementInput.fromPayment),
-    );
-
-    await _ordersRef.doc(orderId).update({
-      'total': total,
-      'grossSubtotal': total,
-      'netTotal': totals.netTotal,
-      'discountAmount': totals.discountAmount,
-      'totalDiscountAmount': totals.discountAmount,
-      'monetaryPaid': totals.monetaryPaid,
-      'totalLiquidated': totals.totalLiquidated,
-      'paidTotal': totals.paidTotal,
-      'pendingTotal': totals.pendingTotal,
-      'paymentStatus': totals.paymentStatus,
-      if (order?.status == 'paid' && totals.pendingTotal > 0.01)
-        'status': 'ready',
-      'updatedAt': FieldValue.serverTimestamp(),
+    // Reading every currently known item in the transaction makes a concurrent
+    // item edit retry this calculation.  More importantly, terminal orders are
+    // deliberately a no-op: recalculation must never reopen a paid sale.
+    await _db.runTransaction((transaction) async {
+      final orderDoc = await transaction.get(orderRef);
+      if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+      final order = PosOrder.fromDoc(orderDoc);
+      if (!isActiveOrderState(order)) return;
+      if (order.captureRevision != expectedRevision) {
+        throw StateError(
+          'La orden cambio durante el recálculo. Actualiza y reintenta.',
+        );
+      }
+      final freshItems = <OrderItem>[];
+      for (final itemRef in itemRefs) {
+        final itemDoc = await transaction.get(itemRef);
+        if (itemDoc.exists) freshItems.add(OrderItem.fromDoc(itemDoc));
+      }
+      final total = activeOrderItemsTotal(freshItems);
+      final totals = reconcileOrderPayments(
+        orderGrossTotal: total,
+        activePayments: payments
+            .where(isCanonicalActivePayment)
+            .map(PaymentSettlementInput.fromPayment),
+      );
+      transaction.update(orderRef, {
+        'total': total,
+        'grossSubtotal': total,
+        'netTotal': totals.netTotal,
+        'discountAmount': totals.discountAmount,
+        'totalDiscountAmount': totals.discountAmount,
+        'monetaryPaid': totals.monetaryPaid,
+        'totalLiquidated': totals.totalLiquidated,
+        'paidTotal': totals.paidTotal,
+        'pendingTotal': totals.pendingTotal,
+        'paymentStatus': totals.paymentStatus,
+        'captureRevision': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 
