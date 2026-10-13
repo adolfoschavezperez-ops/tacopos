@@ -181,7 +181,7 @@ void main() {
       final pubspec = File('pubspec.yaml').readAsStringSync();
 
       expect(repositorySource, contains("'unitCost': unitCost"));
-      expect(pubspec, contains('version: 1.5.10+27'));
+      expect(pubspec, contains('version: 1.5.11+28'));
     },
   );
 }
