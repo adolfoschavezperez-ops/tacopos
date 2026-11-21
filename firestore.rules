@@ -75,12 +75,29 @@ service cloud.firestore {
         !orderIsTerminal(get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data);
     }
 
-    function tableReleaseClosesCurrentOrder(restaurantId) {
+    function orderLinksTable(data, tableId) {
+      return (data.get('tableIds', []) is list && tableId in data.get('tableIds', [])) ||
+        (data.get('tableIds', []) == [] && data.get('orderType', 'dine_in') == 'dine_in' && data.get('tableId', '') == tableId);
+    }
+
+    function tableReleaseClosesCurrentOrder(restaurantId, tableId) {
       let currentOrderId = resource.data.get('currentOrderId', '');
       let currentOrderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(currentOrderId);
       return currentOrderId is string && currentOrderId.size() > 0 &&
-        existsAfter(currentOrderPath) &&
-        getAfter(currentOrderPath).data.get('status', '') in ['paid', 'cancelled', 'closed'];
+        request.resource.data.get('currentOrderId', '') == null &&
+        request.resource.data.get('status', '') == 'available' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'currentOrderId', 'currentOrderStatus', 'tableGroupId',
+          'tableGroupLabel', 'groupPrimaryTableId', 'occupiedAt', 'updatedAt',
+          'restaurantId', 'branchId', 'branchName'
+        ]) &&
+        (!existsAfter(currentOrderPath) ||
+          getAfter(currentOrderPath).data.get('status', '') in ['paid', 'cancelled', 'closed'] ||
+          (getAfter(currentOrderPath).data.get('branchId', 'aviacion') == resource.data.get('branchId', 'aviacion') &&
+            (getAfter(currentOrderPath).data.get('tableId', '') != '' ||
+              (getAfter(currentOrderPath).data.get('tableIds', []) is list &&
+                getAfter(currentOrderPath).data.get('tableIds', []).size() > 0)) &&
+            !orderLinksTable(getAfter(currentOrderPath).data, tableId)));
     }
 
     function tableAssignmentKeepsCurrentOwner(restaurantId) {
@@ -458,7 +475,7 @@ service cloud.firestore {
           (request.resource.data.get('currentOrderId', null) ==
             resource.data.get('currentOrderId', null) ||
             tableAssignmentKeepsCurrentOwner(restaurantId) ||
-            tableReleaseClosesCurrentOrder(restaurantId));
+            tableReleaseClosesCurrentOrder(restaurantId, tableId));
         allow delete: if false;
       }
 
