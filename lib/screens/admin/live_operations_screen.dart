@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/payments/payment_cancellation.dart';
 import '../../core/reports/operational_blockers.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../models/active_session.dart';
@@ -1660,16 +1661,31 @@ class _PaymentsPanel extends StatelessWidget {
       builder: (_) => const _ReasonDialog(),
     );
     if (reason == null) return;
-    await repository.cancelPayment(
-      orderId: order.id,
-      paymentId: payment.id,
-      reason: reason,
+    final report = await runOperatorPaymentCancellation(
+      cancel: () => repository.cancelPayment(
+        orderId: order.id,
+        paymentId: payment.id,
+        reason: reason,
+      ),
+      recordIntervention: () => repository.logBackofficeIntervention(
+        type: 'cancel_payment',
+        orderId: order.id,
+        targetId: payment.id,
+        note: reason,
+      ),
     );
-    await repository.logBackofficeIntervention(
-      type: 'cancel_payment',
-      orderId: order.id,
-      targetId: payment.id,
-      note: reason,
+    if (!context.mounted) return;
+    showAppSnackBar(
+      context,
+      report.message,
+      type: switch (report.status) {
+        OperatorPaymentCancellationStatus.cancelled => AppSnackBarType.success,
+        OperatorPaymentCancellationStatus.cancelledInterventionNotRecorded =>
+          AppSnackBarType.warning,
+        OperatorPaymentCancellationStatus.alreadyCancelled =>
+          AppSnackBarType.info,
+        OperatorPaymentCancellationStatus.failed => AppSnackBarType.error,
+      },
     );
   }
 }

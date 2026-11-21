@@ -4,6 +4,7 @@ import '../../core/orders/checkout_submission_guard.dart';
 import '../../core/orders/employee_benefit_checkout.dart';
 import '../../core/orders/global_discount_checkout.dart';
 import '../../core/payments/payment_attempt_coordinator.dart';
+import '../../core/payments/payment_cancellation.dart';
 import '../../core/sales/daily_sale_folio.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
@@ -412,7 +413,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
     }
 
     try {
-      await _repository.cancelPayment(
+      final result = await _repository.cancelPayment(
         orderId: operationOrderId,
         paymentId: payment.id,
         reason: reason,
@@ -420,7 +421,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (!_isCurrentOrder(operationOrderId)) {
         return;
       }
-      _showMessage('Pago cancelado.');
+      _showMessage(paymentCancellationSuccessMessage(result.outcome));
     } catch (error) {
       if (!_isCurrentOrder(operationOrderId)) {
         return;
