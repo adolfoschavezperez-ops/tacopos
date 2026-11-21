@@ -19,6 +19,8 @@ import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import '../waiter/payment_screen.dart';
+import '../kitchen/kitchen_bundles_feed.dart';
+import '../kitchen/kitchen_sync_banner.dart';
 
 class LiveOperationsScreen extends StatefulWidget {
   const LiveOperationsScreen({super.key, required this.employee});
@@ -280,7 +282,7 @@ class _LiveOperationsScreenState extends State<LiveOperationsScreen> {
                             canControl: _canControl,
                             onOpenOrder: _openOrderDetail,
                           ),
-                          _KitchenLiveTab(
+                          KitchenLiveTab(
                             repository: _repository,
                             canControl: _canControl,
                             onOpenOrder: _openOrderDetail,
@@ -548,48 +550,95 @@ class _TablesLiveTab extends StatelessWidget {
   }
 }
 
-class _KitchenLiveTab extends StatelessWidget {
-  const _KitchenLiveTab({
+/// The kitchen consumer used by LiveOperationsScreen. Owns only kitchen state.
+class KitchenLiveTab extends StatefulWidget {
+  const KitchenLiveTab({
+    super.key,
     required this.repository,
     required this.canControl,
     required this.onOpenOrder,
   });
-
   final TacoPosRepository repository;
   final bool canControl;
   final ValueChanged<String> onOpenOrder;
 
   @override
+  State<KitchenLiveTab> createState() => _KitchenLiveTabState();
+}
+
+class _KitchenLiveTabState extends State<KitchenLiveTab> {
+  late KitchenBundlesFeed _feed;
+  @override
+  void initState() {
+    super.initState();
+    _feed = KitchenBundlesFeed.synchronized(
+      widget.repository.watchKitchenOrderBundlesState,
+    )..start();
+  }
+
+  @override
+  void didUpdateWidget(covariant KitchenLiveTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.repository, widget.repository)) {
+      _feed.dispose();
+      _feed = KitchenBundlesFeed.synchronized(
+        widget.repository.watchKitchenOrderBundlesState,
+      )..start();
+    }
+  }
+
+  @override
+  void dispose() {
+    _feed.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<KitchenOrderBundle>>(
-      stream: repository.watchKitchenOrderBundles(),
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const LoadingPanel(message: 'Cargando cocina...');
-        }
-        final bundles = snapshot.data!;
-        if (bundles.isEmpty) {
-          return const EmptyState(
-            icon: Icons.restaurant_menu,
-            title: 'Cocina sin comandas',
-            message: 'No hay productos activos en cocina.',
-          );
-        }
-        return ListView.builder(
-          padding: const EdgeInsets.all(18),
-          itemCount: bundles.length,
-          itemBuilder: (context, index) {
-            final bundle = bundles[index];
-            return Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: _KitchenLiveCard(
-                repository: repository,
-                bundle: bundle,
-                canControl: canControl,
-                onOpenOrder: () => onOpenOrder(bundle.order.id),
-              ),
-            );
-          },
+    return ValueListenableBuilder<AsyncSnapshot<List<KitchenOrderBundle>>>(
+      valueListenable: _feed,
+      builder: (context, snapshot, child) {
+        final state = _feed.syncState;
+        final bundles = state.bundles;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            KitchenSyncBanner(state: state),
+            Expanded(
+              child: !state.hasData
+                  ? const SizedBox.expand()
+                  : bundles.isEmpty
+                  ? const EmptyState(
+                      icon: Icons.restaurant_menu,
+                      title: 'Cocina sin comandas',
+                      message: 'No hay productos activos en cocina.',
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(18),
+                      itemCount: bundles.length,
+                      itemBuilder: (context, index) {
+                        final bundle = bundles[index];
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: _KitchenLiveCard(
+                            repository: widget.repository,
+                            bundle: bundle,
+                            canControl: widget.canControl && state.isConfirmed,
+                            synchronizationReady: () =>
+                                _feed.syncState.isConfirmed &&
+                                _feed.syncState.bundles.any(
+                                  (current) =>
+                                      current.stableKitchenKey ==
+                                      bundle.stableKitchenKey,
+                                ),
+                            onOpenOrder: () =>
+                                widget.onOpenOrder(bundle.order.id),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
         );
       },
     );
@@ -601,12 +650,14 @@ class _KitchenLiveCard extends StatelessWidget {
     required this.repository,
     required this.bundle,
     required this.canControl,
+    required this.synchronizationReady,
     required this.onOpenOrder,
   });
 
   final TacoPosRepository repository;
   final KitchenOrderBundle bundle;
   final bool canControl;
+  final bool Function() synchronizationReady;
   final VoidCallback onOpenOrder;
 
   @override
@@ -665,6 +716,7 @@ class _KitchenLiveCard extends StatelessWidget {
                   onPressed: pendingIds.isEmpty
                       ? null
                       : () async {
+                          if (!synchronizationReady()) return;
                           await repository.updateKitchenItemsStatus(
                             orderId: bundle.order.id,
                             itemIds: pendingIds,
@@ -684,6 +736,7 @@ class _KitchenLiveCard extends StatelessWidget {
                   onPressed: cookingIds.isEmpty
                       ? null
                       : () async {
+                          if (!synchronizationReady()) return;
                           await repository.updateKitchenItemsStatus(
                             orderId: bundle.order.id,
                             itemIds: cookingIds,

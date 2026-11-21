@@ -19,6 +19,7 @@ import '../../widgets/status_badge.dart';
 import '../kitchen_control/kitchen_control_screen.dart';
 import 'kitchen_order_detail_screen.dart';
 import 'kitchen_bundles_feed.dart';
+import 'kitchen_sync_banner.dart';
 
 class KitchenScreen extends StatefulWidget {
   const KitchenScreen({super.key, this.repository});
@@ -33,7 +34,12 @@ class _KitchenScreenState extends State<KitchenScreen> {
   late final TacoPosRepository _repository;
   late final KitchenBundlesFeed _bundlesFeed;
   late String _bundlesScope;
-  late final Future<bool> _kitchenIsOpenFuture;
+  late Future<bool> _kitchenIsOpenFuture;
+  final _actionsReady = ValueNotifier(false);
+  bool _wasConfirmed = false;
+  bool _validatingActions = false;
+  bool _reconciled = false;
+  late String _actionScope;
   final Set<String> _knownKitchenOrderIds = <String>{};
   bool _hasInitializedKitchenOrders = false;
   bool _openingHourlySales = false;
@@ -42,11 +48,20 @@ class _KitchenScreenState extends State<KitchenScreen> {
   void initState() {
     super.initState();
     _repository = widget.repository ?? TacoPosRepository();
-    _bundlesFeed = KitchenBundlesFeed(_repository.watchKitchenOrderBundles);
+    _bundlesFeed = KitchenBundlesFeed.synchronized(
+      _repository.watchKitchenOrderBundlesState,
+    );
     _bundlesScope = _bundlesFeed.scope;
-    unawaited(_repository.reconcileOpenOrdersForKitchen());
+    _actionScope = _bundlesFeed.scope;
     _kitchenIsOpenFuture = _repository
         .hasCompletedOpenKitchenForCurrentBusinessDate();
+    // Reading cached bundles is independent of validating kitchen actions.
+    // Observe errors immediately even if no server snapshot arrives yet.
+    unawaited(_kitchenIsOpenFuture.then((_) {}, onError: (Object error) {}));
+    _bundlesFeed.addListener(_onSynchronization);
+    if (AppSession.instance.employee?.canViewKitchen == true) {
+      _bundlesFeed.start();
+    }
     LivePresenceService.instance.update(
       appMode: 'kitchen',
       currentScreen: 'Cocina',
@@ -56,8 +71,65 @@ class _KitchenScreenState extends State<KitchenScreen> {
 
   @override
   void dispose() {
+    _bundlesFeed.removeListener(_onSynchronization);
     _bundlesFeed.dispose();
+    _actionsReady.dispose();
     super.dispose();
+  }
+
+  void _onSynchronization() {
+    if (_actionScope != _bundlesFeed.scope) {
+      _actionScope = _bundlesFeed.scope;
+      _reconciled = false;
+      _wasConfirmed = false;
+      final validation = _repository
+          .hasCompletedOpenKitchenForCurrentBusinessDate();
+      unawaited(validation.then((_) {}, onError: (Object error) {}));
+      setState(() {
+        _kitchenIsOpenFuture = validation;
+      });
+    }
+    final confirmed = _bundlesFeed.syncState.isConfirmed;
+    if (!confirmed) _actionsReady.value = false;
+    if (confirmed && !_wasConfirmed) unawaited(_validateActions());
+    _wasConfirmed = confirmed;
+  }
+
+  Future<void> _validateActions() async {
+    if (_validatingActions) return;
+    _validatingActions = true;
+    final scope = _bundlesFeed.scope;
+    try {
+      var open = await _kitchenIsOpenFuture.catchError((Object error) => false);
+      if (!mounted || scope != _bundlesFeed.scope) return;
+      if (!open && _bundlesFeed.syncState.isConfirmed) {
+        final validation = _repository
+            .hasCompletedOpenKitchenForCurrentBusinessDate();
+        setState(() {
+          _kitchenIsOpenFuture = validation;
+        });
+        open = await validation;
+      }
+      if (!mounted ||
+          scope != _bundlesFeed.scope ||
+          !_bundlesFeed.syncState.isConfirmed) {
+        return;
+      }
+      _actionsReady.value = open;
+      if (open && !_reconciled) {
+        _reconciled = true;
+        await _repository.reconcileOpenOrdersForKitchen();
+      }
+    } catch (error) {
+      debugPrint('Kitchen action validation/reconciliation unavailable.');
+    } finally {
+      _validatingActions = false;
+      if (mounted &&
+          scope != _bundlesFeed.scope &&
+          _bundlesFeed.syncState.isConfirmed) {
+        unawaited(_validateActions());
+      }
+    }
   }
 
   @override
@@ -78,23 +150,6 @@ class _KitchenScreenState extends State<KitchenScreen> {
       body: FutureBuilder<bool>(
         future: _kitchenIsOpenFuture,
         builder: (context, kitchenSnapshot) {
-          if (kitchenSnapshot.connectionState == ConnectionState.waiting) {
-            return const LoadingPanel(message: 'Verificando apertura...');
-          }
-          if (kitchenSnapshot.hasError) {
-            return EmptyState(
-              icon: Icons.error_outline,
-              title: 'No se pudo validar cocina',
-              message: '${kitchenSnapshot.error}',
-            );
-          }
-          if (kitchenSnapshot.data != true) {
-            return _KitchenNotOpenState(
-              canOpenKitchen:
-                  AppSession.instance.employee?.canOpenKitchen == true,
-            );
-          }
-
           _bundlesFeed.start();
           return ValueListenableBuilder<
             AsyncSnapshot<List<KitchenOrderBundle>>
@@ -106,69 +161,30 @@ class _KitchenScreenState extends State<KitchenScreen> {
                 _knownKitchenOrderIds.clear();
                 _hasInitializedKitchenOrders = false;
               }
-              if (snapshot.hasError) {
-                return EmptyState(
-                  icon: Icons.error_outline,
-                  title: 'No se pudieron cargar comandas',
-                  message: '${snapshot.error}',
-                );
-              }
-
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const LoadingPanel(message: 'Cargando comandas...');
+              final state = _bundlesFeed.syncState;
+              if (!state.hasData) {
+                return _syncBody(const SizedBox.expand());
               }
 
               final bundles = snapshot.data ?? [];
-              _handleNewKitchenBundles(bundles);
+              _handleNewKitchenBundles(bundles, confirmed: state.isConfirmed);
               if (bundles.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      _KitchenListHeader(
-                        activeCount: 0,
-                        onTestBeep: () => _testKitchenBeep(context),
-                        onTestExpressBeep: () =>
-                            _testKitchenExpressBeep(context),
-                        canViewHourlySales:
-                            _canViewKitchenHourlySalesComparison,
-                        openingHourlySales: _openingHourlySales,
-                        onOpenHourlySales: () =>
-                            _openHourlySalesComparison(context),
-                      ),
-                      const SizedBox(height: 18),
-                      const Expanded(
-                        child: EmptyState(
-                          icon: Icons.room_service_outlined,
-                          title: 'Sin comandas activas',
-                          message:
-                              'Solo apareceran tacos y gringas enviados a cocina.',
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              }
-
-              return LayoutBuilder(
-                builder: (context, constraints) {
-                  final compact = constraints.maxWidth < 700;
-                  final medium = constraints.maxWidth < 950;
-                  final padding = compact
-                      ? 12.0
-                      : medium
-                      ? 16.0
-                      : 22.0;
-                  final gap = compact ? 10.0 : 14.0;
-
-                  return Padding(
-                    padding: EdgeInsets.all(padding),
+                if (kitchenSnapshot.data == false && state.isConfirmed) {
+                  return _syncBody(
+                    _KitchenNotOpenState(
+                      canOpenKitchen:
+                          AppSession.instance.employee?.canOpenKitchen == true,
+                    ),
+                  );
+                }
+                return _syncBody(
+                  Padding(
+                    padding: const EdgeInsets.all(18),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _KitchenListHeader(
-                          activeCount: bundles.length,
+                          activeCount: 0,
                           onTestBeep: () => _testKitchenBeep(context),
                           onTestExpressBeep: () =>
                               _testKitchenExpressBeep(context),
@@ -178,42 +194,87 @@ class _KitchenScreenState extends State<KitchenScreen> {
                           onOpenHourlySales: () =>
                               _openHourlySalesComparison(context),
                         ),
-                        SizedBox(height: compact ? 10 : 18),
-                        Expanded(
-                          child: GridView.builder(
-                            gridDelegate:
-                                SliverGridDelegateWithMaxCrossAxisExtent(
-                                  maxCrossAxisExtent: compact
-                                      ? 330
-                                      : medium
-                                      ? 420
-                                      : 460,
-                                  mainAxisExtent: compact
-                                      ? 196
-                                      : medium
-                                      ? 242
-                                      : 278,
-                                  crossAxisSpacing: gap,
-                                  mainAxisSpacing: gap,
-                                ),
-                            itemCount: bundles.length,
-                            itemBuilder: (context, index) {
-                              return _KitchenOrderCard(
-                                key: ValueKey(
-                                  'kitchen-${bundles[index].stableKitchenKey}',
-                                ),
-                                bundle: bundles[index],
-                                compact: compact,
-                                bundlesFeed: _bundlesFeed,
-                                repository: _repository,
-                              );
-                            },
+                        const SizedBox(height: 18),
+                        const Expanded(
+                          child: EmptyState(
+                            icon: Icons.room_service_outlined,
+                            title: 'Sin comandas activas',
+                            message:
+                                'Solo apareceran tacos y gringas enviados a cocina.',
                           ),
                         ),
                       ],
                     ),
-                  );
-                },
+                  ),
+                );
+              }
+
+              return _syncBody(
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final compact = constraints.maxWidth < 700;
+                    final medium = constraints.maxWidth < 950;
+                    final padding = compact
+                        ? 12.0
+                        : medium
+                        ? 16.0
+                        : 22.0;
+                    final gap = compact ? 10.0 : 14.0;
+
+                    return Padding(
+                      padding: EdgeInsets.all(padding),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          _KitchenListHeader(
+                            activeCount: bundles.length,
+                            onTestBeep: () => _testKitchenBeep(context),
+                            onTestExpressBeep: () =>
+                                _testKitchenExpressBeep(context),
+                            canViewHourlySales:
+                                _canViewKitchenHourlySalesComparison,
+                            openingHourlySales: _openingHourlySales,
+                            onOpenHourlySales: () =>
+                                _openHourlySalesComparison(context),
+                          ),
+                          SizedBox(height: compact ? 10 : 18),
+                          Expanded(
+                            child: GridView.builder(
+                              gridDelegate:
+                                  SliverGridDelegateWithMaxCrossAxisExtent(
+                                    maxCrossAxisExtent: compact
+                                        ? 330
+                                        : medium
+                                        ? 420
+                                        : 460,
+                                    mainAxisExtent: compact
+                                        ? 196
+                                        : medium
+                                        ? 242
+                                        : 278,
+                                    crossAxisSpacing: gap,
+                                    mainAxisSpacing: gap,
+                                  ),
+                              itemCount: bundles.length,
+                              itemBuilder: (context, index) {
+                                return _KitchenOrderCard(
+                                  key: ValueKey(
+                                    'kitchen-${bundles[index].stableKitchenKey}',
+                                  ),
+                                  bundle: bundles[index],
+                                  compact: compact,
+                                  bundlesFeed: _bundlesFeed,
+                                  repository: _repository,
+                                  actionsReady: _actionsReady,
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
               );
             },
           );
@@ -221,6 +282,14 @@ class _KitchenScreenState extends State<KitchenScreen> {
       ),
     );
   }
+
+  Widget _syncBody(Widget child) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      KitchenSyncBanner(state: _bundlesFeed.syncState),
+      Expanded(child: child),
+    ],
+  );
 
   bool get _canViewKitchenHourlySalesComparison =>
       AppSession.instance.employee?.canViewKitchenHourlySalesComparison == true;
@@ -251,11 +320,22 @@ class _KitchenScreenState extends State<KitchenScreen> {
     }
   }
 
-  void _handleNewKitchenBundles(List<KitchenOrderBundle> bundles) {
+  void _handleNewKitchenBundles(
+    List<KitchenOrderBundle> bundles, {
+    required bool confirmed,
+  }) {
     final currentByKey = {
       for (final bundle in bundles) bundle.stableKitchenKey: bundle,
     };
 
+    if (!confirmed) {
+      // Cache is displayable, but not evidence of a new arriving comanda.
+      // Establish the historical baseline only on first full confirmation.
+      if (!_hasInitializedKitchenOrders) {
+        _knownKitchenOrderIds.addAll(currentByKey.keys);
+      }
+      return;
+    }
     if (!_hasInitializedKitchenOrders) {
       _knownKitchenOrderIds.addAll(currentByKey.keys);
       _hasInitializedKitchenOrders = true;
@@ -798,12 +878,14 @@ class _KitchenOrderCard extends StatelessWidget {
     required this.compact,
     required this.bundlesFeed,
     required this.repository,
+    required this.actionsReady,
   });
 
   final KitchenOrderBundle bundle;
   final bool compact;
   final KitchenBundlesFeed bundlesFeed;
   final TacoPosRepository repository;
+  final ValueNotifier<bool> actionsReady;
 
   @override
   Widget build(BuildContext context) {
@@ -855,6 +937,7 @@ class _KitchenOrderCard extends StatelessWidget {
               kitchenBatchId: bundle.kitchenBatchId,
               bundlesFeed: bundlesFeed,
               repository: repository,
+              actionsReady: actionsReady,
             ),
           ),
         );

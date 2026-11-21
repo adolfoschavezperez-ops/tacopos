@@ -154,6 +154,10 @@ class _Repository implements TacoPosRepository {
   );
   void emit(List<KitchenOrderBundle> bundles) => controller.add(bundles);
   @override
+  Stream<KitchenBundlesState> watchKitchenOrderBundlesState() =>
+      watchKitchenOrderBundles().map(KitchenBundlesState.confirmed);
+
+  @override
   Stream<List<KitchenOrderBundle>> watchKitchenOrderBundles() {
     calls++;
     return controller.stream;

@@ -8,13 +8,18 @@ import '../../services/taco_pos_repository.dart';
 /// Owned by one kitchen route; consumers share state, never the upstream stream.
 class KitchenBundlesFeed
     extends ValueNotifier<AsyncSnapshot<List<KitchenOrderBundle>>> {
-  KitchenBundlesFeed(this._watch) : super(const AsyncSnapshot.waiting()) {
+  KitchenBundlesFeed(Stream<List<KitchenOrderBundle>> Function() watch)
+    : this.synchronized(() => watch().map(KitchenBundlesState.confirmed));
+
+  KitchenBundlesFeed.synchronized(this._watch)
+    : super(const AsyncSnapshot.waiting()) {
     _scope = _currentScope;
     AppSession.instance.addListener(_onSessionChanged);
   }
 
-  final Stream<List<KitchenOrderBundle>> Function() _watch;
-  StreamSubscription<List<KitchenOrderBundle>>? _subscription;
+  final Stream<KitchenBundlesState> Function() _watch;
+  StreamSubscription<KitchenBundlesState>? _subscription;
+  KitchenBundlesState syncState = const KitchenBundlesState();
   Future<void> _cancellation = Future<void>.value();
   late String _scope;
   int _generation = 0;
@@ -33,20 +38,40 @@ class KitchenBundlesFeed
   void _listen(int generation) {
     try {
       _subscription = _watch().listen(
-        (bundles) {
+        (state) {
           if (_disposed || generation != _generation) return;
-          value = AsyncSnapshot.withData(ConnectionState.active, bundles);
+          _setState(state);
         },
         onError: (Object error, StackTrace stack) {
           if (_disposed || generation != _generation) return;
-          value = AsyncSnapshot.withError(ConnectionState.active, error, stack);
+          _setState(
+            syncState.withIssue(KitchenSyncIssue(error, recoverable: false)),
+          );
         },
       );
-    } catch (error, stack) {
+    } catch (error) {
       if (!_disposed && generation == _generation) {
-        value = AsyncSnapshot.withError(ConnectionState.active, error, stack);
+        _setState(
+          syncState.withIssue(KitchenSyncIssue(error, recoverable: false)),
+        );
       }
     }
+  }
+
+  void _setState(KitchenBundlesState state) {
+    syncState = state;
+    final previous = value;
+    if (state.hasData) {
+      value = AsyncSnapshot.withData(ConnectionState.active, state.bundles);
+    } else if (state.issues.isNotEmpty) {
+      value = AsyncSnapshot.withError(
+        ConnectionState.active,
+        state.issues.first.error,
+      );
+    } else {
+      value = const AsyncSnapshot.waiting();
+    }
+    if (previous == value) notifyListeners();
   }
 
   void _onSessionChanged() {
@@ -56,7 +81,7 @@ class KitchenBundlesFeed
     final previous = _subscription;
     _subscription = null;
     _cancellation = _cancellation.then((_) => previous?.cancel());
-    value = const AsyncSnapshot.waiting();
+    _setState(const KitchenBundlesState());
     unawaited(_restart(_cancellation, generation));
   }
 

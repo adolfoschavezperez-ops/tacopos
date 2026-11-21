@@ -163,14 +163,14 @@ void main() {
     );
     await _pump(tester);
     expect(repo.attaches, 1);
-    expect(find.text('Cargando comandas express...'), findsOneWidget);
-    repo.controller.addError(StateError('offline'));
-    await _pump(tester);
     expect(
-      find.textContaining('No se pudieron cargar comandas express'),
+      find.text('Artículos de la comanda pendientes de sincronizar.'),
       findsOneWidget,
     );
-    repo.emit([_bundle('extra', express: true)]);
+    repo.controller.addError(StateError('offline'));
+    await _pump(tester);
+    expect(find.textContaining('Error de sincronización:'), findsOneWidget);
+    repo.emit([_bundle('initial'), _bundle('extra', express: true)]);
     await _pump(tester);
     expect(find.text('Surtido express'), findsWidgets);
     await tester.pumpWidget(const SizedBox());
@@ -278,6 +278,10 @@ class _Repository implements TacoPosRepository {
     },
   );
   void emit(List<KitchenOrderBundle> bundles) => controller.add(bundles);
+  @override
+  Stream<KitchenBundlesState> watchKitchenOrderBundlesState() =>
+      watchKitchenOrderBundles().map(KitchenBundlesState.confirmed);
+
   @override
   Stream<List<KitchenOrderBundle>> watchKitchenOrderBundles() {
     calls++;

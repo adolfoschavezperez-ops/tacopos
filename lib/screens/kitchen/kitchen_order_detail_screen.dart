@@ -11,11 +11,11 @@ import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../../utils/formatters.dart';
-import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
 import 'kitchen_bundles_feed.dart';
+import 'kitchen_sync_banner.dart';
 
 class KitchenOrderDetailScreen extends StatefulWidget {
   const KitchenOrderDetailScreen({
@@ -24,12 +24,16 @@ class KitchenOrderDetailScreen extends StatefulWidget {
     this.kitchenBatchId = '',
     this.bundlesFeed,
     this.repository,
+    this.allowActions = true,
+    this.actionsReady,
   });
 
   final String orderId;
   final String kitchenBatchId;
   final KitchenBundlesFeed? bundlesFeed;
   final TacoPosRepository? repository;
+  final bool allowActions;
+  final ValueNotifier<bool>? actionsReady;
 
   @override
   State<KitchenOrderDetailScreen> createState() =>
@@ -38,24 +42,22 @@ class KitchenOrderDetailScreen extends StatefulWidget {
 
 class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
   late final _repository = widget.repository ?? TacoPosRepository();
-  late final Stream<PosOrder?> _orderStream;
-  late final Stream<List<OrderItem>> _itemsStream;
   late final KitchenBundlesFeed _bundlesFeed;
   int _personIndex = 0;
   bool _busy = false;
   bool _returningToList = false;
+  bool _markedCooking = false;
 
   @override
   void initState() {
     super.initState();
-    _orderStream = _repository.watchOrder(widget.orderId);
-    _itemsStream = _repository.watchKitchenItems(
-      widget.orderId,
-      kitchenBatchId: widget.kitchenBatchId,
-    );
     _bundlesFeed =
         widget.bundlesFeed ??
-        KitchenBundlesFeed(_repository.watchKitchenOrderBundles);
+        KitchenBundlesFeed.synchronized(
+          _repository.watchKitchenOrderBundlesState,
+        );
+    _bundlesFeed.addListener(_maybeMarkCooking);
+    widget.actionsReady?.addListener(_maybeMarkCooking);
     _bundlesFeed.start();
     LivePresenceService.instance.update(
       appMode: 'kitchen',
@@ -64,18 +66,48 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       currentKitchenBundleId: widget.orderId,
       currentAction: 'Surtiendo comanda',
     );
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _repository.markActiveKitchenItemsCooking(
-        widget.orderId,
-        kitchenBatchId: widget.kitchenBatchId,
-      );
-    });
+    _maybeMarkCooking();
   }
 
   @override
   void dispose() {
+    _bundlesFeed.removeListener(_maybeMarkCooking);
+    widget.actionsReady?.removeListener(_maybeMarkCooking);
     if (widget.bundlesFeed == null) _bundlesFeed.dispose();
     super.dispose();
+  }
+
+  void _maybeMarkCooking() {
+    if (mounted) setState(() {});
+    if (_markedCooking ||
+        !widget.allowActions ||
+        !(widget.actionsReady?.value ?? true) ||
+        !_bundlesFeed.syncState.isConfirmed ||
+        !_bundlesFeed.syncState.activeOrderIds.contains(widget.orderId)) {
+      return;
+    }
+    _markedCooking = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_bundlesFeed.syncState.isConfirmed ||
+          !(widget.actionsReady?.value ?? true) ||
+          !_bundlesFeed.syncState.activeOrderIds.contains(widget.orderId)) {
+        _markedCooking = false;
+        return;
+      }
+      unawaited(
+        _repository
+            .markActiveKitchenItemsCooking(
+              widget.orderId,
+              kitchenBatchId: widget.kitchenBatchId,
+            )
+            .catchError((Object error) {
+              if (mounted) {
+                showAppSnackBar(context, '$error', type: AppSnackBarType.error);
+              }
+            }),
+      );
+    });
   }
 
   String get _currentKitchenKey {
@@ -131,7 +163,10 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     Future<void> Function() action, {
     bool popAfter = false,
   }) async {
-    if (_busy) {
+    if (_busy ||
+        !widget.allowActions ||
+        !(widget.actionsReady?.value ?? true) ||
+        !_bundlesFeed.syncState.isConfirmed) {
       return;
     }
 
@@ -173,202 +208,208 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
     return Scaffold(
       body: PremiumBackground(
         child: SafeArea(
-          child: StreamBuilder<PosOrder?>(
-            stream: _orderStream,
-            builder: (context, orderSnapshot) {
-              if (orderSnapshot.hasError) {
-                return EmptyState(
-                  icon: Icons.error_outline,
-                  title: 'No se pudo abrir la comanda',
-                  message: '${orderSnapshot.error}',
+          child: ValueListenableBuilder<AsyncSnapshot<List<KitchenOrderBundle>>>(
+            valueListenable: _bundlesFeed,
+            builder: (context, snapshot, child) {
+              final state = _bundlesFeed.syncState;
+              final matching = state.bundles
+                  .where(
+                    (bundle) =>
+                        bundle.order.id == widget.orderId &&
+                        (widget.kitchenBatchId.trim().isEmpty ||
+                            bundle.kitchenBatchId ==
+                                widget.kitchenBatchId.trim()),
+                  )
+                  .toList();
+              if (matching.isEmpty && !state.isConfirmed) {
+                return Column(
+                  children: [
+                    KitchenSyncBanner(state: state),
+                    const Text(
+                      'Artículos de la comanda pendientes de sincronizar.',
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Volver'),
+                    ),
+                  ],
+                );
+              }
+              final items =
+                  state.detailItemsByKitchenKey[_currentKitchenKey] ??
+                  <OrderItem>[for (final bundle in matching) ...bundle.items];
+              final order = matching.isEmpty ? null : matching.first.order;
+              if (items.isEmpty || order == null) {
+                _returnToKitchenList();
+                return _NoActiveKitchenItems(
+                  onBack: () => Navigator.pop(context),
+                );
+              }
+              final grouped = <int, List<OrderItem>>{};
+              for (final item in items) {
+                grouped.putIfAbsent(item.personNumber, () => []).add(item);
+              }
+              final people = grouped.keys.toList()..sort();
+              if (_personIndex >= people.length) {
+                _personIndex = people.isEmpty ? 0 : people.length - 1;
+              }
+
+              if (people.isEmpty) {
+                _returnToKitchenList();
+                return _NoActiveKitchenItems(
+                  onBack: () {
+                    if (mounted) {
+                      Navigator.pop(context);
+                    }
+                  },
                 );
               }
 
-              final order = orderSnapshot.data;
-              if (orderSnapshot.connectionState == ConnectionState.waiting ||
-                  order == null) {
-                return const LoadingPanel(message: 'Abriendo comanda...');
-              }
+              final personNumber = people[_personIndex];
+              final personItems = grouped[personNumber] ?? [];
+              final personName = _personDisplayName(personNumber, personItems);
+              final personItemGroups = _groupKitchenItems(personItems);
+              final isLastPerson = _personIndex >= people.length - 1;
+              final elapsedSince = _elapsedStart(items);
+              final plateAccent = _plateAccent(_personIndex);
 
-              return StreamBuilder<List<OrderItem>>(
-                stream: _itemsStream,
-                builder: (context, itemSnapshot) {
-                  if (itemSnapshot.hasError) {
-                    return EmptyState(
-                      icon: Icons.error_outline,
-                      title: 'No se pudieron cargar articulos de cocina',
-                      message: '${itemSnapshot.error}',
-                    );
-                  }
-                  if (itemSnapshot.connectionState == ConnectionState.waiting) {
-                    return const LoadingPanel(
-                      message: 'Cargando articulos de cocina...',
-                    );
-                  }
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 700;
+                  final medium = constraints.maxWidth < 950;
+                  final padding = compact
+                      ? 8.0
+                      : medium
+                      ? 12.0
+                      : 16.0;
+                  final gap = compact ? 6.0 : 10.0;
 
-                  final items = itemSnapshot.data ?? [];
-                  final grouped = <int, List<OrderItem>>{};
-                  for (final item in items) {
-                    grouped.putIfAbsent(item.personNumber, () => []).add(item);
-                  }
-                  final people = grouped.keys.toList()..sort();
-                  if (_personIndex >= people.length) {
-                    _personIndex = people.isEmpty ? 0 : people.length - 1;
-                  }
-
-                  if (people.isEmpty) {
-                    _returnToKitchenList();
-                    return _NoActiveKitchenItems(
-                      onBack: () {
-                        if (mounted) {
-                          Navigator.pop(context);
-                        }
-                      },
-                    );
-                  }
-
-                  final personNumber = people[_personIndex];
-                  final personItems = grouped[personNumber] ?? [];
-                  final personName = _personDisplayName(
-                    personNumber,
-                    personItems,
-                  );
-                  final personItemGroups = _groupKitchenItems(personItems);
-                  final isLastPerson = _personIndex >= people.length - 1;
-                  final elapsedSince = _elapsedStart(items);
-                  final plateAccent = _plateAccent(_personIndex);
-
-                  return LayoutBuilder(
-                    builder: (context, constraints) {
-                      final compact = constraints.maxWidth < 700;
-                      final medium = constraints.maxWidth < 950;
-                      final padding = compact
-                          ? 8.0
-                          : medium
-                          ? 12.0
-                          : 16.0;
-                      final gap = compact ? 6.0 : 10.0;
-
-                      return Padding(
-                        padding: EdgeInsets.all(padding),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            _Header(
-                              order: order,
-                              kitchenSequence:
-                                  personItems.first.kitchenSequence,
-                              personName: personName,
-                              isExtra: personItems.any(
-                                (item) => item.isKitchenExpress,
-                              ),
-                              compact: compact,
-                              onClose: () => Navigator.pop(context),
-                            ),
-                            SizedBox(height: gap),
-                            _ExpressAlertSlot(
-                              feed: _bundlesFeed,
-                              currentKey: _currentKitchenKey,
-                              busy: _busy,
-                              onOpen: _openExpressBundle,
-                            ),
-                            SizedBox(height: gap),
-                            Expanded(
-                              child: GlassPanel(
-                                blur: 8,
-                                padding: EdgeInsets.all(compact ? 8 : 12),
-                                fill: plateAccent.withValues(alpha: 0.13),
-                                borderColor: plateAccent.withValues(
-                                  alpha: 0.80,
-                                ),
-                                glowColor: plateAccent.withValues(alpha: 0.22),
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    Expanded(
-                                      child: LayoutBuilder(
-                                        builder: (context, gridConstraints) {
-                                          final columns = _kitchenDetailColumns(
-                                            personItemGroups.length,
-                                            gridConstraints.maxWidth,
-                                          );
-                                          final rows =
-                                              (personItemGroups.length +
-                                                  columns -
-                                                  1) ~/
-                                              columns;
-                                          final rowGap = compact ? 6.0 : 8.0;
-                                          final tileHeight =
-                                              ((gridConstraints.maxHeight -
-                                                          (rows - 1) * rowGap) /
-                                                      rows)
-                                                  .clamp(58.0, 150.0)
-                                                  .toDouble();
-                                          return GridView.builder(
-                                            physics:
-                                                const NeverScrollableScrollPhysics(),
-                                            padding: EdgeInsets.zero,
-                                            gridDelegate:
-                                                SliverGridDelegateWithFixedCrossAxisCount(
-                                                  crossAxisCount: columns,
-                                                  mainAxisExtent: tileHeight,
-                                                  crossAxisSpacing: rowGap,
-                                                  mainAxisSpacing: rowGap,
+                  return Padding(
+                    padding: EdgeInsets.all(padding),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        KitchenSyncBanner(state: state),
+                        _Header(
+                          order: order,
+                          kitchenSequence: personItems.first.kitchenSequence,
+                          personName: personName,
+                          isExtra: personItems.any(
+                            (item) => item.isKitchenExpress,
+                          ),
+                          compact: compact,
+                          onClose: () => Navigator.pop(context),
+                        ),
+                        SizedBox(height: gap),
+                        _ExpressAlertSlot(
+                          feed: _bundlesFeed,
+                          currentKey: _currentKitchenKey,
+                          busy:
+                              _busy ||
+                              !state.isConfirmed ||
+                              !widget.allowActions ||
+                              !(widget.actionsReady?.value ?? true),
+                          onOpen: _openExpressBundle,
+                        ),
+                        SizedBox(height: gap),
+                        Expanded(
+                          child: GlassPanel(
+                            blur: 8,
+                            padding: EdgeInsets.all(compact ? 8 : 12),
+                            fill: plateAccent.withValues(alpha: 0.13),
+                            borderColor: plateAccent.withValues(alpha: 0.80),
+                            glowColor: plateAccent.withValues(alpha: 0.22),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Expanded(
+                                  child: LayoutBuilder(
+                                    builder: (context, gridConstraints) {
+                                      final columns = _kitchenDetailColumns(
+                                        personItemGroups.length,
+                                        gridConstraints.maxWidth,
+                                      );
+                                      final rows =
+                                          (personItemGroups.length +
+                                              columns -
+                                              1) ~/
+                                          columns;
+                                      final rowGap = compact ? 6.0 : 8.0;
+                                      final tileHeight =
+                                          ((gridConstraints.maxHeight -
+                                                      (rows - 1) * rowGap) /
+                                                  rows)
+                                              .clamp(58.0, 150.0)
+                                              .toDouble();
+                                      return GridView.builder(
+                                        physics:
+                                            const NeverScrollableScrollPhysics(),
+                                        padding: EdgeInsets.zero,
+                                        gridDelegate:
+                                            SliverGridDelegateWithFixedCrossAxisCount(
+                                              crossAxisCount: columns,
+                                              mainAxisExtent: tileHeight,
+                                              crossAxisSpacing: rowGap,
+                                              mainAxisSpacing: rowGap,
+                                            ),
+                                        itemCount: personItemGroups.length,
+                                        itemBuilder: (context, index) {
+                                          final group = personItemGroups[index];
+                                          return _KitchenItemRow(
+                                            group: group,
+                                            compact: compact || columns > 1,
+                                            busy:
+                                                _busy ||
+                                                !state.isConfirmed ||
+                                                !widget.allowActions ||
+                                                !(widget.actionsReady?.value ??
+                                                    true),
+                                            onAcceptCancellation: () =>
+                                                _resolveCancellationGroup(
+                                                  group,
+                                                  true,
                                                 ),
-                                            itemCount: personItemGroups.length,
-                                            itemBuilder: (context, index) {
-                                              final group =
-                                                  personItemGroups[index];
-                                              return _KitchenItemRow(
-                                                group: group,
-                                                compact: compact || columns > 1,
-                                                busy: _busy,
-                                                onAcceptCancellation: () =>
-                                                    _resolveCancellationGroup(
-                                                      group,
-                                                      true,
-                                                    ),
-                                                onRejectCancellation: () =>
-                                                    _resolveCancellationGroup(
-                                                      group,
-                                                      false,
-                                                    ),
-                                              );
-                                            },
+                                            onRejectCancellation: () =>
+                                                _resolveCancellationGroup(
+                                                  group,
+                                                  false,
+                                                ),
                                           );
                                         },
-                                      ),
-                                    ),
-                                  ],
+                                      );
+                                    },
+                                  ),
                                 ),
-                              ),
+                              ],
                             ),
-                            SizedBox(height: gap),
-                            _KitchenDetailActions(
-                              compact: compact,
-                              busy: _busy,
-                              isLastPerson: isLastPerson,
-                              showPrevious:
-                                  people.length > 1 && _personIndex > 0,
-                              elapsedSince: elapsedSince,
-                              onPrevious: () {
-                                setState(() {
-                                  _personIndex -= 1;
-                                });
-                              },
-                              onNext: () {
-                                setState(() {
-                                  _personIndex += 1;
-                                });
-                              },
-                              accent: plateAccent,
-                              onReady: () => _markReady(items),
-                            ),
-                          ],
+                          ),
                         ),
-                      );
-                    },
+                        SizedBox(height: gap),
+                        _KitchenDetailActions(
+                          compact: compact,
+                          busy:
+                              _busy ||
+                              !state.isConfirmed ||
+                              !widget.allowActions ||
+                              !(widget.actionsReady?.value ?? true),
+                          isLastPerson: isLastPerson,
+                          showPrevious: people.length > 1 && _personIndex > 0,
+                          elapsedSince: elapsedSince,
+                          onPrevious: () {
+                            setState(() {
+                              _personIndex -= 1;
+                            });
+                          },
+                          onNext: () {
+                            setState(() {
+                              _personIndex += 1;
+                            });
+                          },
+                          accent: plateAccent,
+                          onReady: () => _markReady(items),
+                        ),
+                      ],
+                    ),
                   );
                 },
               );
@@ -394,7 +435,11 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       context: context,
       useSafeArea: true,
       builder: (dialogContext) {
-        return _ExpressOrderDialog(bundle: bundle, repository: _repository);
+        return _ExpressOrderDialog(
+          bundle: bundle,
+          repository: _repository,
+          feed: _bundlesFeed,
+        );
       },
     );
   }
@@ -558,10 +603,15 @@ class _BlinkingExpressAlertState extends State<_BlinkingExpressAlert>
 }
 
 class _ExpressOrderDialog extends StatefulWidget {
-  const _ExpressOrderDialog({required this.bundle, required this.repository});
+  const _ExpressOrderDialog({
+    required this.bundle,
+    required this.repository,
+    required this.feed,
+  });
 
   final KitchenOrderBundle bundle;
   final TacoPosRepository repository;
+  final KitchenBundlesFeed feed;
 
   @override
   State<_ExpressOrderDialog> createState() => _ExpressOrderDialogState();
@@ -569,9 +619,14 @@ class _ExpressOrderDialog extends StatefulWidget {
 
 class _ExpressOrderDialogState extends State<_ExpressOrderDialog> {
   bool _busy = false;
+  bool get _canMarkReady =>
+      widget.feed.syncState.isConfirmed &&
+      widget.feed.syncState.bundles.any(
+        (bundle) => bundle.stableKitchenKey == widget.bundle.stableKitchenKey,
+      );
 
   Future<void> _markReady() async {
-    if (_busy) return;
+    if (_busy || !_canMarkReady) return;
     setState(() => _busy = true);
     try {
       await widget.repository.updateKitchenItemsStatus(
@@ -595,66 +650,69 @@ class _ExpressOrderDialogState extends State<_ExpressOrderDialog> {
   @override
   Widget build(BuildContext context) {
     final itemGroups = _groupKitchenItems(widget.bundle.items);
-    return Dialog.fullscreen(
-      backgroundColor: Colors.transparent,
-      child: PremiumBackground(
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _Header(
-                  order: widget.bundle.order,
-                  kitchenSequence: widget.bundle.kitchenSequence,
-                  personName: widget.bundle.personLabel,
-                  isExtra: widget.bundle.isKitchenExpress,
-                  compact: true,
-                  onClose: () => Navigator.pop(context),
-                ),
-                const SizedBox(height: 10),
-                GlassPanel(
-                  borderColor: BrandColors.danger.withValues(alpha: 0.70),
-                  fill: BrandColors.danger.withValues(alpha: 0.12),
-                  child: const Text(
-                    'Surtido express',
-                    style: TextStyle(
-                      color: BrandColors.danger,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
+    return ValueListenableBuilder<AsyncSnapshot<List<KitchenOrderBundle>>>(
+      valueListenable: widget.feed,
+      builder: (context, snapshot, child) => Dialog.fullscreen(
+        backgroundColor: Colors.transparent,
+        child: PremiumBackground(
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _Header(
+                    order: widget.bundle.order,
+                    kitchenSequence: widget.bundle.kitchenSequence,
+                    personName: widget.bundle.personLabel,
+                    isExtra: widget.bundle.isKitchenExpress,
+                    compact: true,
+                    onClose: () => Navigator.pop(context),
+                  ),
+                  const SizedBox(height: 10),
+                  GlassPanel(
+                    borderColor: BrandColors.danger.withValues(alpha: 0.70),
+                    fill: BrandColors.danger.withValues(alpha: 0.12),
+                    child: const Text(
+                      'Surtido express',
+                      style: TextStyle(
+                        color: BrandColors.danger,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: GlassPanel(
-                    padding: const EdgeInsets.all(12),
-                    child: ListView.separated(
-                      itemCount: itemGroups.length,
-                      separatorBuilder: (_, _) => const Divider(height: 12),
-                      itemBuilder: (context, index) {
-                        final group = itemGroups[index];
-                        return _KitchenItemRow(
-                          group: group,
-                          compact: true,
-                          busy: _busy,
-                          onAcceptCancellation: () {},
-                          onRejectCancellation: () {},
-                        );
-                      },
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: GlassPanel(
+                      padding: const EdgeInsets.all(12),
+                      child: ListView.separated(
+                        itemCount: itemGroups.length,
+                        separatorBuilder: (_, _) => const Divider(height: 12),
+                        itemBuilder: (context, index) {
+                          final group = itemGroups[index];
+                          return _KitchenItemRow(
+                            group: group,
+                            compact: true,
+                            busy: _busy,
+                            onAcceptCancellation: () {},
+                            onRejectCancellation: () {},
+                          );
+                        },
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 10),
-                FilledButton.icon(
-                  onPressed: _busy ? null : _markReady,
-                  icon: const Icon(Icons.check_circle_outline),
-                  label: Text(_busy ? 'Marcando...' : 'Listo'),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(56),
+                  const SizedBox(height: 10),
+                  FilledButton.icon(
+                    onPressed: _busy || !_canMarkReady ? null : _markReady,
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: Text(_busy ? 'Marcando...' : 'Listo'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(56),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

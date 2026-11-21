@@ -59,6 +59,7 @@ import '../models/restaurant.dart';
 import '../models/yield_profit_models.dart';
 import '../utils/category_utils.dart';
 import 'app_session.dart';
+import 'kitchen_sync_state.dart';
 import 'device_registry_service.dart';
 import 'operational_auth_service.dart';
 
@@ -87,6 +88,7 @@ export '../core/orders/order_activity.dart'
         shouldKeepTableOccupiedForOrder,
         isStandingOrderVisibleInLiveViewer;
 export '../core/orders/table_operational_status.dart';
+export 'kitchen_sync_state.dart';
 export '../core/orders/order_types.dart';
 
 double _numberToDouble(Object? value) {
@@ -4889,63 +4891,332 @@ class TacoPosRepository {
     });
   }
 
+  /// Compatibility adapter: existing callers still receive confirmed lists/errors.
+  /// Each subscription uses exactly one state upstream; it never attaches twice.
   Stream<List<KitchenOrderBundle>> watchKitchenOrderBundles() {
-    return _ordersRef.snapshots().asyncMap((snapshot) async {
-      final orders = _filterCurrentBranch(
-        snapshot.docs.map(PosOrder.fromDoc).where(isActiveOrder),
-        (order) => order.branchId,
-      );
-
-      final bundles = <KitchenOrderBundle>[];
-      for (final order in orders) {
-        final items = await getActiveKitchenItems(order.id);
-        final itemsByBatch = <String, List<OrderItem>>{};
-        for (final item in items) {
-          final batchId = item.kitchenBatchId?.trim();
-          final key = batchId == null || batchId.isEmpty
-              ? 'order:${order.id}'
-              : 'batch:$batchId';
-          itemsByBatch.putIfAbsent(key, () => <OrderItem>[]).add(item);
-        }
-        for (final batchItems in itemsByBatch.values) {
-          if (batchItems.isNotEmpty) {
-            bundles.add(KitchenOrderBundle(order: order, items: batchItems));
+    Object? lastError;
+    List<KitchenOrderBundle>? lastBundles;
+    return watchKitchenOrderBundlesState().transform(
+      StreamTransformer<
+        KitchenBundlesState,
+        List<KitchenOrderBundle>
+      >.fromHandlers(
+        handleData: (state, sink) {
+          if (state.issues.isNotEmpty) {
+            final error = state.issues.first.error;
+            if (!identical(lastError, error)) sink.addError(error);
+            lastError = error;
+          } else if (state.isConfirmed) {
+            final previous = lastBundles;
+            final unchanged =
+                previous != null &&
+                previous.length == state.bundles.length &&
+                List.generate(
+                  previous.length,
+                  (index) => identical(previous[index], state.bundles[index]),
+                ).every((same) => same);
+            if (!unchanged || lastError != null) sink.add(state.bundles);
+            lastError = null;
+            lastBundles = state.bundles;
           }
-        }
-      }
+        },
+      ),
+    );
+  }
 
-      bundles.sort((a, b) {
-        final sequenceCompare = _compareKitchenSequences(
-          a.kitchenSequence,
-          b.kitchenSequence,
+  Stream<KitchenBundlesState> watchKitchenOrderBundlesState() {
+    late StreamController<KitchenBundlesState> controller;
+    late _KitchenQueryWatcher ordersWatcher;
+    final states = <String, _KitchenItemsState>{};
+    final cancellations = <Future<void>>{};
+    final terminalIds = <String>{};
+    var orders = <PosOrder>[];
+    var cancelled = false;
+    var ordersReady = false;
+    var ordersCache = false;
+    var ordersPending = false;
+    var orderSnapshots = 0;
+    var itemSnapshots = 0;
+    var attaches = 0;
+    var cancels = 0;
+    var rebuilds = 0;
+
+    void trace(String event) {
+      if (!kDebugMode) return;
+      debugPrint(
+        '[TacoPOS][kitchenStream] event=$event itemListeners=${states.values.where((state) => state.watcher?.isAttached == true).length} attaches=$attaches '
+        'cancels=$cancels orderSnapshots=$orderSnapshots '
+        'itemSnapshots=$itemSnapshots bundleRebuilds=$rebuilds',
+      );
+    }
+
+    void cancelItems(_KitchenItemsState state) {
+      final watcher = state.watcher;
+      if (watcher == null) return;
+      final cancellation = watcher.cancel();
+      cancellations.add(cancellation);
+      unawaited(
+        cancellation.then((_) {
+          cancellations.remove(cancellation);
+        }),
+      );
+    }
+
+    void rebuild(_KitchenItemsState state) {
+      state.bundles = _kitchenBundlesForOrder(state.order, state.items!);
+      final chronological = _sortedOrderItems(state.rawItems ?? state.items!);
+      state.detailItems = {
+        'order:${state.order.id}': _activeKitchenItems(chronological),
+        for (final bundle in state.bundles)
+          bundle.stableKitchenKey: _activeKitchenItems(
+            chronological,
+            kitchenBatchId: bundle.kitchenBatchId,
+          ),
+      };
+      rebuilds++;
+    }
+
+    void emit() {
+      if (cancelled) return;
+      final bundles = <KitchenOrderBundle>[
+        for (final order in orders) ...states[order.id]!.bundles,
+      ];
+      _sortKitchenBundles(bundles);
+      controller.add(
+        KitchenBundlesState(
+          bundles: List.unmodifiable(bundles),
+          detailItemsByKitchenKey: Map.unmodifiable({
+            for (final state in states.values)
+              for (final entry in state.detailItems.entries)
+                entry.key: List<OrderItem>.unmodifiable(entry.value),
+          }),
+          hasOrders: ordersReady,
+          ordersFromCache: ordersCache,
+          ordersPendingWrites: ordersPending,
+          activeOrderIds: Set.unmodifiable(states.keys),
+          loadingItemOrderIds: Set.unmodifiable(
+            states.entries
+                .where((entry) => entry.value.items == null)
+                .map((entry) => entry.key),
+          ),
+          cachedItemOrderIds: Set.unmodifiable(
+            states.entries
+                .where((entry) => entry.value.fromCache)
+                .map((entry) => entry.key),
+          ),
+          pendingWriteItemOrderIds: Set.unmodifiable(
+            states.entries
+                .where((entry) => entry.value.pendingWrites)
+                .map((entry) => entry.key),
+          ),
+          issues: List.unmodifiable([
+            if (ordersWatcher.issue != null) ordersWatcher.issue!,
+            for (final state in states.values)
+              if (state.watcher?.issue != null) state.watcher!.issue!,
+            for (final state in states.values)
+              if (state.parseError != null)
+                KitchenSyncIssue(state.parseError!, recoverable: false),
+          ]),
+        ),
+      );
+      trace('emit');
+    }
+
+    void attach(_KitchenItemsState state) {
+      bool current() => !cancelled && identical(states[state.order.id], state);
+      state.watcher = _KitchenQueryWatcher(
+        onAttach: () {
+          attaches++;
+          trace('attach');
+        },
+        onDetach: () {
+          cancels++;
+          trace('detach');
+        },
+        watch: () => _ordersRef
+            .doc(state.order.id)
+            .collection('items')
+            .snapshots(includeMetadataChanges: true),
+        onIssue: () {
+          if (current()) emit();
+        },
+        onData: (snapshot) {
+          if (!current()) return;
+          itemSnapshots++;
+          final provisional =
+              snapshot.metadata.isFromCache ||
+              snapshot.metadata.hasPendingWrites;
+          final wasProvisional = state.fromCache || state.pendingWrites;
+          state.fromCache = snapshot.metadata.isFromCache;
+          state.pendingWrites = snapshot.metadata.hasPendingWrites;
+          try {
+            if (state.items == null ||
+                state.parseError != null ||
+                wasProvisional ||
+                provisional ||
+                snapshot.docChanges.isNotEmpty) {
+              final received = snapshot.docs.map(OrderItem.fromDoc).toList();
+              if (provisional) {
+                // An incomplete cache must not delete previously coherent items.
+                final merged = {
+                  for (final item in state.items ?? <OrderItem>[])
+                    item.id: item,
+                };
+                for (final item in received.where(isKitchenPendingItem)) {
+                  merged[item.id] = item;
+                }
+                if (merged.isNotEmpty) {
+                  state.rawItems = merged.values.toList();
+                  state.items = _activeKitchenItems(merged.values.toList());
+                }
+              } else {
+                state.rawItems = received;
+                state.items = _activeKitchenItems(received);
+              }
+              state.parseError = null;
+              if (state.items != null) rebuild(state);
+            }
+          } catch (error) {
+            state.parseError = error;
+          }
+          emit();
+        },
+      );
+      state.watcher!.start();
+      trace('attach');
+    }
+
+    controller = StreamController<KitchenBundlesState>(
+      onListen: () {
+        ordersWatcher = _KitchenQueryWatcher(
+          watch: () => _ordersRef.snapshots(includeMetadataChanges: true),
+          onIssue: emit,
+          onData: (snapshot) {
+            if (cancelled) return;
+            orderSnapshots++;
+            final wasProvisional = ordersCache || ordersPending;
+            ordersCache = snapshot.metadata.isFromCache;
+            ordersPending = snapshot.metadata.hasPendingWrites;
+            final provisional = ordersCache || ordersPending;
+            try {
+              final decoded = snapshot.docs.map(PosOrder.fromDoc).toList();
+              final received = _filterCurrentBranch(
+                decoded.where(isActiveOrder),
+                (order) => order.branchId,
+              );
+              final changedIds = snapshot.docChanges
+                  .map((change) => change.doc.id)
+                  .toSet();
+              final next = <String, PosOrder>{
+                if (provisional)
+                  for (final order in orders) order.id: order,
+                for (final order in received)
+                  if (!provisional || !terminalIds.contains(order.id))
+                    order.id: order,
+              };
+              if (!provisional) {
+                terminalIds.addAll(
+                  states.keys.where((id) => !next.containsKey(id)),
+                );
+                terminalIds.addAll(
+                  decoded
+                      .where((order) => !isActiveOrder(order))
+                      .map((order) => order.id),
+                );
+                terminalIds.removeAll(next.keys);
+              }
+              for (final id in states.keys.toList()) {
+                if (next.containsKey(id)) continue;
+                cancelItems(states.remove(id)!);
+              }
+              orders = next.values.toList();
+              ordersReady = true;
+              for (final order in orders) {
+                final existing = states[order.id];
+                if (existing == null) {
+                  final state = _KitchenItemsState(order);
+                  states[order.id] = state;
+                  attach(state);
+                } else if (changedIds.contains(order.id) || wasProvisional) {
+                  existing.order = order;
+                  if (existing.items != null) rebuild(existing);
+                }
+              }
+            } catch (error) {
+              ordersWatcher.setParseError(error);
+            }
+            emit();
+            trace(provisional ? 'orders_unconfirmed' : 'orders_confirmed');
+          },
         );
-        if (sequenceCompare != 0) return sequenceCompare;
-        final aDate =
-            a.items
-                .map((item) => item.sentToKitchenAt)
-                .whereType<DateTime>()
-                .fold<DateTime?>(
-                  null,
-                  (min, date) => min == null || date.isBefore(min) ? date : min,
-                ) ??
-            a.order.updatedAt ??
-            a.order.createdAt ??
-            DateTime.fromMillisecondsSinceEpoch(0);
-        final bDate =
-            b.items
-                .map((item) => item.sentToKitchenAt)
-                .whereType<DateTime>()
-                .fold<DateTime?>(
-                  null,
-                  (min, date) => min == null || date.isBefore(min) ? date : min,
-                ) ??
-            b.order.updatedAt ??
-            b.order.createdAt ??
-            DateTime.fromMillisecondsSinceEpoch(0);
-        return aDate.compareTo(bDate);
-      });
+        ordersWatcher.start();
+      },
+      onCancel: () async {
+        cancelled = true;
+        final remaining = states.values.toList();
+        states.clear();
+        cancellations.add(ordersWatcher.cancel());
+        for (final state in remaining) {
+          cancelItems(state);
+        }
+        await Future.wait(cancellations.toList());
+        trace('cancel_all');
+      },
+    );
+    return controller.stream;
+  }
 
-      return bundles;
+  List<KitchenOrderBundle> _kitchenBundlesForOrder(
+    PosOrder order,
+    List<OrderItem> items,
+  ) {
+    final bundles = <KitchenOrderBundle>[];
+    final itemsByBatch = <String, List<OrderItem>>{};
+    for (final item in items) {
+      final batchId = item.kitchenBatchId?.trim();
+      final key = batchId == null || batchId.isEmpty
+          ? 'order:${order.id}'
+          : 'batch:$batchId';
+      itemsByBatch.putIfAbsent(key, () => <OrderItem>[]).add(item);
+    }
+    for (final batchItems in itemsByBatch.values) {
+      if (batchItems.isNotEmpty) {
+        bundles.add(KitchenOrderBundle(order: order, items: batchItems));
+      }
+    }
+    return bundles;
+  }
+
+  void _sortKitchenBundles(List<KitchenOrderBundle> bundles) {
+    bundles.sort((a, b) {
+      final sequenceCompare = _compareKitchenSequences(
+        a.kitchenSequence,
+        b.kitchenSequence,
+      );
+      if (sequenceCompare != 0) return sequenceCompare;
+      final aDate =
+          a.items
+              .map((item) => item.sentToKitchenAt)
+              .whereType<DateTime>()
+              .fold<DateTime?>(
+                null,
+                (min, date) => min == null || date.isBefore(min) ? date : min,
+              ) ??
+          a.order.updatedAt ??
+          a.order.createdAt ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      final bDate =
+          b.items
+              .map((item) => item.sentToKitchenAt)
+              .whereType<DateTime>()
+              .fold<DateTime?>(
+                null,
+                (min, date) => min == null || date.isBefore(min) ? date : min,
+              ) ??
+          b.order.updatedAt ??
+          b.order.createdAt ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      return aDate.compareTo(bDate);
     });
   }
 
@@ -15896,6 +16167,154 @@ class TacoPosRepository {
 
   bool _canManageBranches() {
     return AppSession.instance.employee?.hasAdminAccess == true;
+  }
+}
+
+class _KitchenItemsState {
+  _KitchenItemsState(this.order);
+
+  PosOrder order;
+  List<OrderItem>? items;
+  List<OrderItem>? rawItems;
+  Map<String, List<OrderItem>> detailItems = const {};
+  List<KitchenOrderBundle> bundles = const [];
+  bool fromCache = true;
+  bool pendingWrites = false;
+  Object? parseError;
+  _KitchenQueryWatcher? watcher;
+}
+
+/// Native Firestore listener errors are terminal even though FlutterFire's
+/// broadcast wrapper may not close the Dart stream. Cache/metadata events are
+/// NOT failures: the SDK owns their reconnection and no timer is scheduled.
+class _KitchenQueryWatcher {
+  _KitchenQueryWatcher({
+    required this.watch,
+    required this.onData,
+    required this.onIssue,
+    this.onAttach,
+    this.onDetach,
+  });
+  final Stream<QuerySnapshot<Map<String, dynamic>>> Function() watch;
+  final void Function(QuerySnapshot<Map<String, dynamic>>) onData;
+  final void Function() onIssue;
+  final void Function()? onAttach;
+  final void Function()? onDetach;
+  bool _attached = false;
+  bool get isAttached => _attached;
+  static const _delays = [
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+  ];
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _subscription;
+  Timer? _retry;
+  Future<void> _cancelling = Future<void>.value();
+  int _generation = 0;
+  int _attempts = 0;
+  bool _disposed = false;
+  KitchenSyncIssue? issue;
+
+  void start() {
+    if (_disposed) return;
+    final generation = ++_generation;
+    try {
+      _attached = true;
+      onAttach?.call();
+      _subscription = watch().listen(
+        (snapshot) {
+          if (_disposed || generation != _generation) return;
+          issue = null;
+          onData(snapshot);
+        },
+        onError: (Object error, StackTrace stack) {
+          if (_disposed || generation != _generation) return;
+          if (error is FirebaseException) {
+            unawaited(_ended(error));
+          } else {
+            // Non-Firestore errors don't prove that the source has terminated.
+            // Keep it attached; a following valid event can recover it.
+            setParseError(error);
+          }
+        },
+        onDone: () {
+          if (_disposed || generation != _generation) return;
+          unawaited(
+            _ended(
+              FirebaseException(
+                plugin: 'cloud_firestore',
+                code: 'unavailable',
+                message: 'El listener terminó antes de cerrar Cocina.',
+              ),
+            ),
+          );
+        },
+      );
+    } catch (error) {
+      unawaited(_ended(error));
+    }
+  }
+
+  void setParseError(Object error) {
+    issue = KitchenSyncIssue(error, recoverable: false);
+    onIssue();
+  }
+
+  Future<void> _ended(Object error) async {
+    final generation = ++_generation;
+    final recoverable =
+        error is FirebaseException &&
+        const {
+          'unavailable',
+          'deadline-exceeded',
+          'aborted',
+          'internal',
+          'resource-exhausted',
+        }.contains(error.code);
+    final retrying = recoverable && _attempts < _delays.length;
+    issue = KitchenSyncIssue(
+      error,
+      recoverable: recoverable,
+      retryAttempt: _attempts,
+      retryScheduled: retrying,
+    );
+    onIssue();
+    final previous = _subscription;
+    _subscription = null;
+    _detach();
+    _cancelling = previous?.cancel() ?? Future<void>.value();
+    await _cancelling;
+    if (_disposed || generation != _generation || !retrying) return;
+    final delay = _delays[_attempts++];
+    issue = KitchenSyncIssue(
+      error,
+      recoverable: true,
+      retryAttempt: _attempts,
+      retryScheduled: true,
+    );
+    onIssue();
+    _retry = Timer(delay, () {
+      _retry = null;
+      if (!_disposed && generation == _generation) start();
+    });
+  }
+
+  Future<void> cancel() async {
+    _disposed = true;
+    _generation++;
+    _retry?.cancel();
+    _retry = null;
+    final previous = _subscription;
+    _subscription = null;
+    _detach();
+    await previous?.cancel();
+    await _cancelling;
+  }
+
+  void _detach() {
+    if (!_attached) return;
+    _attached = false;
+    onDetach?.call();
   }
 }
 
