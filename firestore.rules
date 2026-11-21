@@ -80,6 +80,20 @@ service cloud.firestore {
         (data.get('tableIds', []) == [] && data.get('orderType', 'dine_in') == 'dine_in' && data.get('tableId', '') == tableId);
     }
 
+    // Table releases rewrite the device's branch fields (`_currentBranchFields`).
+    // `restaurantName` may only be normalized to the canonical value the app
+    // derives: the branch document's name, or AppConstants.restaurantName when
+    // the branch has none. It can never be deleted or set to arbitrary text.
+    function tableRestaurantNameIsCanonical(restaurantId) {
+      let branchPath = /databases/$(database)/documents/restaurants/$(restaurantId)/branches/$(resource.data.get('branchId', 'aviacion'));
+      let nextName = request.resource.data.get('restaurantName', null);
+      return !('restaurantName' in request.resource.data.diff(resource.data).affectedKeys()) ||
+        (nextName is string && nextName.size() > 0 &&
+          (nextName == "Los Padrino's Tacos" ||
+            (exists(branchPath) &&
+              nextName == get(branchPath).data.get('restaurantName', ''))));
+    }
+
     function tableReleaseClosesCurrentOrder(restaurantId, tableId) {
       let currentOrderId = resource.data.get('currentOrderId', '');
       let currentOrderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(currentOrderId);
@@ -89,8 +103,9 @@ service cloud.firestore {
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'currentOrderId', 'currentOrderStatus', 'tableGroupId',
           'tableGroupLabel', 'groupPrimaryTableId', 'occupiedAt', 'updatedAt',
-          'restaurantId', 'branchId', 'branchName'
+          'restaurantId', 'restaurantName', 'branchId', 'branchName'
         ]) &&
+        tableRestaurantNameIsCanonical(restaurantId) &&
         (!existsAfter(currentOrderPath) ||
           getAfter(currentOrderPath).data.get('status', '') in ['paid', 'cancelled', 'closed'] ||
           (getAfter(currentOrderPath).data.get('branchId', 'aviacion') == resource.data.get('branchId', 'aviacion') &&
