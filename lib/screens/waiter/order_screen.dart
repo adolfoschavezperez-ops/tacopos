@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../core/orders/order_cancellation.dart';
 import '../../core/orders/order_capture_sort.dart';
 import '../../core/orders/order_capture_queue.dart';
 import '../../core/theme/brand_colors.dart';
@@ -397,7 +398,27 @@ class _OrderScreenState extends State<OrderScreen> {
     );
   }
 
+  /// Reads the authoritative server state the operator will confirm, after
+  /// pushing this tablet's pending captures so the review matches the screen.
+  Future<OrderCancellationScope?> _prepareCancellationScope(
+    Future<OrderCancellationScope> Function(String orderId) prepare,
+  ) async {
+    try {
+      await _repository.flushPendingMutations(_boundOrderId);
+      return await prepare(_boundOrderId);
+    } catch (error) {
+      if (mounted) _showMessage('$error'.replaceFirst('Bad state: ', ''));
+      return null;
+    }
+  }
+
   Future<void> _closeEmptyOrder() async {
+    final scope = await _prepareCancellationScope(
+      _repository.prepareEmptyOrderClose,
+    );
+    if (!mounted || scope == null) {
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -423,7 +444,7 @@ class _OrderScreenState extends State<OrderScreen> {
     }
 
     try {
-      await _repository.cancelEmptyOrder(_boundOrderId);
+      await _repository.cancelEmptyOrder(scope);
       if (!mounted) {
         return;
       }
@@ -438,7 +459,7 @@ class _OrderScreenState extends State<OrderScreen> {
       if (!mounted) {
         return;
       }
-      _showMessage('$error');
+      _showMessage('$error'.replaceFirst('Bad state: ', ''));
     }
   }
 
@@ -449,16 +470,34 @@ class _OrderScreenState extends State<OrderScreen> {
       return;
     }
 
+    final scope = await _prepareCancellationScope(
+      _repository.prepareOrderCancellation,
+    );
+    if (!mounted || scope == null) {
+      return;
+    }
+    final productLabel = scope.itemsToCancelCount == 1
+        ? 'producto'
+        : 'productos';
     final reason = await showDialog<String>(
       context: context,
-      builder: (_) => const _ReasonDialog(title: 'Cancelar ticket'),
+      builder: (_) => _ReasonDialog(
+        title: 'Cancelar ticket',
+        summary:
+            'Se cancelaran ${scope.itemsToCancelCount} $productLabel '
+            '(${NumberFormat.currency(locale: 'es_MX', symbol: r'$', decimalDigits: 2).format(scope.itemsToCancelTotal)}). '
+            'Si la orden cambia antes de confirmar, tendras que revisarla de nuevo.',
+      ),
     );
     if (!mounted || reason == null) {
       return;
     }
 
     try {
-      await _repository.cancelOrder(orderId: _boundOrderId, reason: reason);
+      final result = await _repository.cancelOrder(
+        scope: scope,
+        reason: reason,
+      );
       if (!mounted) {
         return;
       }
@@ -468,7 +507,11 @@ class _OrderScreenState extends State<OrderScreen> {
       if (!mounted) {
         return;
       }
-      _showMessage('Orden cancelada y mesa liberada.');
+      _showMessage(
+        result.outcome == OrderCancellationOutcome.alreadyCancelled
+            ? 'La orden ya habia sido cancelada.'
+            : 'Orden cancelada y mesa liberada.',
+      );
       Navigator.pop(context);
     } catch (error) {
       if (!mounted) {
@@ -935,9 +978,12 @@ class _OrderScreenState extends State<OrderScreen> {
 }
 
 class _ReasonDialog extends StatefulWidget {
-  const _ReasonDialog({required this.title});
+  const _ReasonDialog({required this.title, this.summary});
 
   final String title;
+
+  /// Optional authoritative scope shown above the reason field.
+  final String? summary;
 
   @override
   State<_ReasonDialog> createState() => _ReasonDialogState();
@@ -969,6 +1015,10 @@ class _ReasonDialogState extends State<_ReasonDialog> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (widget.summary != null) ...[
+            Text(widget.summary!),
+            const SizedBox(height: 12),
+          ],
           TextField(
             controller: _controller,
             autofocus: true,

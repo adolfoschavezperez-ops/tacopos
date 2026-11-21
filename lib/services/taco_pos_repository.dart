@@ -16,6 +16,7 @@ import '../core/orders/backoffice_sales_cancellation.dart';
 import '../core/orders/global_discount_checkout.dart';
 import '../core/orders/employee_benefit_checkout.dart';
 import '../core/orders/order_activity.dart';
+import '../core/orders/order_cancellation.dart';
 import '../core/orders/order_capture_queue.dart';
 import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
@@ -11944,8 +11945,19 @@ class TacoPosRepository {
     return 'occupied';
   }
 
-  Future<void> cancelOrder({
-    required String orderId,
+  /// Cancels an active, unpaid order atomically with its items, kitchen
+  /// batches, table links and activity records.
+  ///
+  /// The order, items, payments and tables pointing to the order are
+  /// discovered from the server; the transaction re-reads them and commits only
+  /// if the order document is unchanged (fields and `captureRevision`). All
+  /// existing business validations run on the re-read documents. A repeated
+  /// call on an already cancelled order writes nothing.
+  ///
+  /// Not covered: a legacy writer that creates an item document without
+  /// touching the order while this transaction runs.
+  Future<OrderCancellationResult> cancelOrder({
+    required OrderCancellationScope scope,
     required String reason,
   }) async {
     _requireCancelOrders();
@@ -11953,32 +11965,376 @@ class TacoPosRepository {
     if (cleanReason.isEmpty) {
       throw ArgumentError('Captura el motivo de cancelacion.');
     }
-
-    final orderRef = _ordersRef.doc(orderId);
-    final orderDoc = await orderRef.get();
-    if (!orderDoc.exists) {
-      throw StateError('La orden ya no existe.');
+    if (scope.kind != OrderCancellationKind.cancelOrder) {
+      throw ArgumentError('La confirmacion no corresponde a cancelar orden.');
     }
-    final order = PosOrder.fromDoc(orderDoc);
+
+    final (
+      result,
+      order,
+    ) = await _runFencedOrderMutation<(OrderCancellationResult, PosOrder)>(
+      scope: scope,
+      operation: 'cancelar la orden',
+      body: (transaction, state) async {
+        final order = state.order;
+        if (isCancelledOrder(order)) {
+          return (
+            const OrderCancellationResult(
+              outcome: OrderCancellationOutcome.alreadyCancelled,
+            ),
+            order,
+          );
+        }
+        // Commit only the exact state the operator confirmed.
+        state.ensureMatchesScope();
+        final items = state.items.map(OrderItem.fromDoc).toList();
+        _validateOrderCancellable(
+          order,
+          items,
+          state.payments.map(Payment.fromDoc),
+        );
+
+        // Remaining reads: tables, kitchen batches and the order event.
+        final tables = await _readTableReleasePlan(transaction, state);
+        final itemsToCancel = items.where((item) => !item.isCancelled).toList();
+        final orderRef = _ordersRef.doc(order.id);
+        final batchRefs = {
+          for (final item in itemsToCancel)
+            if ((item.kitchenBatchId?.trim() ?? '').isNotEmpty)
+              item.kitchenBatchId!.trim(): orderRef
+                  .collection('kitchenBatches')
+                  .doc(item.kitchenBatchId!.trim()),
+        };
+        final batchesToCancel = <DocumentSnapshot<Map<String, dynamic>>>[];
+        for (final ref in batchRefs.values) {
+          final batchDoc = await transaction.get(ref);
+          final data = batchDoc.data();
+          if (data != null && data['status'] != 'cancelled') {
+            batchesToCancel.add(batchDoc);
+          }
+        }
+        final activityRef = _restaurantRef
+            .collection('activityLog')
+            .doc(orderCancelledActivityId(order.id));
+        final activityDoc = await transaction.get(activityRef);
+
+        // Reject before any write when the atomic cancellation would not fit
+        // the conservative Firestore write budget.
+        ensureCancellationWithinWriteBudget(
+          documentWrites:
+              1 +
+              itemsToCancel.length +
+              batchesToCancel.length +
+              tables.release.length +
+              (activityDoc.exists ? 0 : 1),
+          itemCount: itemsToCancel.length,
+        );
+
+        final now = FieldValue.serverTimestamp();
+        final audit = _employeeAuditFields(prefix: 'cancelledBy');
+        transaction.update(orderRef, {
+          'status': 'cancelled',
+          'kitchenStatus': 'cancelled',
+          'paymentStatus': 'cancelled',
+          'total': 0.0,
+          'paidTotal': 0.0,
+          'pendingTotal': 0.0,
+          'cancelledAt': now,
+          'cancelReason': cleanReason,
+          ...audit,
+          'captureRevision': FieldValue.increment(1),
+          'updatedAt': now,
+        });
+        // Each item keeps its own cancellation trace (reason, time, actor).
+        for (final item in itemsToCancel) {
+          transaction.update(orderRef.collection('items').doc(item.id), {
+            'kitchenStatus': 'cancelled',
+            'paymentStatus': 'cancelled',
+            'cancelledAt': now,
+            'cancelReason': cleanReason,
+            ...audit,
+            'updatedAt': now,
+          });
+        }
+        // Same rule as partial-cancellation reconciliation: a batch whose
+        // items are all cancelled becomes a cancelled batch.
+        for (final batchDoc in batchesToCancel) {
+          transaction.set(batchDoc.reference, {
+            'status': 'cancelled',
+            'itemCount': 0,
+            'activeItemCount': 0,
+            'cancelledAt': now,
+            'cancelReason': 'Todos los productos del batch fueron cancelados',
+            ...audit,
+            'updatedAt': now,
+          }, SetOptions(merge: true));
+        }
+        _releaseTablesInTransaction(transaction, tables.release);
+        if (!activityDoc.exists) {
+          transaction.set(
+            activityRef,
+            _activityLogPayload(
+              type: 'order_cancelled',
+              orderId: order.id,
+              data: {
+                'reason': cleanReason,
+                'total': order.total,
+                'cancelledItemCount': itemsToCancel.length,
+                'cancelledItems': [
+                  for (final item in itemsToCancel)
+                    {
+                      'itemId': item.id,
+                      'productName': item.productName,
+                      'qty': item.qty,
+                      'total': item.total,
+                      'previousKitchenStatus': item.kitchenStatus,
+                    },
+                ],
+                'releasedTableIds': tables.release,
+                'skippedTableIds': tables.skipped,
+              },
+            ),
+          );
+        }
+        return (
+          OrderCancellationResult(
+            outcome: OrderCancellationOutcome.cancelled,
+            releasedTableIds: tables.release,
+            skippedTableIds: tables.skipped,
+          ),
+          order,
+        );
+      },
+    );
+    if (result.outcome == OrderCancellationOutcome.cancelled) {
+      invalidateReportDataCache(
+        branchId: order.branchId,
+        startBusinessDate: order.businessDate,
+        endBusinessDate: order.businessDate,
+      );
+    }
+    return result;
+  }
+
+  /// Closes an empty draft order the operator confirmed through
+  /// [prepareEmptyOrderClose]: open, never sent to kitchen, with no item and
+  /// no payment documents. The transaction commits only while the server still
+  /// holds the confirmed state; an item captured meanwhile aborts the close.
+  Future<OrderCancellationResult> cancelEmptyOrder(
+    OrderCancellationScope scope,
+  ) async {
+    if (scope.kind != OrderCancellationKind.closeEmptyOrder) {
+      throw ArgumentError(
+        'La confirmacion no corresponde a cerrar orden vacia.',
+      );
+    }
+    final (
+      result,
+      order,
+    ) = await _runFencedOrderMutation<(OrderCancellationResult, PosOrder)>(
+      scope: scope,
+      operation: 'cerrar la orden vacia',
+      body: (transaction, state) async {
+        final order = state.order;
+        if (isCancelledOrder(order)) {
+          return (
+            const OrderCancellationResult(
+              outcome: OrderCancellationOutcome.alreadyCancelled,
+            ),
+            order,
+          );
+        }
+        state.ensureMatchesScope();
+        _validateEmptyOrderClosable(
+          order,
+          itemCount: state.items.length,
+          paymentCount: state.payments.length,
+        );
+        final tables = await _readTableReleasePlan(transaction, state);
+        ensureCancellationWithinWriteBudget(
+          documentWrites: 1 + tables.release.length,
+          itemCount: 0,
+        );
+
+        final now = FieldValue.serverTimestamp();
+        transaction.update(_ordersRef.doc(order.id), {
+          'status': 'cancelled',
+          'kitchenStatus': 'cancelled',
+          'paymentStatus': 'cancelled',
+          'cancelledAt': now,
+          ..._employeeAuditFields(prefix: 'cancelledBy'),
+          'captureRevision': FieldValue.increment(1),
+          'updatedAt': now,
+        });
+        _releaseTablesInTransaction(transaction, tables.release);
+        return (
+          OrderCancellationResult(
+            outcome: OrderCancellationOutcome.cancelled,
+            releasedTableIds: tables.release,
+            skippedTableIds: tables.skipped,
+          ),
+          order,
+        );
+      },
+    );
+    if (result.outcome == OrderCancellationOutcome.cancelled) {
+      invalidateReportDataCache(
+        branchId: order.branchId,
+        startBusinessDate: order.businessDate,
+        endBusinessDate: order.businessDate,
+      );
+    }
+    return result;
+  }
+
+  /// Reads the order, its items and payments from the server and returns the
+  /// immutable scope the operator must review before confirming a whole-order
+  /// cancellation. Fails with the same business errors as [cancelOrder].
+  Future<OrderCancellationScope> prepareOrderCancellation(
+    String orderId,
+  ) async {
+    _requireCancelOrders();
+    final snapshot = await _readOrderScopeFromServer(orderId);
+    final items = snapshot.items.map(OrderItem.fromDoc).toList();
+    _validateOrderCancellable(
+      snapshot.order,
+      items,
+      snapshot.payments.map(Payment.fromDoc),
+    );
+    final itemsToCancel = items.where((item) => !item.isCancelled).toList();
+    // Upper-bound estimate so the operator is never asked to confirm a
+    // cancellation that cannot be applied atomically.
+    ensureCancellationWithinWriteBudget(
+      documentWrites:
+          1 +
+          itemsToCancel.length +
+          itemsToCancel
+              .map((item) => item.kitchenBatchId?.trim() ?? '')
+              .where((id) => id.isNotEmpty)
+              .toSet()
+              .length +
+          (orderUsesPhysicalTables(snapshot.order)
+              ? snapshot.order.linkedTableIds.length
+              : 0) +
+          1,
+      itemCount: itemsToCancel.length,
+    );
+    return _scopeFrom(
+      OrderCancellationKind.cancelOrder,
+      snapshot,
+      itemsToCancelCount: itemsToCancel.length,
+      itemsToCancelTotal: activeOrderItemsTotal(itemsToCancel),
+    );
+  }
+
+  /// Server-read scope for closing an empty draft order; see
+  /// [prepareOrderCancellation].
+  Future<OrderCancellationScope> prepareEmptyOrderClose(String orderId) async {
+    final snapshot = await _readOrderScopeFromServer(orderId);
+    _validateEmptyOrderClosable(
+      snapshot.order,
+      itemCount: snapshot.items.length,
+      paymentCount: snapshot.payments.length,
+    );
+    return _scopeFrom(
+      OrderCancellationKind.closeEmptyOrder,
+      snapshot,
+      itemsToCancelCount: 0,
+      itemsToCancelTotal: 0,
+    );
+  }
+
+  Future<
+    ({
+      PosOrder order,
+      Map<String, dynamic> orderData,
+      List<DocumentSnapshot<Map<String, dynamic>>> items,
+      List<DocumentSnapshot<Map<String, dynamic>>> payments,
+    })
+  >
+  _readOrderScopeFromServer(String orderId) async {
+    const server = GetOptions(source: Source.server);
+    final orderRef = _ordersRef.doc(_requireMutableOrderId(orderId));
+    try {
+      final orderDoc = await orderRef.get(server);
+      final orderData = orderDoc.data();
+      if (!orderDoc.exists || orderData == null) {
+        throw StateError('La orden ya no existe.');
+      }
+      final order = PosOrder.fromDoc(orderDoc);
+      if (isCancelledOrder(order)) {
+        throw StateError('La orden ya habia sido cancelada.');
+      }
+      _ensureOrderInOperationalContext(order);
+      final items = (await orderRef.collection('items').get(server)).docs;
+      final payments = (await orderRef.collection('payments').get(server)).docs;
+      return (
+        order: order,
+        orderData: orderData,
+        items: List<DocumentSnapshot<Map<String, dynamic>>>.of(items),
+        payments: List<DocumentSnapshot<Map<String, dynamic>>>.of(payments),
+      );
+    } catch (error) {
+      if (isOrderMutationConnectivityError(error)) {
+        throw StateError(
+          'Sin conexion con el servidor. No se pudo revisar la orden; verifica '
+          'la conexion y vuelve a intentarlo.',
+        );
+      }
+      rethrow;
+    }
+  }
+
+  OrderCancellationScope _scopeFrom(
+    OrderCancellationKind kind,
+    ({
+      PosOrder order,
+      Map<String, dynamic> orderData,
+      List<DocumentSnapshot<Map<String, dynamic>>> items,
+      List<DocumentSnapshot<Map<String, dynamic>>> payments,
+    })
+    snapshot, {
+    required int itemsToCancelCount,
+    required double itemsToCancelTotal,
+  }) {
+    return OrderCancellationScope(
+      kind: kind,
+      orderId: snapshot.order.id,
+      captureRevision: snapshot.order.captureRevision,
+      orderData: snapshot.orderData,
+      itemsById: {
+        for (final doc in snapshot.items) doc.id: doc.data() ?? const {},
+      },
+      paymentsById: {
+        for (final doc in snapshot.payments) doc.id: doc.data() ?? const {},
+      },
+      itemsToCancelCount: itemsToCancelCount,
+      itemsToCancelTotal: itemsToCancelTotal,
+    );
+  }
+
+  /// Existing whole-order cancellation rules, applied to authoritative data.
+  void _validateOrderCancellable(
+    PosOrder order,
+    List<OrderItem> items,
+    Iterable<Payment> payments,
+  ) {
+    _ensureOrderInOperationalContext(order);
     if (_isPaidStatus(order.paymentStatus) ||
         (order.paidAt != null && order.paidTotal > 0.01)) {
       throw StateError('No se puede cancelar una orden pagada al 100%.');
     }
-
-    final itemsSnapshot = await orderRef.collection('items').get();
-    final items = itemsSnapshot.docs.map(OrderItem.fromDoc).toList();
-    final activeItems = items.where(isActiveOrderItem).toList();
-    if (activeItems.any((item) => item.kitchenStatus == 'ready')) {
+    if (!isActiveOrderState(order)) {
+      throw StateError('La orden ya no esta activa.');
+    }
+    if (items
+        .where(isActiveOrderItem)
+        .any((item) => item.kitchenStatus == 'ready')) {
       throw StateError(
         'No se puede cancelar: hay productos servidos por cocina.',
       );
     }
-
-    final paymentsSnapshot = await orderRef.collection('payments').get();
-    final activePayments = paymentsSnapshot.docs
-        .map(Payment.fromDoc)
-        .where(isActivePayment)
-        .toList();
+    final activePayments = payments.where(isActivePayment).toList();
     final activePaidTotal = activePayments.fold<double>(
       0,
       (total, payment) => total + payment.baseAmount,
@@ -11986,83 +12342,19 @@ class TacoPosRepository {
     if (activePayments.isNotEmpty && activePaidTotal > 0.01) {
       throw StateError('No se puede cancelar: los pagos cierran la orden.');
     }
-
-    final batch = _db.batch();
-    final audit = _employeeAuditFields(prefix: 'cancelledBy');
-    batch.update(orderRef, {
-      'status': 'cancelled',
-      'kitchenStatus': 'cancelled',
-      'paymentStatus': 'cancelled',
-      'total': 0.0,
-      'paidTotal': 0.0,
-      'pendingTotal': 0.0,
-      'cancelledAt': FieldValue.serverTimestamp(),
-      'cancelReason': cleanReason,
-      ...audit,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-
-    for (final doc in itemsSnapshot.docs) {
-      final item = OrderItem.fromDoc(doc);
-      if (item.isCancelled) {
-        continue;
-      }
-      batch.update(doc.reference, {
-        'kitchenStatus': 'cancelled',
-        'paymentStatus': 'cancelled',
-        'cancelledAt': FieldValue.serverTimestamp(),
-        'cancelReason': cleanReason,
-        ...audit,
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-      _logActivityInBatch(
-        batch,
-        type: 'order_item_cancelled',
-        orderId: order.id,
-        data: {
-          'itemId': item.id,
-          'productName': item.productName,
-          'qty': item.qty,
-          'reason': cleanReason,
-        },
-      );
-    }
-
-    _setLinkedTablesStateInBatch(batch, order, release: true);
-
-    _logActivityInBatch(
-      batch,
-      type: 'order_cancelled',
-      orderId: order.id,
-      data: {'reason': cleanReason, 'total': order.total},
-    );
-    await batch.commit();
-    invalidateReportDataCache(
-      branchId: order.branchId,
-      startBusinessDate: order.businessDate,
-      endBusinessDate: order.businessDate,
-    );
   }
 
-  Future<void> cancelEmptyOrder(String orderId) async {
-    final orderDoc = await _ordersRef.doc(orderId).get();
-    if (!orderDoc.exists) {
-      throw StateError('La orden ya no existe.');
-    }
-    final order = PosOrder.fromDoc(orderDoc);
-    final itemsSnapshot = await _ordersRef
-        .doc(orderId)
-        .collection('items')
-        .get();
-    final paymentsSnapshot = await _ordersRef
-        .doc(orderId)
-        .collection('payments')
-        .get();
-
-    if (itemsSnapshot.docs.isNotEmpty) {
+  /// Existing empty-order close rules, applied to authoritative data.
+  void _validateEmptyOrderClosable(
+    PosOrder order, {
+    required int itemCount,
+    required int paymentCount,
+  }) {
+    _ensureOrderInOperationalContext(order);
+    if (itemCount > 0) {
       throw StateError('No se puede cerrar: la orden ya tiene articulos.');
     }
-    if (paymentsSnapshot.docs.isNotEmpty) {
+    if (paymentCount > 0) {
       throw StateError('No se puede cerrar: la orden ya tiene pagos.');
     }
     if (order.status != 'open' ||
@@ -12070,25 +12362,193 @@ class TacoPosRepository {
         ['sent', 'cooking', 'ready'].contains(order.kitchenStatus)) {
       throw StateError('No se puede cerrar: la orden ya fue enviada a cocina.');
     }
+  }
 
-    final batch = _db.batch();
-    batch.update(_ordersRef.doc(orderId), {
-      'status': 'cancelled',
-      'kitchenStatus': 'cancelled',
-      'paymentStatus': 'cancelled',
-      'cancelledAt': FieldValue.serverTimestamp(),
-      ..._employeeAuditFields(prefix: 'cancelledBy'),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
+  String _requireMutableOrderId(String orderId) {
+    final clean = orderId.trim();
+    if (clean.isEmpty || clean.contains('/')) {
+      throw ArgumentError('Orden invalida.');
+    }
+    return clean;
+  }
 
-    _setLinkedTablesStateInBatch(batch, order, release: true);
+  void _ensureOrderInOperationalContext(PosOrder order) {
+    if (!_matchesCurrentBranch(order.branchId)) {
+      throw StateError(
+        'La orden pertenece a otra sucursal. Cambia de sucursal e intenta '
+        'de nuevo.',
+      );
+    }
+  }
 
-    await batch.commit();
-    invalidateReportDataCache(
-      branchId: order.branchId,
-      startBusinessDate: order.businessDate,
-      endBusinessDate: order.businessDate,
+  /// Shared protocol for confirmed order-level cancellations.
+  ///
+  /// Each attempt discovers the order's item, payment and pointing-table
+  /// references from the server and rejects at once a set of items or
+  /// payments different from the confirmed [scope]. The transaction re-reads
+  /// the order and those documents; [body] must call
+  /// [_FencedOrderState.ensureMatchesScope] before writing. A changed scope is
+  /// never retried: rediscovery is not an authorization. Only technical
+  /// contention (`aborted`) on an unchanged scope is retried, within
+  /// [orderMutationMaxAttempts]. Nothing is queued offline.
+  Future<T> _runFencedOrderMutation<T>({
+    required OrderCancellationScope scope,
+    required String operation,
+    required Future<T> Function(
+      Transaction transaction,
+      _FencedOrderState state,
+    )
+    body,
+  }) async {
+    const server = GetOptions(source: Source.server);
+    final orderId = _requireMutableOrderId(scope.orderId);
+    final orderRef = _ordersRef.doc(orderId);
+    for (var attempt = 1; attempt <= orderMutationMaxAttempts; attempt++) {
+      try {
+        final itemRefs = (await orderRef.collection('items').get(server)).docs
+            .map((doc) => doc.reference)
+            .toList(growable: false);
+        final paymentRefs = (await orderRef.collection('payments').get(server))
+            .docs
+            .map((doc) => doc.reference)
+            .toList(growable: false);
+        final pointingTableIds =
+            (await _tablesRef
+                    .where('currentOrderId', isEqualTo: orderId)
+                    .get(server))
+                .docs
+                .map((doc) => doc.id)
+                .toList(growable: false);
+        // A different item or payment set is a different operation.
+        final idChange = describeScopeIdChange(
+          scope: scope,
+          currentItemIds: itemRefs.map((ref) => ref.id),
+          currentPaymentIds: paymentRefs.map((ref) => ref.id),
+        );
+        if (idChange != null) {
+          throw OrderCancellationScopeChanged(idChange, scope.changedMessage);
+        }
+
+        return await _db.runTransaction<T>((transaction) async {
+          final orderDoc = await transaction.get(orderRef);
+          if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+          final items = <DocumentSnapshot<Map<String, dynamic>>>[];
+          for (final ref in itemRefs) {
+            final doc = await transaction.get(ref);
+            if (doc.exists) items.add(doc);
+          }
+          final payments = <DocumentSnapshot<Map<String, dynamic>>>[];
+          for (final ref in paymentRefs) {
+            final doc = await transaction.get(ref);
+            if (doc.exists) payments.add(doc);
+          }
+          return body(
+            transaction,
+            _FencedOrderState(
+              scope: scope,
+              order: PosOrder.fromDoc(orderDoc),
+              orderData: orderDoc.data(),
+              discoveredItemIds: itemRefs.map((ref) => ref.id).toList(),
+              discoveredPaymentIds: paymentRefs.map((ref) => ref.id).toList(),
+              items: items,
+              payments: payments,
+              pointingTableIds: pointingTableIds,
+            ),
+          );
+        });
+      } catch (error) {
+        if (isRetryableOrderMutationError(error)) {
+          developer.log(
+            '[TacoPOS][orderMutation] contention operation=$operation '
+            'attempt=$attempt orderId=$orderId error=$error',
+          );
+          continue;
+        }
+        if (error is OrderCancellationScopeChanged) {
+          developer.log(
+            '[TacoPOS][orderMutation] scope changed operation=$operation '
+            'orderId=$orderId reason=${error.reason}',
+          );
+          rethrow;
+        }
+        if (isOrderMutationConnectivityError(error)) {
+          throw StateError(
+            'Sin conexion con el servidor. No se pudo $operation; verifica la '
+            'conexion y vuelve a intentarlo.',
+          );
+        }
+        rethrow;
+      }
+    }
+    throw StateError(
+      'No se pudo $operation por concurrencia en el servidor. No se hicieron '
+      'cambios; intenta de nuevo.',
     );
+  }
+
+  /// Reads, inside the transaction, every table the cancelled order may still
+  /// hold: the re-read order's linked tables plus tables discovered pointing
+  /// to it. Only tables still owned by the order are released.
+  Future<TableReleasePlan> _readTableReleasePlan(
+    Transaction transaction,
+    _FencedOrderState state,
+  ) async {
+    final order = state.order;
+    final candidates = <String>[
+      if (orderUsesPhysicalTables(order)) ...order.linkedTableIds,
+      ...state.pointingTableIds,
+    ];
+    final owners = <String, String?>{};
+    for (final tableId in candidates.toSet()) {
+      final cleanId = tableId.trim();
+      if (cleanId.isEmpty || cleanId.contains('/')) continue;
+      final tableDoc = await transaction.get(_tablesRef.doc(cleanId));
+      if (tableDoc.exists) {
+        owners[cleanId] = tableDoc.data()?['currentOrderId'] as String?;
+      }
+    }
+    return planTableRelease(
+      orderId: order.id,
+      candidateTableIds: candidates,
+      currentOrderIdByTable: owners,
+    );
+  }
+
+  void _releaseTablesInTransaction(
+    Transaction transaction,
+    Iterable<String> tableIds,
+  ) {
+    for (final tableId in tableIds) {
+      transaction.set(_tablesRef.doc(tableId), {
+        'status': 'available',
+        'currentOrderId': null,
+        'currentOrderStatus': null,
+        'tableGroupId': null,
+        'tableGroupLabel': null,
+        'groupPrimaryTableId': null,
+        'occupiedAt': null,
+        ..._currentBranchFields,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+  }
+
+  Map<String, Object?> _activityLogPayload({
+    required String type,
+    required String orderId,
+    Map<String, Object?> data = const {},
+  }) {
+    final employee = AppSession.instance.employee;
+    return {
+      'type': type,
+      ..._currentBranchFields,
+      ...data,
+      'employeeId': employee?.id ?? '',
+      'employeeName': employee?.name ?? '',
+      'createdAt': FieldValue.serverTimestamp(),
+      'createdBy': _auth.currentUser?.uid ?? 'anonymous',
+      'orderId': orderId,
+    };
   }
 
   Future<int> sendOrderToKitchen(String orderId) async {
@@ -16357,6 +16817,56 @@ class TacoPosRepository {
 
   bool _canManageBranches() {
     return AppSession.instance.employee?.hasAdminAccess == true;
+  }
+}
+
+/// Authoritative documents re-read by [_runFencedOrderMutation].
+class _FencedOrderState {
+  _FencedOrderState({
+    required this.scope,
+    required this.order,
+    required this.orderData,
+    required this.discoveredItemIds,
+    required this.discoveredPaymentIds,
+    required this.items,
+    required this.payments,
+    required this.pointingTableIds,
+  });
+
+  final OrderCancellationScope scope;
+  final PosOrder order;
+  final Map<String, dynamic>? orderData;
+  final List<String> discoveredItemIds;
+  final List<String> discoveredPaymentIds;
+  final List<DocumentSnapshot<Map<String, dynamic>>> items;
+  final List<DocumentSnapshot<Map<String, dynamic>>> payments;
+  final List<String> pointingTableIds;
+
+  /// The server must still hold exactly what the operator confirmed: the same
+  /// order document (fields and `captureRevision`) and the same item and
+  /// payment documents. Any difference, including writers that do not
+  /// increment the revision, requires a new confirmation.
+  void ensureMatchesScope() {
+    final reason =
+        describeScopeIdChange(
+          scope: scope,
+          currentItemIds: discoveredItemIds,
+          currentPaymentIds: discoveredPaymentIds,
+        ) ??
+        describeScopeChange(
+          scope: scope,
+          currentRevision: order.captureRevision,
+          currentOrderData: orderData,
+          currentItemsById: {
+            for (final doc in items) doc.id: doc.data() ?? const {},
+          },
+          currentPaymentsById: {
+            for (final doc in payments) doc.id: doc.data() ?? const {},
+          },
+        );
+    if (reason != null) {
+      throw OrderCancellationScopeChanged(reason, scope.changedMessage);
+    }
   }
 }
 
