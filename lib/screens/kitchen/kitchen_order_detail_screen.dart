@@ -15,16 +15,21 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/glass.dart';
 import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
+import 'kitchen_bundles_feed.dart';
 
 class KitchenOrderDetailScreen extends StatefulWidget {
   const KitchenOrderDetailScreen({
     super.key,
     required this.orderId,
     this.kitchenBatchId = '',
+    this.bundlesFeed,
+    this.repository,
   });
 
   final String orderId;
   final String kitchenBatchId;
+  final KitchenBundlesFeed? bundlesFeed;
+  final TacoPosRepository? repository;
 
   @override
   State<KitchenOrderDetailScreen> createState() =>
@@ -32,10 +37,10 @@ class KitchenOrderDetailScreen extends StatefulWidget {
 }
 
 class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
-  final _repository = TacoPosRepository();
+  late final _repository = widget.repository ?? TacoPosRepository();
   late final Stream<PosOrder?> _orderStream;
   late final Stream<List<OrderItem>> _itemsStream;
-  late final Stream<List<KitchenOrderBundle>> _expressBundlesStream;
+  late final KitchenBundlesFeed _bundlesFeed;
   int _personIndex = 0;
   bool _busy = false;
   bool _returningToList = false;
@@ -48,18 +53,10 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       widget.orderId,
       kitchenBatchId: widget.kitchenBatchId,
     );
-    _expressBundlesStream = _repository.watchKitchenOrderBundles().map((
-      bundles,
-    ) {
-      final currentKey = _currentKitchenKey;
-      return bundles
-          .where(
-            (bundle) =>
-                bundle.isKitchenExpress &&
-                bundle.stableKitchenKey != currentKey,
-          )
-          .toList();
-    });
+    _bundlesFeed =
+        widget.bundlesFeed ??
+        KitchenBundlesFeed(_repository.watchKitchenOrderBundles);
+    _bundlesFeed.start();
     LivePresenceService.instance.update(
       appMode: 'kitchen',
       currentScreen: 'Cocina detalle',
@@ -73,6 +70,12 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
         kitchenBatchId: widget.kitchenBatchId,
       );
     });
+  }
+
+  @override
+  void dispose() {
+    if (widget.bundlesFeed == null) _bundlesFeed.dispose();
+    super.dispose();
   }
 
   String get _currentKitchenKey {
@@ -264,7 +267,8 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                             ),
                             SizedBox(height: gap),
                             _ExpressAlertSlot(
-                              stream: _expressBundlesStream,
+                              feed: _bundlesFeed,
+                              currentKey: _currentKitchenKey,
                               busy: _busy,
                               onOpen: _openExpressBundle,
                             ),
@@ -398,21 +402,37 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
 
 class _ExpressAlertSlot extends StatelessWidget {
   const _ExpressAlertSlot({
-    required this.stream,
+    required this.feed,
+    required this.currentKey,
     required this.busy,
     required this.onOpen,
   });
 
-  final Stream<List<KitchenOrderBundle>> stream;
+  final KitchenBundlesFeed feed;
+  final String currentKey;
   final bool busy;
   final ValueChanged<KitchenOrderBundle> onOpen;
 
   @override
   Widget build(BuildContext context) {
-    return StreamBuilder<List<KitchenOrderBundle>>(
-      stream: stream,
-      builder: (context, snapshot) {
-        final bundles = snapshot.data ?? const [];
+    return ValueListenableBuilder<AsyncSnapshot<List<KitchenOrderBundle>>>(
+      valueListenable: feed,
+      builder: (context, snapshot, child) {
+        if (snapshot.hasError) {
+          return Text(
+            'No se pudieron cargar comandas express: ${snapshot.error}',
+          );
+        }
+        if (!snapshot.hasData) {
+          return const LoadingPanel(message: 'Cargando comandas express...');
+        }
+        final bundles = snapshot.data!
+            .where(
+              (bundle) =>
+                  bundle.isKitchenExpress &&
+                  bundle.stableKitchenKey != currentKey,
+            )
+            .toList();
         if (bundles.isEmpty) return const SizedBox.shrink();
         final bundle = bundles.first;
         return _BlinkingExpressAlert(

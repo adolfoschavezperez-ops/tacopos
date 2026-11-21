@@ -18,9 +18,12 @@ import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
 import '../kitchen_control/kitchen_control_screen.dart';
 import 'kitchen_order_detail_screen.dart';
+import 'kitchen_bundles_feed.dart';
 
 class KitchenScreen extends StatefulWidget {
-  const KitchenScreen({super.key});
+  const KitchenScreen({super.key, this.repository});
+
+  final TacoPosRepository? repository;
 
   @override
   State<KitchenScreen> createState() => _KitchenScreenState();
@@ -28,7 +31,8 @@ class KitchenScreen extends StatefulWidget {
 
 class _KitchenScreenState extends State<KitchenScreen> {
   late final TacoPosRepository _repository;
-  late final Stream<List<KitchenOrderBundle>> _bundlesStream;
+  late final KitchenBundlesFeed _bundlesFeed;
+  late String _bundlesScope;
   late final Future<bool> _kitchenIsOpenFuture;
   final Set<String> _knownKitchenOrderIds = <String>{};
   bool _hasInitializedKitchenOrders = false;
@@ -37,8 +41,9 @@ class _KitchenScreenState extends State<KitchenScreen> {
   @override
   void initState() {
     super.initState();
-    _repository = TacoPosRepository();
-    _bundlesStream = _repository.watchKitchenOrderBundles();
+    _repository = widget.repository ?? TacoPosRepository();
+    _bundlesFeed = KitchenBundlesFeed(_repository.watchKitchenOrderBundles);
+    _bundlesScope = _bundlesFeed.scope;
     unawaited(_repository.reconcileOpenOrdersForKitchen());
     _kitchenIsOpenFuture = _repository
         .hasCompletedOpenKitchenForCurrentBusinessDate();
@@ -47,6 +52,12 @@ class _KitchenScreenState extends State<KitchenScreen> {
       currentScreen: 'Cocina',
       currentAction: 'Viendo comandas',
     );
+  }
+
+  @override
+  void dispose() {
+    _bundlesFeed.dispose();
+    super.dispose();
   }
 
   @override
@@ -84,9 +95,17 @@ class _KitchenScreenState extends State<KitchenScreen> {
             );
           }
 
-          return StreamBuilder<List<KitchenOrderBundle>>(
-            stream: _bundlesStream,
-            builder: (context, snapshot) {
+          _bundlesFeed.start();
+          return ValueListenableBuilder<
+            AsyncSnapshot<List<KitchenOrderBundle>>
+          >(
+            valueListenable: _bundlesFeed,
+            builder: (context, snapshot, child) {
+              if (_bundlesScope != _bundlesFeed.scope) {
+                _bundlesScope = _bundlesFeed.scope;
+                _knownKitchenOrderIds.clear();
+                _hasInitializedKitchenOrders = false;
+              }
               if (snapshot.hasError) {
                 return EmptyState(
                   icon: Icons.error_outline,
@@ -185,6 +204,8 @@ class _KitchenScreenState extends State<KitchenScreen> {
                                 ),
                                 bundle: bundles[index],
                                 compact: compact,
+                                bundlesFeed: _bundlesFeed,
+                                repository: _repository,
                               );
                             },
                           ),
@@ -259,7 +280,9 @@ class _KitchenScreenState extends State<KitchenScreen> {
           'express=${bundle?.isKitchenExpress == true}',
         );
       }
+      final scope = _bundlesFeed.scope;
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || scope != _bundlesFeed.scope) return;
         if (hasExpress) {
           KitchenSoundService.instance.playExpressOrderBeep();
         } else {
@@ -773,10 +796,14 @@ class _KitchenOrderCard extends StatelessWidget {
     super.key,
     required this.bundle,
     required this.compact,
+    required this.bundlesFeed,
+    required this.repository,
   });
 
   final KitchenOrderBundle bundle;
   final bool compact;
+  final KitchenBundlesFeed bundlesFeed;
+  final TacoPosRepository repository;
 
   @override
   Widget build(BuildContext context) {
@@ -800,6 +827,8 @@ class _KitchenOrderCard extends StatelessWidget {
             builder: (_) => KitchenOrderDetailScreen(
               orderId: order.id,
               kitchenBatchId: bundle.kitchenBatchId,
+              bundlesFeed: bundlesFeed,
+              repository: repository,
             ),
           ),
         );
