@@ -1281,6 +1281,10 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final customerName =
+        order.orderType == 'takeout' || order.orderType == 'standing'
+        ? order.customerName?.trim() ?? ''
+        : '';
     return Row(
       children: [
         IconButton(onPressed: onClose, icon: const Icon(Icons.close)),
@@ -1339,6 +1343,17 @@ class _Header extends StatelessWidget {
                     ),
                 ],
               ),
+              if (customerName.isNotEmpty)
+                Text(
+                  'Cliente: $customerName',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: BrandColors.accentYellow,
+                    fontSize: compact ? 14 : 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
               if (personName.trim().isNotEmpty)
                 Text(
                   personName,

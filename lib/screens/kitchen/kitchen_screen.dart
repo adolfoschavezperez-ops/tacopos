@@ -808,12 +808,38 @@ class _KitchenOrderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final order = bundle.order;
+    final customerName =
+        order.orderType == 'takeout' || order.orderType == 'standing'
+        ? order.customerName?.trim() ?? ''
+        : '';
     final style = kitchenStatusStyle(order.kitchenStatus);
     final waitingSince =
         bundle.firstSentToKitchenAt ?? order.sentToKitchenAt ?? order.updatedAt;
     final hasCancellationRequest = bundle.items.any(
       (item) => item.hasCancellationRequested,
     );
+
+    // Named unseated orders need an extra line. Keep their content scrollable
+    // when express/cancellation indicators consume the card's fixed height.
+    Widget customerContent(Column child) {
+      if (customerName.isEmpty) return child;
+      final body = child.children.sublist(0, child.children.length - 2)
+        ..removeWhere((widget) => widget is Spacer);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: body,
+              ),
+            ),
+          ),
+          ...child.children.skip(child.children.length - 2),
+        ],
+      );
+    }
 
     return GlassCard(
       accent: _elapsedColorForStart(waitingSince),
@@ -833,115 +859,133 @@ class _KitchenOrderCard extends StatelessWidget {
           ),
         );
       },
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (bundle.kitchenSequence != null) ...[
-                Text(
-                  '#${bundle.kitchenSequence}',
-                  style: TextStyle(
-                    color: BrandColors.accentYellow,
-                    fontSize: compact ? 24 : 32,
-                    fontWeight: FontWeight.w900,
-                    height: 1,
+      child: customerContent(
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                if (bundle.kitchenSequence != null) ...[
+                  Text(
+                    '#${bundle.kitchenSequence}',
+                    style: TextStyle(
+                      color: BrandColors.accentYellow,
+                      fontSize: compact ? 24 : 32,
+                      fontWeight: FontWeight.w900,
+                      height: 1,
+                    ),
+                  ),
+                  SizedBox(width: compact ? 8 : 12),
+                ],
+                Expanded(
+                  child: Text(
+                    order.displayName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: compact ? 18 : 26,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
-                SizedBox(width: compact ? 8 : 12),
+                StatusBadge(style: style),
               ],
-              Expanded(
-                child: Text(
-                  order.displayName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: compact ? 18 : 26,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-              StatusBadge(style: style),
-            ],
-          ),
-          SizedBox(height: compact ? 4 : 8),
-          if (bundle.isKitchenExpress) ...[
-            _ExpressChip(compact: compact),
-            SizedBox(height: compact ? 5 : 8),
-          ],
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _formatTime(waitingSince),
-                  style: TextStyle(
-                    color: BrandColors.textMuted,
-                    fontWeight: FontWeight.w600,
-                    fontSize: compact ? 12 : 14,
-                  ),
-                ),
-              ),
-              KitchenElapsedBadge(startTime: waitingSince, compact: compact),
-            ],
-          ),
-          const Spacer(),
-          if (hasCancellationRequest) ...[
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-              decoration: BoxDecoration(
-                color: BrandColors.danger.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: BrandColors.danger.withValues(alpha: 0.35),
-                ),
-              ),
-              child: Text(
-                'Cancelacion solicitada',
+            ),
+            SizedBox(height: compact ? 4 : 8),
+            if (customerName.isNotEmpty) ...[
+              Text(
+                'Cliente: $customerName',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: BrandColors.danger,
-                  fontSize: compact ? 13 : 16,
-                  fontWeight: FontWeight.w900,
+                  color: BrandColors.accentYellow,
+                  fontSize: compact ? 14 : 18,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
-            ),
-            SizedBox(height: compact ? 6 : 8),
-          ],
-          _IngredientSummary(bundle: bundle, compact: compact),
-          SizedBox(height: compact ? 6 : 10),
-          Text(
-            bundle.personLabel.isEmpty
-                ? '${bundle.personCount} personas'
-                : bundle.personLabel,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: BrandColors.accentYellow,
-              fontSize: compact ? 14 : 18,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          SizedBox(height: compact ? 8 : 14),
-          Row(
-            children: [
-              Text(
-                'Abrir comanda',
-                style: TextStyle(
-                  color: BrandColors.textMuted,
-                  fontWeight: FontWeight.w700,
-                  fontSize: compact ? 12 : 14,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Icon(
-                Icons.open_in_full,
-                size: compact ? 14 : 16,
-                color: BrandColors.textMuted,
-              ),
+              SizedBox(height: compact ? 4 : 8),
             ],
-          ),
-        ],
+            if (bundle.isKitchenExpress) ...[
+              _ExpressChip(compact: compact),
+              SizedBox(height: compact ? 5 : 8),
+            ],
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _formatTime(waitingSince),
+                    style: TextStyle(
+                      color: BrandColors.textMuted,
+                      fontWeight: FontWeight.w600,
+                      fontSize: compact ? 12 : 14,
+                    ),
+                  ),
+                ),
+                KitchenElapsedBadge(startTime: waitingSince, compact: compact),
+              ],
+            ),
+            const Spacer(),
+            if (hasCancellationRequest) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: BrandColors.danger.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: BrandColors.danger.withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Text(
+                  'Cancelacion solicitada',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: BrandColors.danger,
+                    fontSize: compact ? 13 : 16,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              SizedBox(height: compact ? 6 : 8),
+            ],
+            _IngredientSummary(bundle: bundle, compact: compact),
+            SizedBox(height: compact ? 6 : 10),
+            Text(
+              bundle.personLabel.isEmpty
+                  ? '${bundle.personCount} personas'
+                  : bundle.personLabel,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: BrandColors.accentYellow,
+                fontSize: compact ? 14 : 18,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            SizedBox(height: compact ? 8 : 14),
+            Row(
+              children: [
+                Text(
+                  'Abrir comanda',
+                  style: TextStyle(
+                    color: BrandColors.textMuted,
+                    fontWeight: FontWeight.w700,
+                    fontSize: compact ? 12 : 14,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.open_in_full,
+                  size: compact ? 14 : 16,
+                  color: BrandColors.textMuted,
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
