@@ -22,17 +22,23 @@ import 'takeout_orders_screen.dart';
 const IconData takeoutEntryIcon = Icons.two_wheeler;
 
 class TablesScreen extends StatefulWidget {
-  const TablesScreen({super.key});
+  const TablesScreen({super.key, this.repository});
+
+  final TacoPosRepository? repository;
 
   @override
   State<TablesScreen> createState() => _TablesScreenState();
 }
 
 class _TablesScreenState extends State<TablesScreen> {
-  final _repository = TacoPosRepository();
+  late TacoPosRepository _repository = widget.repository ?? TacoPosRepository();
   final _scrollController = ScrollController(keepScrollOffset: false);
   late Future<GhostOrderReconciliationResult> _reconciliation;
   late Stream<List<PosTable>> _tables;
+  late Stream<List<PosOrder>> _orders;
+  late String _branchId;
+  late String _restaurantId;
+  int _streamGeneration = 0;
   bool _opening = false;
   bool _selectingTables = false;
   final Set<String> _selectedTableIds = {};
@@ -40,22 +46,55 @@ class _TablesScreenState extends State<TablesScreen> {
   @override
   void initState() {
     super.initState();
-    _reconciliation = _repository.reconcileGhostOrdersAndTableLinks(
-      branchId: AppSession.instance.currentBranchId,
-      triggeredBy: 'waiter_tables',
-    );
-    _tables = _watchTablesAfterReconciliation();
+    _branchId = AppSession.instance.currentBranchId;
+    _restaurantId = AppSession.instance.currentRestaurantId;
+    _bindBranchStreams();
+    AppSession.instance.addListener(_onSessionChanged);
     _markViewingTables();
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
   }
 
-  Stream<List<PosTable>> _watchTablesAfterReconciliation() async* {
-    await _reconciliation;
-    yield* _repository.watchTables();
+  void _bindBranchStreams() {
+    _streamGeneration++;
+    _reconciliation = _repository.reconcileGhostOrdersAndTableLinks(
+      branchId: _branchId,
+      triggeredBy: 'waiter_tables',
+    );
+    _tables = _watchTablesAfterReconciliation(_reconciliation, _repository);
+    _orders = _repository.watchOpenOrders();
+  }
+
+  @override
+  void didUpdateWidget(covariant TablesScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(widget.repository, oldWidget.repository)) return;
+    _repository = widget.repository ?? TacoPosRepository();
+    _bindBranchStreams();
+  }
+
+  void _onSessionChanged() {
+    final branchId = AppSession.instance.currentBranchId;
+    final restaurantId = AppSession.instance.currentRestaurantId;
+    if (branchId == _branchId && restaurantId == _restaurantId) return;
+    _branchId = branchId;
+    _restaurantId = restaurantId;
+    _selectedTableIds.clear();
+    _selectingTables = false;
+    _bindBranchStreams();
+    setState(() {});
+  }
+
+  Stream<List<PosTable>> _watchTablesAfterReconciliation(
+    Future<GhostOrderReconciliationResult> reconciliation,
+    TacoPosRepository repository,
+  ) async* {
+    await reconciliation;
+    yield* repository.watchTables();
   }
 
   @override
   void dispose() {
+    AppSession.instance.removeListener(_onSessionChanged);
     _scrollController.dispose();
     super.dispose();
   }
@@ -438,6 +477,7 @@ class _TablesScreenState extends State<TablesScreen> {
           ),
       ],
       body: StreamBuilder<List<PosTable>>(
+        key: ValueKey('tables-$_restaurantId-$_branchId-$_streamGeneration'),
         stream: _tables,
         builder: (context, snapshot) {
           if (snapshot.hasError) {
@@ -460,7 +500,7 @@ class _TablesScreenState extends State<TablesScreen> {
           }
 
           return StreamBuilder<List<PosOrder>>(
-            stream: _repository.watchOpenOrders(),
+            stream: _orders,
             initialData: const [],
             builder: (context, ordersSnapshot) {
               if (ordersSnapshot.hasError) {
