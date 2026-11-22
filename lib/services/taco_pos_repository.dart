@@ -208,6 +208,10 @@ class _KitchenSendTransactionResult {
   final int sentCount;
 }
 
+class _OrderRecalculationConflict implements Exception {
+  const _OrderRecalculationConflict();
+}
+
 class LiveStandingOrderBundle {
   const LiveStandingOrderBundle({
     required this.order,
@@ -16465,61 +16469,93 @@ class TacoPosRepository {
     }
   }
 
-  Future<void> recalculateOrderTotal(
-    String orderId, {
-    Source source = Source.serverAndCache,
-  }) async {
+  Future<void> recalculateOrderTotal(String orderId) async {
     final orderRef = _ordersRef.doc(orderId);
-    final expectedOrderDoc = await orderRef.get(GetOptions(source: source));
-    if (!expectedOrderDoc.exists) throw StateError('La orden ya no existe.');
-    final expectedRevision = PosOrder.fromDoc(expectedOrderDoc).captureRevision;
-    final itemsSnapshot = await orderRef
-        .collection('items')
-        .get(GetOptions(source: source));
-    final itemRefs = itemsSnapshot.docs
-        .map((doc) => orderRef.collection('items').doc(doc.id))
-        .toList();
-    final payments = await getOrderPaymentsOnce(orderId, source: source);
-    // Reading every currently known item in the transaction makes a concurrent
-    // item edit retry this calculation.  More importantly, terminal orders are
-    // deliberately a no-op: recalculation must never reopen a paid sale.
-    await _db.runTransaction((transaction) async {
-      final orderDoc = await transaction.get(orderRef);
-      if (!orderDoc.exists) throw StateError('La orden ya no existe.');
-      final order = PosOrder.fromDoc(orderDoc);
-      if (!isActiveOrderState(order)) return;
-      if (order.captureRevision != expectedRevision) {
-        throw StateError(
-          'La orden cambio durante el recálculo. Actualiza y reintenta.',
-        );
-      }
-      final freshItems = <OrderItem>[];
-      for (final itemRef in itemRefs) {
-        final itemDoc = await transaction.get(itemRef);
-        if (itemDoc.exists) freshItems.add(OrderItem.fromDoc(itemDoc));
-      }
-      final total = activeOrderItemsTotal(freshItems);
-      final totals = reconcileOrderPayments(
-        orderGrossTotal: total,
-        activePayments: payments
-            .where(isCanonicalActivePayment)
-            .map(PaymentSettlementInput.fromPayment),
+    var readSource = Source.server;
+    const maxDiscoveryAttempts = 3;
+    for (var attempt = 0; attempt < maxDiscoveryAttempts; attempt++) {
+      final expectedOrderDoc = await orderRef.get(
+        GetOptions(source: readSource),
       );
-      transaction.update(orderRef, {
-        'total': total,
-        'grossSubtotal': total,
-        'netTotal': totals.netTotal,
-        'discountAmount': totals.discountAmount,
-        'totalDiscountAmount': totals.discountAmount,
-        'monetaryPaid': totals.monetaryPaid,
-        'totalLiquidated': totals.totalLiquidated,
-        'paidTotal': totals.paidTotal,
-        'pendingTotal': totals.pendingTotal,
-        'paymentStatus': totals.paymentStatus,
-        'captureRevision': FieldValue.increment(1),
-        'updatedAt': FieldValue.serverTimestamp(),
-      });
-    });
+      if (!expectedOrderDoc.exists) {
+        throw StateError('La orden ya no existe.');
+      }
+      final expectedRevision = PosOrder.fromDoc(
+        expectedOrderDoc,
+      ).captureRevision;
+      final itemsSnapshot = await orderRef
+          .collection('items')
+          .get(GetOptions(source: readSource));
+      final itemRefs = itemsSnapshot.docs
+          .map((doc) => orderRef.collection('items').doc(doc.id))
+          .toList(growable: false);
+      final payments = await getOrderPaymentsOnce(orderId, source: readSource);
+
+      try {
+        // A changed revision means our pre-transaction discovery is stale.
+        // Retry the entire discovery, and switch to server reads after the
+        // first conflict so a stale local cache cannot repeat the same failure.
+        await _db.runTransaction((transaction) async {
+          final orderDoc = await transaction.get(orderRef);
+          if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+          final order = PosOrder.fromDoc(orderDoc);
+          if (!isActiveOrderState(order)) return;
+          if (order.captureRevision != expectedRevision) {
+            throw const _OrderRecalculationConflict();
+          }
+
+          final freshItems = <OrderItem>[];
+          for (final itemRef in itemRefs) {
+            final itemDoc = await transaction.get(itemRef);
+            if (itemDoc.exists) freshItems.add(OrderItem.fromDoc(itemDoc));
+          }
+          final total = activeOrderItemsTotal(freshItems);
+          final totals = reconcileOrderPayments(
+            orderGrossTotal: total,
+            activePayments: payments
+                .where(isCanonicalActivePayment)
+                .map(PaymentSettlementInput.fromPayment),
+          );
+          final current = orderDoc.data() ?? const <String, dynamic>{};
+          final updates = <String, Object?>{
+            'total': total,
+            'grossSubtotal': total,
+            'netTotal': totals.netTotal,
+            'discountAmount': totals.discountAmount,
+            'totalDiscountAmount': totals.discountAmount,
+            'monetaryPaid': totals.monetaryPaid,
+            'totalLiquidated': totals.totalLiquidated,
+            'paidTotal': totals.paidTotal,
+            'pendingTotal': totals.pendingTotal,
+            'paymentStatus': totals.paymentStatus,
+          };
+          final changed = updates.entries.any((entry) {
+            final actual = current[entry.key];
+            final expected = entry.value;
+            if (expected is num) {
+              return actual is! num || actual.toDouble() != expected.toDouble();
+            }
+            return actual != expected;
+          });
+          if (!changed) return;
+
+          transaction.update(orderRef, {
+            ...updates,
+            'captureRevision': FieldValue.increment(1),
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+        });
+        return;
+      } on _OrderRecalculationConflict {
+        readSource = Source.server;
+        if (attempt + 1 == maxDiscoveryAttempts) {
+          throw StateError(
+            'La orden sigue cambiando durante el recálculo. '
+            'Actualiza e intenta de nuevo.',
+          );
+        }
+      }
+    }
   }
 
   Future<void> saveProduct({

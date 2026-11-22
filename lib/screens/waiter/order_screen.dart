@@ -301,10 +301,6 @@ class _OrderScreenState extends State<OrderScreen> {
     });
     try {
       await _repository.flushPendingMutations(operationOrderId);
-      await _repository.recalculateOrderTotal(
-        operationOrderId,
-        source: Source.server,
-      );
       await _repository.prepareOrderForCheckout(
         operationOrderId,
         source: Source.server,

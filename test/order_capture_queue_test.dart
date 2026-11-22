@@ -94,6 +94,27 @@ void main() {
     queue.dispose();
   });
 
+  test(
+    'flush reuses a completed recalculation for the same generation',
+    () async {
+      final queue = OrderCaptureQueue();
+      var recalculations = 0;
+      final mutation = queue.enqueue(
+        'order',
+        () async {},
+        recalculate: () async => recalculations++,
+      );
+      await mutation;
+      await Future<void>.delayed(Duration.zero);
+      expect(recalculations, 1);
+
+      await queue.flush('order', recalculate: () async => recalculations++);
+
+      expect(recalculations, 1);
+      queue.dispose();
+    },
+  );
+
   test('waits for the queue to drain before recalculating', () async {
     final queue = OrderCaptureQueue();
     final release = Completer<void>();
@@ -257,26 +278,50 @@ void main() {
     queue.dispose();
   });
 
+  test('flush retries a failed background reconciliation once', () async {
+    final queue = OrderCaptureQueue();
+    var attempts = 0;
+    await queue.enqueue(
+      'order',
+      () async {},
+      recalculate: () async {
+        attempts++;
+        throw StateError('temporary conflict');
+      },
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(attempts, 1);
+    await queue.flush('order', recalculate: () async => attempts++);
+    expect(attempts, 2);
+    queue.dispose();
+  });
+
   test(
-    'failed background reconciliation blocks checkout without retry loop',
+    'flush recovers when an in-flight background reconciliation fails',
     () async {
       final queue = OrderCaptureQueue();
+      final started = Completer<void>();
+      final release = Completer<void>();
       var attempts = 0;
-      await queue.enqueue(
+      final mutation = queue.enqueue(
         'order',
         () async {},
         recalculate: () async {
           attempts++;
-          throw StateError('reconciliation failed');
+          if (attempts == 1) {
+            started.complete();
+            await release.future;
+            throw StateError('transient revision conflict');
+          }
         },
       );
-      await Future<void>.delayed(Duration.zero);
-      expect(attempts, 1);
-      await expectLater(
-        queue.flush('order', recalculate: () async {}),
-        throwsStateError,
-      );
-      await queue.flush('order', recalculate: () async {});
+      await mutation;
+      await started.future;
+      final flush = queue.flush('order', recalculate: () async => attempts++);
+      release.complete();
+
+      await flush;
+      expect(attempts, 2);
       queue.dispose();
     },
   );

@@ -17,7 +17,7 @@ void main() {
     () async {
       final db = _Firestore();
       final repository = TacoPosRepository(firestore: db, auth: _Auth());
-      await repository.recalculateOrderTotal('order', source: Source.server);
+      await repository.recalculateOrderTotal('order');
       final order = await repository.getOrderOnce(
         'order',
         source: Source.server,
@@ -47,13 +47,80 @@ void main() {
       final db = _Firestore()..serverUnavailable = true;
       final repository = TacoPosRepository(firestore: db, auth: _Auth());
       await expectLater(
-        repository.recalculateOrderTotal('order', source: Source.server),
+        repository.recalculateOrderTotal('order'),
         throwsStateError,
       );
       await expectLater(
         repository.getOrderOnce('order', source: Source.server),
         throwsStateError,
       );
+      expect(db.orderData['total'], 100);
+    },
+  );
+
+  test(
+    'recalculation rediscovers server state after a concurrent revision',
+    () async {
+      final db = _Firestore();
+      db.beforeTransaction = () {
+        if (db.transactionRuns == 1) {
+          // Simulate a concurrent capture/kitchen update after item discovery.
+          db.orderData['captureRevision'] = 1;
+          db.orderData['kitchenStatus'] = 'sent';
+          db.itemAmounts.add(50);
+        }
+      };
+      final repository = TacoPosRepository(firestore: db, auth: _Auth());
+
+      await repository.recalculateOrderTotal('order');
+
+      expect(db.transactionRuns, 2);
+      expect(
+        db.reads.where((read) => read.$1 == _orderPath).first.$2,
+        Source.server,
+      );
+      expect(
+        db.reads.where((read) => read.$1 == _orderPath).elementAt(2).$2,
+        Source.server,
+      );
+      expect(db.orderData['total'], 240);
+      expect(db.orderData['captureRevision'], 2);
+    },
+  );
+
+  test('unchanged aggregates do not increment captureRevision again', () async {
+    final db = _Firestore();
+    final repository = TacoPosRepository(firestore: db, auth: _Auth());
+
+    await repository.recalculateOrderTotal('order');
+    final firstRevision = db.orderData['captureRevision'];
+    await repository.recalculateOrderTotal('order');
+
+    expect(firstRevision, 1);
+    expect(db.orderData['captureRevision'], firstRevision);
+  });
+
+  test(
+    'repeated concurrent changes stop after bounded server retries',
+    () async {
+      final db = _Firestore();
+      db.beforeTransaction = () {
+        db.orderData['captureRevision'] =
+            ((db.orderData['captureRevision'] as num?) ?? 0) + 1;
+      };
+      final repository = TacoPosRepository(firestore: db, auth: _Auth());
+
+      await expectLater(
+        repository.recalculateOrderTotal('order'),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            contains('sigue cambiando'),
+          ),
+        ),
+      );
+      expect(db.transactionRuns, 3);
       expect(db.orderData['total'], 100);
     },
   );
@@ -114,6 +181,9 @@ class _Auth implements FirebaseAuth {
 class _Firestore implements FirebaseFirestore {
   final reads = <(String, Source)>[];
   bool serverUnavailable = false;
+  int transactionRuns = 0;
+  void Function()? beforeTransaction;
+  final itemAmounts = [100, 30, 40, 20];
   final orderData = <String, dynamic>{
     'total': 100,
     'paidTotal': 0,
@@ -134,6 +204,8 @@ class _Firestore implements FirebaseFirestore {
     Duration timeout = const Duration(seconds: 30),
     int maxAttempts = 5,
   }) {
+    transactionRuns++;
+    beforeTransaction?.call();
     return transactionHandler(_Transaction(this));
   }
 
@@ -162,7 +234,7 @@ class _Collection implements CollectionReference<Map<String, dynamic>> {
 
   _Query _query(_Metadata metadata) => _Query([
     if (path.endsWith('/items'))
-      for (final amount in [100, 30, 40, 20])
+      for (final amount in db.itemAmounts)
         _Snapshot('item-$amount', {
           'total': amount,
           'unitPrice': amount,
@@ -267,7 +339,10 @@ class _Transaction implements Transaction {
   Transaction update(DocumentReference documentRef, Map<Object, Object?> data) {
     if (documentRef.path.endsWith('/orders/order')) {
       for (final entry in data.entries) {
-        if (entry.value is! FieldValue) {
+        if (entry.key == 'captureRevision' && entry.value is FieldValue) {
+          db.orderData[entry.key as String] =
+              ((db.orderData[entry.key] as num?) ?? 0) + 1;
+        } else if (entry.value is! FieldValue) {
           db.orderData[entry.key as String] = entry.value;
         }
       }

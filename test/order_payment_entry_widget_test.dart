@@ -469,15 +469,17 @@ class _CheckoutRepository implements TacoPosRepository {
   @override
   Future<void> flushPendingMutations(String orderId) async {
     _stage('flush');
-    await queue.flush(orderId, recalculate: () async {});
+    await queue.flush(
+      orderId,
+      recalculate: () async {
+        _stage('recalculate-server');
+        order = _reconciledOrder();
+      },
+    );
   }
 
   @override
-  Future<void> recalculateOrderTotal(
-    String orderId, {
-    Source source = Source.serverAndCache,
-  }) async {
-    expectSync(source, Source.server);
+  Future<void> recalculateOrderTotal(String orderId) async {
     _stage('recalculate-server');
     order = _reconciledOrder();
   }
@@ -521,10 +523,17 @@ class _CheckoutRepository implements TacoPosRepository {
     String? itemId,
     String? operationId,
   }) {
-    return queue.enqueue(orderId, () async {
-      await writeGate?.future;
-      items.add(_item(itemId!, product.price));
-    }, recalculate: () async {});
+    return queue.enqueue(
+      orderId,
+      () async {
+        await writeGate?.future;
+        items.add(_item(itemId!, product.price));
+      },
+      recalculate: () async {
+        _stage('recalculate-server');
+        order = _reconciledOrder();
+      },
+    );
   }
 
   @override

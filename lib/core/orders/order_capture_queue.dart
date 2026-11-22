@@ -153,25 +153,50 @@ class OrderCaptureQueue {
     required Future<void> Function() recalculate,
   }) async {
     final state = _states.putIfAbsent(orderId, _OrderQueueState.new);
-    state.requestRecalculate();
+    var retriedFailedBackgroundRecalculation = false;
     while (true) {
       final tail = state._tail;
       await tail;
       // A mutation can arrive while a previous write/recalculation is awaited.
       if (tail != state._tail || state.queueDepth != 0) continue;
-      state.throwPendingFailure();
-      state.drainRecalculate(
-        recalculate,
-        onStage: () {},
-        onComplete: () {},
-        onEvent: (_, _) {},
-      );
+      state.throwPendingMutationFailure();
+      // Retry a failed background reconciliation with this explicit flush.
+      // A failed capture write still blocks checkout because its outcome may
+      // not be known to this client.
+      state._pendingRecalculationFailure = null;
+      final hadBackgroundRecalculation = state.recalculateInFlight != null;
+      if (!hadBackgroundRecalculation && !state._recalculateRequested) {
+        if (state._recalculatedGeneration < state.generation) {
+          state.requestRecalculate();
+        }
+      }
+      if (state.recalculateInFlight == null) {
+        state.drainRecalculate(
+          recalculate,
+          onStage: () {},
+          onComplete: () {},
+          onEvent: (_, _) {},
+        );
+      }
       final running = state.recalculateInFlight;
       if (running != null) {
         // The queue records failures for flush, including background failures.
         await running.then<void>((_) {}, onError: (Object _) {});
       }
-      state.throwPendingFailure();
+      state.throwPendingMutationFailure();
+      final recalculationFailure = state.takePendingRecalculationFailure();
+      if (recalculationFailure != null) {
+        if (hadBackgroundRecalculation &&
+            !retriedFailedBackgroundRecalculation) {
+          retriedFailedBackgroundRecalculation = true;
+          state.requestRecalculate();
+          continue;
+        }
+        Error.throwWithStackTrace(
+          recalculationFailure.error,
+          recalculationFailure.stackTrace,
+        );
+      }
       if (tail == state._tail &&
           state.queueDepth == 0 &&
           !state._recalculateRequested) {
@@ -190,9 +215,11 @@ class _OrderQueueState {
   bool _recalculateRequested = false;
   int queueDepth = 0;
   int generation = 0;
+  int _recalculatedGeneration = -1;
   int burstId = 0;
   bool _burstOpen = false;
-  AsyncError? _pendingFailure;
+  AsyncError? _pendingMutationFailure;
+  AsyncError? _pendingRecalculationFailure;
   Future<void> Function()? _recalculate;
   void Function()? _onRecalculateStage;
   void Function()? _onRecalculateComplete;
@@ -218,17 +245,23 @@ class _OrderQueueState {
       });
     });
     _tail = result.catchError((Object error, StackTrace stackTrace) {
-      _pendingFailure ??= AsyncError(error, stackTrace);
+      _pendingMutationFailure ??= AsyncError(error, stackTrace);
     });
     return result;
   }
 
-  void throwPendingFailure() {
-    final failure = _pendingFailure;
-    _pendingFailure = null;
+  void throwPendingMutationFailure() {
+    final failure = _pendingMutationFailure;
+    _pendingMutationFailure = null;
     if (failure != null) {
       Error.throwWithStackTrace(failure.error, failure.stackTrace);
     }
+  }
+
+  AsyncError? takePendingRecalculationFailure() {
+    final failure = _pendingRecalculationFailure;
+    _pendingRecalculationFailure = null;
+    return failure;
   }
 
   void requestRecalculate() {
@@ -262,6 +295,7 @@ class _OrderQueueState {
         onComplete();
         onEvent('RECALC_END', recalcGeneration);
         if (queueDepth > 0) return;
+        _recalculatedGeneration = recalcGeneration;
       } while (_recalculateAgain);
       _recalculateRequested = false;
     }();
@@ -270,7 +304,7 @@ class _OrderQueueState {
       operation.then(
         (_) => _finishRecalculate(),
         onError: (Object error, StackTrace stackTrace) {
-          _pendingFailure ??= AsyncError(error, stackTrace);
+          _pendingRecalculationFailure ??= AsyncError(error, stackTrace);
           // Keep the error for checkout and retry only on an explicit flush or
           // a new mutation, rather than repeatedly retrying in microtasks.
           _recalculateRequested = false;
