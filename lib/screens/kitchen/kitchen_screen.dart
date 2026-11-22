@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -36,9 +37,12 @@ class _KitchenScreenState extends State<KitchenScreen> {
   late String _bundlesScope;
   late Future<bool> _kitchenIsOpenFuture;
   final _actionsReady = ValueNotifier(false);
+  final _actionValidationError = ValueNotifier<String?>(null);
   bool _wasConfirmed = false;
   bool _validatingActions = false;
   bool _reconciled = false;
+  int _actionValidationRetries = 0;
+  Timer? _actionValidationRetry;
   late String _actionScope;
   final Set<String> _knownKitchenOrderIds = <String>{};
   bool _hasInitializedKitchenOrders = false;
@@ -72,8 +76,10 @@ class _KitchenScreenState extends State<KitchenScreen> {
   @override
   void dispose() {
     _bundlesFeed.removeListener(_onSynchronization);
+    _actionValidationRetry?.cancel();
     _bundlesFeed.dispose();
     _actionsReady.dispose();
+    _actionValidationError.dispose();
     super.dispose();
   }
 
@@ -82,6 +88,11 @@ class _KitchenScreenState extends State<KitchenScreen> {
       _actionScope = _bundlesFeed.scope;
       _reconciled = false;
       _wasConfirmed = false;
+      _actionsReady.value = false;
+      _actionValidationError.value = null;
+      _actionValidationRetries = 0;
+      _actionValidationRetry?.cancel();
+      _actionValidationRetry = null;
       final validation = _repository
           .hasCompletedOpenKitchenForCurrentBusinessDate();
       unawaited(validation.then((_) {}, onError: (Object error) {}));
@@ -90,8 +101,18 @@ class _KitchenScreenState extends State<KitchenScreen> {
       });
     }
     final confirmed = _bundlesFeed.syncState.isConfirmed;
-    if (!confirmed) _actionsReady.value = false;
-    if (confirmed && !_wasConfirmed) unawaited(_validateActions());
+    if (!confirmed) {
+      _actionsReady.value = false;
+      _actionValidationError.value = null;
+      _actionValidationRetry?.cancel();
+      _actionValidationRetry = null;
+    }
+    if (confirmed && !_wasConfirmed) {
+      _actionValidationRetries = 0;
+      _actionValidationRetry?.cancel();
+      _actionValidationRetry = null;
+      unawaited(_validateActions());
+    }
     _wasConfirmed = confirmed;
   }
 
@@ -115,13 +136,22 @@ class _KitchenScreenState extends State<KitchenScreen> {
           !_bundlesFeed.syncState.isConfirmed) {
         return;
       }
+      _actionValidationRetries = 0;
+      _actionValidationRetry?.cancel();
+      _actionValidationRetry = null;
       _actionsReady.value = open;
+      _actionValidationError.value = null;
       if (open && !_reconciled) {
         _reconciled = true;
         await _repository.reconcileOpenOrdersForKitchen();
       }
     } catch (error) {
       debugPrint('Kitchen action validation/reconciliation unavailable.');
+      _reconciled = false;
+      _actionValidationError.value = error.toString();
+      if (_isRecoverableActionValidationError(error)) {
+        _scheduleActionValidationRetry(scope);
+      }
     } finally {
       _validatingActions = false;
       if (mounted &&
@@ -130,6 +160,50 @@ class _KitchenScreenState extends State<KitchenScreen> {
         unawaited(_validateActions());
       }
     }
+  }
+
+  bool _isRecoverableActionValidationError(Object error) =>
+      error is FirebaseException &&
+      const {
+        'unavailable',
+        'deadline-exceeded',
+        'aborted',
+        'internal',
+        'resource-exhausted',
+      }.contains(error.code);
+
+  bool _scheduleActionValidationRetry(String scope) {
+    const delays = [
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+      Duration(seconds: 15),
+    ];
+    if (!mounted ||
+        scope != _bundlesFeed.scope ||
+        !_bundlesFeed.syncState.isConfirmed ||
+        _actionValidationRetries >= delays.length ||
+        _actionValidationRetry != null) {
+      return false;
+    }
+    final delay = delays[_actionValidationRetries++];
+    _actionValidationRetry = Timer(delay, () {
+      _actionValidationRetry = null;
+      if (mounted &&
+          scope == _bundlesFeed.scope &&
+          _bundlesFeed.syncState.isConfirmed) {
+        unawaited(_validateActions());
+      }
+    });
+    return true;
+  }
+
+  void _retryActionValidation() {
+    if (!mounted || !_bundlesFeed.syncState.isConfirmed) return;
+    _actionValidationRetry?.cancel();
+    _actionValidationRetry = null;
+    _actionValidationRetries = 0;
+    _actionValidationError.value = null;
+    unawaited(_validateActions());
   }
 
   @override
@@ -266,6 +340,8 @@ class _KitchenScreenState extends State<KitchenScreen> {
                                   bundlesFeed: _bundlesFeed,
                                   repository: _repository,
                                   actionsReady: _actionsReady,
+                                  actionValidationError: _actionValidationError,
+                                  onRetryActions: _retryActionValidation,
                                 );
                               },
                             ),
@@ -287,6 +363,11 @@ class _KitchenScreenState extends State<KitchenScreen> {
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       KitchenSyncBanner(state: _bundlesFeed.syncState),
+      KitchenActionRecoveryBanner(
+        error: _actionValidationError,
+        isConfirmed: _bundlesFeed.syncState.isConfirmed,
+        onRetry: _retryActionValidation,
+      ),
       Expanded(child: child),
     ],
   );
@@ -879,6 +960,8 @@ class _KitchenOrderCard extends StatelessWidget {
     required this.bundlesFeed,
     required this.repository,
     required this.actionsReady,
+    required this.actionValidationError,
+    required this.onRetryActions,
   });
 
   final KitchenOrderBundle bundle;
@@ -886,6 +969,8 @@ class _KitchenOrderCard extends StatelessWidget {
   final KitchenBundlesFeed bundlesFeed;
   final TacoPosRepository repository;
   final ValueNotifier<bool> actionsReady;
+  final ValueNotifier<String?> actionValidationError;
+  final VoidCallback onRetryActions;
 
   @override
   Widget build(BuildContext context) {
@@ -938,6 +1023,8 @@ class _KitchenOrderCard extends StatelessWidget {
               bundlesFeed: bundlesFeed,
               repository: repository,
               actionsReady: actionsReady,
+              actionValidationError: actionValidationError,
+              onRetryActions: onRetryActions,
             ),
           ),
         );

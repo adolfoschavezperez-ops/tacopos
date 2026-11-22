@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -26,6 +27,8 @@ class KitchenOrderDetailScreen extends StatefulWidget {
     this.repository,
     this.allowActions = true,
     this.actionsReady,
+    this.actionValidationError,
+    this.onRetryActions,
   });
 
   final String orderId;
@@ -34,6 +37,8 @@ class KitchenOrderDetailScreen extends StatefulWidget {
   final TacoPosRepository? repository;
   final bool allowActions;
   final ValueNotifier<bool>? actionsReady;
+  final ValueListenable<String?>? actionValidationError;
+  final VoidCallback? onRetryActions;
 
   @override
   State<KitchenOrderDetailScreen> createState() =>
@@ -290,6 +295,13 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         KitchenSyncBanner(state: state),
+                        if (widget.actionValidationError != null &&
+                            widget.onRetryActions != null)
+                          KitchenActionRecoveryBanner(
+                            error: widget.actionValidationError!,
+                            isConfirmed: state.isConfirmed,
+                            onRetry: widget.onRetryActions!,
+                          ),
                         _Header(
                           order: order,
                           kitchenSequence: personItems.first.kitchenSequence,

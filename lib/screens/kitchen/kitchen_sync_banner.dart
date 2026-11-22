@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../services/kitchen_sync_state.dart';
@@ -50,4 +51,57 @@ class KitchenSyncBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+class KitchenActionRecoveryBanner extends StatelessWidget {
+  const KitchenActionRecoveryBanner({
+    super.key,
+    required this.error,
+    required this.isConfirmed,
+    required this.onRetry,
+  });
+
+  final ValueListenable<String?> error;
+  final bool isConfirmed;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<String?>(
+    valueListenable: error,
+    builder: (context, message, child) {
+      if (message == null) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Colors.red.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.red.withValues(alpha: 0.45)),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                const Icon(Icons.sync_problem, color: Colors.redAccent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'No se pudieron habilitar las acciones de Cocina: $message',
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                TextButton(
+                  onPressed: isConfirmed ? onRetry : null,
+                  child: const Text('Reintentar'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }

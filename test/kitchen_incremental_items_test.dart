@@ -344,6 +344,149 @@ void main() {
   );
 
   testWidgets(
+    'Kitchen actions recover after transient open-session validation errors',
+    (tester) async {
+      debugPrint = tester.binding.debugPrintOverride;
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      AppSession.instance.signIn(Employee.fromDoc(_KitchenEmployeeDoc()));
+      await LivePresenceService.instance.stop();
+
+      final repo = _KitchenUiRepository()
+        ..open = true
+        ..openValidationFailuresRemaining = 2;
+      await tester.pumpWidget(
+        MaterialApp(home: KitchenScreen(repository: repo)),
+      );
+      await _pumpUi(tester);
+      repo.db.orders.emit({'a': _order()});
+      repo.db.items('a').emit({
+        'person-1': _item(personNumber: 1),
+        'person-2': _item(personNumber: 2),
+      });
+      await _pumpUi(tester);
+      expect(repo.markedCooking, 0);
+      await tester.tap(find.text('Abrir comanda').first);
+      await _pumpUi(tester);
+      expect(find.byType(KitchenOrderDetailScreen), findsOneWidget);
+      expect(find.text('Siguiente plato'), findsOneWidget);
+      await tester.tap(find.text('Siguiente plato'));
+      await tester.pump();
+      expect(find.text('Listo'), findsNothing);
+
+      // The feed stays server-confirmed while the separate kitchen-session
+      // validation fails twice. The bounded retry must unlock only after the
+      // repository confirms that the kitchen is open.
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      await tester.pump();
+      expect(repo.openValidations, 3);
+      expect(repo.markedCooking, 1);
+
+      await tester.tap(find.text('Siguiente plato'));
+      await _pumpUi(tester);
+      expect(find.text('Listo'), findsOneWidget);
+      await tester.tap(find.text('Listo'));
+      await _pumpUi(tester);
+      expect(repo.kitchenStatusUpdates, hasLength(1));
+      expect(repo.kitchenStatusUpdates.single.orderId, 'a');
+      expect(
+        repo.kitchenStatusUpdates.single.itemIds,
+        unorderedEquals(['person-1', 'person-2']),
+      );
+      expect(repo.kitchenStatusUpdates.single.status, 'ready');
+      expect(find.byType(KitchenOrderDetailScreen), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'permanent kitchen validation errors are shown without retrying',
+    (tester) async {
+      debugPrint = tester.binding.debugPrintOverride;
+      AppSession.instance.signIn(Employee.fromDoc(_KitchenEmployeeDoc()));
+      await LivePresenceService.instance.stop();
+
+      final repo = _KitchenUiRepository()
+        ..open = true
+        ..openValidationErrorCode = 'permission-denied';
+      await tester.pumpWidget(
+        MaterialApp(home: KitchenScreen(repository: repo)),
+      );
+      await _pumpUi(tester);
+      repo.db.orders.emit({'a': _order()});
+      repo.db.items('a').emit({'i': _item()});
+      await _pumpUi(tester);
+
+      expect(repo.openValidations, 2);
+      expect(repo.markedCooking, 0);
+      expect(find.textContaining('permission-denied'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 30));
+      expect(repo.openValidations, 2);
+      expect(repo.markedCooking, 0);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'kitchen actions recover by explicit retry after 60s and exhausted backoff',
+    (tester) async {
+      debugPrint = tester.binding.debugPrintOverride;
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      AppSession.instance.signIn(Employee.fromDoc(_KitchenEmployeeDoc()));
+      await LivePresenceService.instance.stop();
+
+      final repo = _KitchenUiRepository()
+        ..open = true
+        ..openValidationFailuresRemaining = 20;
+      await tester.pumpWidget(
+        MaterialApp(home: KitchenScreen(repository: repo)),
+      );
+      await _pumpUi(tester);
+      repo.db.orders.emit({'a': _order()});
+      repo.db.items('a').emit({
+        'person-1': _item(personNumber: 1),
+        'person-2': _item(personNumber: 2),
+      });
+      await _pumpUi(tester);
+      await tester.tap(find.text('Abrir comanda').first);
+      await _pumpUi(tester);
+
+      // Exercise the complete 2/5/15-second retry budget, then leave the
+      // network unavailable for a minute. No periodic retries should continue.
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 15));
+      await tester.pump();
+      expect(repo.openValidations, 5);
+      expect(find.text('Reintentar'), findsOneWidget);
+      await tester.pump(const Duration(seconds: 60));
+      expect(repo.openValidations, 5);
+      expect(repo.markedCooking, 0);
+
+      // Connectivity is back. The operator can explicitly refresh the
+      // authoritative kitchen-open check without reopening the screen.
+      repo.openValidationFailuresRemaining = 0;
+      await tester.tap(find.text('Reintentar'));
+      await tester.pump();
+      await tester.pump();
+      expect(repo.openValidations, 6);
+      expect(repo.markedCooking, 1);
+      await tester.tap(find.text('Siguiente plato'));
+      await _pumpUi(tester);
+      expect(find.text('Listo'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
     'direct detail and real Live Operations show offline/no-cache and permanent errors honestly',
     (tester) async {
       debugPrint = tester.binding.debugPrintOverride;
@@ -876,8 +1019,9 @@ Map<String, dynamic> _item({
   bool express = false,
   int qty = 1,
   int? sequence,
+  int personNumber = 1,
 }) => {
-  'personNumber': 1,
+  'personNumber': personNumber,
   'personName': 'person',
   'productId': 'p',
   'productName': 'Pastor',
@@ -943,11 +1087,29 @@ class _KitchenUiRepository implements TacoPosRepository {
   late final delegate = TacoPosRepository(firestore: db, auth: _Auth());
   int markedCooking = 0;
   bool open = false;
+  int openValidationFailuresRemaining = 0;
+  int openValidations = 0;
+  String? openValidationErrorCode;
+  final kitchenStatusUpdates = <_KitchenStatusUpdate>[];
   @override
   Stream<KitchenBundlesState> watchKitchenOrderBundlesState() =>
       delegate.watchKitchenOrderBundlesState();
   @override
-  Future<bool> hasCompletedOpenKitchenForCurrentBusinessDate() async => open;
+  Future<bool> hasCompletedOpenKitchenForCurrentBusinessDate() async {
+    openValidations++;
+    if (openValidationErrorCode != null) {
+      throw FirebaseException(
+        plugin: 'cloud_firestore',
+        code: openValidationErrorCode!,
+      );
+    }
+    if (openValidationFailuresRemaining > 0) {
+      openValidationFailuresRemaining--;
+      throw FirebaseException(plugin: 'cloud_firestore', code: 'unavailable');
+    }
+    return open;
+  }
+
   @override
   Future<void> reconcileOpenOrdersForKitchen() async {}
   @override
@@ -959,7 +1121,25 @@ class _KitchenUiRepository implements TacoPosRepository {
   }
 
   @override
+  Future<void> updateKitchenItemsStatus({
+    required String orderId,
+    required Iterable<String> itemIds,
+    required String status,
+  }) async {
+    kitchenStatusUpdates.add(
+      _KitchenStatusUpdate(orderId, itemIds.toList(), status),
+    );
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _KitchenStatusUpdate {
+  const _KitchenStatusUpdate(this.orderId, this.itemIds, this.status);
+  final String orderId;
+  final List<String> itemIds;
+  final String status;
 }
 
 // ignore: subtype_of_sealed_class
