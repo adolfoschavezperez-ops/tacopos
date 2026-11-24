@@ -73,6 +73,17 @@ flutter {
     source = "../.."
 }
 
+// Release variants must come from a clean commit that is already verifiably
+// backed by the same SHA on origin. Debug/emulator builds remain unrestricted.
+val verifyGitProvenance = tasks.register<Exec>("verifyGitProvenance") {
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("node", "tools/verify_release_worktree.js")
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(verifyGitProvenance)
+}
+
 dependencies {
     implementation("com.google.android.play:app-update-ktx:2.1.0")
 }

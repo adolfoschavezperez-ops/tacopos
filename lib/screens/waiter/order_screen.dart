@@ -326,6 +326,7 @@ class _OrderScreenState extends State<OrderScreen> {
 
     var submissionAttempted = false;
     var preserveEditingLock = false;
+    debugPrint('[TacoPOS][UI.send.start] orderId=$_boundOrderId');
     try {
       final hasPendingSubmission =
           _hasPendingLocalSubmission ||
@@ -340,8 +341,15 @@ class _OrderScreenState extends State<OrderScreen> {
         return;
       }
       await _waitForAcceptedRemoteMutations();
+      debugPrint(
+        '[TacoPOS][UI.send.remoteMutationsDrained] orderId=$_boundOrderId',
+      );
       await _repository.flushPendingMutations(_boundOrderId);
+      debugPrint('[TacoPOS][UI.send.queueFlushed] orderId=$_boundOrderId');
       await _waitForAcceptedLocalMutations();
+      debugPrint(
+        '[TacoPOS][UI.send.localMutationsDrained] orderId=$_boundOrderId',
+      );
       LivePresenceService.instance.update(currentAction: 'Enviando cocina');
       final hasLocalLines = await _repository.hasLocalOrderCapture(
         orderId: _boundOrderId,
@@ -349,6 +357,9 @@ class _OrderScreenState extends State<OrderScreen> {
         branchId: _boundBranchId,
       );
       final hadLocalDrafts = hasLocalLines || hasPendingSubmission;
+      debugPrint(
+        '[TacoPOS][UI.send.captureState] orderId=$_boundOrderId localLines=$hasLocalLines pendingSubmission=$hasPendingSubmission',
+      );
       final sentCount = hadLocalDrafts
           ? await (() async {
               submissionAttempted = true;
@@ -380,6 +391,9 @@ class _OrderScreenState extends State<OrderScreen> {
         Navigator.pop(context);
       }
     } catch (error) {
+      debugPrint(
+        '[TacoPOS][UI.send.failed] orderId=$_boundOrderId attempted=$submissionAttempted error=$error',
+      );
       if (!mounted) {
         return;
       }

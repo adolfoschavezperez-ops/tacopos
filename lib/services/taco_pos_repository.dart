@@ -11498,10 +11498,16 @@ class TacoPosRepository {
           orderId: orderId.trim(),
           sendToKitchen: sendToKitchen,
         );
+    developer.log(
+      '[TacoPOS][LocalCapture.callableStart] orderId=${orderId.trim()} submissionId=${submission.id} payloadLines=${submission.lines.length} sendToKitchen=$sendToKitchen',
+    );
     late Map<String, dynamic> response;
     try {
       response = await _localOrderCaptureSubmitter.submit(submission);
     } catch (submitError, submitStack) {
+      developer.log(
+        '[TacoPOS][LocalCapture.callableFailed] orderId=${orderId.trim()} submissionId=${submission.id} error=$submitError',
+      );
       // An error from the callable is not proof that its transaction did not
       // commit. Resolve against a server-side tombstone on the same marker
       // document before allowing the operator to edit or create a new ID.
@@ -11509,8 +11515,14 @@ class TacoPosRepository {
       try {
         resolution = await _localOrderCaptureSubmitter.resolve(submission);
       } catch (_) {
+        developer.log(
+          '[TacoPOS][LocalCapture.resolveFailed] orderId=${orderId.trim()} submissionId=${submission.id}',
+        );
         Error.throwWithStackTrace(submitError, submitStack);
       }
+      developer.log(
+        '[TacoPOS][LocalCapture.resolution] orderId=${orderId.trim()} submissionId=${submission.id} state=${resolution['state']}',
+      );
       if (resolution['state'] == 'committed' && resolution['result'] is Map) {
         response = Map<String, dynamic>.from(resolution['result'] as Map);
       } else if (resolution['state'] == 'aborted') {
@@ -11536,6 +11548,9 @@ class TacoPosRepository {
     // Keep the immutable outbox if reconciliation fails. A retry uses the
     // same server idempotency key and never creates another kitchen batch.
     final reconciliationTimer = Stopwatch()..start();
+    developer.log(
+      '[TacoPOS][LocalCapture.reconcileStart] orderId=${orderId.trim()} submissionId=${submission.id}',
+    );
     await recalculateOrderTotal(orderId.trim());
     await _ordersRef
         .doc(orderId.trim())

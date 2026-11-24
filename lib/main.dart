@@ -39,7 +39,11 @@ void main() async {
     await Firebase.initializeApp(
       options: _useFirebaseEmulators
           ? FirebaseOptions(
-              apiKey: 'emulator-only-invalid-key',
+              // The Firebase client SDK validates the API-key shape before
+              // sending callable requests, even when the endpoint is local.
+              // This syntactically valid placeholder is used only for the
+              // demo-project emulator path; no release build can select it.
+              apiKey: 'AIzaSyD3moTacoPOSLocalEmulatorOnly00000',
               appId: '1:000000000000:android:0000000000000000000000',
               messagingSenderId: '000000000000',
               projectId: _emulatorProjectId,
