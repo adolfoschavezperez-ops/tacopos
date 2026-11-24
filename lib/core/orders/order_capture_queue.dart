@@ -151,8 +151,17 @@ class OrderCaptureQueue {
   Future<void> flush(
     String orderId, {
     required Future<void> Function() recalculate,
+    bool recalculateWhenQueueEmpty = true,
   }) async {
-    final state = _states.putIfAbsent(orderId, _OrderQueueState.new);
+    var state = _states[orderId];
+    // A caller commonly flushes before sending a local durable-capture
+    // submission. If this order has no queued remote mutations, there is
+    // nothing to drain; starting a client transaction here only races the
+    // authoritative submission transaction on another tablet.
+    if (state == null) {
+      if (!recalculateWhenQueueEmpty) return;
+      state = _states.putIfAbsent(orderId, _OrderQueueState.new);
+    }
     var retriedFailedBackgroundRecalculation = false;
     while (true) {
       final tail = state._tail;

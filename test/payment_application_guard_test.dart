@@ -116,6 +116,16 @@ void main() {
     expect(data['cashChangeAmount'], 102);
   });
 
+  test('full cash después de abono parte del saldo pendiente autoritativo', () {
+    final remaining = remainingPaymentAmount(
+      orderNetAmount: 720,
+      previousActivePayments: [_payment(id: 'partial-360', amount: 360)],
+      freshPendingAmount: 360,
+    );
+
+    expect(remaining, 360);
+  });
+
   test('partial que excede saldo lanza error', () {
     expect(
       () => planPaymentApplication(

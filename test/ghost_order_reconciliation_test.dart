@@ -71,15 +71,40 @@ void main() {
       );
     });
 
-    test('D empty order without payments is a ghost', () {
-      final evaluation = evaluateGhostOrder(
-        _order(total: 0, pendingTotal: 0),
-        const [],
-        const [],
-      );
+    test(
+      'D empty server order is not auto-cancelled and keeps its table linked',
+      () {
+        final order = _order(total: 0, pendingTotal: 0);
+        final evaluation = evaluateGhostOrder(order, const [], const []);
 
-      expect(evaluation.isGhost, isTrue);
-    });
+        expect(evaluation.isGhost, isFalse);
+        expect(
+          isOperationalOrderActive(
+            order: order,
+            items: const [],
+            payments: const [],
+          ),
+          isTrue,
+        );
+        expect(
+          shouldKeepTableOccupiedForOrder(
+            order: order,
+            items: const [],
+            payments: const [],
+          ),
+          isTrue,
+        );
+        expect(
+          evaluateOperationalOrderBlocker(
+            order: order,
+            items: const [],
+            payments: const [],
+            belongsToBranchAndDate: true,
+          ),
+          isNull,
+        );
+      },
+    );
 
     test('E paid order is never modified as a ghost', () {
       final evaluation = evaluateGhostOrder(

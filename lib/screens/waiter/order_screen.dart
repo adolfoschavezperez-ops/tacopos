@@ -344,7 +344,10 @@ class _OrderScreenState extends State<OrderScreen> {
       debugPrint(
         '[TacoPOS][UI.send.remoteMutationsDrained] orderId=$_boundOrderId',
       );
-      await _repository.flushPendingMutations(_boundOrderId);
+      await _repository.flushPendingMutations(
+        _boundOrderId,
+        recalculateWhenQueueEmpty: false,
+      );
       debugPrint('[TacoPOS][UI.send.queueFlushed] orderId=$_boundOrderId');
       await _waitForAcceptedLocalMutations();
       debugPrint(

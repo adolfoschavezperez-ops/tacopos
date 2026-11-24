@@ -710,10 +710,14 @@ class _CheckoutRepository implements TacoPosRepository {
   }
 
   @override
-  Future<void> flushPendingMutations(String orderId) async {
+  Future<void> flushPendingMutations(
+    String orderId, {
+    bool recalculateWhenQueueEmpty = true,
+  }) async {
     _stage('flush');
     await queue.flush(
       orderId,
+      recalculateWhenQueueEmpty: recalculateWhenQueueEmpty,
       recalculate: () async {
         _stage('recalculate-server');
         order = _reconciledOrder();

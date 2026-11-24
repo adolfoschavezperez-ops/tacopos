@@ -11777,10 +11777,14 @@ class TacoPosRepository {
     });
   }
 
-  Future<void> flushPendingMutations(String orderId) {
+  Future<void> flushPendingMutations(
+    String orderId, {
+    bool recalculateWhenQueueEmpty = true,
+  }) {
     final cleanOrderId = orderId.trim();
     return _orderCaptureQueue.flush(
       cleanOrderId,
+      recalculateWhenQueueEmpty: recalculateWhenQueueEmpty,
       recalculate: () => recalculateOrderTotal(cleanOrderId),
     );
   }
@@ -13544,13 +13548,18 @@ class TacoPosRepository {
         .doc(orderId)
         .collection('items')
         .get(const GetOptions(source: Source.server));
-    final pendingItems = itemsSnapshot.docs
-        .map(OrderItem.fromDoc)
-        .where((item) => item.paymentStatus != 'paid' && !item.isCancelled)
-        .toList();
-    final baseAmount = pendingItems.fold<double>(
-      0,
-      (runningTotal, item) => runningTotal + item.total,
+    final pendingItemDocs = itemsSnapshot.docs.where((doc) {
+      final item = OrderItem.fromDoc(doc);
+      return item.paymentStatus != 'paid' && !item.isCancelled;
+    }).toList();
+    final previousActivePayments = (await getOrderPaymentsOnce(
+      order.id,
+      source: Source.server,
+    )).where((payment) => payment.isActive).toList();
+    final baseAmount = remainingPaymentAmount(
+      orderNetAmount: order.netTotal ?? order.total,
+      previousActivePayments: previousActivePayments,
+      freshPendingAmount: order.pendingTotal,
     );
 
     if (baseAmount <= 0) {
@@ -13572,10 +13581,6 @@ class TacoPosRepository {
       order,
       baseAmount,
     );
-    final previousActivePayments = (await getOrderPaymentsOnce(
-      order.id,
-      source: Source.server,
-    )).where((payment) => payment.isActive).toList();
     final resolvedAttemptId = _resolvePaymentAttemptId(paymentAttemptId);
     final paymentRef = _ordersRef
         .doc(orderId)
@@ -13598,10 +13603,7 @@ class TacoPosRepository {
       cashSession: cashSession,
       paymentRef: paymentRef,
       paymentData: paymentData,
-      itemDocs: itemsSnapshot.docs.where((doc) {
-        final item = OrderItem.fromDoc(doc);
-        return item.paymentStatus != 'paid' && !item.isCancelled;
-      }),
+      itemDocs: pendingItemDocs,
       discount: effectiveDiscount,
       previousActivePayments: previousActivePayments,
     );

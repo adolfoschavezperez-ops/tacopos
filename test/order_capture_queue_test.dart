@@ -231,6 +231,29 @@ void main() {
     queue.dispose();
   });
 
+  test('flush may skip recalculation when no mutations are queued', () async {
+    final queue = OrderCaptureQueue();
+    var recalculations = 0;
+
+    await queue.flush(
+      'order-with-local-only-draft',
+      recalculate: () async {
+        recalculations++;
+      },
+      recalculateWhenQueueEmpty: false,
+    );
+
+    expect(recalculations, 0);
+    await queue.flush(
+      'checkout-order-with-empty-queue',
+      recalculate: () async {
+        recalculations++;
+      },
+    );
+    expect(recalculations, 1);
+    queue.dispose();
+  });
+
   test('flush waits for a mutation added while it awaits a write', () async {
     final queue = OrderCaptureQueue();
     final first = Completer<void>();
@@ -330,6 +353,12 @@ void main() {
     'flush propagates its own reconciliation failure and allows retry',
     () async {
       final queue = OrderCaptureQueue();
+      await queue.enqueue(
+        'order',
+        () async {},
+        recalculate: () async => throw StateError('background failure'),
+      );
+      await Future<void>.delayed(Duration.zero);
       await expectLater(
         queue.flush(
           'order',

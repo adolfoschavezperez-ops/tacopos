@@ -344,6 +344,12 @@ GhostOrderEvaluation evaluateGhostOrder(
   final cancelledItemsCount = itemList.length - activeItems.length;
   final ghost =
       isActiveOrderState(order) &&
+      // A newly opened order has no server items while capture drafts are
+      // stored locally on the device. Treating that state as a ghost lets the
+      // tables reconciliation cancel a valid offline draft after restart.
+      // Automatic ghost cleanup is reserved for orders with server item
+      // evidence whose items have all become terminal.
+      itemList.isNotEmpty &&
       activeItems.isEmpty &&
       activePayments.isEmpty &&
       (order.total.abs() <= ghostOrderTolerance ||
@@ -382,6 +388,17 @@ bool isOperationalOrderActive({
       _activePaymentStatuses.contains(paymentStatus);
 }
 
+bool hasOperationalOrderEvidence({
+  required PosOrder order,
+  required Iterable<OrderItem> items,
+  required Iterable<Payment> payments,
+}) {
+  return items.any(isActiveOrderItem) ||
+      payments.any(isActiveCustomerPayment) ||
+      order.total > ghostOrderTolerance ||
+      order.pendingTotal > ghostOrderTolerance;
+}
+
 bool isStandingOrderVisibleInLiveViewer({
   required PosOrder order,
   required Iterable<OrderItem> items,
@@ -390,6 +407,11 @@ bool isStandingOrderVisibleInLiveViewer({
 }) {
   return isStandingOrder(order) &&
       belongsToSelectedBranchAndDate &&
+      hasOperationalOrderEvidence(
+        order: order,
+        items: items,
+        payments: payments,
+      ) &&
       isOperationalOrderActive(order: order, items: items, payments: payments);
 }
 

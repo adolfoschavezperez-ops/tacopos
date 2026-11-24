@@ -102,6 +102,13 @@ OperationalOrderBlocker? evaluateOperationalOrderBlocker({
   if (!belongsToBranchAndDate || !isActiveOrderState(order)) return null;
   final evaluation = evaluateGhostOrder(order, items, payments);
   if (evaluation.isGhost) return null;
+  if (!hasOperationalOrderEvidence(
+    order: order,
+    items: items,
+    payments: payments,
+  )) {
+    return null;
+  }
   if (!isOperationalOrderActive(
     order: order,
     items: items,
