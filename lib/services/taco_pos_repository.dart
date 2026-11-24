@@ -11300,13 +11300,14 @@ class TacoPosRepository {
       developer.log(
         '[TacoPOS][addProduct] updating existing itemId=${existingItem.id} '
         'path=$itemsPath/${existingItem.id} productName=${product.name} '
-        'qty=${existingItem.qty + 1}',
+        'discoveredQty=${existingItem.qty} increment=1',
       );
-      await updateItemQty(
-        skipQueue: true,
+      await _incrementPendingOrderItem(
         orderId: cleanOrderId,
-        item: existingItem,
-        qty: existingItem.qty + 1,
+        itemId: existingItem.id,
+        productId: product.id,
+        personNumber: personNumber,
+        appliedPlatformId: usePlatformPrice ? platformId : null,
         operationId: operationId,
       );
       return;
@@ -11378,6 +11379,55 @@ class TacoPosRepository {
       transaction.update(_ordersRef.doc(cleanOrderId), {
         // A shared revision makes aggregate/payment transactions retry when a
         // late capture arrives from another terminal.
+        'captureRevision': FieldValue.increment(1),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  Future<void> _incrementPendingOrderItem({
+    required String orderId,
+    required String itemId,
+    required String productId,
+    required int personNumber,
+    required String? appliedPlatformId,
+    String? operationId,
+  }) async {
+    final orderRef = _ordersRef.doc(orderId.trim());
+    final itemRef = orderRef.collection('items').doc(itemId);
+    await _db.runTransaction((transaction) async {
+      final orderDoc = await transaction.get(orderRef);
+      final itemDoc = await transaction.get(itemRef);
+      if (!orderDoc.exists || !isActiveOrderState(PosOrder.fromDoc(orderDoc))) {
+        throw StateError(
+          'La cuenta ya fue cerrada o cancelada y no admite productos.',
+        );
+      }
+      if (!itemDoc.exists) {
+        throw StateError('El articulo ya no existe. Actualiza e intenta de nuevo.');
+      }
+
+      final freshItem = OrderItem.fromDoc(itemDoc);
+      if (freshItem.productId != productId ||
+          freshItem.personNumber != personNumber ||
+          freshItem.appliedPlatformId != appliedPlatformId ||
+          !itemCanBeSentToKitchenBatch(freshItem)) {
+        throw StateError(
+          'El articulo cambio durante la captura. Actualiza e intenta de nuevo.',
+        );
+      }
+      _ensureItemEditable(freshItem);
+
+      // Compute from the transactional snapshot. A quantity calculated from
+      // the earlier discovery read can overwrite another tablet's increment
+      // when Firestore retries this transaction after a conflict.
+      final nextQty = freshItem.qty + 1;
+      transaction.update(itemRef, {
+        'qty': nextQty,
+        'total': nextQty * freshItem.unitPrice,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      transaction.update(orderRef, {
         'captureRevision': FieldValue.increment(1),
         'updatedAt': FieldValue.serverTimestamp(),
       });
