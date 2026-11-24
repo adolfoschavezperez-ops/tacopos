@@ -21,7 +21,7 @@ Fecha de validación: 2026-11-24 (America/Mexico_City)
 | Artefacto y SHA-256 | No generado |
 | Etiqueta Git | No creada; esperar a verificar artefacto y SHA final |
 
-`pubspec.yaml` permanece en `1.5.13+31`. El worktree de preparación no cambia la versión. Antes de compilar, un commit autorizado deberá actualizarla a `2.0.0-rc.1+32` (solo si Play confirma libre el código 32) y respaldar ese mismo SHA en la rama remota de release. El guard de procedencia pasó en la rama fuente aprobada; este worktree local aún no es compilable: contiene este paquete de preparación sin commit remoto y deliberadamente no tiene `android/key.properties`.
+`pubspec.yaml` permanece en `1.5.13+31`. El worktree de preparación no cambia la versión. Antes de compilar, un commit autorizado deberá actualizarla a `2.0.0-rc.1+32` (solo si Play confirma libre el código 32) y respaldar ese mismo SHA en la rama remota de release. El guard de procedencia pasó en la rama fuente aprobada; este commit de preparación está respaldado, pero no autoriza compilación/distribución y el versionCode 32 sigue pendiente del propietario. La firma local está configurada en el archivo ignorado `android/key.properties`.
 
 ## Integridad de Firebase y distribución
 
@@ -33,15 +33,15 @@ Fecha de validación: 2026-11-24 (America/Mexico_City)
 - App Check Play Integrity está configurado para la app Android `1:346084471865:android:fb196c5d19a1e300f949e8`, exige `MEETS_DEVICE_INTEGRITY`; la respuesta de configuración indica `allowUnrecognizedVersion: true`. El código de Functions exige App Check y consume token limitado para ambas callables fuera del Emulator.
 - Las tablets `1.5.13+31` no contienen `capture_submission_*`, `submitLocalOrderCapture` ni `resolveLocalOrderCaptureSubmission` (revisión del worktree +31). El parche de Rules reserva únicamente ese prefijo y conserva la creación normal de otros eventos `activityLog`; la ruta antigua no cambia.
 
-## Firma, pendiente de confirmación
+## Firma de carga preparada; verificación App Check pendiente
 
-El worktree `release/android-1.5.11-28` conserva la configuración local `android/key.properties` y el keystore externo en `C:/Users/geren/Documents/RenovaDev/keys/tacopos-upload-key.jks`; no se copiaron secretos al worktree nuevo. El certificado local de carga encontrado tiene SHA-256:
+El worktree `release/android-1.5.11-28` conserva la configuración local `android/key.properties` y el keystore externo en `C:/Users/geren/Documents/RenovaDev/keys/tacopos-upload-key.jks`. Se preparó una copia local ignorada en este worktree, sin subir credenciales. El certificado local de carga tiene SHA-256:
 
 `85:D4:5B:55:67:43:89:66:78:23:4D:81:95:E1:F1:17:2F:C2:CE:17:B1:99:10:7E:98:24:7C:9E:D5:BA:05:EE`
 
-Esto identifica el certificado del keystore de carga local, pero **no demuestra** que coincida con el certificado de carga registrado en Play Console ni identifica el certificado de firma de Play App Signing. Ambos deben verificarse en Play Console antes de autorizar una subida. El worktree de preparación requiere recibir `key.properties` por el canal secreto aprobado; nunca se debe incluir en Git.
+El propietario confirmó desde Play Console que coinciden el certificado de carga del keystore y el de carga registrado. `keytool` verificó SHA-1 y SHA-256 localmente. La huella SHA-256 de Play App Signing es distinta; su estado de registro en Firebase y el certificado anterior están documentados en [signing-and-appcheck-verification.md](signing-and-appcheck-verification.md). No se debe confundir la clave de carga del AAB con la clave que firma los APK servidos por Play.
 
-Gradle espera el archivo local ignorado `android/key.properties` con las claves `storePassword`, `keyPassword`, `keyAlias` y `storeFile`, según `android/app/build.gradle.kts`. El archivo y el keystore no existen en este worktree. El propietario puede colocarlos desde el almacén secreto aprobado; verificar después `git check-ignore android/key.properties` y no copiar/mostrar los valores. No hay credenciales ni keystore en el paquete de respaldo.
+Gradle espera `android/key.properties` con las claves `storePassword`, `keyPassword`, `keyAlias` y `storeFile`, según `android/app/build.gradle.kts`. El archivo local ignorado está preparado en este worktree y apunta al keystore externo validado. No se incluyó ni en el commit ni en el paquete de respaldo; `git check-ignore` lo confirma.
 
 ## Validación de este SHA
 
@@ -52,6 +52,7 @@ Gradle espera el archivo local ignorado `android/key.properties` con las claves 
 - Functions Emulator cargó las seis definiciones locales, incluidas ambas callables de captura. La comprobación HTTP GET devolvió 400 por método inválido y no ejecutó escrituras.
 - `node tools/verify_release_worktree.js`: PASS en la rama fuente respaldada en GitHub.
 - Evidencia reproducible de runtime y Rules: [validation-node22.md](validation-node22.md).
+- Evidencia de firma y compatibilidad Firebase App Check: [signing-and-appcheck-verification.md](signing-and-appcheck-verification.md).
 - La preparación de release fija Node 22 de forma concordante en `functions/package.json` (`engines.node`) y `firebase.json` (`functions.runtime`); `functions/package-lock.json` registra también el engine 22. Validación local con Node `22.21.0` y npm `11.6.2`.
 - Las cuatro Functions actualmente desplegadas se inventariaron como `nodejs20`: `backofficePinLogin`, `cancelExpenseRequest`, `listBackofficeUsers` y `submitExpenseRequest`. No se redesplegarán con esta preparación. Node 20 llegó a retirada el `2026-10-30`; existe riesgo de que Google impida nuevas actualizaciones y posteriormente deshabilite workloads, por lo que se requiere una actualización separada antes de que afecte servicio.
 - La suite de Functions bajo Node 22 pasó con 110 pruebas. La suite completa de Rules pasó con 130 pruebas; los tres escenarios del archivo `tacopos_2rc_production_rules_compat.rules.test.js` instancian la copia de Rules desplegada más el cambio mínimo y validan compatibilidad +31 para eventos corrientes, captura, Cocina, extras, sucursal, pagos parciales/finales y cierre normal de caja.
