@@ -94,6 +94,29 @@ Map<String, Object?> normalizePaymentDataForRemaining({
     cashChangeAmount: _nullableMoney(paymentData['cashChangeAmount']),
     freshPendingAmount: freshPendingAmount,
   );
+  // A full-table discount is applied against the authoritative gross
+  // remainder. Its monetary amount is therefore expected to be lower than
+  // the remainder by exactly the discount. Preserve it only when the payment
+  // data proves that relationship; otherwise keep the existing normalization
+  // that prevents stale or excessive payments from being persisted.
+  final discount = _money(paymentData['discountAmount']);
+  final grossAmount = _money(
+    paymentData['baseAmount'] ?? paymentData['subtotalBeforeDiscount'],
+  );
+  if (type.trim().toLowerCase() == 'full_table' && discount > 0) {
+    final discountMatchesAuthoritativeBalance =
+        discount <= grossAmount &&
+        (grossAmount - plan.remainingAmount).abs() <=
+            paymentApplicationTolerance &&
+        (grossAmount - discount - applied).abs() <=
+            paymentApplicationTolerance &&
+        (plan.remainingAmount - discount - applied).abs() <=
+            paymentApplicationTolerance;
+    if (discountMatchesAuthoritativeBalance) return paymentData;
+    throw StateError(
+      'El saldo cambio; revisa el descuento antes de confirmar el cobro.',
+    );
+  }
   if ((plan.appliedAmount - applied).abs() <= paymentApplicationTolerance) {
     return paymentData;
   }

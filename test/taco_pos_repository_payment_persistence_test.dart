@@ -89,6 +89,90 @@ void main() {
       expect(preview.totals.monetaryPaid, 500);
       expect(preview.totals.pendingTotal, 0);
     });
+
+    test('full_table preserves discount when net amount matches gross remainder', () {
+      final preview = buildRepositoryPaymentPersistencePreview(
+        order: _order(net: 80, pending: 80),
+        paymentData: {
+          ..._paymentData(method: 'card', amount: 64),
+          'subtotalBeforeDiscount': 80.0,
+          'baseAmount': 80.0,
+          'discountAmount': 16.0,
+          'totalAfterDiscount': 64.0,
+          'appliedAmount': 64.0,
+          'amount': 64.0,
+          'chargedAmount': 64.0,
+          'cardFeeAbsorbedAmount': 2.56,
+          'discountName': 'Familia / amigos 20%',
+        },
+        previousActivePayments: const [],
+        freshPendingAmount: 80,
+        newPaymentId: 'discounted-full-payment',
+      );
+
+      final data = preview.paymentData;
+      expect(data['baseAmount'], 80);
+      expect(data['discountAmount'], 16);
+      expect(data['totalAfterDiscount'], 64);
+      expect(data['appliedAmount'], 64);
+      expect(data['chargedAmount'], 64);
+      expect(data['cardFeeAbsorbedAmount'], 2.56);
+      expect(preview.totals.discountAmount, 16);
+      expect(preview.totals.monetaryPaid, 64);
+      expect(preview.totals.totalLiquidated, 80);
+      expect(preview.totals.pendingTotal, 0);
+      expect(preview.totals.paymentStatus, 'paid');
+    });
+
+    test('full_table discounted payment fails closed when server balance differs', () {
+      expect(
+        () => buildRepositoryPaymentPersistencePreview(
+          order: _order(net: 80, pending: 75),
+          paymentData: {
+            ..._paymentData(method: 'card', amount: 64),
+            'subtotalBeforeDiscount': 80.0,
+            'baseAmount': 80.0,
+            'discountAmount': 16.0,
+            'totalAfterDiscount': 64.0,
+            'appliedAmount': 64.0,
+            'amount': 64.0,
+            'chargedAmount': 64.0,
+          },
+          previousActivePayments: const [],
+          freshPendingAmount: 75,
+          newPaymentId: 'stale-discounted-payment',
+        ),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('full_table discount preserves only the remaining gross balance', () {
+      final preview = buildRepositoryPaymentPersistencePreview(
+        order: _order(net: 100, pending: 60),
+        paymentData: {
+          ..._paymentData(method: 'card', amount: 48),
+          'subtotalBeforeDiscount': 60.0,
+          'baseAmount': 60.0,
+          'discountAmount': 12.0,
+          'totalAfterDiscount': 48.0,
+          'appliedAmount': 48.0,
+          'amount': 48.0,
+          'chargedAmount': 48.0,
+          'cardFeeAbsorbedAmount': 1.92,
+        },
+        previousActivePayments: [_payment(amount: 40, type: 'partial')],
+        freshPendingAmount: 60,
+        newPaymentId: 'discounted-final-payment',
+      );
+
+      expect(preview.paymentData['baseAmount'], 60);
+      expect(preview.paymentData['discountAmount'], 12);
+      expect(preview.paymentData['appliedAmount'], 48);
+      expect(preview.totals.monetaryPaid, 88);
+      expect(preview.totals.discountAmount, 12);
+      expect(preview.totals.totalLiquidated, 100);
+      expect(preview.totals.pendingTotal, 0);
+    });
   });
 
   group('decidePaymentFinalization', () {
