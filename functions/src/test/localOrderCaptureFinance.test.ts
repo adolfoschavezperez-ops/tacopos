@@ -5,7 +5,8 @@ import {computeOrderAggregates} from "../localOrderCapture";
 
 interface FinanceCase {
   name: string;
-  itemTotals: number[];
+  itemTotals?: number[];
+  itemDetails?: Array<Record<string, unknown>>;
   payments: Array<Record<string, unknown>>;
   expected: Record<string, unknown>;
 }
@@ -17,7 +18,7 @@ describe("local capture aggregate parity fixtures", () => {
   for (const testCase of cases) {
     it(testCase.name, () => {
       const result = computeOrderAggregates(
-        testCase.itemTotals.map((total) => ({qty: 1, total, unitPrice: total, status: "active"})),
+        testCase.itemDetails ?? (testCase.itemTotals ?? []).map((total) => ({qty: 1, total, unitPrice: total, status: "active"})),
         testCase.payments,
       ) as Record<string, unknown>;
       for (const [key, expected] of Object.entries(testCase.expected)) {

@@ -1,5 +1,6 @@
 import {createHash} from "crypto";
 import * as admin from "firebase-admin";
+import {FieldValue, Timestamp} from "firebase-admin/firestore";
 import {HttpsError} from "firebase-functions/v2/https";
 
 type Data = Record<string, unknown>;
@@ -183,7 +184,7 @@ export async function submitLocalOrderCaptureCore(
     const batchId = sentCount > 0 ? orderRef.collection("kitchenBatches").doc().id : "";
     const batchType = isExpress ? "express" : "initial";
     const batchLabel = isExpress ? "Orden extra" : "Orden inicial";
-    const now = admin.firestore.Timestamp.now();
+    const now = Timestamp.now();
 
     if (sentCount > 0) {
       for (let index = 0; index < newItemData.length; index++) {
@@ -205,7 +206,7 @@ export async function submitLocalOrderCaptureCore(
       const itemData = newItemData[index];
       tx.create(orderRef.collection("items").doc(lineIds[index]), {
         ...itemData,
-        createdAt: admin.firestore.Timestamp.fromMillis(now.toMillis() + index),
+        createdAt: Timestamp.fromMillis(now.toMillis() + index),
         updatedAt: now,
       });
     });
@@ -244,7 +245,7 @@ export async function submitLocalOrderCaptureCore(
     }
     const orderUpdate: Data = {
       ...newTotals,
-      captureRevision: admin.firestore.FieldValue.increment(1),
+      captureRevision: FieldValue.increment(1),
       updatedAt: now,
     };
     if (sentCount > 0) {
@@ -337,6 +338,33 @@ export async function resolveLocalOrderCaptureSubmissionCore(
   const markerRef = db.collection("restaurants").doc(restaurantId)
     .collection("activityLog").doc(`capture_submission_${submissionId}`);
   return db.runTransaction(async (tx) => {
+    const restaurantRef = db.collection("restaurants").doc(restaurantId);
+    const [deviceDoc, orderDoc] = await Promise.all([
+      tx.get(restaurantRef.collection("devices").doc(uid)),
+      tx.get(restaurantRef.collection("orders").doc(orderId)),
+    ]);
+    if (!deviceDoc.exists) throw new HttpsError("permission-denied", "El dispositivo no esta registrado.");
+    const device = deviceDoc.data() ?? {};
+    if (device.active === false ||
+        (device.restaurantId && device.restaurantId !== restaurantId) ||
+        device.branchId !== branchId) {
+      throw new HttpsError("permission-denied", "El dispositivo no tiene acceso a esta sucursal.");
+    }
+    const employeeId = safeString(device.employeeId);
+    if (!employeeId) throw new HttpsError("permission-denied", "Inicia sesion nuevamente como mesero.");
+    const employeeDoc = await tx.get(restaurantRef.collection("employees").doc(employeeId));
+    if (!employeeDoc.exists) throw new HttpsError("permission-denied", "El usuario ya no esta activo.");
+    const employee = employeeDoc.data() ?? {};
+    if (employee.active === false || !hasBranchOrderPermission(employee, branchId)) {
+      throw new HttpsError("permission-denied", "No tienes permiso para levantar pedidos en esta sucursal.");
+    }
+    if (!orderDoc.exists) throw new HttpsError("not-found", "La orden ya no existe; el borrador local se conserva.");
+    const order = orderDoc.data() ?? {};
+    if ((order.restaurantId && order.restaurantId !== restaurantId) ||
+        safeString(order.branchId || "aviacion") !== branchId) {
+      throw new HttpsError("failed-precondition", "La orden pertenece a otra sucursal.");
+    }
+
     const marker = await tx.get(markerRef);
     if (marker.exists) {
       const data = marker.data() ?? {};
@@ -359,7 +387,7 @@ export async function resolveLocalOrderCaptureSubmissionCore(
       payloadHash,
       sendToKitchen,
       createdBy: uid,
-      createdAt: admin.firestore.Timestamp.now(),
+      createdAt: Timestamp.now(),
     });
     return {state: "aborted"};
   });

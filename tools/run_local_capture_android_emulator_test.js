@@ -2,7 +2,9 @@ const http = require("http");
 const {spawn} = require("child_process");
 const path = require("path");
 const admin = require("../functions/node_modules/firebase-admin");
+const {assertSafeFunctionsTestEnvironment} = require("../functions/lib/testEnvironment");
 
+assertSafeFunctionsTestEnvironment();
 const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || "";
 if (!projectId.startsWith("demo-") ||
     process.env.FIRESTORE_EMULATOR_HOST !== "127.0.0.1:8080" ||
@@ -23,6 +25,7 @@ const branchId = "branch-demo";
 const orderId = "android-order";
 const uid = "local-capture-android-test";
 const employeeId = "waiter-demo";
+const androidDeviceId = process.env.TACOPOS_ANDROID_DEVICE_ID || "emulator-5554";
 const root = db.collection("restaurants").doc(restaurantId);
 
 async function seed() {
@@ -51,14 +54,24 @@ async function seed() {
       canTakeOrders: true,
       branchAccess: [],
     }),
-    root.collection("products").doc("taco-demo").set({
-      name: "Taco demo",
+    root.collection("products").doc("taco-pastor").set({
+      name: "Taco pastor",
       categoryId: "tacos",
       categoryName: "Tacos",
       active: true,
       sendToKitchen: true,
       affectsKitchenStock: false,
       price: 12,
+      recipeItems: [],
+    }),
+    root.collection("products").doc("taco-asada").set({
+      name: "Taco asada",
+      categoryId: "tacos",
+      categoryName: "Tacos",
+      active: true,
+      sendToKitchen: true,
+      affectsKitchenStock: false,
+      price: 18,
       recipeItems: [],
     }),
     root.collection("branches").doc(branchId).set({name: "Demo"}),
@@ -115,7 +128,7 @@ async function main() {
         method: incoming.method,
         headers: incoming.headers,
       }, (response) => {
-        if (dropResponse) {
+        if (dropResponse && response.statusCode >= 200 && response.statusCode < 300) {
           response.resume();
           response.on("end", () => {
             droppedSubmitResponses++;
@@ -145,7 +158,7 @@ async function main() {
     "test",
     "integration_test/local_capture_android_emulator_test.dart",
     "-d",
-    "emulator-5554",
+    androidDeviceId,
     "--dart-define=TACOPOS_EMULATOR_PROJECT_ID=demo-tacopos-local-capture",
     "--dart-define=TACOPOS_EMULATOR_HOST=10.0.2.2",
     "--dart-define=TACOPOS_FUNCTIONS_EMULATOR_PORT=5002",
@@ -163,7 +176,7 @@ async function main() {
   if (droppedSubmitResponses !== 1) {
     throw new Error(`Expected one committed callable response to be dropped, got ${droppedSubmitResponses}.`);
   }
-  console.log("Android integration verified one committed callable response loss and same-ID recovery.");
+  console.log(`Android integration verified one committed callable response loss and same-ID recovery on ${androidDeviceId}.`);
 }
 
 main().catch((error) => {

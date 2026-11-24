@@ -8,6 +8,7 @@ import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
 import 'package:sembast/sembast_io.dart';
 import 'package:tacopos/core/orders/local_order_capture.dart';
+import 'package:tacopos/firebase_options.dart';
 import 'package:tacopos/services/local_order_capture_store.dart';
 
 const _projectId = String.fromEnvironment(
@@ -29,15 +30,16 @@ void main() {
   testWidgets(
     'Android outbox survives database reopen and recovers a committed lost response idempotently',
     (_) async {
-      await Firebase.initializeApp(
-        options: const FirebaseOptions(
-          apiKey: 'emulator-only-invalid-key',
+      final app = await Firebase.initializeApp(
+        name: 'tacopos-local-capture-test',
+        options: FirebaseOptions(
+          apiKey: DefaultFirebaseOptions.android.apiKey,
           appId: '1:000000000000:android:0000000000000000000000',
           messagingSenderId: '000000000000',
           projectId: _projectId,
         ),
       );
-      final auth = FirebaseAuth.instance;
+      final auth = FirebaseAuth.instanceFor(app: app);
       auth.useAuthEmulator(_emulatorHost, 9099);
       await auth.signInWithEmailAndPassword(
         email: 'capture-test@example.invalid',
@@ -46,9 +48,12 @@ void main() {
       final uid = auth.currentUser!.uid;
       expect(uid, 'local-capture-android-test');
 
-      final firestore = FirebaseFirestore.instance;
+      final firestore = FirebaseFirestore.instanceFor(app: app);
       firestore.useFirestoreEmulator(_emulatorHost, 8080);
-      final functions = FirebaseFunctions.instanceFor(region: 'us-central1');
+      final functions = FirebaseFunctions.instanceFor(
+        app: app,
+        region: 'us-central1',
+      );
       functions.useFunctionsEmulator(_emulatorHost, _functionsPort);
 
       final directory = await getApplicationSupportDirectory();
@@ -62,8 +67,30 @@ void main() {
       LocalOrderCaptureStore store = LocalOrderCaptureStore(database: database);
       for (var index = 0; index < 30; index++) {
         await store.addTap(
-          _captureLine(uid: uid, id: 'tap-line-$index', capturedAt: index),
+          _captureLine(
+            uid: uid,
+            id: 'tap-line-$index',
+            capturedAt: index,
+            productId: 'taco-pastor',
+            productName: 'Taco pastor',
+            unitPrice: 12,
+            personNumber: 1,
+          ),
           operationId: 'tap-operation-$index',
+        );
+      }
+      for (var index = 0; index < 2; index++) {
+        await store.addTap(
+          _captureLine(
+            uid: uid,
+            id: 'second-person-line-$index',
+            capturedAt: 100 + index,
+            productId: 'taco-asada',
+            productName: 'Taco asada',
+            unitPrice: 18,
+            personNumber: 2,
+          ),
+          operationId: 'second-person-operation-$index',
         );
       }
       final orderScope = {
@@ -76,8 +103,9 @@ void main() {
         branchId: orderScope['branchId']!,
         orderId: orderScope['orderId']!,
       );
-      expect(locallySaved, hasLength(1));
-      expect(locallySaved.single.qty, 30);
+      expect(locallySaved, hasLength(2));
+      expect(_lineForProduct(locallySaved, 'taco-pastor').qty, 30);
+      expect(_lineForProduct(locallySaved, 'taco-asada').qty, 2);
 
       await database.close();
       database = await databaseFactoryIo.openDatabase(databasePath);
@@ -87,7 +115,9 @@ void main() {
         branchId: orderScope['branchId']!,
         orderId: orderScope['orderId']!,
       );
-      expect(restored.single.qty, 30);
+      expect(restored, hasLength(2));
+      expect(_lineForProduct(restored, 'taco-pastor').qty, 30);
+      expect(_lineForProduct(restored, 'taco-asada').qty, 2);
 
       final submission = await store.freeze(
         restaurantId: orderScope['restaurantId']!,
@@ -121,9 +151,9 @@ void main() {
       );
       expect(retry['submissionId'], submission.id);
       expect(retry['payloadHash'], submission.payloadHash);
-      expect(retry['acceptedQty'], 30);
-      expect(retry['acceptedLineCount'], 1);
-      expect(retry['sentCount'], 1);
+      expect(retry['acceptedQty'], 32);
+      expect(retry['acceptedLineCount'], 2);
+      expect(retry['sentCount'], 2);
       expect(confirmedResult['submissionId'], retry['submissionId']);
       expect(confirmedResult['payloadHash'], retry['payloadHash']);
 
@@ -144,14 +174,26 @@ void main() {
           .doc('android-order')
           .collection('kitchenBatches')
           .get(const GetOptions(source: Source.server));
-      expect(items.docs, hasLength(1));
-      expect(items.docs.single.id, restored.single.id);
-      expect(items.docs.single.data()['qty'], 30);
-      expect(items.docs.single.data()['total'], 360);
-      expect(items.docs.single.data()['kitchenStatus'], 'sent');
+      expect(items.docs, hasLength(2));
+      final pastorItem = items.docs.singleWhere(
+        (item) => item.data()['productId'] == 'taco-pastor',
+      );
+      final asadaItem = items.docs.singleWhere(
+        (item) => item.data()['productId'] == 'taco-asada',
+      );
+      expect(pastorItem.data()['qty'], 30);
+      expect(pastorItem.data()['total'], 360);
+      expect(pastorItem.data()['personNumber'], 1);
+      expect(asadaItem.data()['qty'], 2);
+      expect(asadaItem.data()['total'], 36);
+      expect(asadaItem.data()['personNumber'], 2);
+      expect(
+        items.docs.every((item) => item.data()['kitchenStatus'] == 'sent'),
+        isTrue,
+      );
       expect(batches.docs, hasLength(1));
-      expect(order.data()?['total'], 360);
-      expect(order.data()?['pendingTotal'], 360);
+      expect(order.data()?['total'], 396);
+      expect(order.data()?['pendingTotal'], 396);
       expect(order.data()?['paymentStatus'], 'pending');
 
       await store.complete(submission);
@@ -174,6 +216,10 @@ LocalOrderCaptureLine _captureLine({
   required String uid,
   required String id,
   required int capturedAt,
+  required String productId,
+  required String productName,
+  required double unitPrice,
+  required int personNumber,
 }) => LocalOrderCaptureLine(
   id: id,
   restaurantId: 'local-capture-demo',
@@ -189,14 +235,14 @@ LocalOrderCaptureLine _captureLine({
   deviceUid: uid,
   employeeId: 'waiter-demo',
   employeeName: 'Mesero Demo',
-  personNumber: 1,
-  personName: 'Persona 1',
-  productId: 'taco-demo',
-  productName: 'Taco demo',
+  personNumber: personNumber,
+  personName: 'Persona $personNumber',
+  productId: productId,
+  productName: productName,
   categoryId: 'tacos',
   categoryName: 'Tacos',
   qty: 1,
-  unitPrice: 12,
+  unitPrice: unitPrice,
   notes: '',
   sendToKitchen: true,
   affectsKitchenStock: false,
@@ -210,3 +256,8 @@ LocalOrderCaptureLine _captureLine({
   priceSource: 'store',
   capturedAtMicros: 1_795_584_000_000_000 + capturedAt,
 );
+
+LocalOrderCaptureLine _lineForProduct(
+  List<LocalOrderCaptureLine> lines,
+  String productId,
+) => lines.singleWhere((line) => line.productId == productId);

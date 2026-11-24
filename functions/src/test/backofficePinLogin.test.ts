@@ -1,3 +1,4 @@
+import "../testEnvironment";
 import * as assert from "assert";
 import * as admin from "firebase-admin";
 import {backofficePinLoginCore, listBackofficeUsersCore} from "../index";

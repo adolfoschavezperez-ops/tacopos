@@ -16,9 +16,31 @@ void main() {
 
   for (final testCase in cases) {
     test('canonical Dart aggregate: ${testCase['name']}', () {
-      final itemTotals = (testCase['itemTotals'] as List<dynamic>)
-          .cast<num>()
-          .map((value) => value.toDouble());
+      final itemDetails = (testCase['itemDetails'] as List<dynamic>?)
+          ?.cast<Map<String, dynamic>>();
+      final itemTotals = itemDetails == null
+          ? (testCase['itemTotals'] as List<dynamic>)
+                .cast<num>()
+                .map((value) => value.toDouble())
+                .toList()
+          : itemDetails
+                .where(
+                  (item) =>
+                      !const {
+                        'cancelled',
+                        'canceled',
+                        'cancelado',
+                        'cancelada',
+                        'voided',
+                        'anulado',
+                        'anulada',
+                      }.contains(
+                        '${item['status'] ?? ''}'.trim().toLowerCase(),
+                      ) &&
+                      (item['qty'] as num? ?? 0) > 0,
+                )
+                .map((item) => (item['total'] as num).toDouble())
+                .toList();
       final grossTotal = itemTotals.fold<double>(
         0,
         (sum, value) => sum + value,

@@ -1,3 +1,4 @@
+import "../testEnvironment";
 import * as assert from "assert";
 import {createHash} from "crypto";
 import * as admin from "firebase-admin";
@@ -99,6 +100,78 @@ describe("submitLocalOrderCapture transaction", () => {
       assert.equal(items.size, 0);
       assert.equal(batches.size, 0);
     }
+  });
+
+  it("does not create an abort marker for an unregistered device", async () => {
+    await root.collection("devices").doc(uid).delete();
+    const request = requestFor("resolver-no-device", [line("line-no-device", 1, 10)]);
+    await assert.rejects(
+      () => resolveLocalOrderCaptureSubmissionCore(db, request, context()),
+      /permission-denied|dispositivo/i,
+    );
+    assert.equal((await root.collection("activityLog").doc("capture_submission_resolver-no-device").get()).exists, false);
+  });
+
+  it("does not create an abort marker for a device assigned to another branch", async () => {
+    await root.collection("devices").doc(uid).update({branchId: "branch-b"});
+    const request = requestFor("resolver-wrong-branch", [line("line-wrong-branch", 1, 10)]);
+    await assert.rejects(
+      () => resolveLocalOrderCaptureSubmissionCore(db, request, context()),
+      /permission-denied|sucursal/i,
+    );
+    assert.equal((await root.collection("activityLog").doc("capture_submission_resolver-wrong-branch").get()).exists, false);
+  });
+
+  it("does not create an abort marker for an inactive device or employee", async () => {
+    const request = requestFor("resolver-inactive-device", [line("line-inactive-device", 1, 10)]);
+    await root.collection("devices").doc(uid).update({active: false});
+    await assert.rejects(
+      () => resolveLocalOrderCaptureSubmissionCore(db, request, context()),
+      /permission-denied|dispositivo/i,
+    );
+    assert.equal((await root.collection("activityLog").doc("capture_submission_resolver-inactive-device").get()).exists, false);
+
+    await root.collection("devices").doc(uid).update({active: true});
+    await root.collection("employees").doc(employeeId).update({active: false});
+    const employeeRequest = requestFor("resolver-inactive-employee", [line("line-inactive-employee", 1, 10)]);
+    await assert.rejects(
+      () => resolveLocalOrderCaptureSubmissionCore(db, employeeRequest, context()),
+      /permission-denied|activo|permiso/i,
+    );
+    assert.equal((await root.collection("activityLog").doc("capture_submission_resolver-inactive-employee").get()).exists, false);
+  });
+
+  it("does not create an abort marker when the employee lost order permission", async () => {
+    await root.collection("employees").doc(employeeId).update({canTakeOrders: false});
+    const request = requestFor("resolver-no-permission", [line("line-no-permission", 1, 10)]);
+    await assert.rejects(
+      () => resolveLocalOrderCaptureSubmissionCore(db, request, context()),
+      /permission-denied|permiso/i,
+    );
+    assert.equal((await root.collection("activityLog").doc("capture_submission_resolver-no-permission").get()).exists, false);
+  });
+
+  it("does not create an abort marker when the order scope differs", async () => {
+    await root.collection("orders").doc(orderId).update({branchId: "branch-b"});
+    const request = requestFor("resolver-wrong-order-branch", [line("line-wrong-order-branch", 1, 10)]);
+    await assert.rejects(
+      () => resolveLocalOrderCaptureSubmissionCore(db, request, context()),
+      /failed-precondition|otra sucursal/i,
+    );
+    assert.equal((await root.collection("activityLog").doc("capture_submission_resolver-wrong-order-branch").get()).exists, false);
+  });
+
+  it("does not create an abort marker under another restaurant", async () => {
+    const otherRestaurant = db.collection("restaurants").doc("other-restaurant");
+    const request = {
+      ...requestFor("resolver-cross-restaurant", [line("line-cross-restaurant", 1, 10)]),
+      restaurantId: "other-restaurant",
+    };
+    await assert.rejects(
+      () => resolveLocalOrderCaptureSubmissionCore(db, request, context()),
+      /permission-denied|dispositivo/i,
+    );
+    assert.equal((await otherRestaurant.collection("activityLog").doc("capture_submission_resolver-cross-restaurant").get()).exists, false);
   });
 
   it("confirms products that do not require kitchen without creating a kitchen batch", async () => {
