@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../core/orders/local_order_capture.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../core/visits/visit_classification.dart';
@@ -17,6 +20,7 @@ import '../../widgets/loading_panel.dart';
 import '../../widgets/status_badge.dart';
 import '../../widgets/visit_survey_dialog.dart';
 import 'order_screen.dart';
+import 'local_order_capture_recovery_screen.dart';
 import 'takeout_orders_screen.dart';
 
 const IconData takeoutEntryIcon = Icons.two_wheeler;
@@ -40,6 +44,7 @@ class _TablesScreenState extends State<TablesScreen> {
   late String _restaurantId;
   int _streamGeneration = 0;
   bool _opening = false;
+  List<LocalOrderCaptureRecoveryEntry> _localCaptureRecoveryEntries = const [];
   bool _selectingTables = false;
   final Set<String> _selectedTableIds = {};
 
@@ -62,6 +67,38 @@ class _TablesScreenState extends State<TablesScreen> {
     );
     _tables = _watchTablesAfterReconciliation(_reconciliation, _repository);
     _orders = _repository.watchOpenOrders();
+    unawaited(_refreshLocalCaptureRecoveryEntries());
+  }
+
+  Future<void> _refreshLocalCaptureRecoveryEntries() async {
+    final restaurantId = _restaurantId;
+    final branchId = _branchId;
+    try {
+      final entries = await _repository.loadLocalOrderCaptureRecoveryEntries(
+        restaurantId: restaurantId,
+        branchId: branchId,
+      );
+      if (!mounted || restaurantId != _restaurantId || branchId != _branchId) {
+        return;
+      }
+      setState(() => _localCaptureRecoveryEntries = entries);
+    } catch (error) {
+      debugPrint('[TacoPOS][LocalCapture.recoveryList] error=$error');
+    }
+  }
+
+  Future<void> _openLocalCaptureRecovery() async {
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocalOrderCaptureRecoveryScreen(
+          repository: _repository,
+          restaurantId: _restaurantId,
+          branchId: _branchId,
+        ),
+      ),
+    );
+    await _refreshLocalCaptureRecoveryEntries();
   }
 
   @override
@@ -129,6 +166,7 @@ class _TablesScreenState extends State<TablesScreen> {
         context,
         MaterialPageRoute(builder: (_) => const TakeoutOrdersScreen()),
       );
+      await _refreshLocalCaptureRecoveryEntries();
       _markViewingTables();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
       return;
@@ -187,6 +225,7 @@ class _TablesScreenState extends State<TablesScreen> {
           ),
         ),
       );
+      await _refreshLocalCaptureRecoveryEntries();
       _markViewingTables();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToTop());
     } catch (error) {
@@ -235,6 +274,7 @@ class _TablesScreenState extends State<TablesScreen> {
           ),
         ),
       );
+      await _refreshLocalCaptureRecoveryEntries();
     } catch (error) {
       if (mounted) {
         showAppSnackBar(context, '$error', type: AppSnackBarType.error);
@@ -249,6 +289,14 @@ class _TablesScreenState extends State<TablesScreen> {
       _selectingTables = !_selectingTables;
       _selectedTableIds.clear();
     });
+  }
+
+  Future<void> _openStandingOrders() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const StandingOrdersScreen()),
+    );
+    await _refreshLocalCaptureRecoveryEntries();
   }
 
   Future<void> _changeTableFromBoard({
@@ -464,6 +512,15 @@ class _TablesScreenState extends State<TablesScreen> {
     return BrandedScaffold(
       title: 'Mesas',
       actions: [
+        if (_localCaptureRecoveryEntries.isNotEmpty)
+          IconButton(
+            tooltip: 'Comandas pendientes',
+            onPressed: _opening ? null : _openLocalCaptureRecovery,
+            icon: Badge(
+              label: Text('${_localCaptureRecoveryEntries.length}'),
+              child: const Icon(Icons.pending_actions_outlined),
+            ),
+          ),
         if (_opening)
           const Padding(
             padding: EdgeInsets.only(right: 16),
@@ -591,13 +648,7 @@ class _TablesScreenState extends State<TablesScreen> {
                                   compact: compact,
                                   onTap: _selectingTables
                                       ? null
-                                      : () => Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) =>
-                                                const StandingOrdersScreen(),
-                                          ),
-                                        ),
+                                      : _openStandingOrders,
                                 );
                               }
                               final table = visibleTables[index];

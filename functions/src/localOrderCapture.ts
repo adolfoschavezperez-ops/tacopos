@@ -15,7 +15,9 @@ export async function submitLocalOrderCaptureCore(
   context: AuthContext,
 ) {
   if (!context.auth?.uid) throw new HttpsError("unauthenticated", "Inicia sesion nuevamente.");
-  if (!context.app) throw new HttpsError("failed-precondition", "La app no pudo validar este envio.");
+  if (!context.app && process.env.FUNCTIONS_EMULATOR !== "true") {
+    throw new HttpsError("failed-precondition", "La app no pudo validar este envio.");
+  }
   const uid = context.auth.uid;
   const restaurantId = safeString(raw.restaurantId);
   const branchId = safeString(raw.branchId);
@@ -63,6 +65,10 @@ export async function submitLocalOrderCaptureCore(
         throw new HttpsError("already-exists", "Este identificador ya fue utilizado con otro contenido.");
       }
       if (markerData.createdBy !== uid) throw new HttpsError("permission-denied", "Este envio pertenece a otro dispositivo.");
+      if (markerData.state === "aborted") {
+        throw new HttpsError("failed-precondition", "Este envio fue cancelado de forma autoritativa y no puede confirmarse.");
+      }
+      if (!markerData.result) throw new HttpsError("data-loss", "El marcador de envio no tiene un resultado confirmado.");
       return markerData.result;
     }
 
@@ -278,6 +284,7 @@ export async function submitLocalOrderCaptureCore(
       serverElapsedMs: Date.now() - startedAt,
     };
     tx.create(markerRef, {
+      state: "committed",
       type: "local_order_capture_submitted",
       status: "confirmed",
       restaurantId,
@@ -298,6 +305,63 @@ export async function submitLocalOrderCaptureCore(
       result,
     });
     return result;
+  });
+}
+
+/**
+ * Atomically resolves an uncertain submission. Creating an aborted marker
+ * races on the same document as submitLocalOrderCapture's transaction: either
+ * the submission commits first and is returned, or the tombstone commits first
+ * and every in-flight/retried submission observes it and is rejected.
+ */
+export async function resolveLocalOrderCaptureSubmissionCore(
+  db: admin.firestore.Firestore,
+  raw: Data,
+  context: AuthContext,
+) {
+  if (!context.auth?.uid) throw new HttpsError("unauthenticated", "Inicia sesion nuevamente.");
+  if (!context.app && process.env.FUNCTIONS_EMULATOR !== "true") {
+    throw new HttpsError("failed-precondition", "La app no pudo validar este envio.");
+  }
+  const uid = context.auth.uid;
+  const restaurantId = safeString(raw.restaurantId);
+  const branchId = safeString(raw.branchId);
+  const orderId = safeString(raw.orderId);
+  const submissionId = safeString(raw.id);
+  const payloadHash = safeString(raw.payloadHash);
+  const sendToKitchen = raw.sendToKitchen === true;
+  if (![restaurantId, branchId, orderId].every(isSafeId) || !isSafeId(submissionId) || !/^[a-f0-9]{64}$/.test(payloadHash)) {
+    throw new HttpsError("invalid-argument", "La solicitud de recuperacion es invalida.");
+  }
+
+  const markerRef = db.collection("restaurants").doc(restaurantId)
+    .collection("activityLog").doc(`capture_submission_${submissionId}`);
+  return db.runTransaction(async (tx) => {
+    const marker = await tx.get(markerRef);
+    if (marker.exists) {
+      const data = marker.data() ?? {};
+      if (data.payloadHash !== payloadHash || data.orderId !== orderId ||
+          data.branchId !== branchId || data.sendToKitchen !== sendToKitchen) {
+        throw new HttpsError("already-exists", "Este identificador ya fue utilizado con otro contenido.");
+      }
+      if (data.createdBy !== uid) throw new HttpsError("permission-denied", "Este envio pertenece a otro dispositivo.");
+      if (data.state === "aborted") return {state: "aborted"};
+      if (!data.result) throw new HttpsError("data-loss", "El marcador de envio no tiene un resultado confirmado.");
+      return {state: "committed", result: data.result};
+    }
+    tx.create(markerRef, {
+      state: "aborted",
+      type: "local_order_capture_aborted",
+      restaurantId,
+      branchId,
+      orderId,
+      submissionId,
+      payloadHash,
+      sendToKitchen,
+      createdBy: uid,
+      createdAt: admin.firestore.Timestamp.now(),
+    });
+    return {state: "aborted"};
   });
 }
 
@@ -519,6 +583,7 @@ function paymentMonetary(payment: Data, base: number, discount: number) {
   return money(Math.max(0, readMoney(payment.chargedAmount) - tip - fee));
 }
 
+/** Mirrors Dart's legacy discounted-payment detection for Firestore map data. */
 function isFreeMeal(payment: Data) {
   const value = [payment.appliedDiscountType, payment.appliedDiscountName, payment.discountSource, payment.discountCatalogId, payment.discountName]
     .filter((entry) => typeof entry === "string").join(" ").toLowerCase();

@@ -7,7 +7,7 @@
   "main": "lib/index.js",
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && mocha --timeout 30000 \"lib/test/**/*.test.js\""
+    "test": "npm run build && node scripts/verify-test-emulator.js && mocha --timeout 30000 \"lib/test/**/*.test.js\""
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",

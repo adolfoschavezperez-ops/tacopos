@@ -95,6 +95,21 @@ void main() {
     _expectStat(tester, 'Pendiente', 100);
   });
 
+  testWidgets(
+    'pending frozen submission remains recoverable when all visible items are already confirmed',
+    (tester) async {
+      final repo = _CheckoutRepository()..pendingSubmission = true;
+      await _showOrder(tester, repo);
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('Reintentar envío pendiente'), findsOneWidget);
+      await tester.tap(find.byTooltip('Reintentar envío pendiente'));
+      await tester.pumpAndSettle();
+      expect(repo.events, contains('submit-local'));
+      expect(repo.sendModes, [true]);
+      expect(find.byType(OrderScreen), findsNothing);
+    },
+  );
+
   testWidgets('local non-kitchen capture is submitted before checkout', (
     tester,
   ) async {
@@ -129,6 +144,33 @@ void main() {
 
     expect(repo.localItems, hasLength(1));
     expect(repo.localItems.single.personNumber, 1);
+  });
+
+  testWidgets('Enviar locks edits and accepts one rapid submission', (
+    tester,
+  ) async {
+    final repo = _CheckoutRepository()
+      ..writeGate = Completer<void>()
+      ..kitchenProduct = true;
+    await _showOrder(tester, repo);
+    await tester.tap(find.text('Producto 30').last);
+    await tester.pumpAndSettle();
+
+    final sendButton = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Enviar').last,
+    );
+    sendButton.onPressed!();
+    sendButton.onPressed!();
+    await tester.pump();
+
+    expect(repo.sendModes, [true]);
+    expect(repo.events.where((event) => event == 'submit-local'), hasLength(1));
+    expect(find.byTooltip('Enviando comanda…'), findsOneWidget);
+
+    repo.writeGate!.complete();
+    await tester.pumpAndSettle();
+    expect(repo.events.where((event) => event == 'submit-local'), hasLength(1));
+    expect(find.byType(OrderScreen), findsNothing);
   });
 
   testWidgets('a rejected local write blocks checkout until exact tap retry', (
@@ -540,6 +582,8 @@ class _CheckoutRepository implements TacoPosRepository {
   Completer<void>? writeGate;
   Completer<void>? localCaptureGate;
   bool failNextLocalCapture = false;
+  bool pendingSubmission = false;
+  bool kitchenProduct = false;
   Completer<List<Payment>>? paymentsGate;
   String? failureStage;
   late PosOrder order = _reconciledOrder();
@@ -641,7 +685,7 @@ class _CheckoutRepository implements TacoPosRepository {
     required String orderId,
     String? restaurantId,
     String? branchId,
-  }) async => false;
+  }) async => pendingSubmission;
 
   @override
   Future<int> submitLocalOrderCapture({
@@ -661,7 +705,7 @@ class _CheckoutRepository implements TacoPosRepository {
     _stage('recalculate-server');
     order = _reconciledOrder();
     localItems.clear();
-    localItems.clear();
+    pendingSubmission = false;
     return submittedQty;
   }
 
@@ -766,10 +810,10 @@ class _CheckoutRepository implements TacoPosRepository {
         for (final price in [30, 40, 20])
           Product.fromMap('$price', {
             'name': 'Producto $price',
-            'category': 'Bebidas',
+            'category': kitchenProduct ? 'Tacos' : 'Bebidas',
             'price': price,
             'active': true,
-            'sendToKitchen': false,
+            'sendToKitchen': kitchenProduct,
           }),
       ]);
   @override

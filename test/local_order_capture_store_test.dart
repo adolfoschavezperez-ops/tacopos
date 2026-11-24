@@ -113,7 +113,7 @@ void main() {
   );
 
   test('server acknowledgement wins over same-ID local outbox draft', () {
-    final draft = line(id: 'same-id').toOrderItem();
+    final draft = line(id: 'lc_same-id').toOrderItem();
     final confirmed = OrderItem(
       id: draft.id,
       personNumber: draft.personNumber,
@@ -134,6 +134,8 @@ void main() {
       confirmedItems: [confirmed],
       localItems: [draft, remainingLocal],
     );
+    expect(draft.isLocalCaptureDraft, isTrue);
+    expect(confirmed.isLocalCaptureDraft, isFalse);
     expect(visible, hasLength(1));
     expect(visible.single.id, 'other-id');
     expect(visible.single.isLocalCaptureDraft, isTrue);
@@ -261,19 +263,55 @@ void main() {
       isEmpty,
     );
   });
+
+  test(
+    'recovery inventory groups drafts and frozen submissions by order',
+    () async {
+      await store.addTap(line(id: 'pending-line'));
+      final submission = await store.freeze(
+        restaurantId: 'restaurant-a',
+        branchId: 'branch-a',
+        orderId: 'order-a',
+        sendToKitchen: true,
+      );
+      await store.addTap(line(id: 'other-order-line', orderId: 'order-b'));
+      await store.addTap(
+        line(id: 'other-branch-line', orderId: 'order-c', branchId: 'branch-b'),
+      );
+
+      final entries = await store.loadRecoveryEntries(
+        restaurantId: 'restaurant-a',
+        branchId: 'branch-a',
+      );
+
+      expect(entries, hasLength(2));
+      final pending = entries.singleWhere(
+        (entry) => entry.orderId == 'order-a',
+      );
+      expect(pending.submission?.id, submission.id);
+      expect(pending.visibleLines.single.productName, 'Taco');
+      expect(pending.quantity, 1);
+      expect(pending.employeeNames, 'Waiter');
+      final draft = entries.singleWhere((entry) => entry.orderId == 'order-b');
+      expect(draft.submission, isNull);
+      expect(draft.visibleLines.single.id, 'other-order-line');
+    },
+  );
 }
 
 LocalOrderCaptureLine line({
   required String id,
   String productId = 'taco',
   int personNumber = 1,
+  String orderId = 'order-a',
+  String branchId = 'branch-a',
 }) => LocalOrderCaptureLine(
   id: id,
   restaurantId: 'restaurant-a',
   restaurantName: 'Restaurant',
-  branchId: 'branch-a',
+  branchId: branchId,
   branchName: 'Branch',
-  orderId: 'order-a',
+  orderId: orderId,
   tableId: 'table-a',
   tableName: 'Table 1',
   tableIds: const ['table-a'],

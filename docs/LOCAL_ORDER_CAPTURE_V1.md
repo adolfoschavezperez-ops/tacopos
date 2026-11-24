@@ -8,6 +8,7 @@ sequenceDiagram
     participant UI as OrderScreen
     participant DB as Sembast / IndexedDB
     participant Fn as submitLocalOrderCapture
+    participant Resolve as resolveLocalOrderCaptureSubmission
     participant FS as Firestore
 
     Mesero->>UI: Agrega producto
@@ -22,6 +23,9 @@ sequenceDiagram
     Fn->>FS: Crea artículos, lote/secuencia, totales y marcador
     FS-->>Fn: Commit atómico
     Fn-->>UI: Confirma hash y cantidades aceptadas
+    Note over UI,Resolve: Si se pierde la respuesta, se consulta el mismo marcador; nunca se infiere el resultado por el código de error
+    UI->>Resolve: Resuelve el submissionId original
+    Resolve->>FS: Devuelve committed o escribe tombstone aborted en el mismo documento
     UI->>FS: Recálculo financiero autoritativo existente
     UI->>FS: Lee orden desde servidor
     UI->>DB: Borra solo los renglones confirmados
@@ -39,7 +43,7 @@ Las líneas se agrupan localmente solo por dispositivo, empleado, persona, produ
 ## Atomicidad e idempotencia
 
 - `submitLocalOrderCapture` es una callable de `us-central1`, con Auth y App Check obligatorios; App Check consume el token de uso limitado.
-- El marcador `activityLog/capture_submission_{submissionId}` vincula UID, orden, sucursal, hash, modo Cocina y resultado. Mismo ID/contenido devuelve el resultado guardado; contenido, modo u propietario distintos se rechazan.
+- El marcador `activityLog/capture_submission_{submissionId}` vincula UID, orden, sucursal, hash, modo Cocina y resultado. Mismo ID/contenido devuelve el resultado guardado; contenido, modo u propietario distintos se rechazan. `resolveLocalOrderCaptureSubmission` lee el mismo marcador: devuelve un commit ya realizado o escribe un tombstone `aborted` en ese documento antes de permitir editar/reintentar con un ID nuevo. Una transacción de envío que compita con el tombstone no puede confirmar después.
 - La transacción valida dispositivo, empleado y sucursal; orden no terminal; precios y producto actuales; stockout; pagos, artículos y mesas vinculadas. Después crea artículos, ajusta agregados, Cocina/secuencia/lote y marcador en la misma transacción.
 - No usa IDs de artículos del cliente como IDs de Firestore. No reemplaza el contenido de la orden.
 - Límite preventivo: 350 líneas, 700 KB UTF-8 y máximo estimado de 450 escrituras. El error conserva el borrador; no hay envío parcial.
@@ -55,7 +59,7 @@ Las líneas se agrupan localmente solo por dispositivo, empleado, persona, produ
 | Backoffice actual | Sin cambios de código ni ruta de captura | No se añade campo obligatorio a documentos históricos ni se ejecuta migración. |
 | Órdenes históricas | Se valida el documento existente y el predicado de estado portado; se leen todos sus artículos/pagos | No depende de fecha, nuevos campos ni migración histórica. |
 
-Rules desplegadas revisadas previamente son permisivas para las escrituras existentes; la callable usa Admin SDK y no depende de una regla nueva. No se modificaron Rules ni índices. Las Rules locales completas se probaron en Emulator. Las escrituras heredadas siguen habilitadas durante la transición: un APK viejo no puede enviar un renglón local que nunca recibió, pero la exclusión criptográfica de todo cliente antiguo requiere una política de versión/Rules de servidor futura y una etapa separada. El servidor no puede conocer borradores que siguen completamente offline en otra tablet.
+La Rule local de `activityLog` bloquea cualquier escritura de cliente cuyo ID comience `capture_submission_`; sólo la callable Admin SDK puede crear el marcador. La prueba de Rules Emulator verifica falsificación, modificación y eliminación negativas. **No se pudo verificar la versión desplegada de Rules**: la ruta de lectura remota falló por la configuración local de certificados de gcloud. La publicación queda bloqueada hasta comprobar que la Rule del marcador está desplegada. No se modificaron Rules ni índices en este cambio. Las escrituras heredadas siguen habilitadas durante la transición: un APK viejo no puede enviar un renglón local que nunca recibió, pero la exclusión criptográfica de todo cliente antiguo requiere una política de versión/Rules de servidor futura y una etapa separada. El servidor no puede conocer borradores que siguen completamente offline en otra tablet.
 
 ### Activación gradual
 
@@ -74,7 +78,7 @@ El servidor no puede descubrir una captura que todavía existe únicamente en el
 3. Si una tablet presenta un borrador pendiente o un envío de resultado incierto, reintentar el mismo `submissionId` desde esa tablet. No borrar los datos de la app, reinstalarla ni volver a capturar esos renglones en otro dispositivo.
 4. Si una orden desaparece de Mesas mientras conserva datos locales en una tablet, detener su cobro y solicitar recuperación desde esa misma tablet y orden. No crear automáticamente otra orden ni trasladar renglones a una orden distinta.
 
-Esta política no sincroniza borradores offline entre dispositivos. La herramienta de inventario/recuperación de borradores huérfanos todavía no existe y es un pendiente P1-08: una orden ausente de Mesas sin acceso a su pantalla no tiene una ruta de soporte dentro de la aplicación. Debe resolverse antes de declarar la captura offline operativamente completa. Clientes Android anteriores y Backoffice pueden seguir escribiendo por sus rutas existentes; no se asume que la instalación de la nueva versión los haya retirado.
+Esta política no sincroniza borradores offline entre dispositivos. La pantalla **Comandas pendientes** inventaría borradores y envíos congelados locales por sucursal, muestra renglones/cantidades/importe y permite abrir desde servidor sólo una orden activa de la misma sucursal. Una orden terminal, ausente o de otra sucursal queda como incidencia recuperable; el flujo no la reabre, transfiere ni elimina. Clientes Android anteriores y Backoffice pueden seguir escribiendo por sus rutas existentes; no se asume que la instalación de la nueva versión los haya retirado.
 
 ## Métricas
 

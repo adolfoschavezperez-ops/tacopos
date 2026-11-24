@@ -1,13 +1,17 @@
 import * as admin from "firebase-admin";
 import {logger} from "firebase-functions";
 import {HttpsError, onCall} from "firebase-functions/v2/https";
-import {submitLocalOrderCaptureCore} from "./localOrderCapture";
-export {submitLocalOrderCaptureCore};
+import {
+  resolveLocalOrderCaptureSubmissionCore,
+  submitLocalOrderCaptureCore,
+} from "./localOrderCapture";
+export {resolveLocalOrderCaptureSubmissionCore, submitLocalOrderCaptureCore};
 
 admin.initializeApp();
 
 const db = admin.firestore();
 const region = "us-central1";
+const enforceCaptureAppCheck = process.env.FUNCTIONS_EMULATOR !== "true";
 
 type Mode = "off" | "shadow" | "live";
 type SubmitStatus = "approved" | "pending";
@@ -122,10 +126,19 @@ export const submitExpenseRequest = onCall(
 export const submitLocalOrderCapture = onCall(
   {
     region,
-    enforceAppCheck: true,
+    enforceAppCheck: enforceCaptureAppCheck,
     consumeAppCheckToken: true,
   },
   async (request) => submitLocalOrderCaptureCore(db, request.data, request),
+);
+
+export const resolveLocalOrderCaptureSubmission = onCall(
+  {
+    region,
+    enforceAppCheck: enforceCaptureAppCheck,
+    consumeAppCheckToken: true,
+  },
+  async (request) => resolveLocalOrderCaptureSubmissionCore(db, request.data, request),
 );
 
 export const cancelExpenseRequest = onCall(

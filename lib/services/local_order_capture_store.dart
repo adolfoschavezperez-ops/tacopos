@@ -49,6 +49,58 @@ class LocalOrderCaptureStore {
         .toList(growable: false);
   }
 
+  Future<List<LocalOrderCaptureRecoveryEntry>> loadRecoveryEntries({
+    required String restaurantId,
+    required String branchId,
+  }) async {
+    final scope = Filter.and([
+      Filter.equals('restaurantId', restaurantId),
+      Filter.equals('branchId', branchId),
+    ]);
+    final lineRows = await _lineStore.find(
+      _database,
+      finder: Finder(
+        filter: scope,
+        sortOrders: [SortOrder('capturedAtMicros'), SortOrder('id')],
+      ),
+    );
+    final submissionRows = await _submissionStore.find(
+      _database,
+      finder: Finder(
+        filter: Filter.and([scope, Filter.equals('state', 'pending')]),
+        sortOrders: [SortOrder('createdAtMicros')],
+      ),
+    );
+    final linesByOrder = <String, List<LocalOrderCaptureLine>>{};
+    for (final row in lineRows) {
+      final line = LocalOrderCaptureLine.fromMap(row.value);
+      (linesByOrder[line.orderId] ??= []).add(line);
+    }
+    final submissionsByOrder = <String, LocalOrderCaptureSubmission>{};
+    for (final row in submissionRows) {
+      final submission = LocalOrderCaptureSubmission.fromMap(row.value);
+      final previous = submissionsByOrder[submission.orderId];
+      if (previous != null) {
+        throw StateError(
+          'Hay varios envios pendientes para la orden ${submission.orderId}.',
+        );
+      }
+      submissionsByOrder[submission.orderId] = submission;
+    }
+    final orderIds = {...linesByOrder.keys, ...submissionsByOrder.keys};
+    final entries = orderIds.map((orderId) {
+      return LocalOrderCaptureRecoveryEntry(
+        restaurantId: restaurantId,
+        branchId: branchId,
+        orderId: orderId,
+        lines: List.unmodifiable(linesByOrder[orderId] ?? const []),
+        submission: submissionsByOrder[orderId],
+      );
+    }).toList();
+    entries.sort((a, b) => a.capturedAt.compareTo(b.capturedAt));
+    return List.unmodifiable(entries);
+  }
+
   Stream<List<LocalOrderCaptureLine>> watchLines({
     required String restaurantId,
     required String branchId,
@@ -370,10 +422,10 @@ class LocalOrderCaptureStore {
         await _submissionStore.record(stored.id).delete(transaction);
       });
 
-  /// Opens a frozen submission only after the callable returned a definitive
-  /// domain rejection (never for timeout/network/unknown outcomes). Draft lines
-  /// remain durable and can then be reviewed or edited.
-  Future<void> releaseDefinitivelyRejected(
+  /// Opens a frozen submission only after the server has atomically written an
+  /// abort tombstone on its idempotency marker. This makes any in-flight older
+  /// submission transaction observe the tombstone instead of committing later.
+  Future<void> releaseAuthoritativelyAborted(
     LocalOrderCaptureSubmission submission,
   ) => _database.transaction((transaction) async {
     final current = await _submissionStore

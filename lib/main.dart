@@ -1,5 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -11,11 +13,47 @@ import 'services/operational_session_service.dart';
 import 'widgets/app_update_gate.dart';
 import 'widgets/expense_cutoff_reminder_coordinator.dart';
 
+const _useFirebaseEmulators = bool.fromEnvironment(
+  'TACOPOS_FIREBASE_EMULATORS',
+  defaultValue: false,
+);
+const _emulatorProjectId = String.fromEnvironment(
+  'TACOPOS_EMULATOR_PROJECT_ID',
+  defaultValue: 'demo-tacopos-local-capture',
+);
+const _emulatorHost = String.fromEnvironment(
+  'TACOPOS_EMULATOR_HOST',
+  defaultValue: '10.0.2.2',
+);
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  await _activateAppCheck();
+  if (_useFirebaseEmulators &&
+      (!kDebugMode || !_emulatorProjectId.startsWith('demo-'))) {
+    throw StateError(
+      'El modo Firebase Emulator solo admite debug y proyectos demo-*.',
+    );
+  }
+  await Firebase.initializeApp(
+    options: _useFirebaseEmulators
+        ? FirebaseOptions(
+            apiKey: 'emulator-only-invalid-key',
+            appId: '1:000000000000:android:0000000000000000000000',
+            messagingSenderId: '000000000000',
+            projectId: _emulatorProjectId,
+          )
+        : DefaultFirebaseOptions.currentPlatform,
+  );
+  if (_useFirebaseEmulators) {
+    FirebaseAuth.instance.useAuthEmulator(_emulatorHost, 9099);
+    FirebaseFirestore.instance.useFirestoreEmulator(_emulatorHost, 8080);
+    FirebaseFunctions.instanceFor(
+      region: 'us-central1',
+    ).useFunctionsEmulator(_emulatorHost, 5001);
+  } else {
+    await _activateAppCheck();
+  }
   await _ensureAnonymousLogin();
 
   runApp(const TacoPosApp());
@@ -60,6 +98,8 @@ class TacoPosApp extends StatelessWidget {
               child: child ?? const SizedBox.shrink(),
             ),
       home: kIsWeb
+          ? const LoginGate()
+          : _useFirebaseEmulators
           ? const LoginGate()
           : const AppUpdateGate(child: LoginGate()),
     );

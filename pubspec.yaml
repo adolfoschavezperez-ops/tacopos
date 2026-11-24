@@ -52,6 +52,8 @@ dependencies:
 
 dev_dependencies:
   firebase_core_platform_interface: ^8.1.0
+  integration_test:
+    sdk: flutter
   flutter_test:
     sdk: flutter
 

@@ -1,7 +1,10 @@
 import * as assert from "assert";
 import {createHash} from "crypto";
 import * as admin from "firebase-admin";
-import {submitLocalOrderCaptureCore} from "../index";
+import {
+  resolveLocalOrderCaptureSubmissionCore,
+  submitLocalOrderCaptureCore,
+} from "../index";
 
 const db = admin.firestore();
 const restaurantId = "local-capture-test";
@@ -53,6 +56,49 @@ describe("submitLocalOrderCapture transaction", () => {
     assert.equal(items.docs[0].data().qty, 2);
     assert.equal(batches.size, 1);
     assert.equal((await root.collection("activityLog").doc("capture_submission_submission-retry").get()).data()?.sendToKitchen, true);
+  });
+
+  it("resolution recovers a committed result after a lost callable response", async () => {
+    const request = requestFor("submission-lost-response", [line("line-lost", 2, 10)]);
+    const submitted = await submitLocalOrderCaptureCore(db, request, context()) as Record<string, unknown>;
+    const resolved = await resolveLocalOrderCaptureSubmissionCore(db, request, context()) as Record<string, unknown>;
+    assert.equal(resolved.state, "committed");
+    assert.deepEqual(resolved.result, submitted);
+    assert.equal((await root.collection("orders").doc(orderId).collection("items").get()).size, 1);
+    assert.equal((await root.collection("orders").doc(orderId).collection("kitchenBatches").get()).size, 1);
+  });
+
+  it("authoritative abort tombstone prevents a delayed submission from committing", async () => {
+    const request = requestFor("submission-aborted", [line("line-aborted", 2, 10)]);
+    const result = await resolveLocalOrderCaptureSubmissionCore(db, request, context()) as Record<string, unknown>;
+    assert.equal(result.state, "aborted");
+    await assert.rejects(
+      () => submitLocalOrderCaptureCore(db, request, context()),
+      /failed-precondition|cancelado de forma autoritativa/i,
+    );
+    assert.equal((await root.collection("orders").doc(orderId).collection("items").get()).size, 0);
+    assert.equal((await root.collection("orders").doc(orderId).collection("kitchenBatches").get()).size, 0);
+  });
+
+  it("submit and abort race on one marker and cannot produce a partial duplicate", async () => {
+    const request = requestFor("submission-race-resolution", [line("line-race", 4, 10)]);
+    const outcomes = await Promise.allSettled([
+      submitLocalOrderCaptureCore(db, request, context()),
+      resolveLocalOrderCaptureSubmissionCore(db, request, context()),
+    ]);
+    const marker = (await root.collection("activityLog").doc("capture_submission_submission-race-resolution").get()).data()!;
+    const items = await root.collection("orders").doc(orderId).collection("items").get();
+    const batches = await root.collection("orders").doc(orderId).collection("kitchenBatches").get();
+    assert.equal(marker.state === "committed" || marker.state === "aborted", true);
+    if (marker.state === "committed") {
+      assert.equal(outcomes.some((outcome) => outcome.status === "fulfilled"), true);
+      assert.equal(items.size, 1);
+      assert.equal(items.docs[0].data().qty, 4);
+      assert.equal(batches.size, 1);
+    } else {
+      assert.equal(items.size, 0);
+      assert.equal(batches.size, 0);
+    }
   });
 
   it("confirms products that do not require kitchen without creating a kitchen batch", async () => {

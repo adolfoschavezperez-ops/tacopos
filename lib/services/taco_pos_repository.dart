@@ -11303,6 +11303,36 @@ class TacoPosRepository {
         null;
   }
 
+  Future<List<LocalOrderCaptureRecoveryEntry>>
+  loadLocalOrderCaptureRecoveryEntries({
+    required String restaurantId,
+    required String branchId,
+  }) async {
+    if (AppSession.instance.employee == null) return const [];
+    return (await _localOrderCaptureStore).loadRecoveryEntries(
+      restaurantId: restaurantId,
+      branchId: branchId,
+    );
+  }
+
+  Future<PosOrder> getOrderForLocalCaptureRecovery(
+    LocalOrderCaptureRecoveryEntry entry,
+  ) async {
+    if (entry.restaurantId != AppSession.instance.currentRestaurantId ||
+        entry.branchId != AppSession.instance.currentBranchId) {
+      throw StateError('La comanda pertenece a otra sucursal.');
+    }
+    final order = await getOrderOnce(entry.orderId, source: Source.server);
+    if (order.restaurantId != entry.restaurantId ||
+        order.branchId != entry.branchId) {
+      throw StateError('La comanda pertenece a otra sucursal.');
+    }
+    if (!isActiveOrderState(order)) {
+      throw StateError('La comanda ya esta pagada o cancelada.');
+    }
+    return order;
+  }
+
   LocalOrderCaptureLine createLocalOrderCaptureLine({
     required PosOrder order,
     required Product product,
@@ -11441,22 +11471,6 @@ class TacoPosRepository {
     required String itemId,
   }) => setLocalOrderCaptureQty(orderId: orderId, itemId: itemId, qty: 0);
 
-  Future<void> releaseDefinitivelyRejectedLocalOrderCapture({
-    required String orderId,
-    String? restaurantId,
-    String? branchId,
-  }) async {
-    final store = await _localOrderCaptureStore;
-    final submission = await store.pendingSubmission(
-      restaurantId: restaurantId ?? AppSession.instance.currentRestaurantId,
-      branchId: branchId ?? AppSession.instance.currentBranchId,
-      orderId: orderId.trim(),
-    );
-    if (submission != null) {
-      await store.releaseDefinitivelyRejected(submission);
-    }
-  }
-
   Future<int> submitLocalOrderCapture({
     required String orderId,
     required bool sendToKitchen,
@@ -11484,7 +11498,28 @@ class TacoPosRepository {
           orderId: orderId.trim(),
           sendToKitchen: sendToKitchen,
         );
-    final response = await _localOrderCaptureSubmitter.submit(submission);
+    late Map<String, dynamic> response;
+    try {
+      response = await _localOrderCaptureSubmitter.submit(submission);
+    } catch (submitError, submitStack) {
+      // An error from the callable is not proof that its transaction did not
+      // commit. Resolve against a server-side tombstone on the same marker
+      // document before allowing the operator to edit or create a new ID.
+      late Map<String, dynamic> resolution;
+      try {
+        resolution = await _localOrderCaptureSubmitter.resolve(submission);
+      } catch (_) {
+        Error.throwWithStackTrace(submitError, submitStack);
+      }
+      if (resolution['state'] == 'committed' && resolution['result'] is Map) {
+        response = Map<String, dynamic>.from(resolution['result'] as Map);
+      } else if (resolution['state'] == 'aborted') {
+        await store.releaseAuthoritativelyAborted(submission);
+        throw LocalOrderCaptureSafelyAborted(submitError);
+      } else {
+        Error.throwWithStackTrace(submitError, submitStack);
+      }
+    }
     developer.log(
       '[TacoPOS][LocalCapture.serverConfirmed] orderId=${orderId.trim()} submissionId=${submission.id} acceptedLines=${response['acceptedLineCount']} acceptedQty=${response['acceptedQty']} serverElapsedMs=${response['serverElapsedMs']} transactionAttempts=${response['transactionAttempts']} collectionQueries=${response['collectionQueries']} readDocuments=${response['readDocuments']} writeOperations=${response['writeOperations']}',
     );

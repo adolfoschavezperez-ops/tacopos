@@ -83,7 +83,8 @@ class _OrderScreenState extends State<OrderScreen> {
   bool _busy = false;
   bool _sendingToKitchen = false;
   bool _editingFrozen = false;
-  bool _allowExitWithLocalDrafts = false;
+  bool _hasPendingLocalSubmission = false;
+  bool _allowExitWithLocalCaptureState = false;
   bool _exitConfirmationOpen = false;
   String? _lastOrderDebugSignature;
   String? _lastItemsDebugSignature;
@@ -160,6 +161,7 @@ class _OrderScreenState extends State<OrderScreen> {
     _boundRestaurantId = AppSession.instance.currentRestaurantId;
     _boundBranchId = AppSession.instance.currentBranchId;
     _editingFrozen = false;
+    _hasPendingLocalSubmission = false;
     debugPrint(
       '[TacoPOS][OrderScreen.bind] tableId=${widget.tableId ?? '-'} '
       'tableName=${widget.tableName} receivedOrderId=${widget.orderId} '
@@ -178,7 +180,10 @@ class _OrderScreenState extends State<OrderScreen> {
         branchId: _boundBranchId,
       );
       if (!mounted || orderId != _boundOrderId || !pending) return;
-      setState(() => _editingFrozen = true);
+      setState(() {
+        _hasPendingLocalSubmission = true;
+        _editingFrozen = true;
+      });
     } catch (error) {
       debugPrint(
         '[TacoPOS][LocalCapture.pendingCheck] orderId=$orderId error=$error',
@@ -309,15 +314,10 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _sendToKitchen() async {
-    if (_editingFrozen && _busy) return;
-    if (AppSession.instance.employee?.canTakeOrders != true) {
-      _showMessage('No tienes permiso para levantar pedidos');
-      return;
-    }
-    if (_busy) {
-      return;
-    }
-
+    // Establish the edit barrier before the first asynchronous lookup. A
+    // double tap or a new capture accepted while checking the local outbox
+    // could otherwise start a second submission with a different snapshot.
+    if (_busy || (_editingFrozen && !_hasPendingLocalSubmission)) return;
     _editingFrozen = true;
     setState(() {
       _busy = true;
@@ -327,15 +327,28 @@ class _OrderScreenState extends State<OrderScreen> {
     var submissionAttempted = false;
     var preserveEditingLock = false;
     try {
+      final hasPendingSubmission =
+          _hasPendingLocalSubmission ||
+          await _repository.hasPendingLocalOrderCaptureSubmission(
+            orderId: _boundOrderId,
+            restaurantId: _boundRestaurantId,
+            branchId: _boundBranchId,
+          );
+      if (AppSession.instance.employee?.canTakeOrders != true &&
+          !hasPendingSubmission) {
+        _showMessage('No tienes permiso para levantar pedidos');
+        return;
+      }
       await _waitForAcceptedRemoteMutations();
       await _repository.flushPendingMutations(_boundOrderId);
       await _waitForAcceptedLocalMutations();
       LivePresenceService.instance.update(currentAction: 'Enviando cocina');
-      final hadLocalDrafts = await _repository.hasLocalOrderCapture(
+      final hasLocalLines = await _repository.hasLocalOrderCapture(
         orderId: _boundOrderId,
         restaurantId: _boundRestaurantId,
         branchId: _boundBranchId,
       );
+      final hadLocalDrafts = hasLocalLines || hasPendingSubmission;
       final sentCount = hadLocalDrafts
           ? await (() async {
               submissionAttempted = true;
@@ -348,6 +361,7 @@ class _OrderScreenState extends State<OrderScreen> {
             })()
           : await _repository.sendOrderToKitchen(_boundOrderId);
       submissionAttempted = false;
+      _hasPendingLocalSubmission = false;
       if (!mounted) {
         return;
       }
@@ -371,15 +385,9 @@ class _OrderScreenState extends State<OrderScreen> {
       }
 
       if (submissionAttempted) {
-        if (_isDefinitiveSubmissionRejection(error)) {
-          await _repository.releaseDefinitivelyRejectedLocalOrderCapture(
-            orderId: _boundOrderId,
-            restaurantId: _boundRestaurantId,
-            branchId: _boundBranchId,
-          );
-        } else {
-          preserveEditingLock = true;
-        }
+        final safelyAborted = error is LocalOrderCaptureSafelyAborted;
+        _hasPendingLocalSubmission = !safelyAborted;
+        preserveEditingLock = !safelyAborted;
       }
 
       _showSubmissionFailure(error, onRetry: () => unawaited(_sendToKitchen()));
@@ -410,11 +418,19 @@ class _OrderScreenState extends State<OrderScreen> {
     try {
       await _waitForAcceptedRemoteMutations();
       await _waitForAcceptedLocalMutations();
-      if (await _repository.hasLocalOrderCapture(
+      final hasLocalLines = await _repository.hasLocalOrderCapture(
         orderId: operationOrderId,
         restaurantId: _boundRestaurantId,
         branchId: _boundBranchId,
-      )) {
+      );
+      final hasPendingSubmission =
+          _hasPendingLocalSubmission ||
+          await _repository.hasPendingLocalOrderCaptureSubmission(
+            orderId: operationOrderId,
+            restaurantId: _boundRestaurantId,
+            branchId: _boundBranchId,
+          );
+      if (hasLocalLines || hasPendingSubmission) {
         submittingLocalDraft = true;
         await _repository.submitLocalOrderCapture(
           orderId: operationOrderId,
@@ -423,6 +439,7 @@ class _OrderScreenState extends State<OrderScreen> {
           branchId: _boundBranchId,
         );
         submittingLocalDraft = false;
+        _hasPendingLocalSubmission = false;
       }
       await _repository.flushPendingMutations(operationOrderId);
       await _repository.prepareOrderForCheckout(
@@ -448,15 +465,9 @@ class _OrderScreenState extends State<OrderScreen> {
     } catch (error) {
       if (!mounted) return;
       if (submittingLocalDraft) {
-        if (_isDefinitiveSubmissionRejection(error)) {
-          await _repository.releaseDefinitivelyRejectedLocalOrderCapture(
-            orderId: operationOrderId,
-            restaurantId: _boundRestaurantId,
-            branchId: _boundBranchId,
-          );
-        } else {
-          preserveEditingLock = true;
-        }
+        final safelyAborted = error is LocalOrderCaptureSafelyAborted;
+        _hasPendingLocalSubmission = !safelyAborted;
+        preserveEditingLock = !safelyAborted;
         _showSubmissionFailure(error, onRetry: () => unawaited(_openPayment()));
       } else {
         _showMessage(
@@ -947,18 +958,6 @@ class _OrderScreenState extends State<OrderScreen> {
       );
   }
 
-  bool _isDefinitiveSubmissionRejection(Object error) {
-    if (error is! FirebaseFunctionsException) return false;
-    return const {
-      'permission-denied',
-      'unauthenticated',
-      'failed-precondition',
-      'invalid-argument',
-      'resource-exhausted',
-      'not-found',
-    }.contains(error.code);
-  }
-
   Future<void> _handleAddProduct(Product product, bool stockedOut) async {
     if (_editingFrozen) return;
     try {
@@ -1014,11 +1013,19 @@ class _OrderScreenState extends State<OrderScreen> {
 
         return PopScope<Object?>(
           canPop:
-              !_busy && (_allowExitWithLocalDrafts || _localDraftItems.isEmpty),
+              !_busy &&
+              (_allowExitWithLocalCaptureState ||
+                  (_localDraftItems.isEmpty &&
+                      !_hasPendingLocalSubmission &&
+                      _failedLocalMutations.isEmpty)),
           onPopInvokedWithResult: (didPop, result) {
+            final hasLocalCaptureState =
+                _localDraftItems.isNotEmpty ||
+                _hasPendingLocalSubmission ||
+                _failedLocalMutations.isNotEmpty;
             if (didPop ||
                 _busy ||
-                _localDraftItems.isEmpty ||
+                !hasLocalCaptureState ||
                 _exitConfirmationOpen) {
               return;
             }
@@ -1040,6 +1047,7 @@ class _OrderScreenState extends State<OrderScreen> {
                     items: _loadedItems,
                     busy: _busy,
                     sending: _sendingToKitchen,
+                    hasPendingLocalSubmission: _hasPendingLocalSubmission,
                     itemsLoaded: !_itemsLoading,
                     onSendToKitchen: _sendToKitchen,
                     onOpenPayment: _openPayment,
@@ -1122,6 +1130,12 @@ class _OrderScreenState extends State<OrderScreen> {
                                     : _retryFailedLocalMutations,
                                 child: const Text('Reintentar'),
                               ),
+                              TextButton(
+                                onPressed: _editingFrozen
+                                    ? null
+                                    : _discardFailedLocalMutations,
+                                child: const Text('Descartar'),
+                              ),
                             ],
                           ),
                         ),
@@ -1137,12 +1151,20 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _confirmExitWithLocalDrafts() async {
+    final hasFailedOnlyInMemory = _failedLocalMutations.isNotEmpty;
+    final hasPendingSubmission = _hasPendingLocalSubmission;
     final shouldExit = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Productos guardados en este dispositivo'),
-        content: const Text(
-          'La comanda no se ha confirmado en el servidor. Si sales, el borrador se conservara en esta tablet y podras recuperarlo al reabrir la misma orden.',
+        title: Text(
+          hasFailedOnlyInMemory
+              ? 'Hay un cambio que no se guardó'
+              : 'Hay una captura local pendiente',
+        ),
+        content: Text(
+          '${hasFailedOnlyInMemory ? 'El cambio fallido nunca quedó guardado; salir lo descarta. ' : ''}'
+          '${hasPendingSubmission ? 'El resultado del envío todavía debe comprobarse. ' : ''}'
+          '${_localDraftItems.isNotEmpty ? 'Los productos guardados en esta tablet se conservarán para recuperarlos desde “Comandas pendientes”.' : ''}',
         ),
         actions: [
           TextButton(
@@ -1151,7 +1173,11 @@ class _OrderScreenState extends State<OrderScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Salir conservando borrador'),
+            child: Text(
+              hasFailedOnlyInMemory
+                  ? 'Descartar cambio y salir'
+                  : 'Salir conservando captura',
+            ),
           ),
         ],
       ),
@@ -1159,9 +1185,35 @@ class _OrderScreenState extends State<OrderScreen> {
     if (!mounted) return;
     setState(() {
       _exitConfirmationOpen = false;
-      _allowExitWithLocalDrafts = shouldExit == true;
+      if (shouldExit == true) _failedLocalMutations.clear();
+      _allowExitWithLocalCaptureState = shouldExit == true;
     });
     if (shouldExit == true) Navigator.pop(context);
+  }
+
+  Future<void> _discardFailedLocalMutations() async {
+    if (_failedLocalMutations.isEmpty || _editingFrozen) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Descartar cambio no guardado'),
+        content: const Text(
+          'Este cambio no llegó a guardarse en la tablet y no se agregó a la comanda. Al descartarlo, esa pulsación no se recuperará.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Conservar y reintentar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Descartar cambio'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || confirmed != true) return;
+    setState(_failedLocalMutations.clear);
   }
 
   void _logOrderDebug(PosOrder order) {
@@ -2271,6 +2323,7 @@ class _TopOrderActions extends StatelessWidget {
     required this.items,
     required this.busy,
     required this.sending,
+    required this.hasPendingLocalSubmission,
     required this.itemsLoaded,
     required this.onSendToKitchen,
     required this.onOpenPayment,
@@ -2286,6 +2339,7 @@ class _TopOrderActions extends StatelessWidget {
   final List<OrderItem> items;
   final bool busy;
   final bool sending;
+  final bool hasPendingLocalSubmission;
   final bool itemsLoaded;
   final VoidCallback onSendToKitchen;
   final VoidCallback onOpenPayment;
@@ -2303,9 +2357,14 @@ class _TopOrderActions extends StatelessWidget {
     final currentOrder = order;
     final pendingKitchenCount = awaitingKitchenSendItemsCount(items);
     final hadKitchenSend = items.any(itemWasSentToKitchen);
-    final canSend = canTakeOrders && !busy && pendingKitchenCount > 0;
+    final canSend =
+        !busy &&
+        ((canTakeOrders && pendingKitchenCount > 0) ||
+            hasPendingLocalSubmission);
     final sendLabel = sending
         ? 'Enviando comanda…'
+        : hasPendingLocalSubmission
+        ? 'Reintentar envío pendiente'
         : pendingKitchenCount == 0
         ? 'Cocina al dia'
         : hadKitchenSend
@@ -2323,7 +2382,9 @@ class _TopOrderActions extends StatelessWidget {
     final canAttemptCharge =
         canCharge &&
         currentOrder != null &&
-        (currentOrder.total > 0 || activeOrderItemsTotal(items) > 0) &&
+        (currentOrder.total > 0 ||
+            activeOrderItemsTotal(items) > 0 ||
+            hasPendingLocalSubmission) &&
         !busy &&
         itemsLoaded;
     final chargeLabel = hasKitchenWorkBeforeCheckout

@@ -7,6 +7,15 @@ import '../../models/product_recipe_item.dart';
 
 const localOrderCaptureSchemaVersion = 1;
 
+class LocalOrderCaptureSafelyAborted implements Exception {
+  const LocalOrderCaptureSafelyAborted(this.cause);
+
+  final Object cause;
+
+  @override
+  String toString() => 'El envio se cancelo de forma segura: $cause';
+}
+
 List<OrderItem> unacknowledgedLocalCaptureDrafts({
   required Iterable<OrderItem> confirmedItems,
   required Iterable<OrderItem> localItems,
@@ -316,6 +325,48 @@ class LocalOrderCaptureSubmission {
       schemaVersion: schemaVersion,
     );
   }
+}
+
+class LocalOrderCaptureRecoveryEntry {
+  const LocalOrderCaptureRecoveryEntry({
+    required this.restaurantId,
+    required this.branchId,
+    required this.orderId,
+    required this.lines,
+    this.submission,
+  });
+
+  final String restaurantId;
+  final String branchId;
+  final String orderId;
+  final List<LocalOrderCaptureLine> lines;
+  final LocalOrderCaptureSubmission? submission;
+
+  List<LocalOrderCaptureLine> get visibleLines => submission?.lines ?? lines;
+  int get quantity => visibleLines.fold(0, (sum, line) => sum + line.qty);
+  double get amount => visibleLines.fold(0, (sum, line) => sum + line.total);
+  DateTime get capturedAt => DateTime.fromMicrosecondsSinceEpoch(
+    visibleLines.isEmpty
+        ? submission?.createdAtMicros ?? 0
+        : visibleLines
+              .map((line) => line.capturedAtMicros)
+              .reduce((a, b) => a < b ? a : b),
+  );
+  String get employeeNames => visibleLines
+      .map((line) => line.employeeName.trim())
+      .where((name) => name.isNotEmpty)
+      .toSet()
+      .join(', ');
+  String get tableName => visibleLines
+      .map(
+        (line) => line.tableGroupLabel.isNotEmpty
+            ? line.tableGroupLabel
+            : line.tableName,
+      )
+      .firstWhere(
+        (name) => name.trim().isNotEmpty,
+        orElse: () => 'Orden $orderId',
+      );
 }
 
 String localCaptureLineId({
