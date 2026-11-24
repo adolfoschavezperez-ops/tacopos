@@ -1,4 +1,5 @@
 import * as admin from "firebase-admin";
+import {FieldValue, Timestamp} from "firebase-admin/firestore";
 import {logger} from "firebase-functions";
 import {HttpsError, onCall} from "firebase-functions/v2/https";
 import {assertSafeFunctionsTestEnvironment} from "./testEnvironment";
@@ -384,7 +385,7 @@ export async function submitExpenseRequestCore(
     const liveApproved = mode === "live" && decision.approved;
     const shadowWouldApprove = mode === "shadow" && decision.approved;
     const status: SubmitStatus = liveApproved ? "approved" : "pending";
-    const now = admin.firestore.FieldValue.serverTimestamp();
+    const now = FieldValue.serverTimestamp();
     const snapshot = policySnapshot(policy);
 
     tx.set(expenseRef, {
@@ -529,7 +530,7 @@ export async function cancelExpenseRequestCore(
     const policyVersion = Number(expense.policyVersion ?? 0);
     const autoApproved = expense.autoApproved === true;
     let restored = false;
-    const now = admin.firestore.FieldValue.serverTimestamp();
+    const now = FieldValue.serverTimestamp();
     if (policyId && autoApproved) {
       const policyDoc = await tx.get(restaurantRef.collection("expensePolicies").doc(policyId));
       const policy = policyFromDoc(policyDoc.id, policyDoc.data() ?? {});
@@ -954,7 +955,7 @@ async function syncBackofficeAuthUser(
     isSuperAdmin: employee.isSuperAdmin === true || employeeId.toLowerCase() === "admin",
     restaurantId: restaurantRef.id,
     permissions,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
   }, {merge: true});
 }
 
@@ -1001,7 +1002,7 @@ function rateLimitId(employeeId: string, requesterKey: string): string {
 async function applyLoginRateLimit(ref: admin.firestore.DocumentReference) {
   const doc = await ref.get();
   const data = doc.data() ?? {};
-  const windowStartedAt = data.windowStartedAt instanceof admin.firestore.Timestamp
+  const windowStartedAt = data.windowStartedAt instanceof Timestamp
     ? data.windowStartedAt.toMillis()
     : 0;
   const failedAttempts = Number(data.failedAttempts ?? 0);
@@ -1010,11 +1011,11 @@ async function applyLoginRateLimit(ref: admin.firestore.DocumentReference) {
 }
 
 async function recordFailedLogin(ref: admin.firestore.DocumentReference) {
-  const now = admin.firestore.Timestamp.now();
+  const now = Timestamp.now();
   await db.runTransaction(async (tx) => {
     const doc = await tx.get(ref);
     const data = doc.data() ?? {};
-    const windowStartedAt = data.windowStartedAt instanceof admin.firestore.Timestamp
+    const windowStartedAt = data.windowStartedAt instanceof Timestamp
       ? data.windowStartedAt.toMillis()
       : 0;
     const expired = Date.now() - windowStartedAt >= 15 * 60 * 1000;
@@ -1029,16 +1030,16 @@ async function recordFailedLogin(ref: admin.firestore.DocumentReference) {
 async function clearLoginRateLimit(ref: admin.firestore.DocumentReference) {
   await ref.set({
     failedAttempts: 0,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
   }, {merge: true});
 }
 
 async function applyListRateLimit(ref: admin.firestore.DocumentReference) {
-  const now = admin.firestore.Timestamp.now();
+  const now = Timestamp.now();
   return db.runTransaction(async (tx) => {
     const doc = await tx.get(ref);
     const data = doc.data() ?? {};
-    const windowStartedAt = data.windowStartedAt instanceof admin.firestore.Timestamp
+    const windowStartedAt = data.windowStartedAt instanceof Timestamp
       ? data.windowStartedAt.toMillis()
       : 0;
     const windowMs = 60 * 1000;
@@ -1112,7 +1113,7 @@ function numberList(value: unknown): number[] {
 
 function dateString(value: unknown): string {
   if (typeof value === "string") return value.trim();
-  if (value instanceof admin.firestore.Timestamp) return dateKey(value.toDate());
+  if (value instanceof Timestamp) return dateKey(value.toDate());
   return "";
 }
 
