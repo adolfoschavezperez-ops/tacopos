@@ -4,6 +4,7 @@
 // This file models TacoPosRepository.cancelPayment in JS so it can run
 // against real rules; the Dart implementation itself is exercised in
 // test/cancel_payment_transaction_test.dart.
+require('./safeTestEnvironment');
 const fs = require('fs');
 const { strict: assert } = require('assert');
 const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');

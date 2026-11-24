@@ -1,3 +1,4 @@
+require('./safeTestEnvironment');
 const fs = require('fs');
 const assert = require('assert');
 const {
@@ -21,7 +22,7 @@ const {
   where,
 } = require('firebase/firestore');
 
-const PROJECT_ID = 'tacopos-renovadev';
+const PROJECT_ID = 'demo-tacopos-rules';
 const RESTAURANT_ID = 'tacopos';
 const BRANCH_ID = 'aviacion';
 const BUSINESS_DATE = '2026-07-31';

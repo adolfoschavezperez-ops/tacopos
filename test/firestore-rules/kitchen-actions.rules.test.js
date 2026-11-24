@@ -1,3 +1,4 @@
+require('./safeTestEnvironment');
 const fs = require('fs');
 const {
   assertFails,

@@ -2,6 +2,7 @@
 // including restaurantName. These tests replay the real payloads of final
 // checkout, change table and order cancellation against tables whose
 // restaurantName is missing or differs, and prove it cannot be set freely.
+require('./safeTestEnvironment');
 const fs = require('fs');
 const { strict: assert } = require('assert');
 const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');

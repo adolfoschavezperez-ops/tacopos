@@ -1,5 +1,6 @@
 const fs = require('fs');
 const { strict: assert } = require('assert');
+require('./safeTestEnvironment');
 const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');
 const { deleteDoc, doc, getDoc, setDoc, updateDoc } = require('firebase/firestore');
 

@@ -2,6 +2,11 @@ import 'package:cloud_functions/cloud_functions.dart';
 
 import '../core/orders/local_order_capture.dart';
 
+const _useFirebaseEmulators = bool.fromEnvironment(
+  'TACOPOS_FIREBASE_EMULATORS',
+  defaultValue: false,
+);
+
 class LocalOrderCaptureSubmitter {
   LocalOrderCaptureSubmitter._(this._call, this._resolve);
 
@@ -17,7 +22,13 @@ class LocalOrderCaptureSubmitter {
       final response = await instance
           .httpsCallable(
             name,
-            options: HttpsCallableOptions(limitedUseAppCheckToken: true),
+            options: HttpsCallableOptions(
+              // Functions Emulator deliberately disables App Check
+              // enforcement; requesting a limited-use production token in
+              // this isolated demo mode would require a real provider/service.
+              // Release builds keep limited-use App Check tokens enabled.
+              limitedUseAppCheckToken: !_useFirebaseEmulators,
+            ),
           )
           .call(submission.toMap());
       if (response.data is! Map) {

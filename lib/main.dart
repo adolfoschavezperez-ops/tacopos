@@ -35,16 +35,24 @@ void main() async {
       'El modo Firebase Emulator solo admite debug y proyectos demo-*.',
     );
   }
-  await Firebase.initializeApp(
-    options: _useFirebaseEmulators
-        ? FirebaseOptions(
-            apiKey: 'emulator-only-invalid-key',
-            appId: '1:000000000000:android:0000000000000000000000',
-            messagingSenderId: '000000000000',
-            projectId: _emulatorProjectId,
-          )
-        : DefaultFirebaseOptions.currentPlatform,
-  );
+  if (Firebase.apps.isEmpty) {
+    await Firebase.initializeApp(
+      options: _useFirebaseEmulators
+          ? FirebaseOptions(
+              apiKey: 'emulator-only-invalid-key',
+              appId: '1:000000000000:android:0000000000000000000000',
+              messagingSenderId: '000000000000',
+              projectId: _emulatorProjectId,
+            )
+          : DefaultFirebaseOptions.currentPlatform,
+    );
+  } else if (_useFirebaseEmulators &&
+      Firebase.app().options.projectId != _emulatorProjectId) {
+    throw StateError(
+      'Firebase nativo apunta a ${Firebase.app().options.projectId}; '
+      'el emulador requiere $_emulatorProjectId.',
+    );
+  }
   if (_useFirebaseEmulators) {
     FirebaseAuth.instance.useAuthEmulator(_emulatorHost, 9099);
     FirebaseFirestore.instance.useFirestoreEmulator(_emulatorHost, 8080);
