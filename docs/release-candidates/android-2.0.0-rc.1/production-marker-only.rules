@@ -1,0 +1,659 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function validRestaurantField(restaurantId) {
+      return !('restaurantId' in request.resource.data) ||
+        request.resource.data.restaurantId == restaurantId;
+    }
+
+    function validBranchField() {
+      return !('branchId' in request.resource.data) ||
+        request.resource.data.branchId is string;
+    }
+
+    function immutableRestaurantId() {
+      return !('restaurantId' in resource.data) ||
+        request.resource.data.restaurantId == resource.data.restaurantId;
+    }
+
+    function immutableBranchId() {
+      return !('branchId' in resource.data) ||
+        request.resource.data.branchId == resource.data.branchId;
+    }
+
+    function validCreate(restaurantId) {
+      return signedIn() &&
+        validRestaurantField(restaurantId) &&
+        validBranchField();
+    }
+
+    function validUpdate() {
+      return signedIn() &&
+        immutableRestaurantId() &&
+        immutableBranchId();
+    }
+
+    function authUserPath(restaurantId) {
+      return /databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid);
+    }
+
+    function hasAuthUser(restaurantId) {
+      return signedIn() && exists(authUserPath(restaurantId));
+    }
+
+    function devicePath(restaurantId) {
+      return /databases/$(database)/documents/restaurants/$(restaurantId)/devices/$(request.auth.uid);
+    }
+
+    function hasOperationalDevice(restaurantId) {
+      return signedIn() &&
+        exists(devicePath(restaurantId)) &&
+        get(devicePath(restaurantId)).data.get('active', true) != false;
+    }
+
+    function operationalDeviceBranch(restaurantId) {
+      return get(devicePath(restaurantId)).data.branchId;
+    }
+
+    function validOperationalDeviceBranch(restaurantId, branchId) {
+      return hasOperationalDevice(restaurantId) &&
+        branchId is string &&
+        operationalDeviceBranch(restaurantId) == branchId;
+    }
+
+    function authUser(restaurantId) {
+      return get(authUserPath(restaurantId)).data;
+    }
+
+    function isBackofficeAdmin(restaurantId) {
+      return hasAuthUser(restaurantId) &&
+        authUser(restaurantId).active == true &&
+        (
+          authUser(restaurantId).isSuperAdmin == true ||
+          authUser(restaurantId).permissions.canViewAdmin == true ||
+          authUser(restaurantId).permissions.canAuthorizeCashWithdrawals == true
+        );
+    }
+
+    function isSensitiveSetting(settingId) {
+      return settingId in ['appUpdates', 'expensePolicies'];
+    }
+
+    function validDeviceHeartbeatCreate(restaurantId, deviceId) {
+      return signedIn() &&
+        request.auth.uid == deviceId &&
+        validRestaurantField(restaurantId) &&
+        validBranchField() &&
+        request.resource.data.deviceId == deviceId &&
+        request.resource.data.keys().hasOnly([
+          'deviceId',
+          'deviceName',
+          'branchId',
+          'branchName',
+          'role',
+          'platform',
+          'appVersionName',
+          'appVersionCode',
+          'availableVersionCode',
+          'lastSeenAt',
+          'lastUpdateCheckAt',
+          'employeeId',
+          'employeeName',
+          'updateStatus',
+          'updatedAt'
+        ]);
+    }
+
+    function validDeviceHeartbeatUpdate(deviceId) {
+      return signedIn() &&
+        request.auth.uid == deviceId &&
+        immutableRestaurantId() &&
+        validBranchField() &&
+        request.resource.data.deviceId == resource.data.deviceId &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'deviceName',
+          'branchId',
+          'branchName',
+          'role',
+          'platform',
+          'appVersionName',
+          'appVersionCode',
+          'availableVersionCode',
+          'lastSeenAt',
+          'lastUpdateCheckAt',
+          'employeeId',
+          'employeeName',
+          'updateStatus',
+          'updatedAt'
+        ]);
+    }
+
+    function preservesExpensePolicyApprovalFields() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+        'policyId',
+        'policyVersion',
+        'policyName',
+        'policySnapshot',
+        'autoApproved',
+        'autoApprovedAt',
+        'policyDecisionReasonCode',
+        'policyDecisionMessage',
+        'approvalSource',
+        'clientRequestId',
+        'amount',
+        'cashSessionId',
+        'businessDate',
+        'restaurantId',
+        'branchId'
+      ]);
+    }
+
+    function validDeviceExpenseCreate(restaurantId, requestId) {
+      return validCreate(restaurantId) &&
+        validOperationalDeviceBranch(restaurantId, request.resource.data.branchId) &&
+        request.resource.data.requestedByDeviceId == request.auth.uid &&
+        request.resource.data.status in ['pending', 'approved'] &&
+        request.resource.data.autoApproved is bool &&
+        request.resource.data.wouldAutoApprove is bool &&
+        request.resource.data.amount is number &&
+        request.resource.data.amount > 0 &&
+        request.resource.data.cashSessionId is string &&
+        request.resource.data.businessDate is string &&
+        request.resource.data.policyId is string &&
+        request.resource.data.clientRequestId == requestId;
+    }
+
+    function validDeviceExpenseCancel(restaurantId) {
+      return validUpdate() &&
+        validOperationalDeviceBranch(restaurantId, resource.data.branchId) &&
+        request.resource.data.status == 'cancelled' &&
+        resource.data.status != 'cancelled' &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly([
+          'status',
+          'cancelledAt',
+          'cancelledByUid',
+          'cancellationReason',
+          'quotaRestored',
+          'cancelledPolicyVersion',
+          'updatedAt'
+        ]);
+    }
+
+    function validExpenseUsageWrite(restaurantId) {
+      return signedIn() &&
+        validOperationalDeviceBranch(restaurantId, request.resource.data.branchId) &&
+        request.resource.data.policyId is string &&
+        request.resource.data.periodKey is string &&
+        request.resource.data.amountUsed is number &&
+        request.resource.data.usesUsed is number &&
+        request.resource.data.expenseIds is list &&
+        request.resource.data.keys().hasOnly([
+          'policyId',
+          'branchId',
+          'periodKey',
+          'amountUsed',
+          'usesUsed',
+          'expenseIds',
+          'updatedAt'
+        ]) &&
+        (
+          !exists(/databases/$(database)/documents/restaurants/$(restaurantId)/expensePolicies/$(request.resource.data.policyId)) ||
+          get(/databases/$(database)/documents/restaurants/$(restaurantId)/expensePolicies/$(request.resource.data.policyId)).data.branchId == request.resource.data.branchId
+        );
+    }
+
+    function validDeviceExpenseIdempotencyCreate(restaurantId, requestId) {
+      return signedIn() &&
+        request.resource.data.clientRequestId == requestId &&
+        request.resource.data.requestId == requestId &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.keys().hasOnly([
+          'clientRequestId',
+          'requestId',
+          'result',
+          'createdAt',
+          'uid'
+        ]);
+    }
+
+    function validDailySaleCounterCreate(restaurantId, branchId, businessDate) {
+      return validCreate(restaurantId) &&
+        request.resource.data.keys().hasAll([
+          'businessDate',
+          'restaurantId',
+          'branchId',
+          'lastSequence',
+          'updatedAt',
+          'updatedByDeviceId',
+          'version'
+        ]) &&
+        request.resource.data.businessDate == businessDate &&
+        request.resource.data.branchId == branchId &&
+        request.resource.data.lastSequence is int &&
+        request.resource.data.lastSequence >= 1 &&
+        request.resource.data.version is int;
+    }
+
+    function validDailySaleCounterUpdate() {
+      return validUpdate() &&
+        request.resource.data.keys().hasAll([
+          'businessDate',
+          'restaurantId',
+          'branchId',
+          'lastSequence',
+          'updatedAt',
+          'updatedByDeviceId',
+          'version'
+        ]) &&
+        request.resource.data.businessDate == resource.data.businessDate &&
+        request.resource.data.version == resource.data.version &&
+        request.resource.data.lastSequence is int &&
+        request.resource.data.lastSequence == resource.data.lastSequence + 1;
+    }
+
+    function validKitchenSequenceCreate(restaurantId, branchId, businessDate) {
+      return validCreate(restaurantId) &&
+        validOperationalDeviceBranch(restaurantId, branchId) &&
+        request.resource.data.keys().hasOnly([
+          'restaurantId',
+          'branchId',
+          'businessDate',
+          'lastSequence',
+          'updatedAt'
+        ]) &&
+        request.resource.data.restaurantId == restaurantId &&
+        request.resource.data.branchId == branchId &&
+        request.resource.data.businessDate == businessDate &&
+        request.resource.data.lastSequence == 1;
+    }
+
+    function validKitchenSequenceUpdate() {
+      return signedIn() &&
+        validOperationalDeviceBranch(
+          resource.data.restaurantId,
+          resource.data.branchId
+        ) &&
+        request.resource.data.keys().hasOnly([
+          'restaurantId',
+          'branchId',
+          'businessDate',
+          'lastSequence',
+          'updatedAt'
+        ]) &&
+        request.resource.data.restaurantId == resource.data.restaurantId &&
+        request.resource.data.branchId == resource.data.branchId &&
+        request.resource.data.businessDate == resource.data.businessDate &&
+        request.resource.data.lastSequence == resource.data.lastSequence + 1;
+    }
+
+    function validSaleAuditEventType() {
+      return request.resource.data.eventType in [
+        'sale_folio_assigned',
+        'sale_completed',
+        'sale_cancelled',
+        'sale_voided',
+        'sale_reopened',
+        'payment_adjusted',
+        'deletion_attempt_blocked'
+      ];
+    }
+
+    function validSaleAuditEventCreate(restaurantId, branchId) {
+      return validCreate(restaurantId) &&
+        request.resource.data.keys().hasAll([
+          'eventType',
+          'orderId',
+          'saleFolioSequence',
+          'saleFolioFull',
+          'businessDate',
+          'restaurantId',
+          'branchId',
+          'amount',
+          'paymentMethodsSnapshot',
+          'previousStatus',
+          'newStatus',
+          'reason',
+          'authorizedBy',
+          'performedBy',
+          'deviceId',
+          'createdAt',
+          'eventVersion'
+        ]) &&
+        request.resource.data.branchId == branchId &&
+        validSaleAuditEventType() &&
+        request.resource.data.orderId is string &&
+        request.resource.data.orderId.size() > 0 &&
+        request.resource.data.businessDate is string &&
+        request.resource.data.businessDate.size() > 0 &&
+        request.resource.data.saleFolioSequence is int &&
+        request.resource.data.saleFolioFull is string &&
+        request.resource.data.saleFolioFull.size() > 0 &&
+        request.resource.data.eventVersion == 1;
+    }
+
+    match /restaurants/{restaurantId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update: if signedIn();
+      allow delete: if false;
+
+      match /branches/{branchId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+
+        match /dailySaleCounters/{businessDate} {
+          allow get: if signedIn();
+          allow list: if signedIn();
+          allow create: if validDailySaleCounterCreate(
+            restaurantId,
+            branchId,
+            businessDate
+          );
+          allow update: if validDailySaleCounterUpdate();
+          allow delete: if false;
+        }
+
+        match /kitchenDailySequences/{businessDate} {
+          allow read: if signedIn();
+          allow create: if validKitchenSequenceCreate(
+            restaurantId,
+            branchId,
+            businessDate
+          );
+          allow update: if validKitchenSequenceUpdate();
+          allow delete: if false;
+        }
+
+        match /saleAuditEvents/{eventId} {
+          allow read: if signedIn();
+          allow create: if validSaleAuditEventCreate(restaurantId, branchId);
+          allow update, delete: if false;
+        }
+      }
+
+      match /employees/{employeeId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if signedIn();
+      }
+
+      match /tables/{tableId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /products/{productId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /productCategories/{categoryId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /ingredientYieldProfiles/{profileId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /productRecipes/{productId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /orderPlatforms/{platformId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /orders/{orderId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+
+        match /items/{itemId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if signedIn();
+        }
+
+        match /payments/{paymentId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if false;
+        }
+
+        match /kitchenBatches/{batchId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if false;
+        }
+      }
+
+      match /cashSessions/{cashSessionId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /cashWithdrawalRequests/{requestId} {
+        allow read: if signedIn();
+        allow create: if validDeviceExpenseCreate(restaurantId, requestId) ||
+          (isBackofficeAdmin(restaurantId) && validCreate(restaurantId));
+        allow update: if (
+          isBackofficeAdmin(restaurantId) &&
+          validUpdate() &&
+          preservesExpensePolicyApprovalFields()
+        ) || validDeviceExpenseCancel(restaurantId);
+        allow delete: if false;
+      }
+
+      match /expensePolicies/{policyId} {
+        allow read: if validOperationalDeviceBranch(
+          restaurantId,
+          resource.data.branchId
+        ) || isBackofficeAdmin(restaurantId);
+        allow create: if isBackofficeAdmin(restaurantId) &&
+          validCreate(restaurantId);
+        allow update: if isBackofficeAdmin(restaurantId) &&
+          validUpdate();
+        allow delete: if false;
+      }
+
+      match /expensePolicyUsage/{usageId} {
+        allow get: if hasOperationalDevice(restaurantId) ||
+          isBackofficeAdmin(restaurantId);
+        allow list: if hasOperationalDevice(restaurantId) ||
+          isBackofficeAdmin(restaurantId);
+        allow create: if validExpenseUsageWrite(restaurantId);
+        allow update: if validExpenseUsageWrite(restaurantId) &&
+          request.resource.data.policyId == resource.data.policyId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.periodKey == resource.data.periodKey;
+        allow delete: if false;
+      }
+
+      match /expenseRequestIdempotency/{requestId} {
+        allow read: if signedIn() &&
+          resource.data.uid == request.auth.uid;
+        allow create: if validDeviceExpenseIdempotencyCreate(
+          restaurantId,
+          requestId
+        );
+        allow update, delete: if false;
+      }
+
+      match /devices/{deviceId} {
+        allow read: if signedIn();
+        allow create: if validDeviceHeartbeatCreate(restaurantId, deviceId) ||
+          (isBackofficeAdmin(restaurantId) && validCreate(restaurantId));
+        allow update: if validDeviceHeartbeatUpdate(deviceId) ||
+          (isBackofficeAdmin(restaurantId) && validUpdate());
+        allow delete: if false;
+      }
+
+      match /authUsers/{uid} {
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+
+      match /kitchenStockItems/{itemId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /kitchenSessions/{sessionId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+
+        match /items/{itemId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if false;
+        }
+
+        match /additionalEntries/{entryId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if false;
+        }
+      }
+
+      match /activeSessions/{sessionId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /activityLog/{eventId} {
+        allow read: if signedIn();
+        allow create: if !eventId.matches('^capture_submission_.*$') &&
+          validCreate(restaurantId);
+        allow update, delete: if false;
+      }
+
+      match /suppliers/{supplierId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /purchaseItems/{itemId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /supplierPurchases/{purchaseId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+
+        match /items/{itemId} {
+          allow read: if signedIn();
+          allow create: if validCreate(restaurantId);
+          allow update: if validUpdate();
+          allow delete: if signedIn();
+        }
+      }
+
+      match /supplierPayments/{paymentId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /partners/{partnerId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /partnerContributions/{contributionId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /discountUsage/{usageId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /discountAuthorizationRequests/{requestId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /productStockOuts/{stockOutId} {
+        allow read: if signedIn();
+        allow create: if validCreate(restaurantId);
+        allow update: if validUpdate();
+        allow delete: if false;
+      }
+
+      match /settings/{settingId} {
+        allow read: if signedIn();
+        allow create: if isSensitiveSetting(settingId)
+          ? isBackofficeAdmin(restaurantId)
+          : signedIn();
+        allow update: if isSensitiveSetting(settingId)
+          ? isBackofficeAdmin(restaurantId)
+          : signedIn();
+        allow delete: if false;
+      }
+    }
+
+    match /{path=**}/payments/{paymentId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
