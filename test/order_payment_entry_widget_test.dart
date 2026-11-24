@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/orders/order_capture_queue.dart';
 import 'package:tacopos/core/orders/order_payment_reconciliation.dart';
+import 'package:tacopos/core/orders/local_order_capture.dart';
 import 'package:tacopos/core/theme/app_theme.dart';
 import 'package:tacopos/models/cash_session.dart';
 import 'package:tacopos/models/employee.dart';
@@ -16,6 +17,7 @@ import 'package:tacopos/models/order_item.dart';
 import 'package:tacopos/models/payment.dart';
 import 'package:tacopos/models/product.dart';
 import 'package:tacopos/models/product_category.dart';
+import 'package:tacopos/models/product_recipe_item.dart';
 import 'package:tacopos/models/purchase_models.dart';
 import 'package:tacopos/screens/waiter/order_screen.dart';
 import 'package:tacopos/screens/waiter/payment_screen.dart';
@@ -60,7 +62,9 @@ void main() {
           findsOneWidget,
         );
         expect(
-          tester.widgetList<MoneyText>(find.byType(MoneyText)).map((w) => w.value),
+          tester
+              .widgetList<MoneyText>(find.byType(MoneyText))
+              .map((w) => w.value),
           contains(30),
         );
         expect(
@@ -108,27 +112,72 @@ void main() {
     _expectStat(tester, 'Total', 130);
   });
 
-  testWidgets('failed local submit before checkout preserves draft and retries', (
+  testWidgets('queued local capture keeps the person selected at tap time', (
     tester,
   ) async {
-    final repo = _CheckoutRepository()..failureStage = 'submit-local';
+    final repo = _CheckoutRepository()..localCaptureGate = Completer<void>();
+    await _showOrder(tester, repo);
+    await tester.tap(find.text('Producto 30').last);
+    await tester.pump();
+    await tester.tap(find.text('Persona').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Persona 2').last);
+    await tester.pump();
+
+    repo.localCaptureGate!.complete();
+    await tester.pumpAndSettle();
+
+    expect(repo.localItems, hasLength(1));
+    expect(repo.localItems.single.personNumber, 1);
+  });
+
+  testWidgets('a rejected local write blocks checkout until exact tap retry', (
+    tester,
+  ) async {
+    final repo = _CheckoutRepository()..failNextLocalCapture = true;
     await _showOrder(tester, repo);
     await tester.tap(find.text('Producto 30').last);
     await tester.pumpAndSettle();
+    expect(
+      find.text('No se guardó este cambio. Reintenta para conservarlo.'),
+      findsOneWidget,
+    );
+
     await tester.tap(find.text('Cobrar'));
     await tester.pumpAndSettle();
     expect(find.byType(PaymentScreen), findsNothing);
-    expect(repo.localItems, hasLength(1));
-    expect(find.textContaining('Conexion inestable'), findsOneWidget);
-    expect(find.textContaining('Bad state'), findsNothing);
+    expect(repo.events, isNot(contains('submit-local')));
 
-    repo.failureStage = null;
-    await tester.tap(find.text('Reintentar').last);
+    await tester.tap(find.widgetWithText(TextButton, 'Reintentar').last);
+    await tester.pumpAndSettle();
+    expect(repo.localItems, hasLength(1));
+    await tester.tap(find.text('Cobrar'));
     await tester.pumpAndSettle();
     expect(find.byType(PaymentScreen), findsOneWidget);
-    expect(repo.localItems, isEmpty);
-    expect(repo.items.length, 3);
   });
+
+  testWidgets(
+    'failed local submit before checkout preserves draft and retries',
+    (tester) async {
+      final repo = _CheckoutRepository()..failureStage = 'submit-local';
+      await _showOrder(tester, repo);
+      await tester.tap(find.text('Producto 30').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cobrar'));
+      await tester.pumpAndSettle();
+      expect(find.byType(PaymentScreen), findsNothing);
+      expect(repo.localItems, hasLength(1));
+      expect(find.textContaining('Conexion inestable'), findsOneWidget);
+      expect(find.textContaining('Bad state'), findsNothing);
+
+      repo.failureStage = null;
+      await tester.tap(find.widgetWithText(TextButton, 'Reintentar').last);
+      await tester.pumpAndSettle();
+      expect(find.byType(PaymentScreen), findsOneWidget);
+      expect(repo.localItems, isEmpty);
+      expect(repo.items.length, 3);
+    },
+  );
 
   testWidgets(
     'last product plus immediate double Cobrar waits for all writes and includes 190',
@@ -489,6 +538,8 @@ class _CheckoutRepository implements TacoPosRepository {
   final payments = <Payment>[];
   final events = <String>[];
   Completer<void>? writeGate;
+  Completer<void>? localCaptureGate;
+  bool failNextLocalCapture = false;
   Completer<List<Payment>>? paymentsGate;
   String? failureStage;
   late PosOrder order = _reconciledOrder();
@@ -523,28 +574,89 @@ class _CheckoutRepository implements TacoPosRepository {
   }
 
   @override
-  Future<List<OrderItem>> captureProductLocally({
+  LocalOrderCaptureLine createLocalOrderCaptureLine({
     required PosOrder order,
     required Product product,
     required int personNumber,
+  }) => LocalOrderCaptureLine(
+    id: 'lc_${product.id}',
+    restaurantId: order.restaurantId,
+    restaurantName: order.restaurantName,
+    branchId: order.branchId,
+    branchName: order.branchName,
+    orderId: order.id,
+    tableId: order.tableId,
+    tableName: order.tableName,
+    tableIds: order.linkedTableIds,
+    tableNames: order.tableNames,
+    tableGroupLabel: order.tableGroupLabel ?? '',
+    deviceUid: 'device',
+    employeeId: 'employee',
+    employeeName: 'Waiter',
+    personNumber: personNumber,
+    personName: order.personName(personNumber),
+    productId: product.id,
+    productName: product.name,
+    categoryId: product.categoryId,
+    categoryName: product.categoryName,
+    qty: 1,
+    unitPrice: product.price,
+    notes: '',
+    sendToKitchen: product.sendToKitchen,
+    affectsKitchenStock: product.affectsKitchenStock,
+    kitchenStockItemId: product.kitchenStockItemId,
+    kitchenStockItemName: product.kitchenStockItemName,
+    kitchenStockUnit: product.kitchenStockUnit,
+    stockConsumptionQty: product.stockConsumptionQty,
+    recipeItems: ProductRecipeItem.toMapList(product.recipeItems),
+    appliedPlatformId: null,
+    appliedPlatformName: null,
+    priceSource: 'store',
+    capturedAtMicros: DateTime.now().microsecondsSinceEpoch,
+  );
+
+  @override
+  Future<List<OrderItem>> captureProductLocally({
+    required LocalOrderCaptureLine line,
+    required String operationId,
   }) async {
-    localItems.add(_item('lc_${product.id}', product.price));
+    await localCaptureGate?.future;
+    if (failNextLocalCapture) {
+      failNextLocalCapture = false;
+      throw StateError('Local database write failed');
+    }
+    localItems.add(line.toOrderItem());
     return List.of(localItems);
   }
 
   @override
-  Future<bool> hasLocalOrderCapture({required String orderId}) async =>
-      localItems.isNotEmpty;
+  Future<bool> hasLocalOrderCapture({
+    required String orderId,
+    String? restaurantId,
+    String? branchId,
+  }) async => localItems.isNotEmpty;
+
+  @override
+  Future<bool> hasPendingLocalOrderCaptureSubmission({
+    required String orderId,
+    String? restaurantId,
+    String? branchId,
+  }) async => false;
 
   @override
   Future<int> submitLocalOrderCapture({
     required String orderId,
     required bool sendToKitchen,
+    String? restaurantId,
+    String? branchId,
   }) async {
     _stage('submit-local');
     sendModes.add(sendToKitchen);
     await writeGate?.future;
-    final submittedQty = localItems.fold<int>(0, (total, item) => total + item.qty);
+    final submittedQty = localItems.fold<int>(
+      0,
+      (total, item) => total + item.qty,
+    );
     items.addAll(localItems);
     _stage('recalculate-server');
     order = _reconciledOrder();
@@ -663,6 +775,8 @@ class _CheckoutRepository implements TacoPosRepository {
   @override
   Stream<List<OrderItem>> watchLocalOrderCaptureItems({
     required String orderId,
+    String? restaurantId,
+    String? branchId,
   }) => Stream.value(List.of(localItems));
   @override
   Stream<List<ProductCategory>> watchProductCategories({

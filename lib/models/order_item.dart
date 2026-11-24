@@ -66,6 +66,7 @@ class OrderItem {
     this.restaurantName = AppConstants.restaurantName,
     this.branchId = AppConstants.defaultBranchId,
     this.branchName = AppConstants.defaultBranchName,
+    this.isLocalCaptureDraft = false,
   });
 
   final String id;
@@ -130,6 +131,9 @@ class OrderItem {
   final String branchId;
   final String branchName;
 
+  /// Provenance marker; never inferred from the Firestore document ID.
+  final bool isLocalCaptureDraft;
+
   OrderItem copyWithQty(int newQty) {
     return OrderItem(
       id: id,
@@ -193,6 +197,7 @@ class OrderItem {
       restaurantName: restaurantName,
       branchId: branchId,
       branchName: branchName,
+      isLocalCaptureDraft: isLocalCaptureDraft,
     );
   }
 

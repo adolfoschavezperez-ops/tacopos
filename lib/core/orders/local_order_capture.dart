@@ -7,6 +7,18 @@ import '../../models/product_recipe_item.dart';
 
 const localOrderCaptureSchemaVersion = 1;
 
+List<OrderItem> unacknowledgedLocalCaptureDrafts({
+  required Iterable<OrderItem> confirmedItems,
+  required Iterable<OrderItem> localItems,
+}) {
+  final confirmedIds = confirmedItems.map((item) => item.id).toSet();
+  return localItems
+      .where(
+        (item) => item.isLocalCaptureDraft && !confirmedIds.contains(item.id),
+      )
+      .toList(growable: false);
+}
+
 class LocalOrderCaptureLine {
   const LocalOrderCaptureLine({
     required this.id,
@@ -150,6 +162,7 @@ class LocalOrderCaptureLine {
     restaurantName: restaurantName,
     branchId: branchId,
     branchName: branchName,
+    isLocalCaptureDraft: true,
     createdAt: DateTime.fromMicrosecondsSinceEpoch(capturedAtMicros),
   );
 

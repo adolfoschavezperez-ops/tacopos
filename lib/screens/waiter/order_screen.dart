@@ -4,11 +4,13 @@ import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:uuid/uuid.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/orders/order_cancellation.dart';
 import '../../core/orders/order_capture_sort.dart';
 import '../../core/orders/order_capture_queue.dart';
+import '../../core/orders/local_order_capture.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
@@ -28,6 +30,13 @@ import '../../widgets/loading_panel.dart';
 import '../../widgets/money_text.dart';
 import '../../widgets/status_badge.dart';
 import 'payment_screen.dart';
+
+class _LocalCaptureMutation {
+  const _LocalCaptureMutation({required this.operationId, required this.apply});
+
+  final String operationId;
+  final Future<List<OrderItem>> Function() apply;
+}
 
 class OrderScreen extends StatefulWidget {
   const OrderScreen({
@@ -58,10 +67,14 @@ class _OrderScreenState extends State<OrderScreen> {
   late final Stream<Map<String, ProductStockOutRow>> _stockOutsStream;
   late final Widget _productMenu;
   late String _boundOrderId;
+  late String _boundRestaurantId;
+  late String _boundBranchId;
   StreamSubscription<List<OrderItem>>? _itemsSubscription;
   StreamSubscription<List<OrderItem>>? _localItemsSubscription;
   List<OrderItem> _localDraftItems = const [];
   Future<void> _localCaptureTail = Future<void>.value();
+  final List<_LocalCaptureMutation> _failedLocalMutations = [];
+  final Set<Future<void>> _acceptedRemoteMutations = {};
   List<OrderItem> _loadedItems = const [];
   bool _itemsLoading = true;
   Object? _itemsError;
@@ -69,7 +82,7 @@ class _OrderScreenState extends State<OrderScreen> {
   int _personCount = 1;
   bool _busy = false;
   bool _sendingToKitchen = false;
-  bool _openingPayment = false;
+  bool _editingFrozen = false;
   bool _allowExitWithLocalDrafts = false;
   bool _exitConfirmationOpen = false;
   String? _lastOrderDebugSignature;
@@ -144,6 +157,9 @@ class _OrderScreenState extends State<OrderScreen> {
 
   void _bindOrderStreams(String orderId) {
     _boundOrderId = orderId.trim();
+    _boundRestaurantId = AppSession.instance.currentRestaurantId;
+    _boundBranchId = AppSession.instance.currentBranchId;
+    _editingFrozen = false;
     debugPrint(
       '[TacoPOS][OrderScreen.bind] tableId=${widget.tableId ?? '-'} '
       'tableName=${widget.tableName} receivedOrderId=${widget.orderId} '
@@ -151,6 +167,23 @@ class _OrderScreenState extends State<OrderScreen> {
     );
     _orderStream = _repository.watchOrder(_boundOrderId);
     _bindOrderItems(_boundOrderId, clearItems: true);
+    unawaited(_restorePendingSubmissionLock(_boundOrderId));
+  }
+
+  Future<void> _restorePendingSubmissionLock(String orderId) async {
+    try {
+      final pending = await _repository.hasPendingLocalOrderCaptureSubmission(
+        orderId: orderId,
+        restaurantId: _boundRestaurantId,
+        branchId: _boundBranchId,
+      );
+      if (!mounted || orderId != _boundOrderId || !pending) return;
+      setState(() => _editingFrozen = true);
+    } catch (error) {
+      debugPrint(
+        '[TacoPOS][LocalCapture.pendingCheck] orderId=$orderId error=$error',
+      );
+    }
   }
 
   Future<void> _bindOrderItems(
@@ -187,16 +220,19 @@ class _OrderScreenState extends State<OrderScreen> {
     }
 
     _localItemsSubscription = _repository
-        .watchLocalOrderCaptureItems(orderId: cleanOrderId)
+        .watchLocalOrderCaptureItems(
+          orderId: cleanOrderId,
+          restaurantId: _boundRestaurantId,
+          branchId: _boundBranchId,
+        )
         .listen(
           (items) {
             if (!mounted || cleanOrderId != _boundOrderId) return;
             setState(() {
-              _localDraftItems = items;
-              _loadedItems = [
-                ..._captureState.effectiveItems,
-                ..._localDraftItems,
-              ];
+              _loadedItems = _withUnacknowledgedDrafts(
+                _captureState.effectiveItems,
+                items,
+              );
             });
           },
           onError: (Object error) {
@@ -213,7 +249,10 @@ class _OrderScreenState extends State<OrderScreen> {
       }
       setState(() {
         _captureState.reconcile(initialItems);
-        _loadedItems = [..._captureState.effectiveItems, ..._localDraftItems];
+        _loadedItems = _withUnacknowledgedDrafts(
+          _captureState.effectiveItems,
+          _localDraftItems,
+        );
         _itemsLoading = false;
         _itemsError = null;
       });
@@ -234,7 +273,10 @@ class _OrderScreenState extends State<OrderScreen> {
                 return;
               }
               setState(() {
-                _loadedItems = [...effectiveItems, ..._localDraftItems];
+                _loadedItems = _withUnacknowledgedDrafts(
+                  effectiveItems,
+                  _localDraftItems,
+                );
                 _itemsLoading = false;
                 _itemsError = null;
               });
@@ -267,6 +309,7 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _sendToKitchen() async {
+    if (_editingFrozen && _busy) return;
     if (AppSession.instance.employee?.canTakeOrders != true) {
       _showMessage('No tienes permiso para levantar pedidos');
       return;
@@ -275,24 +318,36 @@ class _OrderScreenState extends State<OrderScreen> {
       return;
     }
 
+    _editingFrozen = true;
     setState(() {
       _busy = true;
       _sendingToKitchen = true;
     });
 
+    var submissionAttempted = false;
+    var preserveEditingLock = false;
     try {
+      await _waitForAcceptedRemoteMutations();
       await _repository.flushPendingMutations(_boundOrderId);
-      await _localCaptureTail;
+      await _waitForAcceptedLocalMutations();
       LivePresenceService.instance.update(currentAction: 'Enviando cocina');
       final hadLocalDrafts = await _repository.hasLocalOrderCapture(
         orderId: _boundOrderId,
+        restaurantId: _boundRestaurantId,
+        branchId: _boundBranchId,
       );
       final sentCount = hadLocalDrafts
-          ? await _repository.submitLocalOrderCapture(
-              orderId: _boundOrderId,
-              sendToKitchen: true,
-            )
+          ? await (() async {
+              submissionAttempted = true;
+              return _repository.submitLocalOrderCapture(
+                orderId: _boundOrderId,
+                sendToKitchen: true,
+                restaurantId: _boundRestaurantId,
+                branchId: _boundBranchId,
+              );
+            })()
           : await _repository.sendOrderToKitchen(_boundOrderId);
+      submissionAttempted = false;
       if (!mounted) {
         return;
       }
@@ -315,15 +370,25 @@ class _OrderScreenState extends State<OrderScreen> {
         return;
       }
 
-      _showSubmissionFailure(
-        error,
-        onRetry: () => unawaited(_sendToKitchen()),
-      );
+      if (submissionAttempted) {
+        if (_isDefinitiveSubmissionRejection(error)) {
+          await _repository.releaseDefinitivelyRejectedLocalOrderCapture(
+            orderId: _boundOrderId,
+            restaurantId: _boundRestaurantId,
+            branchId: _boundBranchId,
+          );
+        } else {
+          preserveEditingLock = true;
+        }
+      }
+
+      _showSubmissionFailure(error, onRetry: () => unawaited(_sendToKitchen()));
     } finally {
       if (mounted) {
         setState(() {
           _busy = false;
           _sendingToKitchen = false;
+          _editingFrozen = preserveEditingLock;
         });
       }
     }
@@ -336,18 +401,26 @@ class _OrderScreenState extends State<OrderScreen> {
       return;
     }
     final operationOrderId = _boundOrderId;
+    _editingFrozen = true;
     setState(() {
       _busy = true;
-      _openingPayment = true;
     });
     var submittingLocalDraft = false;
+    var preserveEditingLock = false;
     try {
-      await _localCaptureTail;
-      if (await _repository.hasLocalOrderCapture(orderId: operationOrderId)) {
+      await _waitForAcceptedRemoteMutations();
+      await _waitForAcceptedLocalMutations();
+      if (await _repository.hasLocalOrderCapture(
+        orderId: operationOrderId,
+        restaurantId: _boundRestaurantId,
+        branchId: _boundBranchId,
+      )) {
         submittingLocalDraft = true;
         await _repository.submitLocalOrderCapture(
           orderId: operationOrderId,
           sendToKitchen: false,
+          restaurantId: _boundRestaurantId,
+          branchId: _boundBranchId,
         );
         submittingLocalDraft = false;
       }
@@ -375,10 +448,16 @@ class _OrderScreenState extends State<OrderScreen> {
     } catch (error) {
       if (!mounted) return;
       if (submittingLocalDraft) {
-        _showSubmissionFailure(
-          error,
-          onRetry: () => unawaited(_openPayment()),
-        );
+        if (_isDefinitiveSubmissionRejection(error)) {
+          await _repository.releaseDefinitivelyRejectedLocalOrderCapture(
+            orderId: operationOrderId,
+            restaurantId: _boundRestaurantId,
+            branchId: _boundBranchId,
+          );
+        } else {
+          preserveEditingLock = true;
+        }
+        _showSubmissionFailure(error, onRetry: () => unawaited(_openPayment()));
       } else {
         _showMessage(
           'No se pudo validar el total con el servidor. Revisa la orden e intenta de nuevo.',
@@ -389,7 +468,7 @@ class _OrderScreenState extends State<OrderScreen> {
       if (mounted) {
         setState(() {
           _busy = false;
-          _openingPayment = false;
+          _editingFrozen = preserveEditingLock;
         });
       }
     }
@@ -469,7 +548,12 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _closeEmptyOrder() async {
-    if (await _repository.hasLocalOrderCapture(orderId: _boundOrderId)) {
+    if (_editingFrozen) return;
+    if (await _repository.hasLocalOrderCapture(
+      orderId: _boundOrderId,
+      restaurantId: _boundRestaurantId,
+      branchId: _boundBranchId,
+    )) {
       if (mounted) {
         _showMessage(
           'Hay productos guardados en este dispositivo. Envia o retira esos productos antes de cerrar la orden.',
@@ -506,9 +590,10 @@ class _OrderScreenState extends State<OrderScreen> {
     if (confirmed != true) {
       return;
     }
+    if (_editingFrozen) return;
 
     try {
-      await _repository.cancelEmptyOrder(scope);
+      await _trackRemoteMutation(() => _repository.cancelEmptyOrder(scope));
       if (!mounted) {
         return;
       }
@@ -528,7 +613,12 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _cancelOrder() async {
-    if (await _repository.hasLocalOrderCapture(orderId: _boundOrderId)) {
+    if (_editingFrozen) return;
+    if (await _repository.hasLocalOrderCapture(
+      orderId: _boundOrderId,
+      restaurantId: _boundRestaurantId,
+      branchId: _boundBranchId,
+    )) {
       if (mounted) {
         _showMessage(
           'Hay productos guardados en este dispositivo. Envia o retira esos productos antes de cancelar la orden.',
@@ -564,11 +654,11 @@ class _OrderScreenState extends State<OrderScreen> {
     if (!mounted || reason == null) {
       return;
     }
+    if (_editingFrozen) return;
 
     try {
-      final result = await _repository.cancelOrder(
-        scope: scope,
-        reason: reason,
+      final result = await _trackRemoteMutation(
+        () => _repository.cancelOrder(scope: scope, reason: reason),
       );
       if (!mounted) {
         return;
@@ -594,6 +684,7 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _cancelOrRequestItem(OrderItem item) async {
+    if (_editingFrozen) return;
     final employee = AppSession.instance.employee;
     final canCancelItem =
         employee?.canCancelItems == true ||
@@ -619,32 +710,47 @@ class _OrderScreenState extends State<OrderScreen> {
     if (!mounted || reason == null) {
       return;
     }
+    if (_editingFrozen) return;
     try {
-      if (item.id.startsWith('lc_')) {
-        final removal = _localCaptureTail.then(
-          (_) => _repository.removeLocalOrderCapture(
-            orderId: _boundOrderId,
-            itemId: item.id,
+      if (item.isLocalCaptureDraft) {
+        if (_editingFrozen) return;
+        final orderId = _boundOrderId;
+        final restaurantId = _boundRestaurantId;
+        final branchId = _boundBranchId;
+        final mutationId = const Uuid().v4();
+        final removed = await _enqueueLocalMutation(
+          _LocalCaptureMutation(
+            operationId: mutationId,
+            apply: () => _repository.adjustLocalOrderCaptureQty(
+              orderId: orderId,
+              itemId: item.id,
+              delta: -item.qty,
+              operationId: mutationId,
+              restaurantId: restaurantId,
+              branchId: branchId,
+            ),
           ),
         );
-        _localCaptureTail = removal.catchError((_) {});
-        await removal;
-        _showMessage('Articulo retirado de la captura local.');
+        if (removed) _showMessage('Articulo retirado de la captura local.');
         return;
       }
       if (item.kitchenStatus == 'pending' ||
           item.kitchenStatus == 'not_required') {
-        await _repository.cancelOrderItem(
-          orderId: _boundOrderId,
-          itemId: item.id,
-          reason: reason,
+        await _trackRemoteMutation(
+          () => _repository.cancelOrderItem(
+            orderId: _boundOrderId,
+            itemId: item.id,
+            reason: reason,
+          ),
         );
         _showMessage('Articulo cancelado.');
       } else {
-        await _repository.requestOrderItemCancellation(
-          orderId: _boundOrderId,
-          itemId: item.id,
-          reason: reason,
+        await _trackRemoteMutation(
+          () => _repository.requestOrderItemCancellation(
+            orderId: _boundOrderId,
+            itemId: item.id,
+            reason: reason,
+          ),
         );
         _showMessage('Cancelacion solicitada a cocina.');
       }
@@ -655,6 +761,7 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   void _addPerson() {
+    if (_editingFrozen) return;
     if (AppSession.instance.employee?.canTakeOrders != true) {
       _showMessage('No tienes permiso para levantar pedidos');
       return;
@@ -666,6 +773,7 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _renamePerson(int personNumber, String currentName) async {
+    if (_editingFrozen) return;
     if (AppSession.instance.employee?.canTakeOrders != true) {
       _showMessage('No tienes permiso para levantar pedidos');
       return;
@@ -682,11 +790,14 @@ class _OrderScreenState extends State<OrderScreen> {
       return;
     }
 
+    if (_editingFrozen) return;
     try {
-      await _repository.renamePerson(
-        orderId: _boundOrderId,
-        personNumber: personNumber,
-        name: newName,
+      await _trackRemoteMutation(
+        () => _repository.renamePerson(
+          orderId: _boundOrderId,
+          personNumber: personNumber,
+          name: newName,
+        ),
       );
     } catch (error) {
       if (!mounted) {
@@ -704,18 +815,110 @@ class _OrderScreenState extends State<OrderScreen> {
     showAppSnackBar(context, message);
   }
 
-  void _showSubmissionFailure(
-    Object error, {
-    required VoidCallback onRetry,
-  }) {
+  List<OrderItem> _withUnacknowledgedDrafts(
+    List<OrderItem> confirmedItems,
+    List<OrderItem> localItems,
+  ) {
+    _localDraftItems = unacknowledgedLocalCaptureDrafts(
+      confirmedItems: confirmedItems,
+      localItems: localItems,
+    );
+    return [...confirmedItems, ..._localDraftItems];
+  }
+
+  Future<bool> _enqueueLocalMutation(_LocalCaptureMutation mutation) {
+    final task = _localCaptureTail.then<bool>((_) async {
+      try {
+        final items = await mutation.apply();
+        _failedLocalMutations.removeWhere(
+          (entry) => entry.operationId == mutation.operationId,
+        );
+        if (mounted) {
+          setState(() {
+            _loadedItems = _withUnacknowledgedDrafts(
+              _captureState.effectiveItems,
+              items,
+            );
+          });
+        }
+        return true;
+      } catch (error) {
+        if (!_failedLocalMutations.any(
+          (entry) => entry.operationId == mutation.operationId,
+        )) {
+          _failedLocalMutations.add(mutation);
+        }
+        if (mounted) _showLocalCaptureWriteFailure(error);
+        return false;
+      }
+    });
+    _localCaptureTail = task.then<void>((_) {});
+    return task;
+  }
+
+  void _showLocalCaptureWriteFailure(Object error) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text(
+            'No se guardó este cambio. Reintenta para conservarlo.',
+          ),
+          action: SnackBarAction(
+            label: 'Reintentar',
+            onPressed: () => unawaited(_retryFailedLocalMutations()),
+          ),
+        ),
+      );
+    debugPrint('[TacoPOS][LocalCapture.writeFailed] $error');
+  }
+
+  Future<void> _retryFailedLocalMutations() async {
+    if (_editingFrozen) return;
+    final retrying = List<_LocalCaptureMutation>.from(_failedLocalMutations);
+    _failedLocalMutations.clear();
+    for (final mutation in retrying) {
+      await _enqueueLocalMutation(mutation);
+    }
+  }
+
+  Future<void> _waitForAcceptedLocalMutations() async {
+    await _localCaptureTail;
+    if (_failedLocalMutations.isNotEmpty) {
+      throw StateError(
+        'Hay cambios que no se guardaron. Reintentalos antes de enviar.',
+      );
+    }
+  }
+
+  Future<T> _trackRemoteMutation<T>(Future<T> Function() operation) async {
+    final completed = Completer<void>();
+    final tracked = completed.future;
+    _acceptedRemoteMutations.add(tracked);
+    try {
+      return await operation();
+    } finally {
+      _acceptedRemoteMutations.remove(tracked);
+      completed.complete();
+    }
+  }
+
+  Future<void> _waitForAcceptedRemoteMutations() async {
+    while (_acceptedRemoteMutations.isNotEmpty) {
+      await Future.wait(List<Future<void>>.from(_acceptedRemoteMutations));
+    }
+  }
+
+  void _showSubmissionFailure(Object error, {required VoidCallback onRetry}) {
     final code = error is FirebaseFunctionsException ? error.code : '';
     final message = switch (code) {
       'permission-denied' => 'No tienes permiso para enviar esta comanda.',
       'unauthenticated' => 'Tu sesion expiro. Inicia sesion y reintenta.',
-      'not-found' => error is FirebaseFunctionsException &&
-              (error.message?.toLowerCase().contains('servicio') ?? false)
-          ? 'El servicio seguro de envio aun no esta habilitado. Tu pedido esta guardado.'
-          : 'La orden ya no existe. Tu borrador permanece guardado en esta tablet.',
+      'not-found' =>
+        error is FirebaseFunctionsException &&
+                (error.message?.toLowerCase().contains('servicio') ?? false)
+            ? 'El servicio seguro de envio aun no esta habilitado. Tu pedido esta guardado.'
+            : 'La orden ya no existe. Tu borrador permanece guardado en esta tablet.',
       'failed-precondition' || 'resource-exhausted' =>
         error is FirebaseFunctionsException &&
                 (error.message?.trim().isNotEmpty ?? false)
@@ -739,45 +942,52 @@ class _OrderScreenState extends State<OrderScreen> {
       ..showSnackBar(
         SnackBar(
           content: const Text('Conexion inestable. Tu pedido esta guardado.'),
-          action: SnackBarAction(
-            label: 'Reintentar',
-            onPressed: onRetry,
-          ),
+          action: SnackBarAction(label: 'Reintentar', onPressed: onRetry),
         ),
       );
   }
 
-  Future<void> _handleAddProduct(Product product, bool stockedOut) {
-    final capture = _localCaptureTail.then(
-      (_) => _captureProductLocally(product, stockedOut),
-    );
-    _localCaptureTail = capture.catchError((_) {});
-    return capture;
+  bool _isDefinitiveSubmissionRejection(Object error) {
+    if (error is! FirebaseFunctionsException) return false;
+    return const {
+      'permission-denied',
+      'unauthenticated',
+      'failed-precondition',
+      'invalid-argument',
+      'resource-exhausted',
+      'not-found',
+    }.contains(error.code);
   }
 
-  Future<void> _captureProductLocally(Product product, bool stockedOut) async {
-    if (_openingPayment) return;
+  Future<void> _handleAddProduct(Product product, bool stockedOut) async {
+    if (_editingFrozen) return;
     try {
       if (stockedOut) {
         _showMessage('Producto agotado hasta cierre de cocina.');
         return;
       }
+      // Freeze every field from the accepted tap before it enters the async
+      // queue. A later person/order/session change cannot retarget this tap.
       final order = _latestOrder;
       if (order == null) {
         _showMessage('Espera a que cargue la orden para capturar.');
         return;
       }
-      final items = await _repository.captureProductLocally(
+      final line = _repository.createLocalOrderCaptureLine(
         order: order,
         product: product,
         personNumber: _selectedPerson,
       );
-      if (mounted) {
-        setState(() {
-          _localDraftItems = items;
-          _loadedItems = [..._captureState.effectiveItems, ...items];
-        });
-      }
+      final mutationId = const Uuid().v4();
+      await _enqueueLocalMutation(
+        _LocalCaptureMutation(
+          operationId: mutationId,
+          apply: () => _repository.captureProductLocally(
+            line: line,
+            operationId: mutationId,
+          ),
+        ),
+      );
     } catch (error) {
       if (mounted) {
         _showMessage(_editErrorText(error));
@@ -847,16 +1057,75 @@ class _OrderScreenState extends State<OrderScreen> {
               const SizedBox(width: 10),
             ],
             body: AbsorbPointer(
-              absorbing: _openingPayment,
+              absorbing: _editingFrozen,
               child: Stack(
                 children: [
                   _buildBody(orderSnapshot),
-                  if (_openingPayment)
+                  if (_editingFrozen && _busy)
                     const Positioned(
                       top: 0,
                       left: 0,
                       right: 0,
                       child: LinearProgressIndicator(),
+                    ),
+                  if (_editingFrozen && !_busy)
+                    Positioned(
+                      top: 8,
+                      left: 12,
+                      right: 12,
+                      child: Material(
+                        color: BrandColors.accentYellow.withValues(alpha: 0.96),
+                        borderRadius: BorderRadius.circular(12),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          child: Text(
+                            'La comanda aún no tiene confirmación. Reintenta Enviar o Cobrar para comprobar el mismo envío.',
+                            style: const TextStyle(
+                              color: BrandColors.backgroundPrimary,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (_failedLocalMutations.isNotEmpty)
+                    Positioned(
+                      top: 8,
+                      left: 12,
+                      right: 12,
+                      child: Material(
+                        color: BrandColors.accentYellow,
+                        borderRadius: BorderRadius.circular(12),
+                        elevation: 4,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 6,
+                          ),
+                          child: Row(
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  'No se guardó este cambio. Reintenta para conservarlo.',
+                                  style: TextStyle(
+                                    color: BrandColors.backgroundPrimary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: _editingFrozen
+                                    ? null
+                                    : _retryFailedLocalMutations,
+                                child: const Text('Reintentar'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                 ],
               ),
@@ -958,6 +1227,7 @@ class _OrderScreenState extends State<OrderScreen> {
           personCount: _personCount,
           selectedPerson: selectedPerson,
           onPersonCountChanged: (personCount) {
+            if (_editingFrozen) return;
             setState(() {
               _personCount = personCount;
               if (_selectedPerson > _personCount) {
@@ -966,6 +1236,7 @@ class _OrderScreenState extends State<OrderScreen> {
             });
           },
           onSelectPerson: (person) {
+            if (_editingFrozen) return;
             setState(() {
               _selectedPerson = person;
             });
@@ -977,23 +1248,31 @@ class _OrderScreenState extends State<OrderScreen> {
           onAddPerson: _addPerson,
           onRenamePerson: _renamePerson,
           onQtyChanged: (item, qty) {
-            if (_openingPayment) return;
-            if (item.id.startsWith('lc_')) {
-              final quantityUpdate = _localCaptureTail.then(
-                (_) => _repository.setLocalOrderCaptureQty(
-                  orderId: _boundOrderId,
-                  itemId: item.id,
-                  qty: qty,
-                ),
-              );
-              _localCaptureTail = quantityUpdate.catchError((_) {});
+            if (_editingFrozen) return;
+            if (item.isLocalCaptureDraft) {
+              final orderId = _boundOrderId;
+              final restaurantId = _boundRestaurantId;
+              final branchId = _boundBranchId;
+              final delta = qty - item.qty;
+              final operationId = const Uuid().v4();
               unawaited(
-                quantityUpdate.catchError((error) {
-                  if (mounted) _showMessage(_editErrorText(error));
-                }),
+                _enqueueLocalMutation(
+                  _LocalCaptureMutation(
+                    operationId: operationId,
+                    apply: () => _repository.adjustLocalOrderCaptureQty(
+                      orderId: orderId,
+                      itemId: item.id,
+                      delta: delta,
+                      operationId: operationId,
+                      restaurantId: restaurantId,
+                      branchId: branchId,
+                    ),
+                  ),
+                ),
               );
               return;
             }
+            final orderId = _boundOrderId;
             final operationId = 'op-${DateTime.now().microsecondsSinceEpoch}';
             final optimistic = item.copyWithQty(qty);
             setState(() {
@@ -1001,22 +1280,22 @@ class _OrderScreenState extends State<OrderScreen> {
               _loadedItems = _captureState.effectiveItems;
             });
             unawaited(
-              _repository
-                  .updateItemQty(
-                    orderId: _boundOrderId,
-                    item: item,
-                    qty: qty,
-                    operationId: operationId,
-                  )
-                  .catchError((error) {
-                    _captureState.fail(item.id);
-                    if (mounted) {
-                      setState(() {
-                        _loadedItems = _captureState.effectiveItems;
-                      });
-                      _showMessage(_editErrorText(error));
-                    }
-                  }),
+              _trackRemoteMutation(
+                () => _repository.updateItemQty(
+                  orderId: orderId,
+                  item: item,
+                  qty: qty,
+                  operationId: operationId,
+                ),
+              ).catchError((error) {
+                _captureState.fail(item.id);
+                if (mounted) {
+                  setState(() {
+                    _loadedItems = _captureState.effectiveItems;
+                  });
+                  _showMessage(_editErrorText(error));
+                }
+              }),
             );
           },
           onCancelItem: _cancelOrRequestItem,
@@ -1515,7 +1794,7 @@ class _OrderSummaryState extends State<_OrderSummary> {
       grouped.putIfAbsent(item.personNumber, () => []).add(item);
     }
     final localDraftItems = widget.items
-        .where((item) => item.id.startsWith('lc_') && item.qty > 0)
+        .where((item) => item.isLocalCaptureDraft && item.qty > 0)
         .toList(growable: false);
     final localDraftQty = localDraftItems.fold<int>(
       0,

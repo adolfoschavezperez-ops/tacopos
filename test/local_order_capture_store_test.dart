@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sembast/sembast_io.dart';
 import 'package:tacopos/core/orders/local_order_capture.dart';
+import 'package:tacopos/models/order_item.dart';
 import 'package:tacopos/services/local_order_capture_store.dart';
 
 void main() {
@@ -38,6 +39,105 @@ void main() {
       expect(lines.single.qty, 30);
     },
   );
+
+  test(
+    '30 accepted taps without waiting for widget rebuilds are counted once',
+    () async {
+      await Future.wait([
+        for (var index = 0; index < 30; index++)
+          store.addTap(
+            line(id: 'rapid-line-$index'),
+            operationId: 'rapid-operation-$index',
+          ),
+      ]);
+      final lines = await store.loadLines(
+        restaurantId: 'restaurant-a',
+        branchId: 'branch-a',
+        orderId: 'order-a',
+      );
+      expect(lines.single.qty, 30);
+    },
+  );
+
+  test(
+    '30 concurrent local increment deltas apply against latest DB quantity',
+    () async {
+      await store.addTap(line(id: 'delta-seed'), operationId: 'delta-seed-op');
+      final itemId = (await store.loadLines(
+        restaurantId: 'restaurant-a',
+        branchId: 'branch-a',
+        orderId: 'order-a',
+      )).single.id;
+      await Future.wait([
+        for (var index = 0; index < 30; index++)
+          store.adjustQty(
+            id: itemId,
+            delta: 1,
+            operationId: 'delta-operation-$index',
+            restaurantId: 'restaurant-a',
+            branchId: 'branch-a',
+            orderId: 'order-a',
+          ),
+      ]);
+      final lines = await store.loadLines(
+        restaurantId: 'restaurant-a',
+        branchId: 'branch-a',
+        orderId: 'order-a',
+      );
+      expect(lines.single.qty, 31);
+    },
+  );
+
+  test(
+    'tap operation replay is idempotent and cannot change its payload',
+    () async {
+      final accepted = line(id: 'replayed-line');
+      await store.addTap(accepted, operationId: 'same-operation');
+      await store.addTap(accepted, operationId: 'same-operation');
+      expect(
+        (await store.loadLines(
+          restaurantId: 'restaurant-a',
+          branchId: 'branch-a',
+          orderId: 'order-a',
+        )).single.qty,
+        1,
+      );
+      await expectLater(
+        store.addTap(
+          line(id: 'different-line', productId: 'different-product'),
+          operationId: 'same-operation',
+        ),
+        throwsStateError,
+      );
+    },
+  );
+
+  test('server acknowledgement wins over same-ID local outbox draft', () {
+    final draft = line(id: 'same-id').toOrderItem();
+    final confirmed = OrderItem(
+      id: draft.id,
+      personNumber: draft.personNumber,
+      personName: draft.personName,
+      productId: draft.productId,
+      productName: draft.productName,
+      category: draft.category,
+      qty: draft.qty,
+      unitPrice: draft.unitPrice,
+      total: draft.total,
+      notes: draft.notes,
+      sendToKitchen: draft.sendToKitchen,
+      kitchenStatus: 'sent',
+      paymentStatus: 'pending',
+    );
+    final remainingLocal = line(id: 'other-id').toOrderItem();
+    final visible = unacknowledgedLocalCaptureDrafts(
+      confirmedItems: [confirmed],
+      localItems: [draft, remainingLocal],
+    );
+    expect(visible, hasLength(1));
+    expect(visible.single.id, 'other-id');
+    expect(visible.single.isLocalCaptureDraft, isTrue);
+  });
 
   test(
     'captured lines survive database close and process-style reopen',
@@ -86,15 +186,23 @@ void main() {
     expect(lines, hasLength(10));
     for (var flavor = 0; flavor < quantities.length; flavor++) {
       expect(
-        lines.singleWhere(
-          (entry) => entry.productId == 'flavor-$flavor' && entry.personNumber == 1,
-        ).qty,
+        lines
+            .singleWhere(
+              (entry) =>
+                  entry.productId == 'flavor-$flavor' &&
+                  entry.personNumber == 1,
+            )
+            .qty,
         quantities[flavor],
       );
       expect(
-        lines.singleWhere(
-          (entry) => entry.productId == 'flavor-$flavor' && entry.personNumber == 2,
-        ).qty,
+        lines
+            .singleWhere(
+              (entry) =>
+                  entry.productId == 'flavor-$flavor' &&
+                  entry.personNumber == 2,
+            )
+            .qty,
         1,
       );
     }
@@ -159,43 +267,42 @@ LocalOrderCaptureLine line({
   required String id,
   String productId = 'taco',
   int personNumber = 1,
-}) =>
-    LocalOrderCaptureLine(
-      id: id,
-      restaurantId: 'restaurant-a',
-      restaurantName: 'Restaurant',
-      branchId: 'branch-a',
-      branchName: 'Branch',
-      orderId: 'order-a',
-      tableId: 'table-a',
-      tableName: 'Table 1',
-      tableIds: const ['table-a'],
-      tableNames: const ['Table 1'],
-      tableGroupLabel: '',
-      deviceUid: 'device-a',
-      employeeId: 'employee-a',
-      employeeName: 'Waiter',
-      personNumber: personNumber,
-      personName: 'Person $personNumber',
-      productId: productId,
-      productName: 'Taco',
-      categoryId: 'tacos',
-      categoryName: 'Tacos',
-      qty: 1,
-      unitPrice: 12,
-      notes: '',
-      sendToKitchen: true,
-      affectsKitchenStock: false,
-      kitchenStockItemId: null,
-      kitchenStockItemName: null,
-      kitchenStockUnit: null,
-      stockConsumptionQty: null,
-      recipeItems: const [],
-      appliedPlatformId: null,
-      appliedPlatformName: null,
-      priceSource: 'store',
-      capturedAtMicros: 1,
-    );
+}) => LocalOrderCaptureLine(
+  id: id,
+  restaurantId: 'restaurant-a',
+  restaurantName: 'Restaurant',
+  branchId: 'branch-a',
+  branchName: 'Branch',
+  orderId: 'order-a',
+  tableId: 'table-a',
+  tableName: 'Table 1',
+  tableIds: const ['table-a'],
+  tableNames: const ['Table 1'],
+  tableGroupLabel: '',
+  deviceUid: 'device-a',
+  employeeId: 'employee-a',
+  employeeName: 'Waiter',
+  personNumber: personNumber,
+  personName: 'Person $personNumber',
+  productId: productId,
+  productName: 'Taco',
+  categoryId: 'tacos',
+  categoryName: 'Tacos',
+  qty: 1,
+  unitPrice: 12,
+  notes: '',
+  sendToKitchen: true,
+  affectsKitchenStock: false,
+  kitchenStockItemId: null,
+  kitchenStockItemName: null,
+  kitchenStockUnit: null,
+  stockConsumptionQty: null,
+  recipeItems: const [],
+  appliedPlatformId: null,
+  appliedPlatformName: null,
+  priceSource: 'store',
+  capturedAtMicros: 1,
+);
 
 extension on LocalOrderCaptureSubmission {
   LocalOrderCaptureSubmission copyWithForTest({String? payloadHash}) =>

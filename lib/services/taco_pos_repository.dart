@@ -1359,8 +1359,8 @@ class TacoPosRepository {
   Future<LocalOrderCaptureStore>? _localOrderCaptureStoreFuture;
   Future<LocalOrderCaptureStore> get _localOrderCaptureStore =>
       _providedLocalOrderCaptureStore != null
-          ? Future.value(_providedLocalOrderCaptureStore)
-          : (_localOrderCaptureStoreFuture ??= LocalOrderCaptureStore.instance);
+      ? Future.value(_providedLocalOrderCaptureStore)
+      : (_localOrderCaptureStoreFuture ??= LocalOrderCaptureStore.instance);
   final LocalOrderCaptureSubmitter _localOrderCaptureSubmitter;
   final ExpenseRequestAuthSession _expenseRequestAuthSession;
   final ExpenseRequestDeviceSession _expenseRequestDeviceSession;
@@ -11249,18 +11249,22 @@ class TacoPosRepository {
 
   Stream<List<OrderItem>> watchLocalOrderCaptureItems({
     required String orderId,
+    String? restaurantId,
+    String? branchId,
   }) {
     final employee = AppSession.instance.employee;
-    final branchId = AppSession.instance.currentBranchId;
-    if (employee == null || branchId.trim().isEmpty) {
+    final resolvedBranchId = branchId ?? AppSession.instance.currentBranchId;
+    final resolvedRestaurantId =
+        restaurantId ?? AppSession.instance.currentRestaurantId;
+    if (employee == null || resolvedBranchId.trim().isEmpty) {
       return Stream.value(const <OrderItem>[]);
     }
     return _localOrderCaptureStore
         .asStream()
         .asyncExpand(
           (store) => store.watchLines(
-            restaurantId: AppSession.instance.currentRestaurantId,
-            branchId: branchId,
+            restaurantId: resolvedRestaurantId,
+            branchId: resolvedBranchId,
             orderId: orderId.trim(),
           ),
         )
@@ -11270,22 +11274,40 @@ class TacoPosRepository {
         );
   }
 
-  Future<bool> hasLocalOrderCapture({required String orderId}) async {
+  Future<bool> hasLocalOrderCapture({
+    required String orderId,
+    String? restaurantId,
+    String? branchId,
+  }) async {
     final employee = AppSession.instance.employee;
     if (employee == null) return false;
     return (await (await _localOrderCaptureStore).loadLines(
-      restaurantId: AppSession.instance.currentRestaurantId,
-      branchId: AppSession.instance.currentBranchId,
+      restaurantId: restaurantId ?? AppSession.instance.currentRestaurantId,
+      branchId: branchId ?? AppSession.instance.currentBranchId,
       orderId: orderId.trim(),
     )).isNotEmpty;
   }
 
-  Future<List<OrderItem>> captureProductLocally({
+  Future<bool> hasPendingLocalOrderCaptureSubmission({
+    required String orderId,
+    String? restaurantId,
+    String? branchId,
+  }) async {
+    final employee = AppSession.instance.employee;
+    if (employee == null) return false;
+    return await (await _localOrderCaptureStore).pendingSubmission(
+          restaurantId: restaurantId ?? AppSession.instance.currentRestaurantId,
+          branchId: branchId ?? AppSession.instance.currentBranchId,
+          orderId: orderId.trim(),
+        ) !=
+        null;
+  }
+
+  LocalOrderCaptureLine createLocalOrderCaptureLine({
     required PosOrder order,
     required Product product,
     required int personNumber,
-  }) async {
-    final persistenceTimer = Stopwatch()..start();
+  }) {
     _requireTakeOrders();
     final cleanOrderId = order.id.trim();
     final employee = AppSession.instance.employee;
@@ -11356,10 +11378,43 @@ class TacoPosRepository {
       priceSource: appliedPlatformId == null ? 'store' : 'platform',
       capturedAtMicros: DateTime.now().microsecondsSinceEpoch,
     );
-    final lines = await (await _localOrderCaptureStore).addTap(line);
+    return line;
+  }
+
+  Future<List<OrderItem>> captureProductLocally({
+    required LocalOrderCaptureLine line,
+    required String operationId,
+  }) async {
+    final persistenceTimer = Stopwatch()..start();
+    if (line.orderId.isEmpty || operationId.trim().isEmpty) {
+      throw StateError('No se pudo identificar la captura local.');
+    }
+    final lines = await (await _localOrderCaptureStore).addTap(
+      line,
+      operationId: operationId,
+    );
     persistenceTimer.stop();
     developer.log(
-      '[TacoPOS][LocalCapture.persisted] orderId=$cleanOrderId productId=${product.id} person=$personNumber qty=1 persistenceMs=${persistenceTimer.elapsedMilliseconds} remoteReads=0 remoteWrites=0',
+      '[TacoPOS][LocalCapture.persisted] orderId=${line.orderId} productId=${line.productId} person=${line.personNumber} qty=1 persistenceMs=${persistenceTimer.elapsedMilliseconds} remoteReads=0 remoteWrites=0',
+    );
+    return lines.map((entry) => entry.toOrderItem()).toList(growable: false);
+  }
+
+  Future<List<OrderItem>> adjustLocalOrderCaptureQty({
+    required String orderId,
+    required String itemId,
+    required int delta,
+    required String operationId,
+    required String restaurantId,
+    required String branchId,
+  }) async {
+    final lines = await (await _localOrderCaptureStore).adjustQty(
+      id: itemId,
+      delta: delta,
+      operationId: operationId,
+      restaurantId: restaurantId,
+      branchId: branchId,
+      orderId: orderId.trim(),
     );
     return lines.map((entry) => entry.toOrderItem()).toList(growable: false);
   }
@@ -11386,27 +11441,46 @@ class TacoPosRepository {
     required String itemId,
   }) => setLocalOrderCaptureQty(orderId: orderId, itemId: itemId, qty: 0);
 
+  Future<void> releaseDefinitivelyRejectedLocalOrderCapture({
+    required String orderId,
+    String? restaurantId,
+    String? branchId,
+  }) async {
+    final store = await _localOrderCaptureStore;
+    final submission = await store.pendingSubmission(
+      restaurantId: restaurantId ?? AppSession.instance.currentRestaurantId,
+      branchId: branchId ?? AppSession.instance.currentBranchId,
+      orderId: orderId.trim(),
+    );
+    if (submission != null) {
+      await store.releaseDefinitivelyRejected(submission);
+    }
+  }
+
   Future<int> submitLocalOrderCapture({
     required String orderId,
     required bool sendToKitchen,
+    String? restaurantId,
+    String? branchId,
   }) async {
     final submitTimer = Stopwatch()..start();
     if (AppSession.instance.employee == null) {
       throw StateError('Inicia sesion nuevamente.');
     }
     final store = await _localOrderCaptureStore;
-    final restaurantId = AppSession.instance.currentRestaurantId;
-    final branchId = AppSession.instance.currentBranchId;
+    final resolvedRestaurantId =
+        restaurantId ?? AppSession.instance.currentRestaurantId;
+    final resolvedBranchId = branchId ?? AppSession.instance.currentBranchId;
     final existing = await store.pendingSubmission(
-      restaurantId: restaurantId,
-      branchId: branchId,
+      restaurantId: resolvedRestaurantId,
+      branchId: resolvedBranchId,
       orderId: orderId.trim(),
     );
     final submission =
         existing ??
         await store.freeze(
-          restaurantId: restaurantId,
-          branchId: branchId,
+          restaurantId: resolvedRestaurantId,
+          branchId: resolvedBranchId,
           orderId: orderId.trim(),
           sendToKitchen: sendToKitchen,
         );
@@ -11437,7 +11511,15 @@ class TacoPosRepository {
     developer.log(
       '[TacoPOS][LocalCapture.completed] orderId=${orderId.trim()} submissionId=${submission.id} reconciliationMs=${reconciliationTimer.elapsedMilliseconds} totalElapsedMs=${submitTimer.elapsedMilliseconds}',
     );
-    return (response['sentCount'] as num?)?.toInt() ?? 0;
+    var sentCount = (response['sentCount'] as num?)?.toInt() ?? 0;
+    // A frozen outbox keeps the intent of its first accepted submit action.
+    // If the operator retries through Enviar a Cocina after an earlier
+    // Cobrar-originated freeze, first confirm the original capture, then use
+    // the existing kitchen-send protocol for the now-server-backed items.
+    if (sendToKitchen && !submission.sendToKitchen) {
+      sentCount = await sendOrderToKitchen(orderId.trim());
+    }
+    return sentCount;
   }
 
   Future<void> addProductToOrder({

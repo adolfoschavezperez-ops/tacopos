@@ -418,7 +418,7 @@ function makeOrderItem(line: Data, employeeId: string, employeeName: string, bra
   };
 }
 
-function computeOrderAggregates(items: Data[], payments: Data[]) {
+export function computeOrderAggregates(items: Data[], payments: Data[]) {
   const activeItems = items.filter((item) => Number(item.qty) > 0 && !isCancelledItem(item));
   const total = money(activeItems.reduce((sum, item) => sum + numberValue(item.total, Number(item.qty) * numberValue(item.unitPrice)), 0));
   let grossCovered = 0;
@@ -462,12 +462,13 @@ function canonicalActivePayment(payment: Data) {
 }
 
 function normalizedPayment(data: Data): Data {
-  const baseAmount = numberValue(data.baseAmount, numberValue(data.amount));
-  const surchargeAmount = numberValue(data.surchargeAmount);
+  const rawBaseAmount = readMoney(data.baseAmount);
+  const baseAmount = rawBaseAmount > 0 ? rawBaseAmount : readMoney(data.subtotalBeforeDiscount);
+  const surchargeAmount = readMoney(data.surchargeAmount);
   const method = safeString(data.method) || "cash";
-  const chargedAmount = numberValue(data.chargedAmount, numberValue(data.amount, baseAmount + surchargeAmount));
+  const chargedAmount = readMoney(data.chargedAmount);
   const cardFeeAbsorbedAmount = numberValue(
-    data.cardFeeAbsorbedAmount,
+    readMoney(data.cardFeeAbsorbedAmount),
     method === "card" && surchargeAmount > 0 ? surchargeAmount : 0,
   );
   return {
@@ -477,25 +478,24 @@ function normalizedPayment(data: Data): Data {
     method,
     chargedAmount,
     cardFeeAbsorbedAmount,
-    subtotalBeforeDiscount: numberValue(data.subtotalBeforeDiscount, baseAmount),
-    totalAfterDiscount: numberValue(data.totalAfterDiscount, numberValue(data.chargedAmount, baseAmount)),
-    tipAmount: firstPositive(data, ["tipAmount", "tip", "tips", "propina", "gratuity"]),
+    subtotalBeforeDiscount: readMoney(data.subtotalBeforeDiscount),
+    totalAfterDiscount: readMoney(data.totalAfterDiscount),
+    tipAmount: firstPositiveMoney(data, ["tipAmount", "tip", "tips", "propina", "gratuity", "employeeTip"]),
     status: safeString(data.status) || "active",
     type: safeString(data.type) || "full_table",
-    discountAmount: numberValue(data.discountAmount),
-    appliedDiscountPercent: numberValue(data.appliedDiscountPercent),
-    discountPercent: numberValue(data.discountPercent),
-    appliedAmount: data.appliedAmount == null ? null : numberValue(data.appliedAmount),
-    orderGrossSubtotal: numberValue(data.orderGrossSubtotal),
-    orderNetTotal: numberValue(data.orderNetTotal),
+    discountAmount: readMoney(data.discountAmount),
+    appliedDiscountPercent: readMoney(data.appliedDiscountPercent),
+    discountPercent: readMoney(data.discountPercent),
+    orderGrossSubtotal: readMoney(data.orderGrossSubtotal),
+    orderNetTotal: readMoney(data.orderNetTotal),
   };
 }
 
 function paymentDiscount(payment: Data, base: number) {
   if (isFreeMeal(payment) && base > 0) return money(base);
-  const explicit = Math.max(0, numberValue(payment.discountAmount));
+  const explicit = Math.max(0, readMoney(payment.discountAmount));
   if (explicit > 0) return money(explicit);
-  const percent = numberValue(payment.appliedDiscountPercent) > 0 ? numberValue(payment.appliedDiscountPercent) : numberValue(payment.discountPercent);
+  const percent = readMoney(payment.appliedDiscountPercent) > 0 ? readMoney(payment.appliedDiscountPercent) : readMoney(payment.discountPercent);
   if (percent <= 0 || base <= 0) return 0;
   const normalized = percent > 1 ? percent / 100 : percent;
   return money(Math.min(base, Math.max(0, base * normalized)));
@@ -503,45 +503,20 @@ function paymentDiscount(payment: Data, base: number) {
 
 function paymentMonetary(payment: Data, base: number, discount: number) {
   if (isFreeMeal(payment)) return 0;
-  const tip = firstPositive(payment, ["tipAmount", "tip", "tips", "propina", "gratuity", "employeeTip"]);
-  const applied = numberValue(payment.appliedAmount, -1);
-  if (payment.appliedAmount != null && applied >= 0) {
-    if (isLegacyGrossDiscounted(payment, applied, discount)) return money(Math.max(0, legacyNet(payment, applied, discount, tip)));
-    return money(Math.max(0, applied));
+  // Keep this data-path equivalent to PaymentSettlementInput.fromPaymentData
+  // and _paymentDataMonetaryAppliedToSale in order_payment_reconciliation.dart.
+  if (Object.prototype.hasOwnProperty.call(payment, "appliedAmount")) {
+    return money(Math.max(0, readMoney(payment.appliedAmount)));
   }
-  const afterDiscount = numberValue(payment.totalAfterDiscount);
-  if (afterDiscount > 0) {
-    if (isLegacyGrossDiscounted(payment, afterDiscount, discount)) return money(Math.max(0, legacyNet(payment, afterDiscount, discount, tip)));
-    return money(Math.max(0, afterDiscount - tip));
-  }
-  const charged = numberValue(payment.chargedAmount, numberValue(payment.amount, base + numberValue(payment.surchargeAmount)));
-  if (charged > 0 && base > 0 && charged < base - 0.02) return money(Math.max(0, charged - tip));
   const baseNet = base > 0 ? Math.max(0, base - discount) : 0;
   if (baseNet > 0 || discount > 0) return money(baseNet);
-  return money(Math.max(0, charged - tip - numberValue(payment.cardFeeAbsorbedAmount, numberValue(payment.surchargeAmount))));
-}
-
-function isLegacyGrossDiscounted(payment: Data, applied: number, discount: number) {
-  const discountPercent = numberValue(payment.appliedDiscountPercent);
-  if (discount <= 0 && discountPercent <= 0) return false;
-  const base = numberValue(payment.baseAmount, numberValue(payment.amount));
-  const subtotal = numberValue(payment.subtotalBeforeDiscount, base);
-  if (base <= 0 || Math.abs(applied - base) > 0.02 || (subtotal > 0 && Math.abs(applied - subtotal) > 0.02)) return false;
-  const orderGross = numberValue(payment.orderGrossSubtotal);
-  const orderNet = numberValue(payment.orderNetTotal, -1);
-  const type = safeString(payment.type);
-  const hasOrderEvidence = orderGross > 0 && orderNet >= 0 && orderNet < orderGross - 0.02 && (type === "full_table" || Math.abs(base - orderGross) <= 0.02);
-  const cashReceived = numberValue(payment.cashReceivedAmount, -1);
-  const cashChange = numberValue(payment.cashChangeAmount, -1);
-  const hasCashEvidence = payment.method === "cash" && cashReceived >= 0 && cashChange >= 0 && cashReceived - cashChange >= 0 && Math.abs(cashReceived - cashChange - applied) > 0.02;
-  return hasOrderEvidence || hasCashEvidence;
-}
-
-function legacyNet(payment: Data, applied: number, discount: number, tip: number) {
-  const gross = numberValue(payment.orderGrossSubtotal);
-  const net = numberValue(payment.orderNetTotal, -1);
-  if (net >= 0 && gross > 0 && net < gross - 0.02) return Math.max(0, net - tip);
-  return Math.max(0, applied - discount - tip);
+  const tip = firstPositiveMoney(payment, ["tipAmount", "tip", "tips", "propina", "gratuity", "employeeTip"]);
+  const fee = readMoney(payment.cardFeeAbsorbedAmount) > 0
+    ? readMoney(payment.cardFeeAbsorbedAmount)
+    : readMoney(payment.surchargeAmount);
+  const afterDiscount = readMoney(payment.totalAfterDiscount);
+  if (afterDiscount > 0) return money(Math.max(0, afterDiscount - tip));
+  return money(Math.max(0, readMoney(payment.chargedAmount) - tip - fee));
 }
 
 function isFreeMeal(payment: Data) {
@@ -596,6 +571,11 @@ function orderTableIds(order: Data) {
 function normalize(value: unknown) { return safeString(value).toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, ""); }
 function safeString(value: unknown) { return typeof value === "string" ? value.trim() : ""; }
 function numberValue(value: unknown, fallback = 0) { return typeof value === "number" && Number.isFinite(value) ? value : fallback; }
+function readMoney(value: unknown) {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") return Number.parseFloat(value.trim().replace(/,/g, "")) || 0;
+  return 0;
+}
 function parseNumber(value: unknown) { if (typeof value === "number") return Number.isFinite(value) ? value : 0; if (typeof value === "string") return Number.parseFloat(value.trim().replace(",", ".")) || 0; return 0; }
 function readBool(value: unknown, fallback: boolean) {
   if (typeof value === "boolean") return value;
@@ -607,7 +587,7 @@ function readBool(value: unknown, fallback: boolean) {
   }
   return fallback;
 }
-function firstPositive(data: Data, keys: string[]) { for (const key of keys) { const value = numberValue(data[key]); if (value > 0) return value; } return 0; }
+function firstPositiveMoney(data: Data, keys: string[]) { for (const key of keys) { const value = readMoney(data[key]); if (value > 0) return value; } return 0; }
 function money(value: number) { return Math.round(value * 100) / 100; }
 function isSafeId(value: string) { return value.length > 0 && value.length <= 140 && !value.includes("/"); }
 function safeIdPart(value: string) { return value.trim().replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/_+/g, "_"); }

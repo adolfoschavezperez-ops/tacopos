@@ -65,6 +65,17 @@ Rules desplegadas revisadas previamente son permisivas para las escrituras exist
 4. Probar una tablet con almacenamiento persistente, red interrumpida, reintento y envío a Cocina/Cobro; confirmar la misma cantidad y un único lote.
 5. Expandir por sucursal y revisar métricas locales/remotas antes de decidir si se hace obligatoria.
 
+## Política operativa y borradores pendientes
+
+El servidor no puede descubrir una captura que todavía existe únicamente en el almacenamiento local de otra tablet. Durante pérdida de conectividad, no se debe tratar la vista del servidor como prueba de que todas las capturas fueron recibidas. La política de operación para la prueba controlada es:
+
+1. Asignar una sola tablet/mesero como capturista de una orden mientras esa orden esté trabajando sin conectividad estable.
+2. No cobrar ni cerrar una orden hasta que todos los dispositivos que pudieron capturarla hayan vuelto a conectarse, hayan abierto la orden y no muestren capturas locales o envíos pendientes.
+3. Si una tablet presenta un borrador pendiente o un envío de resultado incierto, reintentar el mismo `submissionId` desde esa tablet. No borrar los datos de la app, reinstalarla ni volver a capturar esos renglones en otro dispositivo.
+4. Si una orden desaparece de Mesas mientras conserva datos locales en una tablet, detener su cobro y solicitar recuperación desde esa misma tablet y orden. No crear automáticamente otra orden ni trasladar renglones a una orden distinta.
+
+Esta política no sincroniza borradores offline entre dispositivos. La herramienta de inventario/recuperación de borradores huérfanos todavía no existe y es un pendiente P1-08: una orden ausente de Mesas sin acceso a su pantalla no tiene una ruta de soporte dentro de la aplicación. Debe resolverse antes de declarar la captura offline operativamente completa. Clientes Android anteriores y Backoffice pueden seguir escribiendo por sus rutas existentes; no se asume que la instalación de la nueva versión los haya retirado.
+
 ## Métricas
 
 Cada pulsación registra `persistenceMs`, `remoteReads=0` y `remoteWrites=0`. La callable devuelve `serverElapsedMs`, intentos, consultas de colección, documentos leídos y operaciones escritas. El cliente registra la duración del recálculo/lectura de servidor y duración total. Las lecturas de conciliación posteriores se miden por separado; no se suman a las lecturas que reporta la callable. Los contadores no son bytes transferidos. Para medir bytes se necesita medición de red Android por paquete durante una prueba física.

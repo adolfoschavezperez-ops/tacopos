@@ -22,6 +22,9 @@ class LocalOrderCaptureStore {
   static final _submissionStore = StoreRef<String, Map<String, dynamic>>(
     'orderCaptureSubmissions',
   );
+  static final _operationStore = StoreRef<String, Map<String, dynamic>>(
+    'orderCaptureTapOperations',
+  );
 
   final Database _database;
 
@@ -68,51 +71,154 @@ class LocalOrderCaptureStore {
             .toList(growable: false),
       );
 
-  Future<List<LocalOrderCaptureLine>> addTap(LocalOrderCaptureLine newLine) =>
-      _database.transaction((transaction) async {
-        final pending = await _pendingForOrder(
-          transaction,
-          restaurantId: newLine.restaurantId,
-          branchId: newLine.branchId,
-          orderId: newLine.orderId,
-        );
-        if (pending.isNotEmpty) {
-          throw StateError(
-            'Hay un envio pendiente. Reintenta antes de editar.',
-          );
-        }
+  Future<List<LocalOrderCaptureLine>> addTap(
+    LocalOrderCaptureLine newLine, {
+    String? operationId,
+  }) => _database.transaction((transaction) async {
+    final cleanOperationId = operationId?.trim().isNotEmpty == true
+        ? operationId!.trim()
+        : newLine.id;
+    final pending = await _pendingForOrder(
+      transaction,
+      restaurantId: newLine.restaurantId,
+      branchId: newLine.branchId,
+      orderId: newLine.orderId,
+    );
+    if (pending.isNotEmpty) {
+      throw StateError('Hay un envio pendiente. Reintenta antes de editar.');
+    }
 
-        final currentLines = await _findLines(
-          transaction,
-          restaurantId: newLine.restaurantId,
-          branchId: newLine.branchId,
-          orderId: newLine.orderId,
-        );
-        LocalOrderCaptureLine? matching;
-        for (final line in currentLines) {
-          if (line.deviceUid == newLine.deviceUid &&
-              line.employeeId == newLine.employeeId &&
-              line.personNumber == newLine.personNumber &&
-              line.productId == newLine.productId &&
-              line.appliedPlatformId == newLine.appliedPlatformId) {
-            matching = line;
-            break;
-          }
-        }
-        if (matching == null) {
-          await _lineStore.record(newLine.id).put(transaction, newLine.toMap());
-        } else {
-          await _lineStore
-              .record(matching.id)
-              .put(transaction, matching.withQty(matching.qty + 1).toMap());
-        }
-        return _findLines(
-          transaction,
-          restaurantId: newLine.restaurantId,
-          branchId: newLine.branchId,
-          orderId: newLine.orderId,
-        );
-      });
+    final operation = await _operationStore
+        .record(cleanOperationId)
+        .get(transaction);
+    if (operation != null) {
+      if (operation['orderId'] != newLine.orderId ||
+          operation['branchId'] != newLine.branchId ||
+          operation['restaurantId'] != newLine.restaurantId ||
+          operation['lineCanonical'] != newLine.canonicalJson()) {
+        throw StateError('El identificador de captura ya fue utilizado.');
+      }
+      return _findLines(
+        transaction,
+        restaurantId: newLine.restaurantId,
+        branchId: newLine.branchId,
+        orderId: newLine.orderId,
+      );
+    }
+
+    final currentLines = await _findLines(
+      transaction,
+      restaurantId: newLine.restaurantId,
+      branchId: newLine.branchId,
+      orderId: newLine.orderId,
+    );
+    LocalOrderCaptureLine? matching;
+    for (final line in currentLines) {
+      if (line.deviceUid == newLine.deviceUid &&
+          line.employeeId == newLine.employeeId &&
+          line.personNumber == newLine.personNumber &&
+          line.productId == newLine.productId &&
+          line.appliedPlatformId == newLine.appliedPlatformId) {
+        matching = line;
+        break;
+      }
+    }
+    if (matching == null) {
+      await _lineStore.record(newLine.id).put(transaction, newLine.toMap());
+    } else {
+      await _lineStore
+          .record(matching.id)
+          .put(transaction, matching.withQty(matching.qty + 1).toMap());
+    }
+    await _operationStore.record(cleanOperationId).put(transaction, {
+      'operationId': cleanOperationId,
+      'restaurantId': newLine.restaurantId,
+      'branchId': newLine.branchId,
+      'orderId': newLine.orderId,
+      'lineCanonical': newLine.canonicalJson(),
+      'createdAtMicros': newLine.capturedAtMicros,
+    });
+    return _findLines(
+      transaction,
+      restaurantId: newLine.restaurantId,
+      branchId: newLine.branchId,
+      orderId: newLine.orderId,
+    );
+  });
+
+  Future<List<LocalOrderCaptureLine>> adjustQty({
+    required String id,
+    required int delta,
+    required String operationId,
+    required String restaurantId,
+    required String branchId,
+    required String orderId,
+  }) => _database.transaction((transaction) async {
+    final previousOperation = await _operationStore
+        .record(operationId)
+        .get(transaction);
+    if (previousOperation != null) {
+      if (previousOperation['lineId'] != id ||
+          previousOperation['delta'] != delta ||
+          previousOperation['orderId'] != orderId ||
+          previousOperation['branchId'] != branchId ||
+          previousOperation['restaurantId'] != restaurantId) {
+        throw StateError('El identificador de captura ya fue utilizado.');
+      }
+      return _findLines(
+        transaction,
+        restaurantId: restaurantId,
+        branchId: branchId,
+        orderId: orderId,
+      );
+    }
+    if (delta == 0) {
+      return _findLines(
+        transaction,
+        restaurantId: restaurantId,
+        branchId: branchId,
+        orderId: orderId,
+      );
+    }
+    final line = await _lineStore.record(id).get(transaction);
+    if (line == null ||
+        line['restaurantId'] != restaurantId ||
+        line['branchId'] != branchId ||
+        line['orderId'] != orderId) {
+      throw StateError('La captura local ya no existe.');
+    }
+    if ((await _pendingForOrder(
+      transaction,
+      restaurantId: restaurantId,
+      branchId: branchId,
+      orderId: orderId,
+    )).isNotEmpty) {
+      throw StateError('Hay un envio pendiente. Reintenta antes de editar.');
+    }
+    final current = LocalOrderCaptureLine.fromMap(line);
+    final next = current.qty + delta;
+    if (next <= 0) {
+      await _lineStore.record(id).delete(transaction);
+    } else {
+      await _lineStore
+          .record(id)
+          .put(transaction, current.withQty(next).toMap());
+    }
+    await _operationStore.record(operationId).put(transaction, {
+      'operationId': operationId,
+      'restaurantId': restaurantId,
+      'branchId': branchId,
+      'orderId': orderId,
+      'lineId': id,
+      'delta': delta,
+    });
+    return _findLines(
+      transaction,
+      restaurantId: restaurantId,
+      branchId: branchId,
+      orderId: orderId,
+    );
+  });
 
   Future<List<LocalOrderCaptureLine>> setQty({
     required String id,
@@ -263,6 +369,26 @@ class LocalOrderCaptureStore {
         }
         await _submissionStore.record(stored.id).delete(transaction);
       });
+
+  /// Opens a frozen submission only after the callable returned a definitive
+  /// domain rejection (never for timeout/network/unknown outcomes). Draft lines
+  /// remain durable and can then be reviewed or edited.
+  Future<void> releaseDefinitivelyRejected(
+    LocalOrderCaptureSubmission submission,
+  ) => _database.transaction((transaction) async {
+    final current = await _submissionStore
+        .record(submission.id)
+        .get(transaction);
+    if (current == null) return;
+    final stored = LocalOrderCaptureSubmission.fromMap(current);
+    if (stored.payloadHash != submission.payloadHash ||
+        stored.orderId != submission.orderId ||
+        stored.branchId != submission.branchId ||
+        stored.restaurantId != submission.restaurantId) {
+      throw StateError('El envio local cambio mientras se recuperaba.');
+    }
+    await _submissionStore.record(stored.id).delete(transaction);
+  });
 
   Future<List<RecordSnapshot<String, Map<String, dynamic>>>> _pendingForOrder(
     DatabaseClient transaction, {

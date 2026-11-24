@@ -702,7 +702,11 @@ service cloud.firestore {
 
       match /activityLog/{eventId} {
         allow read: if signedIn();
-        allow create: if validCreate(restaurantId);
+        // Local order capture markers are idempotency evidence written only
+        // by the Admin SDK callable. Clients must not be able to pre-create a
+        // forged acknowledgement that causes the callable to skip the write.
+        allow create: if !eventId.matches('^capture_submission_.*$') &&
+          validCreate(restaurantId);
         allow update, delete: if false;
       }
 
