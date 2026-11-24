@@ -28,6 +28,6 @@ void main() {
   test('Android pubspec version increments for appbundle release', () {
     final pubspec = File('pubspec.yaml').readAsStringSync();
 
-    expect(pubspec, contains('version: 1.5.12+29'));
+    expect(pubspec, contains('version: 1.5.13+30'));
   });
 }

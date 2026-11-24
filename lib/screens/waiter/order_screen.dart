@@ -311,7 +311,7 @@ class _OrderScreenState extends State<OrderScreen> {
           ModalRoute.of(context)?.isCurrent != true) {
         return;
       }
-      await Navigator.push(
+      final paymentCompleted = await Navigator.push<bool>(
         context,
         MaterialPageRoute(
           builder: (_) => PaymentScreen(
@@ -321,6 +321,15 @@ class _OrderScreenState extends State<OrderScreen> {
           ),
         ),
       );
+      if (paymentCompleted == true &&
+          mounted &&
+          operationOrderId == _boundOrderId &&
+          ModalRoute.of(context)?.isCurrent == true) {
+        // PaymentScreen returns true only after a server-confirmed paid state.
+        // Pop this order route as well, preserving the originating destination
+        // (tables, takeout, or counter) beneath it.
+        Navigator.of(context).pop(true);
+      }
     } catch (error) {
       if (!mounted) return;
       _showMessage('No se pudo validar el total: $error');
@@ -336,15 +345,23 @@ class _OrderScreenState extends State<OrderScreen> {
     if (!mounted) {
       return;
     }
-    LivePresenceService.instance.updateCurrentScreen(
-      appMode: 'waiter',
-      currentScreen: 'Orden',
-      currentAction: 'Levantando orden',
-      currentTableId: widget.tableId,
-      currentTableName: widget.tableName,
-      currentOrderId: _boundOrderId,
-      currentPersonNumber: _selectedPerson,
-      force: true,
+    unawaited(
+      LivePresenceService.instance
+          .updateCurrentScreen(
+            appMode: 'waiter',
+            currentScreen: 'Orden',
+            currentAction: 'Levantando orden',
+            currentTableId: widget.tableId,
+            currentTableName: widget.tableName,
+            currentOrderId: _boundOrderId,
+            currentPersonNumber: _selectedPerson,
+            force: true,
+          )
+          .catchError((Object error, StackTrace stackTrace) {
+            debugPrint(
+              'ORDER_PRESENCE_UPDATE_ERROR order=$_boundOrderId error=$error',
+            );
+          }),
     );
   }
 

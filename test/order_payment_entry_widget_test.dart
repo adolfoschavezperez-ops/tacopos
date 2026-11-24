@@ -10,6 +10,7 @@ import 'package:tacopos/core/orders/order_capture_queue.dart';
 import 'package:tacopos/core/orders/order_payment_reconciliation.dart';
 import 'package:tacopos/core/theme/app_theme.dart';
 import 'package:tacopos/models/cash_session.dart';
+import 'package:tacopos/models/branch.dart';
 import 'package:tacopos/models/employee.dart';
 import 'package:tacopos/models/order.dart';
 import 'package:tacopos/models/order_item.dart';
@@ -27,13 +28,20 @@ import 'package:tacopos/widgets/money_text.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setupFirebaseCoreMocks();
+  var failedPresenceWritesRemaining = 0;
   setUpAll(() async {
     await Firebase.initializeApp();
     // Presence writes are unrelated to checkout; no network is used by tests.
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMessageHandler(
           'dev.flutter.pigeon.cloud_firestore_platform_interface.FirebaseFirestoreHostApi.documentReferenceSet',
-          (_) async => const StandardMessageCodec().encodeMessage([null]),
+          (message) async {
+            if (failedPresenceWritesRemaining > 0) {
+              failedPresenceWritesRemaining--;
+              throw PlatformException(code: 'unavailable');
+            }
+            return const StandardMessageCodec().encodeMessage([null]);
+          },
         );
   });
   tearDown(() async {
@@ -142,6 +150,155 @@ void main() {
     await tester.pumpAndSettle();
     _expectStat(tester, 'Total', 175);
   });
+
+  testWidgets('full cash payment exact amount returns to tables', (
+    tester,
+  ) async {
+    final repo = _CheckoutRepository();
+    await _showOrderFromTables(tester, repo);
+    await tester.tap(find.text('Cobrar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cobrar mesa completa'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Efectivo'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmar pago'));
+    await tester.pumpAndSettle();
+
+    expect(repo.fullPaymentCalls, 1);
+    expect(find.byType(PaymentScreen, skipOffstage: false), findsNothing);
+    expect(find.byType(OrderScreen, skipOffstage: false), findsNothing);
+    expect(find.text('Mesas'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'full cash payment with change returns to tables despite presence write error',
+    (tester) async {
+      final repo = _CheckoutRepository();
+      await _showOrderFromTables(tester, repo);
+      LivePresenceService.instance.start(
+        AppSession.instance.employee!,
+        Branch.defaultBranch,
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Cobrar'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cobrar mesa completa'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Efectivo'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, '120');
+      failedPresenceWritesRemaining = 10;
+      await tester.tap(find.text('Confirmar pago'));
+      await tester.pumpAndSettle();
+      failedPresenceWritesRemaining = 0;
+      await LivePresenceService.instance.stop();
+
+      expect(repo.fullPaymentCalls, 1);
+      expect(find.byType(PaymentScreen, skipOffstage: false), findsNothing);
+      expect(find.byType(OrderScreen, skipOffstage: false), findsNothing);
+      expect(find.text('Mesas'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'confirmed full card payment returns to tables without duplicate calls',
+    (tester) async {
+      final repo = _CheckoutRepository();
+      await _showOrderFromTables(tester, repo);
+
+      await tester.tap(find.text('Cobrar'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cobrar mesa completa'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Tarjeta'));
+      await tester.tap(find.text('Confirmar pago'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Confirmar cobro'));
+      await tester.pumpAndSettle();
+
+      expect(repo.fullPaymentCalls, 1);
+      expect(find.byType(PaymentScreen, skipOffstage: false), findsNothing);
+      expect(find.byType(OrderScreen, skipOffstage: false), findsNothing);
+      expect(find.text('Mesas'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('partial payment keeps the payment screen open', (tester) async {
+    final repo = _CheckoutRepository();
+    await _showOrderFromTables(tester, repo);
+    await tester.tap(find.text('Cobrar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pago parcial'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).last, '25');
+    await tester.tap(find.text('Continuar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tarjeta'));
+    await tester.tap(find.text('Confirmar pago'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmar cobro'));
+    await tester.pumpAndSettle();
+
+    expect(repo.partialPaymentCalls, 1);
+    expect(find.byType(PaymentScreen, skipOffstage: false), findsOneWidget);
+    expect(find.byType(OrderScreen, skipOffstage: false), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('disposed payment screen ignores late confirmed response', (
+    tester,
+  ) async {
+    final repo = _CheckoutRepository()
+      ..fullPaymentGate = Completer<PaymentResult>();
+    await _showOrderFromTables(tester, repo);
+    await tester.tap(find.text('Cobrar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cobrar mesa completa'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tarjeta'));
+    await tester.tap(find.text('Confirmar pago'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirmar cobro'));
+    await tester.pump();
+    expect(repo.fullPaymentCalls, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    repo.fullPaymentGate!.complete(
+      const PaymentResult(
+        allPaid: true,
+        paymentId: 'payment-test',
+        authoritativePendingTotal: 0,
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'server-confirmed payment from another tablet returns to the origin route',
+    (tester) async {
+      final repo = _CheckoutRepository();
+      await _showOrderFromTables(tester, repo);
+      await tester.tap(find.text('Cobrar'));
+      await tester.pumpAndSettle();
+      expect(find.byType(PaymentScreen), findsOneWidget);
+
+      repo.markPaidFromAnotherTablet();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PaymentScreen, skipOffstage: false), findsNothing);
+      expect(find.byType(OrderScreen, skipOffstage: false), findsNothing);
+      expect(find.text('Mesas'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   final cases =
       <
@@ -261,6 +418,10 @@ void main() {
       await _showOrder(tester, repo);
       await tester.tap(find.text('Cobrar'));
       await tester.pumpAndSettle();
+      if (fixture.pending <= 0.01) {
+        expect(find.byType(PaymentScreen), findsNothing);
+        return;
+      }
       expect(find.byType(PaymentScreen), findsOneWidget);
       _expectStat(tester, 'Total', fixture.net);
       // The checkout panel displays monetary paid, as defined by existing logic.
@@ -317,6 +478,49 @@ void main() {
   );
 }
 
+Future<void> _showOrderFromTables(
+  WidgetTester tester,
+  _CheckoutRepository repo,
+) async {
+  addTearDown(repo.queue.dispose);
+  addTearDown(repo.orderChanges.close);
+  tester.view.physicalSize = const Size(1280, 720);
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+  AppSession.instance.signIn(Employee.fromDoc(_EmployeeDoc()));
+  await LivePresenceService.instance.stop();
+  await tester.pumpWidget(
+    MaterialApp(
+      theme: AppTheme.dark(),
+      home: Builder(
+        builder: (context) => Scaffold(
+          body: Column(
+            children: [
+              const Text('Mesas'),
+              TextButton(
+                onPressed: () => Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) => OrderScreen(
+                      orderId: 'order',
+                      tableName: 'Mesa 1',
+                      repository: repo,
+                    ),
+                  ),
+                ),
+                child: const Text('Abrir mesa'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('Abrir mesa'));
+  await tester.pumpAndSettle();
+}
+
 Future<void> _showOrder(
   WidgetTester tester,
   _CheckoutRepository repo, {
@@ -327,6 +531,7 @@ Future<void> _showOrder(
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
   addTearDown(repo.queue.dispose);
+  addTearDown(repo.orderChanges.close);
   AppSession.instance.signIn(Employee.fromDoc(_EmployeeDoc()));
   // Keep permissions while avoiding the presence heartbeat in widget fake time.
   await LivePresenceService.instance.stop();
@@ -432,6 +637,10 @@ class _CheckoutRepository implements TacoPosRepository {
   final items = [_item('base-60', 60), _item('base-40', 40)];
   final payments = <Payment>[];
   final events = <String>[];
+  final orderChanges = StreamController<PosOrder?>.broadcast();
+  int fullPaymentCalls = 0;
+  int partialPaymentCalls = 0;
+  Completer<PaymentResult>? fullPaymentGate;
   Completer<void>? writeGate;
   Completer<List<Payment>>? paymentsGate;
   String? failureStage;
@@ -461,6 +670,69 @@ class _CheckoutRepository implements TacoPosRepository {
     );
   }
 
+  PosOrder _paidOrder() => PosOrder(
+    id: 'order',
+    tableId: 'table',
+    tableName: 'Mesa 1',
+    status: 'paid',
+    kitchenStatus: 'ready',
+    paymentStatus: 'paid',
+    total: 100,
+    grossSubtotal: 100,
+    netTotal: 100,
+    paidTotal: 100,
+    pendingTotal: 0,
+    personNames: const {},
+    orderType: 'table',
+    paidAt: DateTime.utc(2026, 11, 21),
+    closedAt: DateTime.utc(2026, 11, 21),
+  );
+
+  void markPaidFromAnotherTablet() {
+    order = _paidOrder();
+    orderChanges.add(order);
+  }
+
+  @override
+  Future<PaymentResult> payFullTable({
+    required String orderId,
+    required String method,
+    String? paymentAttemptId,
+    String? employeeId,
+    String? employeeName,
+    CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
+  }) async {
+    fullPaymentCalls++;
+    if (fullPaymentGate != null) return fullPaymentGate!.future;
+    order = _paidOrder();
+    return const PaymentResult(
+      allPaid: true,
+      saleFolioDisplay: 'F-TEST',
+      paymentId: 'payment-test',
+      authoritativePendingTotal: 0,
+    );
+  }
+
+  @override
+  Future<PaymentResult> payPartialAmount({
+    required String orderId,
+    required double baseAmount,
+    required String method,
+    String? paymentAttemptId,
+    String? employeeId,
+    String? employeeName,
+    CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
+  }) async {
+    partialPaymentCalls++;
+    return PaymentResult(
+      allPaid: false,
+      paymentId: paymentAttemptId,
+      authoritativePendingTotal: 100 - baseAmount,
+    );
+  }
+
   void _stage(String stage) {
     events.add(stage);
     if (failureStage == stage) throw StateError('sin conexion: $stage');
@@ -483,6 +755,14 @@ class _CheckoutRepository implements TacoPosRepository {
     _stage('recalculate-server');
     order = _reconciledOrder();
   }
+
+  @override
+  AppliedDiscountDetails? preparedGlobalDiscountForAmount({
+    required PosOrder order,
+    required double amountBeforeDiscount,
+    required double remainingGrossSubtotal,
+    required Iterable<Payment> activePayments,
+  }) => null;
 
   @override
   Future<CheckoutPreparation> prepareOrderForCheckout(
@@ -539,7 +819,15 @@ class _CheckoutRepository implements TacoPosRepository {
   @override
   Stream<PosOrder?> watchOrder(String orderId, {bool requireServer = false}) {
     if (events.isNotEmpty) expectSync(requireServer, isTrue);
-    return Stream.value(order);
+    return Stream<PosOrder?>.multi((controller) {
+      controller.add(order);
+      final subscription = orderChanges.stream.listen(
+        controller.add,
+        onError: controller.addError,
+        onDone: controller.close,
+      );
+      controller.onCancel = subscription.cancel;
+    });
   }
 
   @override

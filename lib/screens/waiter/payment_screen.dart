@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../core/orders/order_activity.dart';
 import '../../core/orders/checkout_submission_guard.dart';
 import '../../core/orders/employee_benefit_checkout.dart';
 import '../../core/orders/global_discount_checkout.dart';
@@ -42,6 +45,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
   late Stream<List<OrderItem>> _itemsStream;
   late Stream<List<Payment>> _paymentsStream;
   bool _busy = false;
+  bool _returnScheduled = false;
+  bool _hasReturnedFromPaidOrder = false;
 
   @override
   void initState() {
@@ -73,8 +78,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   @override
   void dispose() {
-    LivePresenceService.instance.clearCurrentOrder(
-      currentAction: 'Viendo mesas',
+    unawaited(
+      LivePresenceService.instance
+          .clearCurrentOrder(currentAction: 'Viendo mesas')
+          .catchError((Object error, StackTrace stackTrace) {
+            debugPrint(
+              'PAYMENT_PRESENCE_CLEAR_ERROR order=${widget.orderId} error=$error',
+            );
+          }),
     );
     super.dispose();
   }
@@ -367,14 +378,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
               ? 'Venta cobrada.'
               : 'Venta cobrada. Folio $folio',
         );
-        await LivePresenceService.instance.clearCurrentOrder(
-          currentAction: 'Viendo mesas',
-        );
-        if (!mounted) {
-          return true;
-        }
-        Navigator.pop(context);
-        Navigator.pop(context);
+        _returnFromConfirmedPayment(operationOrderId);
       } else {
         _showMessage('Pago registrado.');
       }
@@ -394,6 +398,42 @@ class _PaymentScreenState extends State<PaymentScreen> {
           _busy = false;
         });
       }
+    }
+  }
+
+  void _scheduleReturnIfOrderIsPaid(PosOrder? order) {
+    if (order == null ||
+        !isPaidOrder(order) ||
+        _returnScheduled ||
+        _hasReturnedFromPaidOrder) {
+      return;
+    }
+    _returnScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _returnFromConfirmedPayment(order.id);
+    });
+  }
+
+  void _returnFromConfirmedPayment(String orderId) {
+    if (!_isCurrentOrder(orderId) || _hasReturnedFromPaidOrder) {
+      return;
+    }
+    _hasReturnedFromPaidOrder = true;
+    final navigator = Navigator.of(context);
+    final paymentRoute = ModalRoute.of(context);
+    if (paymentRoute == null) {
+      _hasReturnedFromPaidOrder = false;
+      _showMessage(
+        'El pago quedó confirmado, pero no se pudo cerrar la pantalla.',
+      );
+      return;
+    }
+    // The payment method sheet (or a confirmation dialog) may still sit above
+    // this route. Remove only overlays above PaymentScreen, then return its
+    // confirmed result to OrderScreen. OrderScreen returns to its own caller.
+    navigator.popUntil((route) => identical(route, paymentRoute));
+    if (mounted && paymentRoute.isCurrent) {
+      navigator.pop(true);
     }
   }
 
@@ -701,6 +741,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
               order == null) {
             return const LoadingPanel(message: 'Cargando cuenta...');
           }
+
+          // watchOrder(requireServer: true) suppresses cached and pending
+          // snapshots. This also exits when another tablet confirms payment.
+          _scheduleReturnIfOrderIsPaid(order);
 
           return StreamBuilder<List<OrderItem>>(
             stream: _itemsStream,
