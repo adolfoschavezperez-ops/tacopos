@@ -83,6 +83,24 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "orders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "effectiveBranchId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "operationalActive",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orderType",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

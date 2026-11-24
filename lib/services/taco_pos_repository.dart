@@ -4718,6 +4718,87 @@ class TacoPosRepository {
     });
   }
 
+  /// Candidate server-filtered source for staged shadow validation. It is
+  /// deliberately not wired to production screens until backfill and every
+  /// writer (including Backoffice) maintain these fields.
+  Stream<List<PosOrder>> watchOpenOrdersByOperationalFields() {
+    return _operationalOrdersQuery().snapshots().map((snapshot) {
+      final orders =
+          snapshot.docs.map(PosOrder.fromDoc).where(isActiveOrder).toList()
+            ..sort(_compareOrdersNewestFirst);
+      return orders;
+    });
+  }
+
+  Query<Map<String, dynamic>> _operationalOrdersQuery() => _ordersRef
+      .where(
+        'effectiveBranchId',
+        isEqualTo: AppSession.instance.currentBranchId,
+      )
+      .where('operationalActive', isEqualTo: true);
+
+  /// Diagnostic snapshot to compare historical classification with the
+  /// candidate index. Never use it as the screen source until gaps are zero.
+  Future<
+    ({
+      int historicalDocuments,
+      int candidateDocuments,
+      Duration elapsed,
+      Set<String> activeIds,
+      Set<String> candidateIds,
+      Set<String> omittedIds,
+      Set<String> unexpectedIds,
+    })
+  >
+  compareOperationalOrderQuery() async {
+    final stopwatch = Stopwatch()..start();
+    final legacy = await _ordersRef.get(
+      const GetOptions(source: Source.server),
+    );
+    final candidate = await _operationalOrdersQuery().get(
+      const GetOptions(source: Source.server),
+    );
+    stopwatch.stop();
+    final activeIds = legacy.docs
+        .map(PosOrder.fromDoc)
+        .where(
+          (order) =>
+              isActiveOrder(order) &&
+              _matchesBranch(
+                order.branchId,
+                AppSession.instance.currentBranchId,
+              ),
+        )
+        .map((order) => order.id)
+        .toSet();
+    final candidateIds = candidate.docs
+        .map(PosOrder.fromDoc)
+        .where(isActiveOrder)
+        .where(
+          (order) => _matchesBranch(
+            order.branchId,
+            AppSession.instance.currentBranchId,
+          ),
+        )
+        .map((order) => order.id)
+        .toSet();
+    return (
+      historicalDocuments: legacy.size,
+      candidateDocuments: candidate.size,
+      elapsed: stopwatch.elapsed,
+      activeIds: activeIds,
+      candidateIds: candidateIds,
+      omittedIds: activeIds.difference(candidateIds),
+      unexpectedIds: candidateIds.difference(activeIds),
+    );
+  }
+
+  static int _compareOrdersNewestFirst(PosOrder a, PosOrder b) {
+    final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+    return bDate.compareTo(aDate);
+  }
+
   Stream<List<PosOrder>> watchOpenTakeoutOrders() {
     return _ordersRef.snapshots().map((snapshot) {
       final orders =
@@ -4737,6 +4818,19 @@ class TacoPosRepository {
       return orders;
     });
   }
+
+  Stream<List<PosOrder>> watchOpenTakeoutOrdersByOperationalFields() =>
+      _operationalOrdersQuery()
+          .where('orderType', isEqualTo: 'takeout')
+          .snapshots()
+          .map(
+            (snapshot) =>
+                snapshot.docs
+                    .map(PosOrder.fromDoc)
+                    .where(isActiveOrder)
+                    .toList()
+                  ..sort(_compareOrdersNewestFirst),
+          );
 
   Stream<List<PosOrder>> watchOpenStandingOrders() {
     return _ordersRef.snapshots().map((snapshot) {
@@ -4758,6 +4852,19 @@ class TacoPosRepository {
       return orders;
     });
   }
+
+  Stream<List<PosOrder>> watchOpenStandingOrdersByOperationalFields() =>
+      _operationalOrdersQuery()
+          .where('orderType', isEqualTo: standingOrderType)
+          .snapshots()
+          .map(
+            (snapshot) =>
+                snapshot.docs
+                    .map(PosOrder.fromDoc)
+                    .where(isActiveOrder)
+                    .toList()
+                  ..sort(_compareOrdersNewestFirst),
+          );
 
   Stream<List<LiveStandingOrderBundle>>
   watchOperationalStandingOrderBundles() async* {
@@ -4926,7 +5033,19 @@ class TacoPosRepository {
     );
   }
 
-  Stream<KitchenBundlesState> watchKitchenOrderBundlesState() {
+  Stream<KitchenBundlesState> watchKitchenOrderBundlesState() =>
+      _watchKitchenOrderBundlesState(operationalFields: false);
+
+  /// Shadow candidate for server-side active-order filtering. Keep the
+  /// historical watcher authoritative until writer coverage and backfill are
+  /// proven complete.
+  Stream<KitchenBundlesState>
+  watchKitchenOrderBundlesStateByOperationalFields() =>
+      _watchKitchenOrderBundlesState(operationalFields: true);
+
+  Stream<KitchenBundlesState> _watchKitchenOrderBundlesState({
+    required bool operationalFields,
+  }) {
     late StreamController<KitchenBundlesState> controller;
     late _KitchenQueryWatcher ordersWatcher;
     final states = <String, _KitchenItemsState>{};
@@ -5091,7 +5210,9 @@ class TacoPosRepository {
     controller = StreamController<KitchenBundlesState>(
       onListen: () {
         ordersWatcher = _KitchenQueryWatcher(
-          watch: () => _ordersRef.snapshots(includeMetadataChanges: true),
+          watch: () =>
+              (operationalFields ? _operationalOrdersQuery() : _ordersRef)
+                  .snapshots(includeMetadataChanges: true),
           onIssue: emit,
           onData: (snapshot) {
             if (cancelled) return;
