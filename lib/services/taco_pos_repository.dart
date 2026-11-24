@@ -18,6 +18,7 @@ import '../core/orders/employee_benefit_checkout.dart';
 import '../core/orders/order_activity.dart';
 import '../core/orders/order_cancellation.dart';
 import '../core/orders/order_capture_queue.dart';
+import '../core/orders/local_order_capture.dart';
 import '../core/orders/order_payment_reconciliation.dart';
 import '../core/orders/order_types.dart';
 import '../core/orders/payment_application_guard.dart';
@@ -63,6 +64,8 @@ import '../utils/category_utils.dart';
 import 'app_session.dart';
 import 'kitchen_sync_state.dart';
 import 'device_registry_service.dart';
+import 'local_order_capture_store.dart';
+import 'local_order_capture_submitter.dart';
 import 'operational_auth_service.dart';
 
 export '../core/orders/order_activity.dart'
@@ -1324,8 +1327,14 @@ class TacoPosRepository {
     FirebaseAuth? auth,
     ExpenseRequestAuthSession? expenseRequestAuthSession,
     ExpenseRequestDeviceSession? expenseRequestDeviceSession,
+    LocalOrderCaptureStore? localOrderCaptureStore,
+    LocalOrderCaptureSubmitter? localOrderCaptureSubmitter,
   }) : _db = firestore ?? FirebaseFirestore.instance,
        _auth = auth ?? FirebaseAuth.instance,
+       _providedLocalOrderCaptureStore = localOrderCaptureStore,
+       _localOrderCaptureSubmitter =
+           localOrderCaptureSubmitter ??
+           LocalOrderCaptureSubmitter.production(),
        _expenseRequestAuthSession =
            expenseRequestAuthSession ??
            ExpenseRequestAuthSession.production(auth ?? FirebaseAuth.instance),
@@ -1346,6 +1355,13 @@ class TacoPosRepository {
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
+  final LocalOrderCaptureStore? _providedLocalOrderCaptureStore;
+  Future<LocalOrderCaptureStore>? _localOrderCaptureStoreFuture;
+  Future<LocalOrderCaptureStore> get _localOrderCaptureStore =>
+      _providedLocalOrderCaptureStore != null
+          ? Future.value(_providedLocalOrderCaptureStore)
+          : (_localOrderCaptureStoreFuture ??= LocalOrderCaptureStore.instance);
+  final LocalOrderCaptureSubmitter _localOrderCaptureSubmitter;
   final ExpenseRequestAuthSession _expenseRequestAuthSession;
   final ExpenseRequestDeviceSession _expenseRequestDeviceSession;
 
@@ -11231,6 +11247,199 @@ class TacoPosRepository {
     return maxNumber + 1;
   }
 
+  Stream<List<OrderItem>> watchLocalOrderCaptureItems({
+    required String orderId,
+  }) {
+    final employee = AppSession.instance.employee;
+    final branchId = AppSession.instance.currentBranchId;
+    if (employee == null || branchId.trim().isEmpty) {
+      return Stream.value(const <OrderItem>[]);
+    }
+    return _localOrderCaptureStore
+        .asStream()
+        .asyncExpand(
+          (store) => store.watchLines(
+            restaurantId: AppSession.instance.currentRestaurantId,
+            branchId: branchId,
+            orderId: orderId.trim(),
+          ),
+        )
+        .map(
+          (lines) =>
+              lines.map((line) => line.toOrderItem()).toList(growable: false),
+        );
+  }
+
+  Future<bool> hasLocalOrderCapture({required String orderId}) async {
+    final employee = AppSession.instance.employee;
+    if (employee == null) return false;
+    return (await (await _localOrderCaptureStore).loadLines(
+      restaurantId: AppSession.instance.currentRestaurantId,
+      branchId: AppSession.instance.currentBranchId,
+      orderId: orderId.trim(),
+    )).isNotEmpty;
+  }
+
+  Future<List<OrderItem>> captureProductLocally({
+    required PosOrder order,
+    required Product product,
+    required int personNumber,
+  }) async {
+    final persistenceTimer = Stopwatch()..start();
+    _requireTakeOrders();
+    final cleanOrderId = order.id.trim();
+    final employee = AppSession.instance.employee;
+    final branchId = AppSession.instance.currentBranchId.trim();
+    final restaurantId = AppSession.instance.currentRestaurantId.trim();
+    final deviceUid = _auth.currentUser?.uid.trim() ?? '';
+    if (cleanOrderId.isEmpty || branchId.isEmpty || restaurantId.isEmpty) {
+      throw StateError('No se pudo identificar la orden y sucursal.');
+    }
+    if (deviceUid.isEmpty || employee == null) {
+      throw StateError('Inicia sesion nuevamente para guardar la captura.');
+    }
+    if (order.restaurantId != restaurantId || order.branchId != branchId) {
+      throw StateError('La orden pertenece a otra sucursal.');
+    }
+    if (!isActiveOrderState(order)) {
+      throw StateError(
+        'La orden esta pagada o cancelada. No admite productos.',
+      );
+    }
+    final platformId = order.orderType == 'takeout' ? order.platformId : null;
+    final appliedPlatformId = platformId != null && platformId != 'en_persona'
+        ? platformId
+        : null;
+    final recipe = product.affectsKitchenStock
+        ? product.recipeItems.take(1).toList(growable: false)
+        : const <ProductRecipeItem>[];
+    final primaryRecipe = recipe.isEmpty ? null : recipe.first;
+    final line = LocalOrderCaptureLine(
+      id: 'lc_${const Uuid().v4()}',
+      restaurantId: restaurantId,
+      restaurantName: AppSession.instance.currentRestaurantName,
+      branchId: branchId,
+      branchName: AppSession.instance.currentBranchName,
+      orderId: cleanOrderId,
+      tableId: order.tableId,
+      tableName: order.tableName,
+      tableIds: order.linkedTableIds,
+      tableNames: order.tableNames,
+      tableGroupLabel: order.tableGroupLabel ?? '',
+      deviceUid: deviceUid,
+      employeeId: employee.id,
+      employeeName: employee.name,
+      personNumber: personNumber,
+      personName: order.personName(personNumber),
+      productId: product.id,
+      productName: product.name,
+      categoryId: product.categoryId,
+      categoryName: product.categoryName,
+      qty: 1,
+      unitPrice: product.priceForPlatform(appliedPlatformId),
+      notes: '',
+      sendToKitchen: product.sendToKitchen,
+      affectsKitchenStock: product.affectsKitchenStock,
+      kitchenStockItemId:
+          primaryRecipe?.kitchenStockItemId ?? product.kitchenStockItemId,
+      kitchenStockItemName:
+          primaryRecipe?.kitchenStockItemName ?? product.kitchenStockItemName,
+      kitchenStockUnit:
+          primaryRecipe?.kitchenStockUnit ?? product.kitchenStockUnit,
+      stockConsumptionQty:
+          primaryRecipe?.consumptionFactor ?? product.stockConsumptionQty,
+      recipeItems: ProductRecipeItem.toMapList(recipe),
+      appliedPlatformId: appliedPlatformId,
+      appliedPlatformName: appliedPlatformId == null
+          ? null
+          : order.platformName,
+      priceSource: appliedPlatformId == null ? 'store' : 'platform',
+      capturedAtMicros: DateTime.now().microsecondsSinceEpoch,
+    );
+    final lines = await (await _localOrderCaptureStore).addTap(line);
+    persistenceTimer.stop();
+    developer.log(
+      '[TacoPOS][LocalCapture.persisted] orderId=$cleanOrderId productId=${product.id} person=$personNumber qty=1 persistenceMs=${persistenceTimer.elapsedMilliseconds} remoteReads=0 remoteWrites=0',
+    );
+    return lines.map((entry) => entry.toOrderItem()).toList(growable: false);
+  }
+
+  Future<void> setLocalOrderCaptureQty({
+    required String orderId,
+    required String itemId,
+    required int qty,
+  }) async {
+    if (AppSession.instance.employee == null) {
+      throw StateError('Inicia sesion nuevamente.');
+    }
+    await (await _localOrderCaptureStore).setQty(
+      id: itemId,
+      qty: qty,
+      restaurantId: AppSession.instance.currentRestaurantId,
+      branchId: AppSession.instance.currentBranchId,
+      orderId: orderId.trim(),
+    );
+  }
+
+  Future<void> removeLocalOrderCapture({
+    required String orderId,
+    required String itemId,
+  }) => setLocalOrderCaptureQty(orderId: orderId, itemId: itemId, qty: 0);
+
+  Future<int> submitLocalOrderCapture({
+    required String orderId,
+    required bool sendToKitchen,
+  }) async {
+    final submitTimer = Stopwatch()..start();
+    if (AppSession.instance.employee == null) {
+      throw StateError('Inicia sesion nuevamente.');
+    }
+    final store = await _localOrderCaptureStore;
+    final restaurantId = AppSession.instance.currentRestaurantId;
+    final branchId = AppSession.instance.currentBranchId;
+    final existing = await store.pendingSubmission(
+      restaurantId: restaurantId,
+      branchId: branchId,
+      orderId: orderId.trim(),
+    );
+    final submission =
+        existing ??
+        await store.freeze(
+          restaurantId: restaurantId,
+          branchId: branchId,
+          orderId: orderId.trim(),
+          sendToKitchen: sendToKitchen,
+        );
+    final response = await _localOrderCaptureSubmitter.submit(submission);
+    developer.log(
+      '[TacoPOS][LocalCapture.serverConfirmed] orderId=${orderId.trim()} submissionId=${submission.id} acceptedLines=${response['acceptedLineCount']} acceptedQty=${response['acceptedQty']} serverElapsedMs=${response['serverElapsedMs']} transactionAttempts=${response['transactionAttempts']} collectionQueries=${response['collectionQueries']} readDocuments=${response['readDocuments']} writeOperations=${response['writeOperations']}',
+    );
+    final expectedQty = submission.lines.fold<int>(
+      0,
+      (quantity, line) => quantity + line.qty,
+    );
+    if (response['submissionId'] != submission.id ||
+        response['payloadHash'] != submission.payloadHash ||
+        response['acceptedLineCount'] != submission.lines.length ||
+        response['acceptedQty'] != expectedQty) {
+      throw StateError('El servidor no confirmo las cantidades del envio.');
+    }
+    // Keep the immutable outbox if reconciliation fails. A retry uses the
+    // same server idempotency key and never creates another kitchen batch.
+    final reconciliationTimer = Stopwatch()..start();
+    await recalculateOrderTotal(orderId.trim());
+    await _ordersRef
+        .doc(orderId.trim())
+        .get(const GetOptions(source: Source.server));
+    reconciliationTimer.stop();
+    await store.complete(submission);
+    submitTimer.stop();
+    developer.log(
+      '[TacoPOS][LocalCapture.completed] orderId=${orderId.trim()} submissionId=${submission.id} reconciliationMs=${reconciliationTimer.elapsedMilliseconds} totalElapsedMs=${submitTimer.elapsedMilliseconds}',
+    );
+    return (response['sentCount'] as num?)?.toInt() ?? 0;
+  }
+
   Future<void> addProductToOrder({
     required String orderId,
     required Product product,
@@ -11404,7 +11613,9 @@ class TacoPosRepository {
         );
       }
       if (!itemDoc.exists) {
-        throw StateError('El articulo ya no existe. Actualiza e intenta de nuevo.');
+        throw StateError(
+          'El articulo ya no existe. Actualiza e intenta de nuevo.',
+        );
       }
 
       final freshItem = OrderItem.fromDoc(itemDoc);

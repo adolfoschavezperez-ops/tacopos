@@ -1,6 +1,8 @@
 import * as admin from "firebase-admin";
 import {logger} from "firebase-functions";
 import {HttpsError, onCall} from "firebase-functions/v2/https";
+import {submitLocalOrderCaptureCore} from "./localOrderCapture";
+export {submitLocalOrderCaptureCore};
 
 admin.initializeApp();
 
@@ -115,6 +117,15 @@ export const submitExpenseRequest = onCall(
     consumeAppCheckToken: true,
   },
   async (request) => submitExpenseRequestCore(db, request.data, request),
+);
+
+export const submitLocalOrderCapture = onCall(
+  {
+    region,
+    enforceAppCheck: true,
+    consumeAppCheckToken: true,
+  },
+  async (request) => submitLocalOrderCaptureCore(db, request.data, request),
 );
 
 export const cancelExpenseRequest = onCall(

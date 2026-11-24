@@ -54,7 +54,15 @@ void main() {
         await tester.tap(find.text('Producto 30').last);
         await tester.pumpAndSettle();
         _expectNoCaptureTotal(tester);
-        expect(repo.items.length, 3);
+        expect(repo.localItems.length, 1);
+        expect(
+          find.textContaining('Borrador local: 1 producto(s)'),
+          findsOneWidget,
+        );
+        expect(
+          tester.widgetList<MoneyText>(find.byType(MoneyText)).map((w) => w.value),
+          contains(30),
+        );
         expect(
           tester.widgetList<MoneyText>(find.byType(MoneyText)).length,
           greaterThanOrEqualTo(before),
@@ -83,6 +91,45 @@ void main() {
     _expectStat(tester, 'Pendiente', 100);
   });
 
+  testWidgets('local non-kitchen capture is submitted before checkout', (
+    tester,
+  ) async {
+    final repo = _CheckoutRepository();
+    await _showOrder(tester, repo);
+    await tester.tap(find.text('Producto 30').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cobrar'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PaymentScreen), findsOneWidget);
+    expect(repo.items.length, 3);
+    expect(repo.events.first, 'submit-local');
+    expect(repo.sendModes, [false]);
+    expect(repo.localItems, isEmpty);
+    _expectStat(tester, 'Total', 130);
+  });
+
+  testWidgets('failed local submit before checkout preserves draft and retries', (
+    tester,
+  ) async {
+    final repo = _CheckoutRepository()..failureStage = 'submit-local';
+    await _showOrder(tester, repo);
+    await tester.tap(find.text('Producto 30').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cobrar'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PaymentScreen), findsNothing);
+    expect(repo.localItems, hasLength(1));
+    expect(find.textContaining('Conexion inestable'), findsOneWidget);
+    expect(find.textContaining('Bad state'), findsNothing);
+
+    repo.failureStage = null;
+    await tester.tap(find.text('Reintentar').last);
+    await tester.pumpAndSettle();
+    expect(find.byType(PaymentScreen), findsOneWidget);
+    expect(repo.localItems, isEmpty);
+    expect(repo.items.length, 3);
+  });
+
   testWidgets(
     'last product plus immediate double Cobrar waits for all writes and includes 190',
     (tester) async {
@@ -103,7 +150,7 @@ void main() {
       charge.onPressed!();
       await tester.pump();
       expect(find.byType(PaymentScreen), findsNothing);
-      expect(repo.events, ['flush']);
+      expect(repo.events, ['submit-local']);
       expect(
         find.byWidgetPredicate(
           (w) => w is LinearProgressIndicator && w.value == null,
@@ -117,7 +164,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         repo.events,
-        ['flush', 'recalculate-server', 'prepare-server', 'read-server'],
+        [
+          'submit-local',
+          'recalculate-server',
+          'flush',
+          'recalculate-server',
+          'prepare-server',
+          'read-server',
+        ],
         reason: tester
             .widgetList<Text>(find.byType(Text))
             .map((w) => w.data)
@@ -430,6 +484,8 @@ class _EmployeeDoc implements DocumentSnapshot<Map<String, dynamic>> {
 class _CheckoutRepository implements TacoPosRepository {
   final queue = OrderCaptureQueue();
   final items = [_item('base-60', 60), _item('base-40', 40)];
+  final localItems = <OrderItem>[];
+  final sendModes = <bool>[];
   final payments = <Payment>[];
   final events = <String>[];
   Completer<void>? writeGate;
@@ -464,6 +520,37 @@ class _CheckoutRepository implements TacoPosRepository {
   void _stage(String stage) {
     events.add(stage);
     if (failureStage == stage) throw StateError('sin conexion: $stage');
+  }
+
+  @override
+  Future<List<OrderItem>> captureProductLocally({
+    required PosOrder order,
+    required Product product,
+    required int personNumber,
+  }) async {
+    localItems.add(_item('lc_${product.id}', product.price));
+    return List.of(localItems);
+  }
+
+  @override
+  Future<bool> hasLocalOrderCapture({required String orderId}) async =>
+      localItems.isNotEmpty;
+
+  @override
+  Future<int> submitLocalOrderCapture({
+    required String orderId,
+    required bool sendToKitchen,
+  }) async {
+    _stage('submit-local');
+    sendModes.add(sendToKitchen);
+    await writeGate?.future;
+    final submittedQty = localItems.fold<int>(0, (total, item) => total + item.qty);
+    items.addAll(localItems);
+    _stage('recalculate-server');
+    order = _reconciledOrder();
+    localItems.clear();
+    localItems.clear();
+    return submittedQty;
   }
 
   @override
@@ -573,6 +660,10 @@ class _CheckoutRepository implements TacoPosRepository {
             'sendToKitchen': false,
           }),
       ]);
+  @override
+  Stream<List<OrderItem>> watchLocalOrderCaptureItems({
+    required String orderId,
+  }) => Stream.value(List.of(localItems));
   @override
   Stream<List<ProductCategory>> watchProductCategories({
     bool activeOnly = true,

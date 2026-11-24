@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -58,13 +59,19 @@ class _OrderScreenState extends State<OrderScreen> {
   late final Widget _productMenu;
   late String _boundOrderId;
   StreamSubscription<List<OrderItem>>? _itemsSubscription;
+  StreamSubscription<List<OrderItem>>? _localItemsSubscription;
+  List<OrderItem> _localDraftItems = const [];
+  Future<void> _localCaptureTail = Future<void>.value();
   List<OrderItem> _loadedItems = const [];
   bool _itemsLoading = true;
   Object? _itemsError;
   int _selectedPerson = 1;
   int _personCount = 1;
   bool _busy = false;
+  bool _sendingToKitchen = false;
   bool _openingPayment = false;
+  bool _allowExitWithLocalDrafts = false;
+  bool _exitConfirmationOpen = false;
   String? _lastOrderDebugSignature;
   String? _lastItemsDebugSignature;
   PosOrder? _latestOrder;
@@ -129,6 +136,7 @@ class _OrderScreenState extends State<OrderScreen> {
   @override
   void dispose() {
     _itemsSubscription?.cancel();
+    _localItemsSubscription?.cancel();
     _captureState.clear();
     _platformIdNotifier.dispose();
     super.dispose();
@@ -150,6 +158,7 @@ class _OrderScreenState extends State<OrderScreen> {
     bool clearItems = false,
   }) async {
     await _itemsSubscription?.cancel();
+    await _localItemsSubscription?.cancel();
     final cleanOrderId = orderId.trim();
     final path =
         'restaurants/${AppConstants.restaurantId}/orders/$cleanOrderId/items';
@@ -160,6 +169,7 @@ class _OrderScreenState extends State<OrderScreen> {
       setState(() {
         if (clearItems) {
           _loadedItems = const [];
+          _localDraftItems = const [];
           _captureState.clear();
         }
         _itemsLoading = cleanOrderId.isNotEmpty && _loadedItems.isEmpty;
@@ -176,6 +186,25 @@ class _OrderScreenState extends State<OrderScreen> {
       return;
     }
 
+    _localItemsSubscription = _repository
+        .watchLocalOrderCaptureItems(orderId: cleanOrderId)
+        .listen(
+          (items) {
+            if (!mounted || cleanOrderId != _boundOrderId) return;
+            setState(() {
+              _localDraftItems = items;
+              _loadedItems = [
+                ..._captureState.effectiveItems,
+                ..._localDraftItems,
+              ];
+            });
+          },
+          onError: (Object error) {
+            if (!mounted || cleanOrderId != _boundOrderId) return;
+            setState(() => _itemsError = error);
+          },
+        );
+
     try {
       final initialItems = await _repository.getOrderItemsOnce(cleanOrderId);
       debugPrint('[TacoPOS][OrderItems.initialCount] ${initialItems.length}');
@@ -184,7 +213,7 @@ class _OrderScreenState extends State<OrderScreen> {
       }
       setState(() {
         _captureState.reconcile(initialItems);
-        _loadedItems = _captureState.effectiveItems;
+        _loadedItems = [..._captureState.effectiveItems, ..._localDraftItems];
         _itemsLoading = false;
         _itemsError = null;
       });
@@ -205,7 +234,7 @@ class _OrderScreenState extends State<OrderScreen> {
                 return;
               }
               setState(() {
-                _loadedItems = effectiveItems;
+                _loadedItems = [...effectiveItems, ..._localDraftItems];
                 _itemsLoading = false;
                 _itemsError = null;
               });
@@ -248,25 +277,37 @@ class _OrderScreenState extends State<OrderScreen> {
 
     setState(() {
       _busy = true;
+      _sendingToKitchen = true;
     });
 
     try {
       await _repository.flushPendingMutations(_boundOrderId);
+      await _localCaptureTail;
       LivePresenceService.instance.update(currentAction: 'Enviando cocina');
-      final sentCount = await _repository.sendOrderToKitchen(_boundOrderId);
+      final hadLocalDrafts = await _repository.hasLocalOrderCapture(
+        orderId: _boundOrderId,
+      );
+      final sentCount = hadLocalDrafts
+          ? await _repository.submitLocalOrderCapture(
+              orderId: _boundOrderId,
+              sendToKitchen: true,
+            )
+          : await _repository.sendOrderToKitchen(_boundOrderId);
       if (!mounted) {
         return;
       }
 
       showAppSnackBar(
         context,
-        sentCount == 0
+        sentCount == 0 && !hadLocalDrafts
             ? 'No hay productos de cocina para enviar.'
             : 'Comanda enviada a cocina.',
-        type: sentCount == 0 ? AppSnackBarType.info : AppSnackBarType.success,
+        type: sentCount == 0 && !hadLocalDrafts
+            ? AppSnackBarType.info
+            : AppSnackBarType.success,
       );
 
-      if (sentCount > 0) {
+      if (sentCount > 0 || hadLocalDrafts) {
         Navigator.pop(context);
       }
     } catch (error) {
@@ -274,15 +315,15 @@ class _OrderScreenState extends State<OrderScreen> {
         return;
       }
 
-      showAppSnackBar(
-        context,
-        'No se pudo enviar la comanda: $error',
-        type: AppSnackBarType.error,
+      _showSubmissionFailure(
+        error,
+        onRetry: () => unawaited(_sendToKitchen()),
       );
     } finally {
       if (mounted) {
         setState(() {
           _busy = false;
+          _sendingToKitchen = false;
         });
       }
     }
@@ -299,7 +340,17 @@ class _OrderScreenState extends State<OrderScreen> {
       _busy = true;
       _openingPayment = true;
     });
+    var submittingLocalDraft = false;
     try {
+      await _localCaptureTail;
+      if (await _repository.hasLocalOrderCapture(orderId: operationOrderId)) {
+        submittingLocalDraft = true;
+        await _repository.submitLocalOrderCapture(
+          orderId: operationOrderId,
+          sendToKitchen: false,
+        );
+        submittingLocalDraft = false;
+      }
       await _repository.flushPendingMutations(operationOrderId);
       await _repository.prepareOrderForCheckout(
         operationOrderId,
@@ -323,7 +374,16 @@ class _OrderScreenState extends State<OrderScreen> {
       );
     } catch (error) {
       if (!mounted) return;
-      _showMessage('No se pudo validar el total: $error');
+      if (submittingLocalDraft) {
+        _showSubmissionFailure(
+          error,
+          onRetry: () => unawaited(_openPayment()),
+        );
+      } else {
+        _showMessage(
+          'No se pudo validar el total con el servidor. Revisa la orden e intenta de nuevo.',
+        );
+      }
       return;
     } finally {
       if (mounted) {
@@ -409,6 +469,14 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _closeEmptyOrder() async {
+    if (await _repository.hasLocalOrderCapture(orderId: _boundOrderId)) {
+      if (mounted) {
+        _showMessage(
+          'Hay productos guardados en este dispositivo. Envia o retira esos productos antes de cerrar la orden.',
+        );
+      }
+      return;
+    }
     final scope = await _prepareCancellationScope(
       _repository.prepareEmptyOrderClose,
     );
@@ -460,6 +528,14 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _cancelOrder() async {
+    if (await _repository.hasLocalOrderCapture(orderId: _boundOrderId)) {
+      if (mounted) {
+        _showMessage(
+          'Hay productos guardados en este dispositivo. Envia o retira esos productos antes de cancelar la orden.',
+        );
+      }
+      return;
+    }
     if (AppSession.instance.employee?.canCancelOrders != true &&
         AppSession.instance.employee?.canViewAdmin != true) {
       _showMessage('No tienes permiso para cancelar tickets.');
@@ -544,6 +620,18 @@ class _OrderScreenState extends State<OrderScreen> {
       return;
     }
     try {
+      if (item.id.startsWith('lc_')) {
+        final removal = _localCaptureTail.then(
+          (_) => _repository.removeLocalOrderCapture(
+            orderId: _boundOrderId,
+            itemId: item.id,
+          ),
+        );
+        _localCaptureTail = removal.catchError((_) {});
+        await removal;
+        _showMessage('Articulo retirado de la captura local.');
+        return;
+      }
       if (item.kitchenStatus == 'pending' ||
           item.kitchenStatus == 'not_required') {
         await _repository.cancelOrderItem(
@@ -616,82 +704,82 @@ class _OrderScreenState extends State<OrderScreen> {
     showAppSnackBar(context, message);
   }
 
-  String _applyOptimisticProduct(
-    Product product,
-    int personNumber,
-    PosOrder? order,
-  ) {
-    final platformId = order?.orderType == 'takeout' ? order?.platformId : null;
-    final appliedPlatformId = platformId != null && platformId != 'en_persona'
-        ? platformId
-        : null;
-    final effective = _captureState.effectiveItems;
-    final existing = effective.cast<OrderItem?>().firstWhere(
-      (item) =>
-          item!.productId == product.id &&
-          item.personNumber == personNumber &&
-          item.appliedPlatformId == appliedPlatformId &&
-          itemIsAwaitingKitchenSend(item) &&
-          item.paymentStatus == 'pending',
-      orElse: () => null,
-    );
-    final item =
-        existing ??
-        OrderItem(
-          id: 'local-${DateTime.now().microsecondsSinceEpoch}-${product.id}',
-          personNumber: personNumber,
-          personName:
-              order?.personName(personNumber) ?? 'Persona $personNumber',
-          productId: product.id,
-          productName: product.name,
-          category: product.category,
-          qty: 0,
-          unitPrice: product.priceForPlatform(appliedPlatformId),
-          total: 0,
-          notes: '',
-          sendToKitchen: product.sendToKitchen,
-          kitchenStatus: product.sendToKitchen ? 'pending' : 'not_required',
-          paymentStatus: 'pending',
-          affectsKitchenStock: product.affectsKitchenStock,
-          kitchenStockItemId: product.kitchenStockItemId,
-          kitchenStockItemName: product.kitchenStockItemName,
-          kitchenStockUnit: product.kitchenStockUnit,
-          recipeItems: product.recipeItems,
-          appliedPlatformId: appliedPlatformId,
-          appliedPlatformName: order?.platformName,
-          priceSource: appliedPlatformId == null ? 'store' : 'platform',
-        );
-    final optimistic = item.copyWithQty(item.qty + 1);
-    _captureState.apply(optimistic);
-    setState(() {
-      _loadedItems = _captureState.effectiveItems;
-    });
-    return item.id;
+  void _showSubmissionFailure(
+    Object error, {
+    required VoidCallback onRetry,
+  }) {
+    final code = error is FirebaseFunctionsException ? error.code : '';
+    final message = switch (code) {
+      'permission-denied' => 'No tienes permiso para enviar esta comanda.',
+      'unauthenticated' => 'Tu sesion expiro. Inicia sesion y reintenta.',
+      'not-found' => error is FirebaseFunctionsException &&
+              (error.message?.toLowerCase().contains('servicio') ?? false)
+          ? 'El servicio seguro de envio aun no esta habilitado. Tu pedido esta guardado.'
+          : 'La orden ya no existe. Tu borrador permanece guardado en esta tablet.',
+      'failed-precondition' || 'resource-exhausted' =>
+        error is FirebaseFunctionsException &&
+                (error.message?.trim().isNotEmpty ?? false)
+            ? error.message?.trim() ?? ''
+            : 'No se pudo validar la orden. Tu pedido esta guardado.',
+      _ => 'No se pudo confirmar el envío. Tu pedido está guardado.',
+    };
+    if (code == 'permission-denied' || code == 'unauthenticated') {
+      showAppSnackBar(context, message, type: AppSnackBarType.error);
+      return;
+    }
+    if (code == 'failed-precondition' ||
+        code == 'resource-exhausted' ||
+        code == 'invalid-argument' ||
+        code == 'not-found') {
+      showAppSnackBar(context, message, type: AppSnackBarType.error);
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: const Text('Conexion inestable. Tu pedido esta guardado.'),
+          action: SnackBarAction(
+            label: 'Reintentar',
+            onPressed: onRetry,
+          ),
+        ),
+      );
   }
 
-  Future<void> _handleAddProduct(Product product, bool stockedOut) async {
-    if (_openingPayment) return;
-    final operationId = 'op-${DateTime.now().microsecondsSinceEpoch}';
-    final itemId = _applyOptimisticProduct(
-      product,
-      _selectedPerson,
-      _latestOrder,
+  Future<void> _handleAddProduct(Product product, bool stockedOut) {
+    final capture = _localCaptureTail.then(
+      (_) => _captureProductLocally(product, stockedOut),
     );
+    _localCaptureTail = capture.catchError((_) {});
+    return capture;
+  }
+
+  Future<void> _captureProductLocally(Product product, bool stockedOut) async {
+    if (_openingPayment) return;
     try {
-      await _repository.addProductToOrder(
-        orderId: _boundOrderId,
+      if (stockedOut) {
+        _showMessage('Producto agotado hasta cierre de cocina.');
+        return;
+      }
+      final order = _latestOrder;
+      if (order == null) {
+        _showMessage('Espera a que cargue la orden para capturar.');
+        return;
+      }
+      final items = await _repository.captureProductLocally(
+        order: order,
         product: product,
         personNumber: _selectedPerson,
-        knownStockedOut: stockedOut,
-        itemId: itemId,
-        operationId: operationId,
       );
-    } catch (error) {
-      _captureState.fail(itemId);
       if (mounted) {
         setState(() {
-          _loadedItems = _captureState.effectiveItems;
+          _localDraftItems = items;
+          _loadedItems = [..._captureState.effectiveItems, ...items];
         });
+      }
+    } catch (error) {
+      if (mounted) {
         _showMessage(_editErrorText(error));
       }
     }
@@ -714,54 +802,97 @@ class _OrderScreenState extends State<OrderScreen> {
             AppSession.instance.employee?.canTakeOrders == true;
         final canCharge = AppSession.instance.employee?.canCharge == true;
 
-        return BrandedScaffold(
-          title: order?.displayName ?? widget.tableName,
-          showOperationDate: false,
-          showSessionAction: false,
-          actions: [
-            Builder(
-              builder: (context) {
-                if (order != null) {
-                  _logItemsDebug(order, _loadedItems);
-                }
-                return _TopOrderActions(
-                  order: order,
-                  items: _loadedItems,
-                  busy: _busy,
-                  itemsLoaded: !_itemsLoading,
-                  onSendToKitchen: _sendToKitchen,
-                  onOpenPayment: _openPayment,
-                  onBlockedPayment: _showKitchenPendingDialog,
-                  onCloseEmptyOrder: _closeEmptyOrder,
-                  onCancelOrder: _cancelOrder,
-                  canTakeOrders: canTakeOrders,
-                  canCharge: canCharge,
-                  canCancelOrders:
-                      AppSession.instance.employee?.canCancelOrders == true ||
-                      AppSession.instance.employee?.canViewAdmin == true,
-                );
-              },
-            ),
-            const SizedBox(width: 10),
-          ],
-          body: AbsorbPointer(
-            absorbing: _openingPayment,
-            child: Stack(
-              children: [
-                _buildBody(orderSnapshot),
-                if (_openingPayment)
-                  const Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: LinearProgressIndicator(),
-                  ),
-              ],
+        return PopScope<Object?>(
+          canPop:
+              !_busy && (_allowExitWithLocalDrafts || _localDraftItems.isEmpty),
+          onPopInvokedWithResult: (didPop, result) {
+            if (didPop ||
+                _busy ||
+                _localDraftItems.isEmpty ||
+                _exitConfirmationOpen) {
+              return;
+            }
+            _exitConfirmationOpen = true;
+            unawaited(_confirmExitWithLocalDrafts());
+          },
+          child: BrandedScaffold(
+            title: order?.displayName ?? widget.tableName,
+            showOperationDate: false,
+            showSessionAction: false,
+            actions: [
+              Builder(
+                builder: (context) {
+                  if (order != null) {
+                    _logItemsDebug(order, _loadedItems);
+                  }
+                  return _TopOrderActions(
+                    order: order,
+                    items: _loadedItems,
+                    busy: _busy,
+                    sending: _sendingToKitchen,
+                    itemsLoaded: !_itemsLoading,
+                    onSendToKitchen: _sendToKitchen,
+                    onOpenPayment: _openPayment,
+                    onBlockedPayment: _showKitchenPendingDialog,
+                    onCloseEmptyOrder: _closeEmptyOrder,
+                    onCancelOrder: _cancelOrder,
+                    canTakeOrders: canTakeOrders,
+                    canCharge: canCharge,
+                    canCancelOrders:
+                        AppSession.instance.employee?.canCancelOrders == true ||
+                        AppSession.instance.employee?.canViewAdmin == true,
+                  );
+                },
+              ),
+              const SizedBox(width: 10),
+            ],
+            body: AbsorbPointer(
+              absorbing: _openingPayment,
+              child: Stack(
+                children: [
+                  _buildBody(orderSnapshot),
+                  if (_openingPayment)
+                    const Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: LinearProgressIndicator(),
+                    ),
+                ],
+              ),
             ),
           ),
         );
       },
     );
+  }
+
+  Future<void> _confirmExitWithLocalDrafts() async {
+    final shouldExit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Productos guardados en este dispositivo'),
+        content: const Text(
+          'La comanda no se ha confirmado en el servidor. Si sales, el borrador se conservara en esta tablet y podras recuperarlo al reabrir la misma orden.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Seguir en la orden'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Salir conservando borrador'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      _exitConfirmationOpen = false;
+      _allowExitWithLocalDrafts = shouldExit == true;
+    });
+    if (shouldExit == true) Navigator.pop(context);
   }
 
   void _logOrderDebug(PosOrder order) {
@@ -847,6 +978,22 @@ class _OrderScreenState extends State<OrderScreen> {
           onRenamePerson: _renamePerson,
           onQtyChanged: (item, qty) {
             if (_openingPayment) return;
+            if (item.id.startsWith('lc_')) {
+              final quantityUpdate = _localCaptureTail.then(
+                (_) => _repository.setLocalOrderCaptureQty(
+                  orderId: _boundOrderId,
+                  itemId: item.id,
+                  qty: qty,
+                ),
+              );
+              _localCaptureTail = quantityUpdate.catchError((_) {});
+              unawaited(
+                quantityUpdate.catchError((error) {
+                  if (mounted) _showMessage(_editErrorText(error));
+                }),
+              );
+              return;
+            }
             final operationId = 'op-${DateTime.now().microsecondsSinceEpoch}';
             final optimistic = item.copyWithQty(qty);
             setState(() {
@@ -1367,6 +1514,17 @@ class _OrderSummaryState extends State<_OrderSummary> {
     for (final item in widget.items) {
       grouped.putIfAbsent(item.personNumber, () => []).add(item);
     }
+    final localDraftItems = widget.items
+        .where((item) => item.id.startsWith('lc_') && item.qty > 0)
+        .toList(growable: false);
+    final localDraftQty = localDraftItems.fold<int>(
+      0,
+      (total, item) => total + item.qty,
+    );
+    final localDraftAmount = localDraftItems.fold<double>(
+      0,
+      (total, item) => total + item.total,
+    );
     final batchLabels = _buildBatchLabels(widget.items, widget.order.createdAt);
 
     return Column(
@@ -1448,6 +1606,42 @@ class _OrderSummaryState extends State<_OrderSummary> {
           ),
         ),
         SizedBox(height: compact ? 2 : 6),
+        if (localDraftItems.isNotEmpty)
+          Container(
+            margin: EdgeInsets.fromLTRB(
+              compact ? 8 : edgePadding,
+              0,
+              compact ? 8 : edgePadding,
+              compact ? 4 : 8,
+            ),
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 10 : 14,
+              vertical: compact ? 7 : 10,
+            ),
+            decoration: BoxDecoration(
+              color: BrandColors.accentYellow.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: BrandColors.accentYellow.withValues(alpha: 0.3),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.inventory_2_outlined, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Borrador local: $localDraftQty producto(s) pendiente(s) de enviar',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                MoneyText(value: localDraftAmount),
+              ],
+            ),
+          ),
         Expanded(
           child: widget.items.isEmpty
               ? const EmptyState(
@@ -1797,6 +1991,7 @@ class _TopOrderActions extends StatelessWidget {
     required this.order,
     required this.items,
     required this.busy,
+    required this.sending,
     required this.itemsLoaded,
     required this.onSendToKitchen,
     required this.onOpenPayment,
@@ -1811,6 +2006,7 @@ class _TopOrderActions extends StatelessWidget {
   final PosOrder? order;
   final List<OrderItem> items;
   final bool busy;
+  final bool sending;
   final bool itemsLoaded;
   final VoidCallback onSendToKitchen;
   final VoidCallback onOpenPayment;
@@ -1829,7 +2025,9 @@ class _TopOrderActions extends StatelessWidget {
     final pendingKitchenCount = awaitingKitchenSendItemsCount(items);
     final hadKitchenSend = items.any(itemWasSentToKitchen);
     final canSend = canTakeOrders && !busy && pendingKitchenCount > 0;
-    final sendLabel = pendingKitchenCount == 0
+    final sendLabel = sending
+        ? 'Enviando comanda…'
+        : pendingKitchenCount == 0
         ? 'Cocina al dia'
         : hadKitchenSend
         ? 'Enviar orden extra'
@@ -1846,7 +2044,7 @@ class _TopOrderActions extends StatelessWidget {
     final canAttemptCharge =
         canCharge &&
         currentOrder != null &&
-        currentOrder.total > 0 &&
+        (currentOrder.total > 0 || activeOrderItemsTotal(items) > 0) &&
         !busy &&
         itemsLoaded;
     final chargeLabel = hasKitchenWorkBeforeCheckout
@@ -1875,7 +2073,7 @@ class _TopOrderActions extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             _CompactHeaderAction(
-              onPressed: () => Navigator.maybePop(context),
+              onPressed: busy ? null : () => Navigator.maybePop(context),
               icon: const Icon(Icons.arrow_back),
               label: 'Volver',
             ),
@@ -1884,11 +2082,17 @@ class _TopOrderActions extends StatelessWidget {
               child: _CompactHeaderAction(
                 onPressed: canSend ? onSendToKitchen : null,
                 label: 'Enviar',
-                icon: Icon(
-                  pendingKitchenCount == 0
-                      ? Icons.check_circle_outline
-                      : Icons.room_service_outlined,
-                ),
+                icon: sending
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(
+                        pendingKitchenCount == 0
+                            ? Icons.check_circle_outline
+                            : Icons.room_service_outlined,
+                      ),
               ),
             ),
             if (canCloseEmpty)
@@ -1933,18 +2137,24 @@ class _TopOrderActions extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           OutlinedButton.icon(
-            onPressed: () => Navigator.maybePop(context),
+            onPressed: busy ? null : () => Navigator.maybePop(context),
             icon: const Icon(Icons.arrow_back),
             label: const Text('Volver'),
           ),
           const SizedBox(width: 8),
           OutlinedButton.icon(
             onPressed: canSend ? onSendToKitchen : null,
-            icon: Icon(
-              pendingKitchenCount == 0
-                  ? Icons.check_circle_outline
-                  : Icons.room_service_outlined,
-            ),
+            icon: sending
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    pendingKitchenCount == 0
+                        ? Icons.check_circle_outline
+                        : Icons.room_service_outlined,
+                  ),
             label: Text(sendLabel, overflow: TextOverflow.ellipsis),
           ),
           if (canCloseEmpty) ...[

@@ -20,7 +20,8 @@ void main() {
         ),
       );
       expect(orderScreen, contains('stockOutsStream: _stockOutsStream'));
-      expect(orderScreen, contains('knownStockedOut: stockedOut'));
+      expect(orderScreen, contains('captureProductLocally('));
+      expect(orderScreen, isNot(contains('knownStockedOut: stockedOut')));
       expect(orderScreen, contains('businessDateFuture: _businessDateFuture'));
     },
   );
