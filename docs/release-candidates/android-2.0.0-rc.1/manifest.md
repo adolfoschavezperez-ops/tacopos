@@ -27,10 +27,11 @@ Fecha de validación: 2026-11-24 (America/Mexico_City)
 
 - `android/app/google-services.json` identifica `tacopos-renovadev` y el paquete `com.renova.tacopos`.
 - `lib/main.dart` rechaza `TACOPOS_FIREBASE_EMULATORS=true` en release y solo activa Play Integrity para Android release. No se debe pasar define de Emulator al build.
-- La cuenta Firebase autenticada pudo leer el recurso de Rules y las configuraciones App Check. La Rules Firestore activa se identificó como `projects/tacopos-renovadev/releases/cloud.firestore`, ruleset `projects/tacopos-renovadev/rulesets/c4cd13aa-b1a5-4e69-b98e-dfb6f42802d7`, actualizado `2026-08-28T01:30:48.691327Z`.
-- Se preparó [una copia de esa Rules activa con únicamente el rechazo de IDs `capture_submission_*`](production-marker-only.rules). No es el `firestore.rules` completo del repositorio y no se desplegó.
+- La Rules activa inicial se identificó como ruleset `c4cd13aa-b1a5-4e69-b98e-dfb6f42802d7`, actualizado `2026-08-28T01:30:48.691327Z`; su contenido coincidió exactamente con la base del archivo [production-marker-only.rules](production-marker-only.rules) al retirar el único guard de `capture_submission_*`.
+- Con autorización expresa, se desplegó solo `firestore:rules` desde `firebase-rules-only.json`. Lectura posterior confirmó release `cloud.firestore`, ruleset `167eb735-240f-44cb-9665-7bc42b9dceda`, actualizado `2026-11-24T23:54:44.318606Z`; SHA-256 de contenido `6bb0f073ba64290eb944146198bb66f03dc56c01ec587b22647818bd7bb2f7d7`, idéntico al candidato. No se desplegó el `firestore.rules` completo del repositorio.
 - El listado productivo actual contiene `backofficePinLogin`, `cancelExpenseRequest`, `listBackofficeUsers` y `submitExpenseRequest`; `submitLocalOrderCapture` y `resolveLocalOrderCaptureSubmission` todavía no aparecen desplegadas.
-- App Check Play Integrity está configurado para la app Android `1:346084471865:android:fb196c5d19a1e300f949e8`, exige `MEETS_DEVICE_INTEGRITY`; la respuesta de configuración indica `allowUnrecognizedVersion: true`. El código de Functions exige App Check y consume token limitado para ambas callables fuera del Emulator.
+- App Check Play Integrity conserva `allowUnrecognizedVersion=true`, `MEETS_DEVICE_INTEGRITY` y TTL `3600s`. Se registraron SHA-256 del upload key y de las claves de firma actual/anterior de Play; el read-back conservó las tres.
+- `playintegrity.googleapis.com` aparece `DISABLED` en Service Usage; el enlace Play Console ↔ `tacopos-renovadev` aún requiere confirmación. Las Functions Gen 2 no se desplegaron: ambas consumen tokens App Check, pero el IAM del proyecto no muestra `roles/firebaseappcheck.tokenVerifier` para la cuenta de runtime `346084471865-compute@developer.gserviceaccount.com`. Las cuatro Functions existentes usan esa misma cuenta; no se cambiarán sin autorización específica de IAM.
 - Las tablets `1.5.13+31` no contienen `capture_submission_*`, `submitLocalOrderCapture` ni `resolveLocalOrderCaptureSubmission` (revisión del worktree +31). El parche de Rules reserva únicamente ese prefijo y conserva la creación normal de otros eventos `activityLog`; la ruta antigua no cambia.
 
 ## Firma de carga preparada; verificación App Check pendiente
@@ -60,9 +61,9 @@ Gradle espera `android/key.properties` con las claves `storePassword`, `keyPassw
 
 ## Condiciones que faltan para autorizar RC.1
 
-1. Confirmar que Play no ha usado `versionCode 32` y comparar certificados de carga y Play App Signing en la app `com.renova.tacopos`.
-2. Revisar/aceptar la Rules mínima contra la release activa identificada; programar su despliegue por separado. No desplegar `firestore.rules` del worktree, que contiene otras protecciones acumuladas no presentes en producción.
-3. Desplegar únicamente las dos callables indicadas, después de Rules, y verificar sus opciones App Check en producción sin reemplazar otras Functions.
+1. Confirmar en Play Console que `versionCode 32` no se ha usado en ninguna pista y que Play Integrity está vinculado al proyecto `tacopos-renovadev`.
+2. Resolver `playintegrity.googleapis.com` en estado `DISABLED` y autorizar/configurar el permiso mínimo `roles/firebaseappcheck.tokenVerifier` para el runtime de las dos callables. La cuenta de runtime actual también la usan las cuatro Functions existentes.
+3. Desplegar únicamente las dos callables indicadas después de resolver App Check; verificar versiones y opciones en producción sin reemplazar otras Functions.
 4. Cerrar el riesgo de `allowUnrecognizedVersion: true` mediante confirmación del propietario de que corresponde a la política de pruebas Play; comprobar una instalación interna reconocida por Play Integrity.
 5. Configurar firma en el worktree dedicado mediante canal secreto, actualizar versión solo tras autorización, commit/push del SHA final y guard limpio con remote SHA coincidente.
 6. Generar AAB únicamente tras autorización separada; comprobar paquete, versión, `versionCode`, firma y SHA-256; después crear la etiqueta anotada `tacopos-android-v2.0.0-rc.1+32` apuntando al SHA exacto del artefacto.

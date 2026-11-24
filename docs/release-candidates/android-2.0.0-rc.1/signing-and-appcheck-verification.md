@@ -2,18 +2,20 @@
 
 Date: 2026-11-24 (America/Mexico_City)
 
-## Firebase Android app (read-only)
+## Firebase Android app
 
 - Firebase project: `tacopos-renovadev`.
 - Android package: `com.renova.tacopos`.
 - Firebase App ID: `1:346084471865:android:fb196c5d19a1e300f949e8` (ACTIVE).
-- `firebase apps:android:sha:list` returned exactly one registered certificate: SHA-256 `85:D4:5B:55:67:43:89:66:78:23:4D:81:95:E1:F1:17:2F:C2:CE:17:B1:99:10:7E:98:24:7C:9E:D5:BA:05:EE`. No SHA-1 entry or Play app-signing certificate was returned.
+- Before registration, `firebase apps:android:sha:list` returned only the upload certificate SHA-256 `85:D4:5B:55:67:43:89:66:78:23:4D:81:95:E1:F1:17:2F:C2:CE:17:B1:99:10:7E:98:24:7C:9E:D5:BA:05:EE`.
 - This Firebase SHA-256 exactly matches the local upload keystore and the upload certificate supplied from Play Console.
-- The current Play app-signing SHA-256 supplied by the owner (`D2:8F:BF:06:AF:8F:57:2C:3C:7E:79:17:C5:FE:2B:9A:1F:EF:88:D1:5F:77:95:CB:51:00:F1:7D:35:75:C6:21`) is **not currently registered** in Firebase. The prior Play app-signing certificate is also not in the returned list; its fingerprints were not supplied in this verification.
+- After explicit authorization, the current Play app-signing SHA-256 (`D2:8F:BF:06:AF:8F:57:2C:3C:7E:79:17:C5:FE:2B:9A:1F:EF:88:D1:5F:77:95:CB:51:00:F1:7D:35:75:C6:21`) and previous Play app-signing SHA-256 (`9F:61:A3:30:9F:F5:43:12:2C:54:66:3F:2F:D7:AD:45:EF:CC:35:94:AB:28:5D:11:EC:9D:9F:89:FA:6D:C0:13`) were added. Read-back confirmed exactly three SHA-256 entries: upload, current Play signing, and previous Play signing. No existing certificate was removed.
 
-The read-only Play Integrity config currently has `tokenTtl=3600s`, `allowUnrecognizedVersion=true`, and `minDeviceRecognitionLevel=MEETS_DEVICE_INTEGRITY`. Firebase's App Check documentation says registered SHA-256 signing fingerprints are used to validate Play Integrity tokens. Therefore the Play-signed installation is not fully verified against the current Firebase registration. Before distributing through Play, register the current Play app-signing SHA-256 and, if the previous app-signing key can still sign/serve installed builds, its SHA-256 as well. Preserve the existing upload-key entry. Do not change App Check enforcement/recognition controls as part of that registration.
+The Play Integrity config remains unchanged: `tokenTtl=3600s`, `allowUnrecognizedVersion=true`, and `minDeviceRecognitionLevel=MEETS_DEVICE_INTEGRITY`. Firebase's App Check documentation says registered SHA-256 signing fingerprints are used to validate Play Integrity tokens. A read-only Google Service Usage query returned `playintegrity.googleapis.com` state `DISABLED`; the Firebase-side config exists, but its Play Console project link to `tacopos-renovadev` could not be independently confirmed with available access. Resolve/verify the Play Console link and API state before testing a Play-installed build. No App Check controls were changed.
 
-No Firebase configuration was modified. No certificate was removed.
+SHA-1 is not required by App Check Play Integrity, which validates SHA-256 fingerprints. Source review found Firebase custom-token authentication and no Google Sign-In, phone authentication, or Firebase Dynamic Links integration; SHA-1 registration is not needed for those services in this candidate. If those services are added later, register the corresponding SHA-1.
+
+Firebase certificate metadata was modified only to add the two authorized SHA-256 hashes. App Check controls and SHA-1 registrations were not modified.
 
 ## Local upload signing setup
 
@@ -25,4 +27,4 @@ No Firebase configuration was modified. No certificate was removed.
 
 ## Required owner follow-up
 
-Obtain the previous Play app-signing SHA-256 from Play Console. Then authorize adding the current and previous app-signing SHA-256 fingerprints to this existing Firebase Android app without deleting the upload fingerprint or changing App Check settings. Re-run the read-only SHA listing and validate a Play-installed internal-test build's App Check token before wider distribution.
+Verify in Play Console that Play Integrity is linked to `tacopos-renovadev`. Confirm why Service Usage reports `playintegrity.googleapis.com` as `DISABLED` and validate App Check token issuance from a Play-installed internal-test build before wider distribution.

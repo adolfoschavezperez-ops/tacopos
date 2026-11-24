@@ -1,8 +1,8 @@
 # Preparación Firebase — TacoPOS 2.0.0-rc.1
 
-Este documento prepara comandos; no autoriza ejecución. No se desplegó nada.
+Documento de control de despliegue. La Rules mínima ya se desplegó con autorización; las dos Functions siguen pendientes por bloqueos de App Check/IAM.
 
-## Rules mínima
+## Rules mínima — DESPLEGADA
 
 La release Firestore activa leída en solo lectura es `projects/tacopos-renovadev/releases/cloud.firestore`, ruleset `c4cd13aa-b1a5-4e69-b98e-dfb6f42802d7`, con `updateTime` `2026-08-28T01:30:48.691327Z`. El archivo [production-marker-only.rules](production-marker-only.rules) se obtuvo de esa versión y agrega únicamente esta condición al `create` de `activityLog`:
 
@@ -17,11 +17,11 @@ Todas las demás líneas corresponden a la fuente desplegada recuperada; no sust
 firebase deploy --config docs/release-candidates/android-2.0.0-rc.1/firebase-rules-only.json --only firestore:rules --project tacopos-renovadev
 ```
 
-Ejecutar solo tras revisión del propietario, aceptación del diff de una condición y ventana autorizada. El cambio mantiene los eventos `activityLog` ordinarios y no altera el cliente `1.5.13+31`, que no usa el prefijo reservado.
+Antes del despliegue se volvió a leer producción: Ruleset `c4cd13aa-b1a5-4e69-b98e-dfb6f42802d7`, `updateTime` `2026-08-28T01:30:48.691327Z`; al retirar la única condición nueva, la fuente coincidió byte a byte con el Ruleset activo. Con autorización, el archivo aislado se desplegó con el comando anterior. Lectura posterior: Ruleset `167eb735-240f-44cb-9665-7bc42b9dceda`, `updateTime` `2026-11-24T23:54:44.318606Z`, SHA-256 `6bb0f073ba64290eb944146198bb66f03dc56c01ec587b22647818bd7bb2f7d7`, idéntico al candidato. La regla conserva eventos `activityLog` ordinarios y no altera +31.
 
 ## Functions selectivas
 
-El listado de producción consultado actualmente no contiene las callables de captura. Una vez revisadas y con Rules lista, desplegar exclusivamente:
+El listado actual no contiene las callables de captura. Su despliegue selectivo queda detenido hasta resolver App Check/IAM. Después, desplegar exclusivamente:
 
 ```powershell
 firebase deploy --only functions:submitLocalOrderCapture,functions:resolveLocalOrderCaptureSubmission --project tacopos-renovadev
@@ -31,19 +31,21 @@ La configuración versionada fija `nodejs22` para el codebase Functions y `engin
 
 No usar `--only functions` a secas y no redesplegar `backofficePinLogin`, Caja u otras Functions. Confirmar en el listado que solo se crearon/actualizaron esos dos endpoints y que ambos exigen Auth/App Check, consumen token de uso limitado y operan en `us-central1`.
 
-Inventario de Functions existentes consultado en producción (solo lectura): `backofficePinLogin`, `cancelExpenseRequest`, `listBackofficeUsers`, `submitExpenseRequest`; todas declaran `nodejs20`. No se incluirán en el despliegue selectivo de RC.1. Node 20 fue retirado el `2026-10-30`; planificar y probar su migración en un cambio separado. No actualizar esas cuatro junto con las callables nuevas.
+Inventario actual (solo lectura): `backofficePinLogin`, `cancelExpenseRequest`, `listBackofficeUsers`, `submitExpenseRequest`; las cuatro son Gen 2, `nodejs20`, región `us-central1` y ejecutan con `346084471865-compute@developer.gserviceaccount.com`. No se incluirán en RC.1. Node 20 fue retirado el `2026-10-30`; planificar su migración por separado, sin actualizar esas cuatro junto con las callables nuevas.
+
+Las callables nuevas tienen `enforceAppCheck=true` y `consumeAppCheckToken=true`. El IAM del proyecto no muestra `roles/firebaseappcheck.tokenVerifier` para la cuenta de ejecución Gen 2 por defecto. Esa cuenta también la usan las cuatro Functions existentes; no se ha concedido el rol y su alcance requiere una decisión explícita. Además, `playintegrity.googleapis.com` está `DISABLED`; aunque existe una configuración Firebase Play Integrity, no se pudo confirmar el vínculo desde Play Console a `tacopos-renovadev`. No desplegar las callables hasta resolver ambos puntos.
 
 ## App Check y Play Integrity
 
-La consulta de solo lectura a Firebase devolvió para Android `MEETS_DEVICE_INTEGRITY`, `allowUnrecognizedVersion: true`. El código local activa `AndroidPlayIntegrityProvider` en release y configura ambas callables con `enforceAppCheck` fuera del Emulator y `consumeAppCheckToken: true`.
+La configuración Firebase conserva `MEETS_DEVICE_INTEGRITY`, `allowUnrecognizedVersion: true` y TTL `3600s`. Se registraron las SHA-256 actual/anterior de Play, conservando la de carga; no se modificaron los controles App Check. El servicio `playintegrity.googleapis.com` aparece `DISABLED`, y el vínculo de Play Console requiere confirmación del propietario.
 
 Antes del internal test, el propietario debe confirmar en Firebase App Check que el app ID y paquete corresponden a producción y si `allowUnrecognizedVersion: true` es intencional para la política de distribución. Validar token real desde una instalación de pista interna; el Emulator no acredita Play Integrity. Confirmar en Play Console que la firma de la pista usa Play App Signing y cotejar los certificados antes de atribuir una falla a Rules.
 
 ## Compatibilidad y orden
 
 1. Mantener compatibilidad con `1.5.13+31`: la regla solo reserva IDs nuevos y las funciones nuevas no son invocadas por esa versión.
-2. Aplicar la Rules mínima previamente revisada y verificar creación permitida de eventos normales y rechazada de `capture_submission_*`.
-3. Desplegar las dos Functions con App Check y verificar sus nombres/settings; no activar todavía actualización obligatoria.
+2. Rules mínima ya desplegada y verificada por lectura posterior.
+3. Resolver vínculo/servicio Play Integrity y el permiso Token Verifier; después desplegar solo las dos Functions y verificar sus settings. No activar actualización obligatoria.
 4. Instalar la RC desde Internal Testing, validar el flujo físico y reconciliar envíos pendientes.
 5. Si cualquier paso falla, detener la pista; no retirar Rules/Functions mientras haya clientes con una respuesta de envío incierta. Resolver o drenar esos IDs antes de rollback server-side.
 
