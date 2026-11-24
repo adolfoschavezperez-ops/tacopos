@@ -1,8 +1,12 @@
+import 'dart:async';
+
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/orders/checkout_submission_guard.dart';
 import '../../core/orders/employee_benefit_checkout.dart';
 import '../../core/orders/global_discount_checkout.dart';
+import '../../core/orders/order_activity.dart';
 import '../../core/payments/payment_attempt_coordinator.dart';
 import '../../core/payments/payment_cancellation.dart';
 import '../../core/sales/daily_sale_folio.dart';
@@ -42,6 +46,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
   late Stream<List<OrderItem>> _itemsStream;
   late Stream<List<Payment>> _paymentsStream;
   bool _busy = false;
+  bool _authoritativeReturnInProgress = false;
+  bool _hasReturnedFromPaidOrder = false;
 
   @override
   void initState() {
@@ -73,8 +79,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   @override
   void dispose() {
-    LivePresenceService.instance.clearCurrentOrder(
-      currentAction: 'Viendo mesas',
+    unawaited(
+      LivePresenceService.instance
+          .clearCurrentOrder(currentAction: 'Viendo mesas')
+          .catchError((Object error, StackTrace stackTrace) {
+            debugPrint(
+              'PAYMENT_PRESENCE_CLEAR_ERROR order=${widget.orderId} error=$error',
+            );
+          }),
     );
     super.dispose();
   }
@@ -361,20 +373,26 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
       afterSuccess?.call();
       if (result.allPaid) {
+        final confirmedOrder = await _getAuthoritativeOrder(operationOrderId);
+        if (confirmedOrder == null || !_isConfirmedPaidOrder(confirmedOrder)) {
+          if (_isCurrentOrder(operationOrderId)) {
+            _showMessage(
+              'El pago respondió, pero no se confirmó el cierre de la orden. '
+              'No vuelvas a cobrar; actualiza el estado e inténtalo de nuevo.',
+            );
+          }
+          return false;
+        }
         final folio = result.saleFolioDisplay?.trim();
         _showMessage(
           folio == null || folio.isEmpty
               ? 'Venta cobrada.'
               : 'Venta cobrada. Folio $folio',
         );
-        await LivePresenceService.instance.clearCurrentOrder(
-          currentAction: 'Viendo mesas',
-        );
-        if (!mounted) {
-          return true;
-        }
-        Navigator.pop(context);
-        Navigator.pop(context);
+        await _returnFromConfirmedPayment(confirmedOrder);
+        // The payment sheet was removed together with this route; returning
+        // true would make its async callback pop the newly exposed route too.
+        return false;
       } else {
         _showMessage('Pago registrado.');
       }
@@ -386,6 +404,12 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (!_isCurrentOrder(operationOrderId)) {
         return false;
       }
+      final recoveredOrder = await _getAuthoritativeOrder(operationOrderId);
+      if (recoveredOrder != null && _isConfirmedPaidOrder(recoveredOrder)) {
+        _showMessage('Venta cobrada y confirmada por el servidor.');
+        await _returnFromConfirmedPayment(recoveredOrder);
+        return false;
+      }
       _showMessage(_paymentErrorText(error));
       return false;
     } finally {
@@ -395,6 +419,87 @@ class _PaymentScreenState extends State<PaymentScreen> {
         });
       }
     }
+  }
+
+  bool _isConfirmedPaidOrder(PosOrder order) {
+    return !isCancelledOrder(order) &&
+        isPaidOrder(order) &&
+        order.pendingTotal <= 0.01;
+  }
+
+  Future<PosOrder?> _getAuthoritativeOrder(String orderId) async {
+    try {
+      return await _repository.getOrderOnce(orderId, source: Source.server);
+    } catch (error) {
+      debugPrint('PAYMENT_ORDER_VERIFY_ERROR order=$orderId error=$error');
+      return null;
+    }
+  }
+
+  Future<void> _returnFromConfirmedPayment(PosOrder order) async {
+    if (!_isCurrentOrder(order.id) ||
+        !_isConfirmedPaidOrder(order) ||
+        _hasReturnedFromPaidOrder ||
+        _authoritativeReturnInProgress) {
+      return;
+    }
+    _authoritativeReturnInProgress = true;
+    try {
+      final navigator = Navigator.of(context);
+      final paymentRoute = ModalRoute.of(context);
+      if (paymentRoute == null || paymentRoute.isFirst) {
+        _hasReturnedFromPaidOrder = true;
+        _showMessage(
+          'El pago quedó confirmado. Regresa a Mesas para continuar.',
+        );
+        return;
+      }
+
+      // Close sheets/dialogs above PaymentScreen, then let its caller decide
+      // where to return. This preserves the originating route stack.
+      navigator.popUntil((route) => identical(route, paymentRoute));
+      if (!mounted || !paymentRoute.isCurrent) {
+        return;
+      }
+      _hasReturnedFromPaidOrder = true;
+      unawaited(
+        LivePresenceService.instance
+            .clearCurrentOrder(currentAction: 'Viendo mesas')
+            .catchError((Object error, StackTrace stackTrace) {
+              debugPrint(
+                'PAYMENT_PRESENCE_CLEAR_ERROR order=${order.id} error=$error',
+              );
+            }),
+      );
+      navigator.pop(true);
+    } catch (error, stackTrace) {
+      debugPrint(
+        'PAYMENT_RETURN_NAVIGATION_ERROR order=${order.id} '
+        'error=$error stack=$stackTrace',
+      );
+      if (mounted) {
+        _showMessage(
+          'Pago confirmado. No se pudo cerrar la pantalla de cobro; '
+          'no vuelvas a registrar el pago.',
+        );
+      }
+    } finally {
+      _authoritativeReturnInProgress = false;
+    }
+  }
+
+  void _scheduleReturnForConfirmedOrder(PosOrder? order) {
+    if (order == null ||
+        !_isConfirmedPaidOrder(order) ||
+        _hasReturnedFromPaidOrder ||
+        _authoritativeReturnInProgress) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(_returnFromConfirmedPayment(order));
+      }
+    });
   }
 
   Future<void> _cancelPayment(Payment payment) async {
@@ -701,6 +806,10 @@ class _PaymentScreenState extends State<PaymentScreen> {
               order == null) {
             return const LoadingPanel(message: 'Cargando cuenta...');
           }
+
+          // requireServer filters cache and pending-write snapshots. This also
+          // exits safely when another tablet has already completed the order.
+          _scheduleReturnForConfirmedOrder(order);
 
           return StreamBuilder<List<OrderItem>>(
             stream: _itemsStream,

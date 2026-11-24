@@ -311,7 +311,7 @@ class _OrderScreenState extends State<OrderScreen> {
           ModalRoute.of(context)?.isCurrent != true) {
         return;
       }
-      await Navigator.push(
+      final paymentCompleted = await Navigator.push<bool>(
         context,
         MaterialPageRoute(
           builder: (_) => PaymentScreen(
@@ -321,6 +321,20 @@ class _OrderScreenState extends State<OrderScreen> {
           ),
         ),
       );
+      if (!mounted) {
+        return;
+      }
+      final orderRoute = ModalRoute.of(context);
+      if (paymentCompleted == true &&
+          operationOrderId == _boundOrderId &&
+          orderRoute?.isCurrent == true &&
+          orderRoute?.isFirst == false) {
+        // PaymentScreen has already verified the paid order from the server.
+        // Pop only this order route so the original caller (tables, takeout,
+        // or another entry point) remains the destination.
+        Navigator.of(context).pop(true);
+        return;
+      }
     } catch (error) {
       if (!mounted) return;
       _showMessage('No se pudo validar el total: $error');
