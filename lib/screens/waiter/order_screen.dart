@@ -90,6 +90,7 @@ class _OrderScreenState extends State<OrderScreen> {
   String? _lastItemsDebugSignature;
   PosOrder? _latestOrder;
   bool _terminalOrderExitInProgress = false;
+  bool _terminalOrderHandling = false;
   bool _terminalOrderDialogOpen = false;
 
   @override
@@ -471,7 +472,7 @@ class _OrderScreenState extends State<OrderScreen> {
           ModalRoute.of(context)?.isCurrent != true) {
         return;
       }
-      await Navigator.push(
+      final paymentCompleted = await Navigator.push<bool>(
         context,
         MaterialPageRoute(
           builder: (_) => PaymentScreen(
@@ -481,6 +482,22 @@ class _OrderScreenState extends State<OrderScreen> {
           ),
         ),
       );
+      if (!mounted || operationOrderId != _boundOrderId) return;
+      if (paymentCompleted == true) {
+        // PaymentScreen returns only after the repository confirms the paid
+        // state from the server. It has already removed its own route; now
+        // resolve any local capture conflict and leave this order exactly once.
+        final paidOrder = _latestOrder;
+        if (paidOrder != null && paidOrder.id == operationOrderId) {
+          await _handleConfirmedTerminalOrder(paidOrder);
+        } else {
+          final serverOrder = await _repository.getOrderOnce(
+            operationOrderId,
+            source: Source.server,
+          );
+          await _handleConfirmedTerminalOrder(serverOrder);
+        }
+      }
     } catch (error) {
       if (!mounted) return;
       if (submittingLocalDraft) {
@@ -1187,9 +1204,11 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   Future<void> _handleConfirmedTerminalOrder(PosOrder order) async {
-    if (_terminalOrderDialogOpen) return;
+    if (_terminalOrderDialogOpen || _terminalOrderHandling) return;
+    _terminalOrderHandling = true;
     _terminalOrderExitInProgress = true;
     if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+      _terminalOrderHandling = false;
       _terminalOrderExitInProgress = false;
       return;
     }
@@ -1223,7 +1242,11 @@ class _OrderScreenState extends State<OrderScreen> {
       );
       hasUncertainSubmission = true;
     }
-    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+      _terminalOrderHandling = false;
+      _terminalOrderExitInProgress = false;
+      return;
+    }
 
     final failedInMemoryCapture = _failedLocalMutations.isNotEmpty;
     if (hasDurableCapture || hasUncertainSubmission || failedInMemoryCapture) {
@@ -1249,6 +1272,7 @@ class _OrderScreenState extends State<OrderScreen> {
       );
       _terminalOrderDialogOpen = false;
       if (failedInMemoryCapture) {
+        _terminalOrderHandling = false;
         _terminalOrderExitInProgress = false;
         return;
       }
@@ -1258,6 +1282,8 @@ class _OrderScreenState extends State<OrderScreen> {
     if (mounted && ModalRoute.of(context)?.isCurrent == true) {
       Navigator.pop(context);
     }
+    _terminalOrderHandling = false;
+    _terminalOrderExitInProgress = false;
   }
 
   Future<void> _confirmExitWithLocalDrafts() async {

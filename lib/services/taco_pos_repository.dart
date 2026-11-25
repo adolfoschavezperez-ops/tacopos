@@ -13564,7 +13564,7 @@ class TacoPosRepository {
 
     if (baseAmount <= 0) {
       return PaymentResult(
-        allPaid: order.pendingTotal <= 0.01,
+        allPaid: isPaidOrder(order) && order.pendingTotal <= 0.01,
         saleFolioDisplay: order.saleFolioDisplay,
         authoritativePendingTotal: order.pendingTotal,
       );
@@ -13660,7 +13660,9 @@ class TacoPosRepository {
     );
 
     if (baseAmount <= 0) {
-      return PaymentResult(allPaid: order.pendingTotal <= 0.01);
+      return PaymentResult(
+        allPaid: isPaidOrder(order) && order.pendingTotal <= 0.01,
+      );
     }
 
     final remainingGrossSubtotal = items
@@ -13835,7 +13837,9 @@ class TacoPosRepository {
     );
 
     if (baseAmount <= 0) {
-      return PaymentResult(allPaid: order.pendingTotal <= 0.01);
+      return PaymentResult(
+        allPaid: isPaidOrder(order) && order.pendingTotal <= 0.01,
+      );
     }
 
     final names = selectedPeople.map((person) => order.personName(person));
@@ -14112,7 +14116,7 @@ class TacoPosRepository {
 
     if (baseAmount <= 0) {
       return PaymentResult(
-        allPaid: order.pendingTotal <= 0.01,
+        allPaid: isPaidOrder(order) && order.pendingTotal <= 0.01,
         saleFolioDisplay: order.saleFolioDisplay,
         authoritativePendingTotal: order.pendingTotal,
       );
@@ -15510,17 +15514,30 @@ class TacoPosRepository {
     if (!orderDoc.exists) {
       throw StateError('La orden ya no existe despues del cobro.');
     }
-    if (paymentRef != null && !reads.last.exists) {
+    final authoritativeOrder = PosOrder.fromDoc(orderDoc);
+    final isAuthoritativelyPaid =
+        isPaidOrder(authoritativeOrder) &&
+        authoritativeOrder.pendingTotal <= 0.01;
+    if (paymentRef != null && !reads.last.exists && !isAuthoritativelyPaid) {
       throw StateError('El pago no fue confirmado por el servidor.');
     }
-    final authoritativeOrder = PosOrder.fromDoc(orderDoc);
     return PaymentResult(
-      allPaid: authoritativeOrder.pendingTotal <= 0.01,
+      allPaid: isAuthoritativelyPaid,
       saleFolioDisplay:
           authoritativeOrder.saleFolioDisplay ?? fallbackSaleFolioDisplay,
       paymentId: paymentId,
       authoritativePendingTotal: authoritativeOrder.pendingTotal,
     );
+  }
+
+  /// Resolves an uncertain client payment result without creating a payment.
+  /// All reads use the server; an absent attempt is only accepted if another
+  /// committed payment has already closed the order.
+  Future<PaymentResult> resolvePaymentAttempt({
+    required String orderId,
+    required String paymentId,
+  }) {
+    return _authoritativePaymentResult(orderId: orderId, paymentId: paymentId);
   }
 
   OrderPaymentReconciliationTotals _reconcileOrderPayments({

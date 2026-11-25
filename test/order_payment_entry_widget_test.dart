@@ -95,6 +95,47 @@ void main() {
     _expectStat(tester, 'Pendiente', 100);
   });
 
+  for (final loseResponseAfterCommit in [false, true]) {
+    testWidgets(
+      'confirmed full cash payment returns through the sheet and order to tables once (lost response: $loseResponseAfterCommit)',
+      (tester) async {
+        final repo = _CheckoutRepository();
+        repo.losePaymentResponseAfterCommit = loseResponseAfterCommit;
+        await _showOrder(
+          tester,
+          repo,
+          routeOrder: true,
+          size: const Size(1200, 2400),
+          devicePixelRatio: 2,
+        );
+        await tester.ensureVisible(find.text('Cobrar').last);
+        await tester.tap(find.text('Cobrar'));
+        await tester.pumpAndSettle();
+        expect(find.byType(PaymentScreen), findsOneWidget);
+
+        await tester.tap(find.text('Cobrar mesa completa').first);
+        await tester.pumpAndSettle();
+        expect(find.text('Tarjeta'), findsWidgets);
+        await tester.tap(find.text('Efectivo').last);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Confirmar pago').last);
+        await tester.pumpAndSettle();
+
+        expect(repo.paymentCalls, hasLength(1));
+        expect(
+          repo.resolvedPaymentAttempts,
+          loseResponseAfterCommit
+              ? [repo.paymentCalls.single.split(':').last]
+              : isEmpty,
+        );
+        expect(find.byType(PaymentScreen), findsNothing);
+        expect(find.byType(OrderScreen), findsNothing);
+        expect(find.text('Mesas'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets(
     'pending frozen submission remains recoverable when all visible items are already confirmed',
     (tester) async {
@@ -502,10 +543,11 @@ Future<void> _showOrder(
   WidgetTester tester,
   _CheckoutRepository repo, {
   Size size = const Size(412, 915),
+  double devicePixelRatio = 1,
   bool routeOrder = false,
 }) async {
   tester.view.physicalSize = size;
-  tester.view.devicePixelRatio = 1;
+  tester.view.devicePixelRatio = devicePixelRatio;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
   addTearDown(repo.queue.dispose);
@@ -639,6 +681,9 @@ class _CheckoutRepository implements TacoPosRepository {
   final sendModes = <bool>[];
   final payments = <Payment>[];
   final events = <String>[];
+  final paymentCalls = <String>[];
+  final resolvedPaymentAttempts = <String>[];
+  bool losePaymentResponseAfterCommit = false;
   Completer<void>? writeGate;
   Completer<void>? localCaptureGate;
   bool failNextLocalCapture = false;
@@ -648,7 +693,7 @@ class _CheckoutRepository implements TacoPosRepository {
   String? failureStage;
   late PosOrder order = _reconciledOrder();
 
-  PosOrder _reconciledOrder() {
+  PosOrder _reconciledOrder({bool terminal = false}) {
     final gross = activeOrderItemsTotal(items);
     final totals = reconcileOrderPayments(
       orderGrossTotal: gross,
@@ -658,15 +703,15 @@ class _CheckoutRepository implements TacoPosRepository {
       id: 'order',
       tableId: 'table',
       tableName: 'Mesa 1',
-      status: 'open',
+      status: terminal ? 'paid' : 'open',
       kitchenStatus: 'ready',
-      paymentStatus: totals.paymentStatus,
+      paymentStatus: terminal ? 'paid' : totals.paymentStatus,
       total: gross,
       grossSubtotal: gross,
       netTotal: totals.netTotal,
       explicitDiscount: totals.discountAmount,
-      paidTotal: totals.paidTotal,
-      pendingTotal: totals.pendingTotal,
+      paidTotal: terminal ? gross : totals.paidTotal,
+      pendingTotal: terminal ? 0 : totals.pendingTotal,
       personNames: const {},
       orderType: 'table',
     );
@@ -822,6 +867,43 @@ class _CheckoutRepository implements TacoPosRepository {
   }
 
   @override
+  Future<PaymentResult> payFullTable({
+    required String orderId,
+    required String method,
+    String? paymentAttemptId,
+    String? employeeId,
+    String? employeeName,
+    CashPaymentDetails? cashDetails,
+    AppliedDiscountDetails? discount,
+  }) async {
+    paymentCalls.add('$orderId:$method:$paymentAttemptId');
+    order = _reconciledOrder(terminal: true);
+    if (losePaymentResponseAfterCommit) {
+      throw StateError('respuesta perdida después de confirmar el pago');
+    }
+    return PaymentResult(
+      allPaid: true,
+      saleFolioDisplay: 'F-1',
+      paymentId: paymentAttemptId,
+      authoritativePendingTotal: 0,
+    );
+  }
+
+  @override
+  Future<PaymentResult> resolvePaymentAttempt({
+    required String orderId,
+    required String paymentId,
+  }) async {
+    resolvedPaymentAttempts.add(paymentId);
+    return PaymentResult(
+      allPaid: order.status == 'paid' && order.pendingTotal <= 0.01,
+      saleFolioDisplay: 'F-1',
+      paymentId: paymentId,
+      authoritativePendingTotal: order.pendingTotal,
+    );
+  }
+
+  @override
   Future<void> addProductToOrder({
     required String orderId,
     required Product product,
@@ -892,6 +974,13 @@ class _CheckoutRepository implements TacoPosRepository {
   }) => Stream.value([]);
   @override
   Future<CashSession?> getOpenCashSession() async => null;
+  @override
+  AppliedDiscountDetails? preparedGlobalDiscountForAmount({
+    required PosOrder order,
+    required double amountBeforeDiscount,
+    required double remainingGrossSubtotal,
+    required Iterable<Payment> activePayments,
+  }) => null;
   @override
   Stream<Map<String, ProductStockOutRow>> watchActiveProductStockOuts({
     Future<String>? businessDateFuture,

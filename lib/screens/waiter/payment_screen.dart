@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../core/orders/checkout_submission_guard.dart';
@@ -42,6 +44,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
   late Stream<List<OrderItem>> _itemsStream;
   late Stream<List<Payment>> _paymentsStream;
   bool _busy = false;
+  String? _confirmedPaidOrderAwaitingReturn;
+  bool _returningToTables = false;
 
   @override
   void initState() {
@@ -62,6 +66,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
     _bindCheckoutStreams();
     setState(() {
       _busy = false;
+      _confirmedPaidOrderAwaitingReturn = null;
+      _returningToTables = false;
     });
     LivePresenceService.instance.update(
       appMode: 'cash',
@@ -97,12 +103,26 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
   Future<PaymentResult> _runPersistentAttempt(
     String key,
+    String orderId,
     Future<PaymentResult> Function(String attemptId) action,
   ) async {
     final attemptId = _paymentAttempts.acquire(key);
-    final result = await action(attemptId);
-    _paymentAttempts.complete(key, attemptId);
-    return result;
+    try {
+      final result = await action(attemptId);
+      _paymentAttempts.complete(key, attemptId);
+      return result;
+    } catch (error, stackTrace) {
+      try {
+        final result = await _repository.resolvePaymentAttempt(
+          orderId: orderId,
+          paymentId: attemptId,
+        );
+        _paymentAttempts.complete(key, attemptId);
+        return result;
+      } catch (_) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+    }
   }
 
   Future<bool> _payFullTable(
@@ -147,6 +167,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       operationOrderId: operationOrderId,
       () => _runPersistentAttempt(
         '$operationOrderId|full_table',
+        operationOrderId,
         (attemptId) => _repository.payFullTable(
           orderId: operationOrderId,
           method: method,
@@ -204,6 +225,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       operationOrderId: operationOrderId,
       () => _runPersistentAttempt(
         '$operationOrderId|person|${(personNumbers.toList()..sort()).join(',')}',
+        operationOrderId,
         (attemptId) => _repository.payPeople(
           orderId: operationOrderId,
           personNumbers: personNumbers,
@@ -261,6 +283,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
       operationOrderId: operationOrderId,
       () => _runPersistentAttempt(
         '$operationOrderId|partial|${(amount * 100).round()}',
+        operationOrderId,
         (attemptId) => _repository.payPartialAmount(
           orderId: operationOrderId,
           baseAmount: amount,
@@ -287,12 +310,14 @@ class _PaymentScreenState extends State<PaymentScreen> {
       operationOrderId: operationOrderId,
       () => _runPersistentAttempt(
         '$operationOrderId|platform',
+        operationOrderId,
         (attemptId) => _repository.payPlatformOrder(
           orderId: operationOrderId,
           paymentAttemptId: attemptId,
         ),
       ),
     );
+    _returnToTablesAfterConfirmedPayment(operationOrderId);
   }
 
   bool _validateEmployee(String method, {Employee? employee}) {
@@ -367,14 +392,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
               ? 'Venta cobrada.'
               : 'Venta cobrada. Folio $folio',
         );
-        await LivePresenceService.instance.clearCurrentOrder(
-          currentAction: 'Viendo mesas',
+        _confirmedPaidOrderAwaitingReturn = operationOrderId;
+        unawaited(
+          LivePresenceService.instance
+              .clearCurrentOrder(currentAction: 'Viendo mesas')
+              .catchError((Object error, StackTrace stackTrace) {
+                debugPrint(
+                  '[TacoPOS][payment.presence] orderId=$operationOrderId '
+                  'cleanup failed: $error',
+                );
+              }),
         );
-        if (!mounted) {
-          return true;
-        }
-        Navigator.pop(context);
-        Navigator.pop(context);
       } else {
         _showMessage('Pago registrado.');
       }
@@ -395,6 +423,20 @@ class _PaymentScreenState extends State<PaymentScreen> {
         });
       }
     }
+  }
+
+  void _returnToTablesAfterConfirmedPayment(String orderId) {
+    if (!_isCurrentOrder(orderId) ||
+        _returningToTables ||
+        _confirmedPaidOrderAwaitingReturn != orderId) {
+      return;
+    }
+    // Payment actions run inside a modal sheet. The sheet owns its own pop;
+    // this route returns a result only after that sheet has completed.
+    if (ModalRoute.of(context)?.isCurrent != true) return;
+    _returningToTables = true;
+    _confirmedPaidOrderAwaitingReturn = null;
+    Navigator.of(context).pop(true);
   }
 
   Future<void> _cancelPayment(Payment payment) async {
@@ -508,6 +550,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         },
       ),
     );
+    _returnToTablesAfterConfirmedPayment(operationOrderId);
   }
 
   Future<void> _openPeopleSheet({
@@ -571,6 +614,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
             },
       ),
     );
+    _returnToTablesAfterConfirmedPayment(operationOrderId);
   }
 
   Future<void> _openPartialSheet({
@@ -616,6 +660,7 @@ class _PaymentScreenState extends State<PaymentScreen> {
         },
       ),
     );
+    _returnToTablesAfterConfirmedPayment(operationOrderId);
   }
 
   Future<AppliedDiscountDetails?> _openDiscountDialog(
