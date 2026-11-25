@@ -1,6 +1,6 @@
 # Validation evidence — Node.js 22
 
-Date: 2026-11-24 (America/Mexico_City)
+Date: 2026-11-25 (America/Mexico_City)
 
 ## Environment
 
@@ -11,10 +11,18 @@ Date: 2026-11-24 (America/Mexico_City)
 
 ## Results
 
-- `npm test --prefix functions`: **PASS, 110 tests**. This runs the TypeScript build and `scripts/verify-test-emulator.js` before the tests. The emulator guard reported project `demo-tacopos-node22-validation` and Firestore `127.0.0.1:8181`.
+- `npm test --prefix functions`: **PASS, 112 tests** after adding coverage for Firebase CLI discovery. This runs the TypeScript build and `scripts/verify-test-emulator.js` before the tests. The emulator guard reported a `demo-*` project and local Auth/Firestore endpoints.
+- Firebase CLI Functions Emulator discovery: **PASS**, using Node `22.21.0` and isolated local ports. It loaded exactly the six source definitions and exited without invoking any function. A first attempt on default ports was blocked by an already occupied port; no existing process was stopped.
 - Full Firestore Rules Emulator suite: **PASS, 130 tests** using the repository Rules file.
 - The full Rules suite includes `test/firestore-rules/tacopos_2rc_production_rules_compat.rules.test.js`. That test initializes the exact retrieved production Rules source plus the single `capture_submission_*` marker guard and verifies three compatibility groups: ordinary +31 activity events and marker immutability; capture, kitchen actions, extras, and branch scope; partial/final payments and normal cash close.
-- `git diff --check`: **PASS** before staging.
+- `git diff --check`: **PASS** before committing the discovery guard.
+
+## Production deployment follow-up
+
+- Commit `4d2afbe` (remote branch `release/android-2.0.0-rc.1-prep`) fixes the CLI discovery guard. The guard remains active in tests and Functions Emulator; it exempts the Firebase CLI's `FUNCTIONS_CONTROL_API=true` discovery subprocess.
+- Selective deployment created exactly `submitLocalOrderCapture` and `resolveLocalOrderCaptureSubmission` as active Gen 2 Node.js 22 functions in `us-central1`. `firebase functions:list` confirmed the four pre-existing Node.js 20 functions retained their prior hashes and service account.
+- Both new callables retain `enforceAppCheck=true` and `consumeAppCheckToken=true`. An unauthenticated POST probe to each returned `401 UNAUTHENTICATED` without data writes. This does not prove App Check token issuance/consumption; a Play-installed Android test is still required.
+- Firebase CLI reported a non-zero final status after both function create operations succeeded because no Artifact Registry cleanup policy exists. No cleanup policy was added; that storage policy is outside this release's authorized deployment scope.
 
 The release worktree has no root `node_modules`; its `functions/node_modules` supplies the Functions toolchain. The full Rules suite used already installed test dependencies from the source worktree because this repo's root `package.json` currently combines `firebase@^12` with `@firebase/rules-unit-testing@^4.0.1` (peer range Firebase `^11`), and a clean npm install fails with `ERESOLVE`. No dependency manifests were changed to work around this.
 

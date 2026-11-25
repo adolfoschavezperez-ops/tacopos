@@ -1,6 +1,6 @@
 # Preparación Firebase — TacoPOS 2.0.0-rc.1
 
-Documento de control de despliegue. La Rules mínima ya se desplegó con autorización; las dos Functions siguen pendientes por bloqueos de App Check/IAM.
+Documento de control de despliegue. La Rules mínima y las dos Functions nuevas ya se desplegaron con autorización. La prueba de token Play Integrity desde una instalación real y la confirmación de versionCode 32 siguen pendientes.
 
 ## Rules mínima — DESPLEGADA
 
@@ -21,32 +21,32 @@ Antes del despliegue se volvió a leer producción: Ruleset `c4cd13aa-b1a5-4e69-
 
 ## Functions selectivas
 
-El listado actual no contiene las callables de captura. Su despliegue selectivo queda detenido hasta resolver App Check/IAM. Después, desplegar exclusivamente:
+Despliegue selectivo completado el 2026-11-25, commit de preparación `4d2afbe`:
 
 ```powershell
 firebase deploy --only functions:submitLocalOrderCapture,functions:resolveLocalOrderCaptureSubmission --project tacopos-renovadev
 ```
 
-La configuración versionada fija `nodejs22` para el codebase Functions y `engines.node=22` en `functions/package.json`; el lockfile generado con npm en Node `22.21.0` coincide. Firebase documenta que `functions.runtime` en `firebase.json` prevalece sobre `package.json`, por eso se conservan ambos valores iguales.
+El listado de producción confirma `submitLocalOrderCapture` y `resolveLocalOrderCaptureSubmission` ACTIVE, Gen 2, Node.js 22, `us-central1`, con la cuenta de ejecución `346084471865-compute@developer.gserviceaccount.com`. Los otros cuatro endpoints siguen Node.js 20 y conservan sus hashes de despliegue previos: no se redesplegaron. La compatibilidad con +31 se conserva porque esas instalaciones no llaman las nuevas callables y las Rules solo reservan los marcadores de captura.
 
-No usar `--only functions` a secas y no redesplegar `backofficePinLogin`, Caja u otras Functions. Confirmar en el listado que solo se crearon/actualizaron esos dos endpoints y que ambos exigen Auth/App Check, consumen token de uso limitado y operan en `us-central1`.
+No usar `--only functions` a secas y no redesplegar `backofficePinLogin`, Caja u otras Functions. El listado posterior mostró solo las dos nuevas Functions en Node 22; las cuatro existentes permanecen en Node 20, región `us-central1`, mismo service account y mismos hashes anteriores. En el código desplegado, ambas callables conservan `enforceAppCheck=true` y `consumeAppCheckToken=true`.
 
 Inventario actual (solo lectura): `backofficePinLogin`, `cancelExpenseRequest`, `listBackofficeUsers`, `submitExpenseRequest`; las cuatro son Gen 2, `nodejs20`, región `us-central1` y ejecutan con `346084471865-compute@developer.gserviceaccount.com`. No se incluirán en RC.1. Node 20 fue retirado el `2026-10-30`; planificar su migración por separado, sin actualizar esas cuatro junto con las callables nuevas.
 
-Las callables nuevas tienen `enforceAppCheck=true` y `consumeAppCheckToken=true`. El IAM del proyecto no muestra `roles/firebaseappcheck.tokenVerifier` para la cuenta de ejecución Gen 2 por defecto. Esa cuenta también la usan las cuatro Functions existentes; no se ha concedido el rol y su alcance requiere una decisión explícita. Además, `playintegrity.googleapis.com` está `DISABLED`; aunque existe una configuración Firebase Play Integrity, no se pudo confirmar el vínculo desde Play Console a `tacopos-renovadev`. No desplegar las callables hasta resolver ambos puntos.
+El propietario confirmó el vínculo de Play Integrity desde Play Console con `tacopos-renovadev`. Con autorización expresa se habilitó `playintegrity.googleapis.com` y se concedió únicamente `roles/firebaseappcheck.tokenVerifier` a `346084471865-compute@developer.gserviceaccount.com`; los permisos previos se conservaron. La cuenta es compartida por las cuatro Functions antiguas, pero estas no se redesplegaron. No se modificó la política de App Check.
 
 ## App Check y Play Integrity
 
-La configuración Firebase conserva `MEETS_DEVICE_INTEGRITY`, `allowUnrecognizedVersion: true` y TTL `3600s`. Se registraron las SHA-256 actual/anterior de Play, conservando la de carga; no se modificaron los controles App Check. El servicio `playintegrity.googleapis.com` aparece `DISABLED`, y el vínculo de Play Console requiere confirmación del propietario.
+La configuración Firebase conserva `MEETS_DEVICE_INTEGRITY`, `allowUnrecognizedVersion: true` y TTL `3600s`. Se registraron las SHA-256 actual/anterior de Play, conservando la de carga; no se modificaron los controles App Check. El servicio está habilitado y el propietario confirmó el vínculo Play Console.
 
-Antes del internal test, el propietario debe confirmar en Firebase App Check que el app ID y paquete corresponden a producción y si `allowUnrecognizedVersion: true` es intencional para la política de distribución. Validar token real desde una instalación de pista interna; el Emulator no acredita Play Integrity. Confirmar en Play Console que la firma de la pista usa Play App Signing y cotejar los certificados antes de atribuir una falla a Rules.
+Una solicitud POST sin autenticación a cada callable respondió `401 UNAUTHENTICATED` y no creó datos. Esto verifica que los endpoints están activos y rechazan una llamada anónima, pero no sustituye una prueba con ID token y token App Check real. Validar token real desde una instalación de pista interna; el Emulator no acredita Play Integrity. La consola del propietario todavía debe confirmar que `versionCode 32` está libre en todas las pistas.
 
 ## Compatibilidad y orden
 
 1. Mantener compatibilidad con `1.5.13+31`: la regla solo reserva IDs nuevos y las funciones nuevas no son invocadas por esa versión.
 2. Rules mínima ya desplegada y verificada por lectura posterior.
-3. Resolver vínculo/servicio Play Integrity y el permiso Token Verifier; después desplegar solo las dos Functions y verificar sus settings. No activar actualización obligatoria.
-4. Instalar la RC desde Internal Testing, validar el flujo físico y reconciliar envíos pendientes.
+3. Con vínculo Play Integrity, API y permiso Token Verifier activos, las dos Functions quedaron desplegadas. No activar actualización obligatoria.
+4. Tras confirmar versionCode 32 y generar el AAB, instalar la RC desde Internal Testing, validar token App Check y flujo físico, y reconciliar envíos pendientes.
 5. Si cualquier paso falla, detener la pista; no retirar Rules/Functions mientras haya clientes con una respuesta de envío incierta. Resolver o drenar esos IDs antes de rollback server-side.
 
 Las reglas productivas leídas carecen de varias protecciones terminales/financieras presentes en la versión más nueva del repositorio. No se incluyeron en este parche mínimo ni se deben desplegar como parte de esta candidata sin revisión y autorización separadas.
