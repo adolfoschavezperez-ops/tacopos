@@ -484,6 +484,86 @@ void main() {
   );
 
   testWidgets(
+    'multiple cancellation controls remain reachable in a scrolling detail list',
+    (tester) async {
+      debugPrint = tester.binding.debugPrintOverride;
+      tester.view.physicalSize = const Size(540, 700);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      AppSession.instance.signIn(Employee.fromDoc(_KitchenEmployeeDoc()));
+      await LivePresenceService.instance.stop();
+
+      final repo = _KitchenUiRepository();
+      addTearDown(repo.close);
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(1.35)),
+            child: child!,
+          ),
+          home: KitchenOrderDetailScreen(
+            orderId: 'a',
+            kitchenBatchId: 'initial',
+            repository: repo,
+          ),
+        ),
+      );
+      await _pumpUi(tester);
+      repo.db.orders.emit({'a': _order()});
+      repo.db.items('a').emit({
+        for (var i = 0; i < 15; i++)
+          'item-$i': _item(
+            productName: i == 14 ? 'Z Producto 14' : 'Producto $i',
+            cancelRequested: i == 0 || i == 7 || i == 14,
+          ),
+      });
+      await _pumpUi(tester);
+      expect(tester.takeException(), isNull);
+      tester.view.physicalSize = const Size(900, 540);
+      await _pumpUi(tester);
+      expect(tester.takeException(), isNull);
+
+      expect(find.text('Aceptar cancelacion'), findsWidgets);
+      expect(find.text('Rechazar'), findsWidgets);
+      expect(find.byType(ListView), findsOneWidget);
+      for (
+        var attempt = 0;
+        attempt < 12 && find.textContaining('Producto 14').evaluate().isEmpty;
+        attempt++
+      ) {
+        await tester.drag(
+          find.text('Aceptar cancelacion').first,
+          const Offset(0, -400),
+        );
+        await tester.pumpAndSettle();
+      }
+      expect(find.textContaining('Producto 14'), findsWidgets);
+      final lastAccept = find.text('Aceptar cancelacion').last;
+      final lastReject = find.text('Rechazar').last;
+      await tester.ensureVisible(lastAccept);
+      await tester.ensureVisible(lastReject);
+      await tester.pumpAndSettle();
+      expect(
+        tester.getRect(lastAccept).overlaps(tester.getRect(lastReject)),
+        isFalse,
+      );
+      await tester.tap(lastAccept);
+      await _pumpUi(tester);
+      expect(repo.cancellationResolutions, hasLength(1));
+      expect(repo.cancellationResolutions.single.$1, 'item-14');
+      expect(repo.cancellationResolutions.single.$2, isTrue);
+      await tester.tap(lastReject);
+      await _pumpUi(tester);
+      expect(repo.cancellationResolutions, hasLength(2));
+      expect(repo.cancellationResolutions.last, ('item-14', false));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'kitchen actions recover by explicit retry after 60s and exhausted backoff',
     (tester) async {
       debugPrint = tester.binding.debugPrintOverride;
@@ -1069,6 +1149,8 @@ Map<String, dynamic> _order({String status = 'open', int updated = 0}) => {
 Map<String, dynamic> _item({
   String batch = 'initial',
   String kitchen = 'sent',
+  String productName = 'Pastor',
+  bool cancelRequested = false,
   bool express = false,
   int qty = 1,
   int? sequence,
@@ -1077,7 +1159,7 @@ Map<String, dynamic> _item({
   'personNumber': personNumber,
   'personName': 'person',
   'productId': 'p',
-  'productName': 'Pastor',
+  'productName': productName,
   'category': 'tacos',
   'qty': qty,
   'unitPrice': 20,
@@ -1087,6 +1169,8 @@ Map<String, dynamic> _item({
   'paymentStatus': 'pending',
   'kitchenBatchId': batch,
   'isKitchenExpress': express,
+  'cancelStatus': cancelRequested ? 'requested' : 'none',
+  'cancelRequestedReason': cancelRequested ? 'Sin cebolla' : null,
   'kitchenSequence': ?sequence,
 };
 
@@ -1145,6 +1229,7 @@ class _KitchenUiRepository implements TacoPosRepository {
   int openValidations = 0;
   String? openValidationErrorCode;
   final kitchenStatusUpdates = <_KitchenStatusUpdate>[];
+  final cancellationResolutions = <(String, bool)>[];
   @override
   Stream<KitchenBundlesState> watchKitchenOrderBundlesState() =>
       delegate.watchKitchenOrderBundlesState();
@@ -1187,6 +1272,16 @@ class _KitchenUiRepository implements TacoPosRepository {
     kitchenStatusUpdates.add(
       _KitchenStatusUpdate(orderId, itemIds.toList(), status),
     );
+  }
+
+  @override
+  Future<void> resolveKitchenCancellation({
+    required String orderId,
+    required String itemId,
+    required bool accepted,
+    String rejectReason = '',
+  }) async {
+    cancellationResolutions.add((itemId, accepted));
   }
 
   @override

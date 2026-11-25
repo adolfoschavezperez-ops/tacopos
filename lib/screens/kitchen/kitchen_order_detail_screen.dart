@@ -342,51 +342,48 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                                         personItemGroups.length,
                                         gridConstraints.maxWidth,
                                       );
-                                      final rows =
+                                      final rowGap = compact ? 6.0 : 8.0;
+                                      final rowCount =
                                           (personItemGroups.length +
                                               columns -
                                               1) ~/
                                           columns;
-                                      final rowGap = compact ? 6.0 : 8.0;
-                                      final tileHeight =
-                                          ((gridConstraints.maxHeight -
-                                                      (rows - 1) * rowGap) /
-                                                  rows)
-                                              .clamp(58.0, 150.0)
-                                              .toDouble();
-                                      return GridView.builder(
-                                        physics:
-                                            const NeverScrollableScrollPhysics(),
+                                      return ListView.separated(
+                                        physics: const ClampingScrollPhysics(),
                                         padding: EdgeInsets.zero,
-                                        gridDelegate:
-                                            SliverGridDelegateWithFixedCrossAxisCount(
-                                              crossAxisCount: columns,
-                                              mainAxisExtent: tileHeight,
-                                              crossAxisSpacing: rowGap,
-                                              mainAxisSpacing: rowGap,
-                                            ),
-                                        itemCount: personItemGroups.length,
+                                        itemCount: rowCount,
+                                        separatorBuilder: (_, _) =>
+                                            SizedBox(height: rowGap),
                                         itemBuilder: (context, index) {
-                                          final group = personItemGroups[index];
-                                          return _KitchenItemRow(
-                                            group: group,
-                                            compact: compact || columns > 1,
-                                            busy:
-                                                _busy ||
-                                                !state.isConfirmed ||
-                                                !widget.allowActions ||
-                                                !(widget.actionsReady?.value ??
-                                                    true),
-                                            onAcceptCancellation: () =>
-                                                _resolveCancellationGroup(
-                                                  group,
-                                                  true,
+                                          return Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              for (
+                                                var column = 0;
+                                                column < columns;
+                                                column++
+                                              ) ...[
+                                                if (column > 0)
+                                                  SizedBox(width: rowGap),
+                                                Expanded(
+                                                  child:
+                                                      index * columns + column <
+                                                          personItemGroups
+                                                              .length
+                                                      ? _buildKitchenItemRow(
+                                                          personItemGroups[index *
+                                                                  columns +
+                                                              column],
+                                                          compact:
+                                                              compact ||
+                                                              columns > 1,
+                                                          state: state,
+                                                        )
+                                                      : const SizedBox.shrink(),
                                                 ),
-                                            onRejectCancellation: () =>
-                                                _resolveCancellationGroup(
-                                                  group,
-                                                  false,
-                                                ),
+                                              ],
+                                            ],
                                           );
                                         },
                                       );
@@ -432,6 +429,22 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
       ),
     );
   }
+
+  Widget _buildKitchenItemRow(
+    _KitchenItemGroup group, {
+    required bool compact,
+    required KitchenBundlesState state,
+  }) => _KitchenItemRow(
+    group: group,
+    compact: compact,
+    busy:
+        _busy ||
+        !state.isConfirmed ||
+        !widget.allowActions ||
+        !(widget.actionsReady?.value ?? true),
+    onAcceptCancellation: () => _resolveCancellationGroup(group, true),
+    onRejectCancellation: () => _resolveCancellationGroup(group, false),
+  );
 
   DateTime? _elapsedStart(List<OrderItem> items) {
     return items
