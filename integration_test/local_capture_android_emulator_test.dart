@@ -19,9 +19,17 @@ const _emulatorHost = String.fromEnvironment(
   'TACOPOS_EMULATOR_HOST',
   defaultValue: '10.0.2.2',
 );
+const _authPort = int.fromEnvironment(
+  'TACOPOS_AUTH_EMULATOR_PORT',
+  defaultValue: 9099,
+);
+const _firestorePort = int.fromEnvironment(
+  'TACOPOS_FIRESTORE_EMULATOR_PORT',
+  defaultValue: 8080,
+);
 const _functionsPort = int.fromEnvironment(
   'TACOPOS_FUNCTIONS_EMULATOR_PORT',
-  defaultValue: 5002,
+  defaultValue: 5001,
 );
 
 void main() {
@@ -40,7 +48,7 @@ void main() {
         ),
       );
       final auth = FirebaseAuth.instanceFor(app: app);
-      auth.useAuthEmulator(_emulatorHost, 9099);
+      auth.useAuthEmulator(_emulatorHost, _authPort);
       await auth.signInWithEmailAndPassword(
         email: 'capture-test@example.invalid',
         password: 'emulator-only-password',
@@ -49,7 +57,7 @@ void main() {
       expect(uid, 'local-capture-android-test');
 
       final firestore = FirebaseFirestore.instanceFor(app: app);
-      firestore.useFirestoreEmulator(_emulatorHost, 8080);
+      firestore.useFirestoreEmulator(_emulatorHost, _firestorePort);
       final functions = FirebaseFunctions.instanceFor(
         app: app,
         region: 'us-central1',

@@ -25,12 +25,31 @@ const _emulatorHost = String.fromEnvironment(
   'TACOPOS_EMULATOR_HOST',
   defaultValue: '10.0.2.2',
 );
+const _authEmulatorPort = int.fromEnvironment(
+  'TACOPOS_AUTH_EMULATOR_PORT',
+  defaultValue: 9099,
+);
+const _firestoreEmulatorPort = int.fromEnvironment(
+  'TACOPOS_FIRESTORE_EMULATOR_PORT',
+  defaultValue: 8080,
+);
+const _functionsEmulatorPort = int.fromEnvironment(
+  'TACOPOS_FUNCTIONS_EMULATOR_PORT',
+  defaultValue: 5001,
+);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   if (_useFirebaseEmulators &&
-      (!kDebugMode || !_emulatorProjectId.startsWith('demo-'))) {
+      (!kDebugMode ||
+          !_emulatorProjectId.startsWith('demo-') ||
+          _authEmulatorPort < 1 ||
+          _authEmulatorPort > 65535 ||
+          _firestoreEmulatorPort < 1 ||
+          _firestoreEmulatorPort > 65535 ||
+          _functionsEmulatorPort < 1 ||
+          _functionsEmulatorPort > 65535)) {
     throw StateError(
       'El modo Firebase Emulator solo admite debug y proyectos demo-*.',
     );
@@ -58,11 +77,14 @@ void main() async {
     );
   }
   if (_useFirebaseEmulators) {
-    FirebaseAuth.instance.useAuthEmulator(_emulatorHost, 9099);
-    FirebaseFirestore.instance.useFirestoreEmulator(_emulatorHost, 8080);
+    FirebaseAuth.instance.useAuthEmulator(_emulatorHost, _authEmulatorPort);
+    FirebaseFirestore.instance.useFirestoreEmulator(
+      _emulatorHost,
+      _firestoreEmulatorPort,
+    );
     FirebaseFunctions.instanceFor(
       region: 'us-central1',
-    ).useFunctionsEmulator(_emulatorHost, 5001);
+    ).useFunctionsEmulator(_emulatorHost, _functionsEmulatorPort);
   } else {
     await _activateAppCheck();
   }

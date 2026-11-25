@@ -123,3 +123,58 @@ Caja Admin se observó desde la UI y mostró venta bruta $118, descuentos $0, ef
 6. Respaldar commit en la rama remota de esta feature y volver a comprobar SHA/status remoto.
 
 Hasta resolver esos puntos, el candidato no debe distribuirse de forma general.
+
+## Addendum de cierre — 25 de noviembre de 2026
+
+Este cierre parte de `e53d73358fbce258d63984ec44e7ca7be15b51b5` en `fix/tacopos-2.0.1-operational-stability`.
+
+### Corrección de alcance del emulador Android
+
+Durante la validación de cierre se detectó que la aplicación y la prueba de integración usaban por defecto `127.0.0.1:8080/9099/5001` desde el host Android, mientras que el stack dedicado de este worktree está en `127.0.0.1:8082/9101/5002`. Para evitar volver a cruzar los proyectos demo:
+
+- `lib/main.dart` acepta puertos de Emulator explícitos, validados en debug y únicamente con proyecto `demo-*`.
+- La integración de captura local usa los mismos defines y ahora tiene defaults coherentes con el stack convencional `8080/9099/5001`.
+- Se agregó `integration_test/phase6_candidate_rules_android_test.dart` para consultar tablas y `collectionGroup('payments')` desde el SDK Android contra el stack candidato con puertos explícitos.
+- La prueba de Rules ahora cubre explícitamente lectura por collection group y compatibilidad de escrituras con forma Android +31 antes y después de terminalizar una orden.
+
+El contenido cargado en `demo-tacopos-2-0-1` fue leído desde `http://127.0.0.1:8082/emulator/v1/projects/demo-tacopos-2-0-1:securityRules`. SHA-256 del contenido devuelto: `732201CF7C3C8B553EC0E60749F251E3E1AFDAE210847F48A16637C60524DF2F`, idéntico al archivo `firestore.rules.production-candidate`.
+
+La incompatibilidad previa de `collectionGroup` se debía a probar con otro snapshot de Rules que carecía del match global de lectura para `/{path=**}/payments/{paymentId}`. El candidato sí conserva dicho permiso de lectura para usuarios autenticados, y deniega escritura en ese match. No se omitió ni relajó una regla para hacer pasar las pruebas.
+
+### Validación repetida en este cierre
+
+- `npm run test:rules -- --reporter dot`, con guard de proyecto demo y Firestore Emulator local, usando `TACOPOS_RULES_FILE=firestore.rules.production-candidate`: **139/139 PASS**. Incluye `collectionGroup('payments')`, escritura legacy +31 sobre orden activa, rechazo de agregar artículo y reabrir orden terminal, captura local, cancelación administrativa y negativas de seguridad.
+- `flutter analyze`: **PASS**, sin issues.
+- `flutter test`: **953/953 PASS**.
+- `integration_test/phase6_candidate_rules_android_test.dart`: **1/1 PASS** en `emulator-5564`, después de configurar el JDK para usar el truststore de Windows, manteniendo validación TLS.
+- `flutter build apk --debug` con los defines explícitos del stack candidato: **PASS**; instalada con `adb install -r`. No se generó APK/AAB de release.
+- `git diff --check`: PASS después de consolidar el addendum y las evidencias.
+
+### Integración Android y bloqueo restante de la interfaz
+
+El primer intento de `integration_test/phase6_candidate_rules_android_test.dart` en `emulator-5564` falló antes de instalar el test porque Gradle no confiaba en la cadena Maven (`PKIX path building failed`). El host Windows sí validó el certificado con su almacén del sistema; repetir Gradle con `-Djavax.net.ssl.trustStoreType=Windows-ROOT` resolvió el problema sin desactivar TLS ni cambiar repositorios.
+
+La prueba Android **PASS 1/1**: inició Firebase Auth Emulator en `10.0.2.2:9101`, leyó las mesas de `aviacion` y ejecutó `collectionGroup('payments')` en Firestore Emulator `10.0.2.2:8082`, bajo el SHA candidato exacto. También se generó e instaló por `adb install -r` una APK **debug** del worktree con el proyecto y los puertos candidatos; no se desinstaló la aplicación. Se guardó captura y jerarquía UI del inicio de sesión en `evidence/`.
+
+La integración Android prueba el SDK Firebase y las Rules, pero no el recorrido de TacoPOS. En la app principal debug se inició sesión por el flujo UI con el usuario ficticio Admin y se confirmó la sucursal `Aviacion`; al abrir Mesas, la pantalla mostró “No hay mesas registradas para esta sucursal”. En paralelo, Admin SDK y el test Android SDK leen cuatro mesas activas con `branchId=aviacion`, además de los cinco empleados activos. No se observó `PERMISSION_DENIED` concluyente para esa lectura en Logcat. Sí aparece una advertencia Firestore `RESOURCE_EXHAUSTED / too_many_pings` durante la corrida; no hay evidencia suficiente para afirmar que esa advertencia cause la lista vacía. Capturas y jerarquías están en `evidence/`.
+
+La evidencia de interfaz anterior que no registró los puertos efectivos **no se considera evidencia de recorrido bajo el proyecto/Rules candidatos**. Las consultas Android SDK y las Rules Emulator son válidas para sus alcances, pero no sustituyen los recorridos UI pedidos.
+
+### Estado actualizado de bloques solicitados
+
+| Bloque / escenario | Estado al cierre | Evidencia o bloqueo |
+|---|---|---|
+| 1. SHA efectivo de Rules candidatas | PASS | REST del Emulator devuelve el mismo contenido y SHA que el archivo candidato. |
+| 1. Compatibilidad `collectionGroup('payments')` | PASS | 139/139 en Rules Emulator y lectura desde SDK Android con Rules candidatas exactas. |
+| 1. Forma de escrituras Android +31 y protección terminal | PASS (Rules Emulator) | Orden legacy activa permite captura/estado de Cocina; tras pago, nuevo artículo y reapertura son rechazados. |
+| 1. Pago de tres personas, fallo de presencia, regreso a Mesas, intento Android +31/+32 después de liquidación, cancelación admin y captura concurrente bajo candidato exacto | NO DEMOSTRADO integralmente | Tests Rules cubren límites autorizados y denegados; la app autentica, pero Mesas no ve las mesas que sí devuelve el test SDK. Flujos de negocio detenidos sin crear órdenes. |
+| 2. Cocina: microcorte, false→true, cambio de sucursal, respuestas tardías y acciones tras reconexión en AVD | NO EJECUTADO en UI | Las regresiones widget permanecen cubiertas por Flutter. La prueba Android SDK no incluye KitchenScreen; no se habilitaron acciones con datos provisionales. |
+| 3. Solicitudes aceptar/rechazar en comanda extensa, varias cancelaciones y segunda tablet en Mesas | NO EJECUTADO bajo Rules candidatas | El recorrido de negocio no pasó del inicio de sesión; la prueba SDK no ejercita estas pantallas. |
+| 4. Captura offline tras cierre/reinicio Android y envío exactamente una vez | NO EJECUTADO bajo stack candidato | No se reinició Android con un borrador operativo. La prueba de SDK no equivale al reinicio del sistema y recorrido UI completo. |
+| 5. Conciliación exacta, cierre Caja/Cocina y lectura del mismo corte por Backoffice Finanzas | NO DEMOSTRADO para este stack | Los resultados de cortes documentados antes de corregir los puertos no se atribuyen al proyecto candidato. No se produjo nueva operación ficticia para reemplazarlos. |
+| Regresión automatizada Flutter | PASS | `flutter analyze`; `flutter test` 953/953. |
+| Rules completas del candidato | PASS | 139/139; emulador y guard `demo-*`/host local. |
+
+### Dictamen
+
+La Fase 6 **no queda cerrada**. No se autoriza preparar distribución del candidato: faltan recorridos UI críticos bajo el proyecto y SHA de Rules correctos, incluidos pago por personas, recuperación de Cocina, cancelaciones desde lista larga, persistencia offline después de reiniciar y conciliación con Backoffice Finanzas. El bloqueo de PKIX para Gradle ya fue resuelto de forma segura mediante `Windows-ROOT`. El bloqueo actual es la discrepancia reproducible entre la lectura de mesas desde SDK Android aislado y la lista vacía de Mesas en la app principal. Debe determinarse por qué difieren antes de ejecutar escrituras ficticias de operación; después, repetir sólo los escenarios aún no demostrados.

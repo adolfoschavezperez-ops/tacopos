@@ -1,7 +1,7 @@
 require('./safeTestEnvironment');
 const { strict: assert } = require('node:assert');
 const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');
-const { doc, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp, deleteField } = require('firebase/firestore');
+const { collectionGroup, doc, getDocs, query, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp, deleteField } = require('firebase/firestore');
 const fs = require('node:fs');
 
 const rulesPath = process.env.TACOPOS_RULES_FILE || 'firestore.rules';
@@ -58,6 +58,54 @@ async function seedItem(orderId = 'order', itemId = 'item') {
 }
 
 describe('terminal order write protection', () => {
+  it('allows the collectionGroup payments read required by the Android payment feed', async () => {
+    await seedOrder({ id: 'cash-order-a' });
+    await seedOrder({ id: 'cash-order-b' });
+    await seed('orders/cash-order-a/payments/pay-a', {
+      restaurantId, branchId, orderId: 'cash-order-a', status: 'active',
+      method: 'cash', baseAmount: 20,
+    });
+    await seed('orders/cash-order-b/payments/pay-b', {
+      restaurantId, branchId, orderId: 'cash-order-b', status: 'active',
+      method: 'card', baseAmount: 25,
+    });
+
+    const d = db();
+    const result = await assertSucceeds(
+      getDocs(query(collectionGroup(d, 'payments'))),
+    );
+    assert.equal(result.size, 2);
+  });
+
+  it('preserves +31 legacy writes on an active order and rejects them after terminal close', async () => {
+    const orderPath = path('orders/android-31-order');
+    const d = db();
+    await seed('orders/android-31-order', {
+      restaurantId, branchId, orderType: 'dine_in', status: 'open',
+      paymentStatus: 'pending', total: 20,
+    });
+    await assertSucceeds(setDoc(doc(d, `${orderPath}/items/first`), {
+      restaurantId, branchId, productId: 'pastor', status: 'active',
+      kitchenStatus: 'pending', qty: 1, total: 20,
+    }));
+    await assertSucceeds(updateDoc(doc(d, orderPath), {
+      status: 'sent', total: 20,
+    }));
+    await assertSucceeds(updateDoc(doc(d, `${orderPath}/items/first`), {
+      kitchenStatus: 'ready',
+    }));
+
+    await assertSucceeds(updateDoc(doc(d, orderPath), {
+      status: 'paid', paymentStatus: 'paid', paidTotal: 20,
+      pendingTotal: 0, paidAt: Timestamp.fromMillis(20),
+    }));
+    await assertFails(setDoc(doc(d, `${orderPath}/items/late`), {
+      restaurantId, branchId, productId: 'asada', status: 'active',
+      kitchenStatus: 'pending', qty: 1, total: 24,
+    }));
+    await assertFails(updateDoc(doc(d, orderPath), {status: 'open', total: 44}));
+  });
+
   it('allows ordinary capture only when the parent revision advances atomically', async () => {
     await seedOrder();
     const d = db();
