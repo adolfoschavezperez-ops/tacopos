@@ -83,6 +83,24 @@ void main() {
       );
     });
 
+    test('ready state wins over historical cooking timestamp', () {
+      expect(
+        waiterTableStatusKey(
+          table: _table(),
+          order: _order(),
+          items: [
+            _item(
+              kitchenStatus: 'ready',
+              sent: true,
+              cookingAt: DateTime(2026, 11, 24, 22, 41),
+              readyAt: DateTime(2026, 11, 24, 22, 42),
+            ),
+          ],
+        ),
+        tableStatusReadyToCharge,
+      );
+    });
+
     test('marks paid or closed orders as available', () {
       expect(
         waiterTableStatusKey(
@@ -240,6 +258,8 @@ OrderItem _item({
   bool sent = false,
   String? kitchenBatchId,
   String status = 'active',
+  DateTime? cookingAt,
+  DateTime? readyAt,
 }) {
   return OrderItem(
     id: id,
@@ -257,6 +277,8 @@ OrderItem _item({
     paymentStatus: 'pending',
     kitchenBatchId: kitchenBatchId,
     sentToKitchenAt: sent ? DateTime(2026) : null,
+    cookingAt: cookingAt,
+    readyAt: readyAt,
     status: status,
   );
 }

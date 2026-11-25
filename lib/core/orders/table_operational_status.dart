@@ -53,6 +53,9 @@ bool _itemIsPreparing(OrderItem item) {
   if (!isActiveOrderItem(item) || !itemRequiresKitchen(item)) {
     return false;
   }
+  if (isKitchenReadyItem(item)) {
+    return false;
+  }
   final status = normalizeOperationalStatus(
     item.kitchenStatus,
   ).replaceAll(RegExp(r'[\s-]+'), '_');

@@ -1,8 +1,10 @@
 require('./safeTestEnvironment');
 const { strict: assert } = require('node:assert');
 const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');
-const { doc, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp } = require('firebase/firestore');
+const { doc, setDoc, updateDoc, deleteDoc, writeBatch, Timestamp, deleteField } = require('firebase/firestore');
 const fs = require('node:fs');
+
+const rulesPath = process.env.TACOPOS_RULES_FILE || 'firestore.rules';
 
 const restaurantId = 'tacopos-terminal-protection';
 const branchId = 'aviacion';
@@ -12,7 +14,7 @@ let env;
 before(async () => {
   env = await initializeTestEnvironment({
     projectId: 'demo-tacopos-order-terminal-protection',
-    firestore: { rules: fs.readFileSync('firestore.rules', 'utf8') },
+    firestore: { rules: fs.readFileSync(rulesPath, 'utf8') },
   });
 });
 after(async () => env?.cleanup());
@@ -158,6 +160,44 @@ describe('terminal order write protection', () => {
     });
     batch.update(doc(d, path('orders/active')), {
       paymentStatus: 'partial', paidTotal: 20, pendingTotal: 80, captureRevision: 1,
+    });
+    await assertSucceeds(batch.commit());
+  });
+
+  it('rejects kitchen batch writes after close but permits an authorized payment cancellation', async () => {
+    await seedOrder({ id: 'terminal-kitchen', status: 'paid', paymentStatus: 'paid', extra: {
+      paidAt: Timestamp.fromMillis(10), paidTotal: 100, pendingTotal: 0,
+    }});
+    await seed('orders/terminal-kitchen/kitchenBatches/b1', { restaurantId, branchId, status: 'sent' });
+    const waiter = db();
+    await assertFails(updateDoc(doc(waiter, path('orders/terminal-kitchen/kitchenBatches/b1')), {
+      status: 'cooking',
+    }));
+    await assertFails(setDoc(doc(waiter, path('orders/terminal-kitchen/kitchenBatches/late')), {
+      restaurantId, branchId, status: 'sent',
+    }));
+
+    await seedOrder({ id: 'admin-cancel', status: 'ready', paymentStatus: 'paid', extra: {
+      paidAt: Timestamp.fromMillis(10), paidTotal: 100, pendingTotal: 0,
+    }});
+    await seed('orders/admin-cancel/items/item', {
+      restaurantId, branchId, productId: 'pastor', status: 'active',
+      kitchenStatus: 'ready', paymentStatus: 'paid', paymentId: 'pay-1',
+      qty: 1, unitPrice: 100, total: 100, paidAt: Timestamp.fromMillis(10),
+    });
+    await seed('orders/admin-cancel/payments/pay-1', {
+      restaurantId, branchId, orderId: 'admin-cancel', status: 'active', method: 'cash', baseAmount: 100,
+    });
+    await seed('authUsers/admin', { active: true, isSuperAdmin: true, permissions: { canViewAdmin: true } });
+    const admin = db('admin');
+    const batch = writeBatch(admin);
+    batch.update(doc(admin, path('orders/admin-cancel/payments/pay-1')), { status: 'cancelled' });
+    batch.update(doc(admin, path('orders/admin-cancel/items/item')), {
+      paymentStatus: 'pending', paymentId: deleteField(), paidAt: deleteField(),
+    });
+    batch.update(doc(admin, path('orders/admin-cancel')), {
+      paymentStatus: 'pending', paidTotal: 0, pendingTotal: 100,
+      paidAt: deleteField(), captureRevision: 1,
     });
     await assertSucceeds(batch.commit());
   });

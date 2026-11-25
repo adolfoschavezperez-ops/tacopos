@@ -4,6 +4,8 @@ require('./safeTestEnvironment');
 const { initializeTestEnvironment, assertFails, assertSucceeds } = require('@firebase/rules-unit-testing');
 const { deleteDoc, doc, getDoc, setDoc, updateDoc } = require('firebase/firestore');
 
+const rulesPath = process.env.TACOPOS_RULES_FILE || 'firestore.rules';
+
 const R = 'tacopos';
 const B = 'aviacion';
 const root = `restaurants/${R}`;
@@ -12,7 +14,7 @@ let env;
 before(async () => {
   env = await initializeTestEnvironment({
     projectId: 'demo-local-order-capture-marker',
-    firestore: { rules: fs.readFileSync('firestore.rules', 'utf8') },
+    firestore: { rules: fs.readFileSync(rulesPath, 'utf8') },
   });
 });
 after(async () => env?.cleanup());
