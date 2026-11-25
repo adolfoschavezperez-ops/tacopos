@@ -55,7 +55,7 @@ Gradle espera `android/key.properties` con las claves `storePassword`, `keyPassw
 - `flutter build appbundle --release --no-pub`: PASS en el SHA `1c660da74c54cd87495b26c2698d3808a0bb638d`.
 - `bundletool dump manifest`: paquete `com.renova.tacopos`, `versionName=2.0.0-rc.1`, `versionCode=32`.
 - `bundletool dump resources`: Firebase project `tacopos-renovadev`, app ID `1:346084471865:android:fb196c5d19a1e300f949e8`.
-- `jarsigner -verify`: PASS. `keytool -printcert -jarfile` confirmó que el firmante es la clave de carga verificada (SHA-256 `85:D4:5B:55:67:43:89:66:78:23:4D:81:95:E1:F1:17:2F:C2:CE:17:B1:99:10:7E:98:24:7C:9E:D5:BA:05:EE`).
+- `bundletool validate`: PASS. `jarsigner -verify`: PASS. `keytool -printcert -jarfile` confirmó que el firmante es la clave de carga verificada (SHA-256 `85:D4:5B:55:67:43:89:66:78:23:4D:81:95:E1:F1:17:2F:C2:CE:17:B1:99:10:7E:98:24:7C:9E:D5:BA:05:EE`). Jarsigner informa que el certificado es autofirmado y no tiene sello de tiempo; corresponde al keystore de carga verificado.
 - SHA-256 calculado del AAB: `0B7571F7D18A1A05423CD42B1B48615E3CE459BF3441C4064F0426DEA55CE3D9`.
 - Functions contra Firestore/Auth Emulator aislados: PASS, 112 pruebas con Node 22.
 - Firestore Rules Emulator aislado: PASS, 130 pruebas en la suite final bajo Node `22.21.0`; incluye 3 pruebas sobre la Rules productiva recuperada más el guard mínimo `capture_submission_*`.
