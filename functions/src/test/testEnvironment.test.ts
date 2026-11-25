@@ -1,6 +1,9 @@
 import "../testEnvironment";
 import * as assert from "assert";
-import {assertSafeFunctionsTestEnvironment} from "../testEnvironment";
+import {
+  assertSafeFunctionsTestEnvironment,
+  shouldAssertSafeFunctionsTestEnvironment,
+} from "../testEnvironment";
 
 const validEnvironment = {
   GCLOUD_PROJECT: "demo-tacopos-tests",
@@ -11,6 +14,21 @@ const validEnvironment = {
 };
 
 describe("Functions Admin SDK test environment guard", () => {
+  it("does not apply the demo-only test guard during Firebase CLI discovery", () => {
+    assert.equal(shouldAssertSafeFunctionsTestEnvironment({
+      GCLOUD_PROJECT: "tacopos-renovadev",
+      FIREBASE_CONFIG: JSON.stringify({projectId: "tacopos-renovadev"}),
+      FUNCTIONS_CONTROL_API: "true",
+    }), false);
+  });
+
+  it("still applies the guard inside the Functions Emulator", () => {
+    assert.equal(shouldAssertSafeFunctionsTestEnvironment({
+      ...validEnvironment,
+      FUNCTIONS_EMULATOR: "true",
+    }), true);
+  });
+
   it("accepts one demo project and local Firestore/Auth emulators", () => {
     assert.doesNotThrow(() => assertSafeFunctionsTestEnvironment(validEnvironment));
   });

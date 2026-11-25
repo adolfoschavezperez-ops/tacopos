@@ -2,17 +2,17 @@ import * as admin from "firebase-admin";
 import {FieldValue, Timestamp} from "firebase-admin/firestore";
 import {logger} from "firebase-functions";
 import {HttpsError, onCall} from "firebase-functions/v2/https";
-import {assertSafeFunctionsTestEnvironment} from "./testEnvironment";
+import {
+  assertSafeFunctionsTestEnvironment,
+  shouldAssertSafeFunctionsTestEnvironment,
+} from "./testEnvironment";
 import {
   resolveLocalOrderCaptureSubmissionCore,
   submitLocalOrderCaptureCore,
 } from "./localOrderCapture";
 export {resolveLocalOrderCaptureSubmissionCore, submitLocalOrderCaptureCore};
 
-const runningInGoogleFunctions = Boolean(
-  process.env.K_SERVICE || process.env.FUNCTION_TARGET || process.env.FUNCTION_NAME,
-);
-if (!runningInGoogleFunctions || process.env.FUNCTIONS_EMULATOR === "true") {
+if (shouldAssertSafeFunctionsTestEnvironment()) {
   assertSafeFunctionsTestEnvironment();
 }
 admin.initializeApp();

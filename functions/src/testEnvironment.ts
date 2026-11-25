@@ -39,6 +39,18 @@ export function assertSafeFunctionsTestEnvironment(
   }
 }
 
+export function shouldAssertSafeFunctionsTestEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.FUNCTIONS_EMULATOR === "true") return true;
+
+  const runningInGoogleFunctions = Boolean(
+    env.K_SERVICE || env.FUNCTION_TARGET || env.FUNCTION_NAME,
+  );
+  const firebaseCliDiscovery = env.FUNCTIONS_CONTROL_API === "true";
+  return !runningInGoogleFunctions && !firebaseCliDiscovery;
+}
+
 function assertLocalEndpoint(name: string, value: string | undefined): void {
   if (!value?.trim()) throw new Error(`Refusing Functions tests: ${name} is required.`);
   let parsed: URL;
@@ -62,6 +74,7 @@ function isTestInvocation(): boolean {
   );
 }
 
-// Fail closed if an Admin-using Functions test is launched directly, outside
-// the guarded npm runner. This module deliberately has no Firebase imports.
+// Fail closed if an Admin-using test or local process is launched outside the
+// guarded npm runner. Firebase CLI discovery and deployed Functions are not
+// test executions and must not be forced to use demo project IDs.
 if (isTestInvocation()) assertSafeFunctionsTestEnvironment();
