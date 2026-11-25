@@ -1,0 +1,26 @@
+TACOPOS 2.0.1 phase6 environment inventory (2026-11-25)
+Starting Git SHA: e99e86e488967d036116d23c52a622ab77f98809
+
+Project Firebase Emulator process: demo-tacopos-2-0-1
+Auth: 127.0.0.1:9101
+Firestore: 127.0.0.1:8082
+Functions: 127.0.0.1:5002
+Rules loaded from Firestore Emulator REST: SHA-256 732201CF7C3C8B553EC0E60749F251E3E1AFDAE210847F48A16637C60524DF2F
+Local candidate firestore.rules.production-candidate SHA-256: 732201CF7C3C8B553EC0E60749F251E3E1AFDAE210847F48A16637C60524DF2F
+Loaded rules text equals candidate file text: true
+
+The 2.0.1 emulator process was started with --project demo-tacopos-2-0-1 and --config .firebase-phase6-production-candidate.json. firebase.json contains default ports 8080/5001/9099; those are not the effective ports for this already-running candidate process. Do not use the defaults for this session.
+
+Other suite left untouched: demo-tacopos-local-capture on Firestore 8080, Functions 5001, emulator UI 4000 (process command line identifies its separate worktree). It is outside this validation.
+
+AVDs found before cleanup:
+- TacoPOS_201_B on emulator-5562: gracefully stopped with `adb emu kill`; no wipe-data; data retained.
+- TacoPOS_201_Phase6_B on emulator-5566: gracefully stopped with `adb emu kill`; no wipe-data; data retained.
+- TacoPOS_201_Phase6_A on emulator-5564: gracefully stopped with `adb emu kill`; no wipe-data; data retained.
+- TacoPOS_201_A: listed but not running.
+- Medium_Phone_API_36.1 on emulator-5554: left running because its generic name does not prove exclusive ownership by this test.
+- Pixel_6 on emulator-5556: left running for the same reason.
+
+After stopping the three named TacoPOS test AVDs, host free memory read 2,373,352 KB, then 2,984,240 KB and 3,008 MB in later samples. The conservative 3 GiB threshold is 3,072 MiB; the host remained below it. Starting TacoPOS_201_Phase6_A was refused by a guard before launch. This left no TacoPOS AVD running, and preserved their on-disk data.
+
+No pending local data was cleared. No unrelated process or emulator suite was stopped. No UI business scenario was run after the resource gate. Candidate Rules, project, and port checks above are read-only.
