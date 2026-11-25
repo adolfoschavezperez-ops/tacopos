@@ -89,6 +89,8 @@ class _OrderScreenState extends State<OrderScreen> {
   String? _lastOrderDebugSignature;
   String? _lastItemsDebugSignature;
   PosOrder? _latestOrder;
+  bool _terminalOrderExitInProgress = false;
+  bool _terminalOrderDialogOpen = false;
 
   @override
   void initState() {
@@ -989,6 +991,10 @@ class _OrderScreenState extends State<OrderScreen> {
         _showMessage('Espera a que cargue la orden para capturar.');
         return;
       }
+      if (!isActiveOrderState(order)) {
+        await _handleConfirmedTerminalOrder(order);
+        return;
+      }
       final line = _repository.createLocalOrderCaptureLine(
         order: order,
         product: product,
@@ -1018,6 +1024,18 @@ class _OrderScreenState extends State<OrderScreen> {
       builder: (context, orderSnapshot) {
         final order = orderSnapshot.data;
         _latestOrder = order;
+        final orderIsTerminal = order != null && !isActiveOrderState(order);
+        if (orderIsTerminal) {
+          // Apply the edit barrier in this build so every control is disabled
+          // as soon as a terminal server snapshot is observed.
+          _editingFrozen = true;
+          if (!_terminalOrderExitInProgress) {
+            _terminalOrderExitInProgress = true;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              unawaited(_handleConfirmedTerminalOrder(order));
+            });
+          }
+        }
         _platformIdNotifier.value = order?.orderType == 'takeout'
             ? order?.platformId
             : null;
@@ -1063,6 +1081,7 @@ class _OrderScreenState extends State<OrderScreen> {
                     order: order,
                     items: _loadedItems,
                     busy: _busy,
+                    terminal: orderIsTerminal,
                     sending: _sendingToKitchen,
                     hasPendingLocalSubmission: _hasPendingLocalSubmission,
                     itemsLoaded: !_itemsLoading,
@@ -1082,7 +1101,7 @@ class _OrderScreenState extends State<OrderScreen> {
               const SizedBox(width: 10),
             ],
             body: AbsorbPointer(
-              absorbing: _editingFrozen,
+              absorbing: _editingFrozen || orderIsTerminal,
               child: Stack(
                 children: [
                   _buildBody(orderSnapshot),
@@ -1165,6 +1184,80 @@ class _OrderScreenState extends State<OrderScreen> {
         );
       },
     );
+  }
+
+  Future<void> _handleConfirmedTerminalOrder(PosOrder order) async {
+    if (_terminalOrderDialogOpen) return;
+    _terminalOrderExitInProgress = true;
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+      _terminalOrderExitInProgress = false;
+      return;
+    }
+    _editingFrozen = true;
+    try {
+      await _waitForAcceptedLocalMutations();
+    } catch (_) {
+      // Keep an in-memory failed tap on this route for explicit operator
+      // recovery; it cannot be safely applied to a terminal order.
+    }
+    var hasDurableCapture = _localDraftItems.isNotEmpty;
+    var hasUncertainSubmission = _hasPendingLocalSubmission;
+    try {
+      hasDurableCapture =
+          hasDurableCapture ||
+          await _repository.hasLocalOrderCapture(
+            orderId: order.id,
+            restaurantId: _boundRestaurantId,
+            branchId: _boundBranchId,
+          );
+      hasUncertainSubmission =
+          hasUncertainSubmission ||
+          await _repository.hasPendingLocalOrderCaptureSubmission(
+            orderId: order.id,
+            restaurantId: _boundRestaurantId,
+            branchId: _boundBranchId,
+          );
+    } catch (error) {
+      debugPrint(
+        '[TacoPOS][terminalOrder.localCheck] orderId=${order.id} error=$error',
+      );
+      hasUncertainSubmission = true;
+    }
+    if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
+
+    final failedInMemoryCapture = _failedLocalMutations.isNotEmpty;
+    if (hasDurableCapture || hasUncertainSubmission || failedInMemoryCapture) {
+      _terminalOrderDialogOpen = true;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('La orden ya fue cerrada'),
+          content: Text(
+            failedInMemoryCapture
+                ? 'Hay un cambio que no se pudo guardar en esta tablet. La orden no recibira cambios; conserva esta pantalla y solicita apoyo antes de salir.'
+                : 'La captura guardada en esta tablet no se enviara a la orden cerrada. Conserva la informacion y recuperala desde Mesas > Comandas pendientes.',
+          ),
+          actions: [
+            if (!failedInMemoryCapture)
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Volver a Mesas'),
+              ),
+          ],
+        ),
+      );
+      _terminalOrderDialogOpen = false;
+      if (failedInMemoryCapture) {
+        _terminalOrderExitInProgress = false;
+        return;
+      }
+    } else {
+      showAppSnackBar(context, 'La orden ya fue liquidada o cancelada.');
+    }
+    if (mounted && ModalRoute.of(context)?.isCurrent == true) {
+      Navigator.pop(context);
+    }
   }
 
   Future<void> _confirmExitWithLocalDrafts() async {
@@ -2339,6 +2432,7 @@ class _TopOrderActions extends StatelessWidget {
     required this.order,
     required this.items,
     required this.busy,
+    required this.terminal,
     required this.sending,
     required this.hasPendingLocalSubmission,
     required this.itemsLoaded,
@@ -2355,6 +2449,7 @@ class _TopOrderActions extends StatelessWidget {
   final PosOrder? order;
   final List<OrderItem> items;
   final bool busy;
+  final bool terminal;
   final bool sending;
   final bool hasPendingLocalSubmission;
   final bool itemsLoaded;
@@ -2371,11 +2466,19 @@ class _TopOrderActions extends StatelessWidget {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final compact = size.width < 650 || size.height < 750;
+    if (terminal) {
+      return IconButton(
+        tooltip: 'Volver a Mesas',
+        onPressed: busy ? null : () => Navigator.maybePop(context),
+        icon: const Icon(Icons.arrow_back),
+      );
+    }
     final currentOrder = order;
     final pendingKitchenCount = awaitingKitchenSendItemsCount(items);
     final hadKitchenSend = items.any(itemWasSentToKitchen);
     final canSend =
         !busy &&
+        !terminal &&
         ((canTakeOrders && pendingKitchenCount > 0) ||
             hasPendingLocalSubmission);
     final sendLabel = sending
@@ -2391,6 +2494,7 @@ class _TopOrderActions extends StatelessWidget {
     final hasKitchenWorkBeforeCheckout =
         hasKitchenPending || pendingKitchenCount > 0;
     final canCloseEmpty =
+        !terminal &&
         currentOrder != null &&
         currentOrder.status == 'open' &&
         currentOrder.sentToKitchenAt == null &&
@@ -2403,6 +2507,7 @@ class _TopOrderActions extends StatelessWidget {
             activeOrderItemsTotal(items) > 0 ||
             hasPendingLocalSubmission) &&
         !busy &&
+        !terminal &&
         itemsLoaded;
     final chargeLabel = hasKitchenWorkBeforeCheckout
         ? pendingKitchenCount > 0
@@ -2412,6 +2517,7 @@ class _TopOrderActions extends StatelessWidget {
         ? 'No tienes permiso para cobrar'
         : 'Cobrar';
     final canCancelOrder =
+        !terminal &&
         canCancelOrders &&
         currentOrder != null &&
         currentOrder.paymentStatus != 'paid' &&

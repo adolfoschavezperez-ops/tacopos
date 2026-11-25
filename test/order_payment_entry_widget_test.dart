@@ -404,6 +404,12 @@ void main() {
     testWidgets('checkout preserves canonical ${fixture.name}', (tester) async {
       final repo = _CheckoutRepository()..payments.addAll(fixture.payments);
       await _showOrder(tester, repo);
+      if (fixture.pending <= 0.01) {
+        expect(find.byType(PaymentScreen), findsNothing);
+        expect(find.text('Cobrar'), findsNothing);
+        expect(repo.order.pendingTotal, 0);
+        return;
+      }
       await tester.tap(find.text('Cobrar'));
       await tester.pumpAndSettle();
       expect(find.byType(PaymentScreen), findsOneWidget);
@@ -460,12 +466,43 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
     },
   );
+
+  testWidgets(
+    'a terminal order returns to tables without sending a pending local capture',
+    (tester) async {
+      final repo = _CheckoutRepository()..pendingSubmission = true;
+      repo.order = PosOrder(
+        id: 'order',
+        tableId: 'table',
+        tableName: 'Mesa 1',
+        status: 'paid',
+        kitchenStatus: 'ready',
+        paymentStatus: 'paid',
+        total: 100,
+        paidTotal: 100,
+        pendingTotal: 0,
+        personNames: const {},
+        orderType: 'table',
+      );
+      await _showOrder(tester, repo, routeOrder: true);
+
+      await tester.pumpAndSettle();
+      expect(find.text('La orden ya fue cerrada'), findsOneWidget);
+      expect(repo.events, isNot(contains('submit-local')));
+      await tester.tap(find.text('Volver a Mesas'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Mesas'), findsOneWidget);
+      expect(repo.pendingSubmission, isTrue);
+    },
+  );
 }
 
 Future<void> _showOrder(
   WidgetTester tester,
   _CheckoutRepository repo, {
   Size size = const Size(412, 915),
+  bool routeOrder = false,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -478,13 +515,36 @@ Future<void> _showOrder(
   await tester.pumpWidget(
     MaterialApp(
       theme: AppTheme.dark(),
-      home: OrderScreen(
-        orderId: 'order',
-        tableName: 'Mesa 1',
-        repository: repo,
-      ),
+      home: routeOrder
+          ? Builder(
+              builder: (context) => Scaffold(
+                body: Center(
+                  child: TextButton(
+                    onPressed: () => Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => OrderScreen(
+                          orderId: 'order',
+                          tableName: 'Mesa 1',
+                          repository: repo,
+                        ),
+                      ),
+                    ),
+                    child: const Text('Mesas'),
+                  ),
+                ),
+              ),
+            )
+          : OrderScreen(
+              orderId: 'order',
+              tableName: 'Mesa 1',
+              repository: repo,
+            ),
     ),
   );
+  if (routeOrder) {
+    await tester.tap(find.text('Mesas'));
+  }
   await tester.pumpAndSettle();
 }
 

@@ -338,6 +338,7 @@ describe('TacoPOS Firestore production guard rails', () => {
     const db = authedDb('checkout');
     const orderRefPath = doc(db, orderPath);
     const itemRef = doc(db, `${orderPath}/items/item-1`);
+    const paymentRef = doc(db, `${orderPath}/payments/payment-1`);
     const tableRef = doc(db, `restaurants/${RESTAURANT_ID}/tables/table-1`);
     await seed(orderPath, {
       restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
@@ -356,7 +357,19 @@ describe('TacoPOS Firestore production guard rails', () => {
       await tx.get(orderRefPath);
       await tx.get(itemRef);
       await tx.get(tableRef);
-      tx.update(itemRef, { paymentStatus: 'paid', paidAt: serverTimestamp() });
+      tx.set(paymentRef, {
+        restaurantId: RESTAURANT_ID,
+        branchId: BRANCH_ID,
+        orderId: 'atomic-close',
+        status: 'active',
+        method: 'cash',
+        baseAmount: 100,
+      });
+      tx.update(itemRef, {
+        paymentStatus: 'paid',
+        paymentId: 'payment-1',
+        paidAt: serverTimestamp(),
+      });
       tx.update(orderRefPath, {
         status: 'paid', paymentStatus: 'paid', paidTotal: 100,
         pendingTotal: 0, paidAt: serverTimestamp(),

@@ -38,13 +38,34 @@ service cloud.firestore {
         immutableBranchId();
     }
 
+    function paidOrderStatus(value) {
+      return value in ['paid', 'pagado', 'pagada', 'closed', 'cerrado', 'cerrada'];
+    }
+
+    function cancelledOrderStatus(value) {
+      return value in [
+        'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided',
+        'anulado', 'anulada'
+      ];
+    }
+
     function orderIsTerminal(data) {
-      return data.get('status', '') in ['paid', 'cancelled', 'closed'] ||
-        data.get('paymentStatus', '') in ['paid', 'cancelled'] ||
-        data.get('kitchenStatus', '') == 'cancelled' ||
-        ('paidAt' in data && data.paidAt != null) ||
+      return data.get('status', '') in [
+          'paid', 'pagado', 'pagada', 'closed', 'cerrado', 'cerrada',
+          'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided', 'anulado', 'anulada'
+        ] ||
+        data.get('paymentStatus', '') in [
+          'paid', 'pagado', 'pagada', 'closed', 'cerrado', 'cerrada',
+          'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided', 'anulado', 'anulada'
+        ] ||
+        data.get('kitchenStatus', '') in [
+          'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided', 'anulado', 'anulada'
+        ] ||
+        ('paidAt' in data && data.paidAt != null &&
+          data.get('pendingTotal', 0) is number && data.get('pendingTotal', 0) <= 0.02) ||
         ('closedAt' in data && data.closedAt != null) ||
-        ('cancelledAt' in data && data.cancelledAt != null);
+        ('cancelledAt' in data && data.cancelledAt != null) ||
+        ('canceledAt' in data && data.canceledAt != null);
     }
 
     function terminalOrderFieldsUnchanged() {
@@ -71,8 +92,74 @@ service cloud.firestore {
     // intentionally server-side so an old APK with a stale cached order cannot
     // append or edit items after checkout/cancellation.
     function parentOrderIsEditable(restaurantId, orderId) {
-      return exists(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)) &&
-        !orderIsTerminal(get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data);
+      let orderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId);
+      let before = get(orderPath).data;
+      let after = getAfter(orderPath).data;
+      return exists(orderPath) && existsAfter(orderPath) &&
+        !orderIsTerminal(before) && !orderIsTerminal(after);
+    }
+
+    function parentOrderIsEditableBefore(restaurantId, orderId) {
+      let orderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId);
+      return exists(orderPath) &&
+        !orderIsTerminal(get(orderPath).data);
+    }
+
+    function itemMutationParentAllowsWrite(restaurantId, orderId) {
+      let orderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId);
+      let before = get(orderPath).data;
+      let after = getAfter(orderPath).data;
+      return exists(orderPath) && existsAfter(orderPath) &&
+        !orderIsTerminal(before) &&
+        (!orderIsTerminal(after) ||
+          (cancelledOrderStatus(after.get('status', '')) && itemIsCancelledAfterWrite()) ||
+          (paidOrderStatus(after.get('status', '')) &&
+            paidOrderStatus(after.get('paymentStatus', '')) &&
+            request.resource.data.get('paymentStatus', '') == 'paid' &&
+            request.resource.data.get('paymentId', '') is string &&
+            request.resource.data.get('paymentId', '').size() > 0 &&
+            request.resource.data.get('paidAt', null) is timestamp &&
+            existsAfter(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)/payments/$(request.resource.data.get('paymentId', ''))) &&
+            getAfter(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)/payments/$(request.resource.data.get('paymentId', ''))).data.get('orderId', orderId) == orderId));
+    }
+
+    function itemIsCancelledAfterWrite() {
+      return request.resource.data.get('status', '') in [
+          'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided',
+          'anulado', 'anulada'
+        ] || request.resource.data.get('kitchenStatus', '') in [
+          'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided',
+          'anulado', 'anulada'
+        ] || request.resource.data.get('paymentStatus', '') in [
+          'cancelled', 'canceled', 'cancelado', 'cancelada', 'voided',
+          'anulado', 'anulada'
+        ] || request.resource.data.get('cancelStatus', '') in [
+          'cancelled', 'canceled', 'cancelado', 'cancelada', 'accepted',
+          'voided', 'anulado', 'anulada'
+        ] || ('cancelledAt' in request.resource.data &&
+          request.resource.data.cancelledAt is timestamp) ||
+        ('canceledAt' in request.resource.data &&
+          request.resource.data.canceledAt is timestamp);
+    }
+
+    function parentOrderIsReopenedByAuthorizedPaymentCancellation(restaurantId, orderId) {
+      let orderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId);
+      let before = get(orderPath).data;
+      let after = getAfter(orderPath).data;
+      return isBackofficeAdmin(restaurantId) && exists(orderPath) &&
+        existsAfter(orderPath) && orderIsTerminal(before) && !orderIsTerminal(after) &&
+        getAfter(orderPath).data.get('paymentStatus', '') in ['pending', 'partial'];
+    }
+
+    function kitchenBatchParentAllowsUpdate(restaurantId, orderId) {
+      let orderPath = /databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId);
+      let before = get(orderPath).data;
+      let after = getAfter(orderPath).data;
+      return exists(orderPath) && existsAfter(orderPath) &&
+        !orderIsTerminal(before) &&
+        (!orderIsTerminal(after) ||
+          (cancelledOrderStatus(after.get('status', '')) &&
+            cancelledOrderStatus(request.resource.data.get('status', ''))));
     }
 
     function orderLinksTable(data, tableId) {
@@ -545,8 +632,9 @@ service cloud.firestore {
           allow create: if validCreate(restaurantId) &&
             parentOrderIsEditable(restaurantId, orderId);
           allow update: if validUpdate() &&
-            (parentOrderIsEditable(restaurantId, orderId) ||
-              (isBackofficeAdmin(restaurantId) &&
+            (itemMutationParentAllowsWrite(restaurantId, orderId) ||
+              (parentOrderIsReopenedByAuthorizedPaymentCancellation(restaurantId, orderId) &&
+                isBackofficeAdmin(restaurantId) &&
                 resource.data.get('paymentStatus', '') == 'paid' &&
                 request.resource.data.get('paymentStatus', '') == 'pending' &&
                 resource.data.get('paymentId', '') is string &&
@@ -561,11 +649,14 @@ service cloud.firestore {
         match /payments/{paymentId} {
           allow read: if signedIn();
           allow create: if validCreate(restaurantId) &&
+            parentOrderIsEditableBefore(restaurantId, orderId) &&
             (!('cashSessionId' in request.resource.data) ||
               cashSessionAcceptsMonetaryWrite(
                 restaurantId, request.resource.data.cashSessionId
               ));
           allow update: if validUpdate() &&
+            (parentOrderIsEditable(restaurantId, orderId) ||
+              parentOrderIsReopenedByAuthorizedPaymentCancellation(restaurantId, orderId)) &&
             (!('cashSessionId' in resource.data) ||
               cashSessionAcceptsMonetaryWrite(
                 restaurantId, resource.data.cashSessionId
@@ -575,8 +666,10 @@ service cloud.firestore {
 
         match /kitchenBatches/{batchId} {
           allow read: if signedIn();
-          allow create: if validCreate(restaurantId);
-          allow update: if validUpdate();
+          allow create: if validCreate(restaurantId) &&
+            parentOrderIsEditableBefore(restaurantId, orderId);
+          allow update: if validUpdate() &&
+            kitchenBatchParentAllowsUpdate(restaurantId, orderId);
           allow delete: if false;
         }
       }
