@@ -215,3 +215,9 @@ Las evidencias de Android/Firestore son solo del proyecto `demo-tacopos-2-0-1`; 
 ### Dictamen actualizado
 
 La causa de la pantalla Mesas vacía quedó demostrada y el arreglo de **entorno debug** está integrado en una prueba Android dirigida. Se validaron desde UI pagos por persona, captura concurrente, envío y acciones `Siguiente plato`/`Listo`, además de la protección de borrador ante una orden terminal. La **Fase 6 no queda cerrada**: faltan conciliación/cierre normal de Caja y Cocina con lectura desde Backoffice Finanzas, cancelaciones de lista larga, recuperación de Cocina bajo cortes y cambios de sucursal, recuperación/reenvío del borrador después del reinicio a una orden abierta y compatibilidad UI de +31. No autorizar preparación del release hasta completar esos bloqueos.
+
+### Seguimiento del 25 de noviembre — intento de cierre normal de Cocina
+
+Se retomó la sesión ficticia desde la pantalla normal de Control de cocina en el AVD `emulator-5564`. `Cerrar cocina` abrió el formulario de conteo final. Durante la captura de los conteos, Android mostró el diálogo del sistema **“TacoPOS isn't responding”**. La evidencia está en `evidence/phase6-kitchen-close-attempt-anr.png` y `evidence/phase6-kitchen-close-attempt-anr.xml`.
+
+No se pulsó confirmar cierre ni existe evidencia de que se haya enviado/escrito el cierre; por tanto, este intento **no cuenta como cierre** y no se afirma que Cocina o Caja hayan quedado cerradas. El ANR impidió continuar de forma segura por el flujo UI. No se usó Admin SDK para cerrar sesiones ni se modificaron datos fuera de las operaciones de UI autorizadas. La sesión de Caja/Cocina y la conciliación con Backoffice Finanzas quedan pendientes. No se repitieron pruebas automatizadas ya aprobadas.
