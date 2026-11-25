@@ -1,6 +1,6 @@
 # TacoPOS Android 2.0.0-rc.1 — candidato de preparación
 
-Estado: **PREPARACIÓN REMOTA; AAB BLOQUEADO HASTA CONFIRMAR versionCode 32; NO PUBLICAR**
+Estado: **AAB FIRMADO Y VERIFICADO LOCALMENTE; NO SUBIDO A GOOGLE PLAY**
 
 Fecha de validación: 2026-11-25 (America/Mexico_City)
 
@@ -13,15 +13,18 @@ Fecha de validación: 2026-11-25 (America/Mexico_City)
 | `versionCode` confirmado | `32` — libre según Google Play Console, confirmado por el propietario |
 | Paquete | `com.renova.tacopos` |
 | Proyecto Firebase de producción | `tacopos-renovadev` |
-| SHA fuente validado | `05323e9ac1fa9cd8f3f28b0c72426155f6fdd65d` |
-| Rama fuente respaldada | `feature/durable-local-order-capture` |
-| SHA remoto del guard de descubrimiento verificado | `4d2afbead2a5e3f552bc2eb9cde253abcdfac626` |
+| SHA fuente base aprobada | `05323e9ac1fa9cd8f3f28b0c72426155f6fdd65d` |
+| SHA exacto que produjo el AAB | `1c660da74c54cd87495b26c2698d3808a0bb638d` |
+| Rama de preparación | `release/android-2.0.0-rc.1-prep` |
 | Worktree de preparación | `C:/Users/geren/Documents/RenovaDev/tacopos-release-2.0.0-rc.1` |
 | Rama local de preparación | `release/android-2.0.0-rc.1-prep` |
-| Artefacto y SHA-256 | No generado |
-| Etiqueta Git | No creada; esperar a verificar artefacto y SHA final |
+| Artefacto | `C:/Users/geren/Documents/RenovaDev/tacopos-release-2.0.0-rc.1/build/app/outputs/bundle/release/app-release.aab` |
+| SHA-256 del AAB | `0B7571F7D18A1A05423CD42B1B48615E3CE459BF3441C4064F0426DEA55CE3D9` |
+| Certificado de carga (SHA-256) | `85D45B556743896678234D8195E1F1172FC2CE17B199107E98247C9ED5BA05EE` |
+| Etiqueta Git | `tacopos-android-v2.0.0-rc.1+32` (apunta al SHA que produjo el AAB) |
+| Distribución | No subido a Play; pendiente prueba de token App Check en dispositivo desde Internal Testing |
 
-`pubspec.yaml` está en `2.0.0-rc.1+32`. El propietario confirmó libre el `versionCode 32` en Google Play Console. La firma local está configurada en `android/key.properties`, ignorado por Git.
+`pubspec.yaml` está en `2.0.0-rc.1+32`. El propietario confirmó libre el `versionCode 32` en Google Play Console. El AAB se compiló desde el SHA exacto indicado y se validaron manifiesto, proyecto Firebase, paquete y certificado de carga. La firma local está configurada en `android/key.properties`, ignorado por Git.
 
 ## Integridad de Firebase y distribución
 
@@ -44,10 +47,16 @@ El propietario confirmó desde Play Console que coinciden el certificado de carg
 
 Gradle espera `android/key.properties` con las claves `storePassword`, `keyPassword`, `keyAlias` y `storeFile`, según `android/app/build.gradle.kts`. El archivo local ignorado está preparado en este worktree y apunta al keystore externo validado. No se incluyó ni en el commit ni en el paquete de respaldo; `git check-ignore` lo confirma.
 
-## Validación de este SHA
+## Validación del candidato y artefacto
 
 - `flutter analyze`: PASS, sin issues.
 - `flutter test`: PASS, 944 pruebas.
+- Tests de versión dirigidos: PASS, 21 pruebas.
+- `flutter build appbundle --release --no-pub`: PASS en el SHA `1c660da74c54cd87495b26c2698d3808a0bb638d`.
+- `bundletool dump manifest`: paquete `com.renova.tacopos`, `versionName=2.0.0-rc.1`, `versionCode=32`.
+- `bundletool dump resources`: Firebase project `tacopos-renovadev`, app ID `1:346084471865:android:fb196c5d19a1e300f949e8`.
+- `jarsigner -verify`: PASS. `keytool -printcert -jarfile` confirmó que el firmante es la clave de carga verificada (SHA-256 `85:D4:5B:55:67:43:89:66:78:23:4D:81:95:E1:F1:17:2F:C2:CE:17:B1:99:10:7E:98:24:7C:9E:D5:BA:05:EE`).
+- SHA-256 calculado del AAB: `0B7571F7D18A1A05423CD42B1B48615E3CE459BF3441C4064F0426DEA55CE3D9`.
 - Functions contra Firestore/Auth Emulator aislados: PASS, 112 pruebas con Node 22.
 - Firestore Rules Emulator aislado: PASS, 130 pruebas en la suite final bajo Node `22.21.0`; incluye 3 pruebas sobre la Rules productiva recuperada más el guard mínimo `capture_submission_*`.
 - Functions Emulator cargó las seis definiciones locales en puertos aislados. Un POST sin autenticación a cada callable productiva devolvió `401 UNAUTHENTICATED` sin escribir datos; falta validar emisión de token Play Integrity real.
@@ -59,10 +68,8 @@ Gradle espera `android/key.properties` con las claves `storePassword`, `keyPassw
 - La suite de Functions bajo Node 22 pasó con 112 pruebas. La suite completa de Rules pasó con 130 pruebas; los tres escenarios del archivo `tacopos_2rc_production_rules_compat.rules.test.js` instancian la copia de Rules desplegada más el cambio mínimo y validan compatibilidad +31 para eventos corrientes, captura, Cocina, extras, sucursal, pagos parciales/finales y cierre normal de caja.
 - La suite Rules completa se ejecutó contra un Emulator temporal con `singleProjectMode=false`; los `clearFirestore()` de las pruebas no tocaron la instancia ficticia conciliada del puerto 8080.
 
-## Condiciones que faltan para autorizar RC.1
+## Pendiente antes de ampliar distribución
 
-1. Ejecutar guard de procedencia sobre el SHA exacto de versión respaldado en remoto.
-2. Generar el AAB autorizado y validar paquete, versión, código, certificado de carga y SHA-256.
-3. Validar tokens App Check desde la instalación interna antes de ampliar distribución.
-4. Mantener sin cambios `allowUnrecognizedVersion`, TTL y nivel de integridad.
-5. Crear la etiqueta anotada `tacopos-android-v2.0.0-rc.1+32` solo después de verificar el artefacto.
+1. Subir el AAB manualmente a Google Play Internal Testing; no está publicado por este proceso.
+2. Instalar desde Play en tablet y validar emisión/verificación de App Check Play Integrity y el flujo operativo real.
+3. Mantener sin cambios `allowUnrecognizedVersion`, TTL y nivel de integridad; no activar actualización obligatoria.

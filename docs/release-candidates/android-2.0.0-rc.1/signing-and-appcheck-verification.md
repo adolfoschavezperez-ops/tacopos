@@ -23,8 +23,8 @@ Firebase certificate metadata was modified only to add the two authorized SHA-25
 - `keytool -list` using the existing local `android/key.properties` confirmed alias `tacopos-upload` and both owner-provided upload-certificate fingerprints: SHA-1 `59:F2:2A:AC:CD:2D:8D:09:7D:41:15:33:10:DF:2C:F5:5F:E8:C8:CA`; SHA-256 `85:D4:5B:55:67:43:89:66:78:23:4D:81:95:E1:F1:17:2F:C2:CE:17:B1:99:10:7E:98:24:7C:9E:D5:BA:05:EE`.
 - The existing ignored `android/key.properties` was copied locally into this release worktree and points to the same external keystore. `android/.gitignore` ignores it; Git status remains clean and the secret file is not committed or pushed.
 - The AAB must be signed by this upload key for Play upload; Google Play then signs delivered APKs with its app-signing key. These are distinct roles and certificates.
-- No new key was created, no key reset was requested, and no artifact was built.
+- No new key was created and no key reset was requested. The AAB was built later from the recorded release source SHA.
 
 ## Remaining verification
 
-Validate App Check token issuance from a Play-installed internal-test build before wider distribution. Confirm that versionCode 32 is unused across all Play tracks before changing `pubspec.yaml` or building an AAB.
+Validate App Check token issuance from a Play-installed internal-test build before wider distribution. The owner confirmed versionCode 32 was available before the version update and AAB build.

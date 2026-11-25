@@ -7,7 +7,7 @@ Date: 2026-11-25 (America/Mexico_City)
 - Node.js `22.21.0`; npm `11.6.2`.
 - Firebase CLI `15.30.0`.
 - Firebase Emulator project IDs used were `demo-*`; emulators used local Auth/Firestore endpoints only.
-- No production deployment, writes, Android build, or AAB generation was performed.
+- These emulator test runs used demo IDs and local endpoints only. Production Rules/Functions deployment and the signed AAB build are recorded separately below; no production business records were written.
 
 ## Results
 

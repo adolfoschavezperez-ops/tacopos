@@ -39,7 +39,7 @@ El propietario confirmó el vínculo de Play Integrity desde Play Console con `t
 
 La configuración Firebase conserva `MEETS_DEVICE_INTEGRITY`, `allowUnrecognizedVersion: true` y TTL `3600s`. Se registraron las SHA-256 actual/anterior de Play, conservando la de carga; no se modificaron los controles App Check. El servicio está habilitado y el propietario confirmó el vínculo Play Console.
 
-Una solicitud POST sin autenticación a cada callable respondió `401 UNAUTHENTICATED` y no creó datos. Esto verifica que los endpoints están activos y rechazan una llamada anónima, pero no sustituye una prueba con ID token y token App Check real. Validar token real desde una instalación de pista interna; el Emulator no acredita Play Integrity. La consola del propietario todavía debe confirmar que `versionCode 32` está libre en todas las pistas.
+Una solicitud POST sin autenticación a cada callable respondió `401 UNAUTHENTICATED` y no creó datos. Esto verifica que los endpoints están activos y rechazan una llamada anónima, pero no sustituye una prueba con ID token y token App Check real. El propietario confirmó que `versionCode 32` está libre y el AAB ya se generó; validar el token real desde una instalación de pista interna antes de ampliar la distribución.
 
 ## Compatibilidad y orden
 
