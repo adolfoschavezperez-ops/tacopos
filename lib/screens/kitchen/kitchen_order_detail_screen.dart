@@ -300,6 +300,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
                           KitchenActionRecoveryBanner(
                             error: widget.actionValidationError!,
                             isConfirmed: state.isConfirmed,
+                            actionsReady: widget.actionsReady!,
                             onRetry: widget.onRetryActions!,
                           ),
                         _Header(

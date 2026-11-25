@@ -11,6 +11,7 @@ import 'package:tacopos/core/constants/app_constants.dart';
 import 'package:tacopos/models/branch.dart';
 import 'package:tacopos/models/order.dart';
 import 'package:tacopos/models/employee.dart';
+import 'package:tacopos/models/kitchen_session.dart';
 import 'package:tacopos/models/order_item.dart';
 import 'package:tacopos/screens/kitchen/kitchen_bundles_feed.dart';
 import 'package:tacopos/screens/admin/live_operations_screen.dart';
@@ -403,6 +404,54 @@ void main() {
   );
 
   testWidgets(
+    'Kitchen actions recover when opening changes after feed confirmation',
+    (tester) async {
+      debugPrint = tester.binding.debugPrintOverride;
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      AppSession.instance.signIn(Employee.fromDoc(_KitchenEmployeeDoc()));
+      await LivePresenceService.instance.stop();
+
+      final repo = _KitchenUiRepository();
+      addTearDown(repo.close);
+      await tester.pumpWidget(
+        MaterialApp(home: KitchenScreen(repository: repo)),
+      );
+      await _pumpUi(tester);
+      repo.db.orders.emit({'a': _order()});
+      repo.db.items('a').emit({'i': _item()});
+      await _pumpUi(tester);
+      expect(repo.open, isFalse);
+      expect(repo.markedCooking, 0);
+
+      await tester.tap(find.text('Abrir comanda').first);
+      await _pumpUi(tester);
+      expect(find.byType(KitchenOrderDetailScreen), findsOneWidget);
+      expect(find.textContaining('Acciones pausadas'), findsOneWidget);
+
+      repo.open = true;
+      repo.kitchenSessions.add(
+        const KitchenSession(
+          id: 'kitchen-2026-11-24',
+          businessDate: '2026-11-24',
+          status: 'open',
+          notes: '',
+        ),
+      );
+      await _pumpUi(tester);
+      expect(repo.markedCooking, 1);
+      expect(find.text('Listo'), findsOneWidget);
+      await tester.tap(find.text('Listo'));
+      await _pumpUi(tester);
+      expect(repo.kitchenStatusUpdates, hasLength(1));
+      expect(repo.kitchenStatusUpdates.single.status, 'ready');
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
     'permanent kitchen validation errors are shown without retrying',
     (tester) async {
       debugPrint = tester.binding.debugPrintOverride;
@@ -422,7 +471,11 @@ void main() {
 
       expect(repo.openValidations, 2);
       expect(repo.markedCooking, 0);
-      expect(find.textContaining('permission-denied'), findsOneWidget);
+      expect(
+        find.textContaining('No tienes permiso para validar'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('permission-denied'), findsNothing);
       await tester.pump(const Duration(seconds: 30));
       expect(repo.openValidations, 2);
       expect(repo.markedCooking, 0);
@@ -1084,6 +1137,7 @@ class _Auth implements FirebaseAuth {
 
 class _KitchenUiRepository implements TacoPosRepository {
   final db = _Firestore();
+  final kitchenSessions = StreamController<KitchenSession?>.broadcast();
   late final delegate = TacoPosRepository(firestore: db, auth: _Auth());
   int markedCooking = 0;
   bool open = false;
@@ -1094,6 +1148,8 @@ class _KitchenUiRepository implements TacoPosRepository {
   @override
   Stream<KitchenBundlesState> watchKitchenOrderBundlesState() =>
       delegate.watchKitchenOrderBundlesState();
+  @override
+  Stream<KitchenSession?> watchOpenKitchenSession() => kitchenSessions.stream;
   @override
   Future<bool> hasCompletedOpenKitchenForCurrentBusinessDate() async {
     openValidations++;
@@ -1109,6 +1165,8 @@ class _KitchenUiRepository implements TacoPosRepository {
     }
     return open;
   }
+
+  Future<void> close() => kitchenSessions.close();
 
   @override
   Future<void> reconcileOpenOrdersForKitchen() async {}

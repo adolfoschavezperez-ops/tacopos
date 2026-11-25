@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/models/branch.dart';
 import 'package:tacopos/models/employee.dart';
+import 'package:tacopos/models/kitchen_session.dart';
 import 'package:tacopos/models/order.dart';
 import 'package:tacopos/models/order_item.dart';
 import 'package:tacopos/screens/kitchen/kitchen_bundles_feed.dart';
@@ -281,6 +282,8 @@ class _Repository implements TacoPosRepository {
   @override
   Stream<KitchenBundlesState> watchKitchenOrderBundlesState() =>
       watchKitchenOrderBundles().map(KitchenBundlesState.confirmed);
+  @override
+  Stream<KitchenSession?> watchOpenKitchenSession() => const Stream.empty();
 
   @override
   Stream<List<KitchenOrderBundle>> watchKitchenOrderBundles() {

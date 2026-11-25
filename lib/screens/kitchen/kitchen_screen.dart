@@ -8,6 +8,7 @@ import '../../core/reports/hourly_sales_comparison.dart';
 import '../../core/sound/kitchen_sound_service.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
+import '../../models/kitchen_session.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
@@ -31,7 +32,8 @@ class KitchenScreen extends StatefulWidget {
   State<KitchenScreen> createState() => _KitchenScreenState();
 }
 
-class _KitchenScreenState extends State<KitchenScreen> {
+class _KitchenScreenState extends State<KitchenScreen>
+    with WidgetsBindingObserver {
   late final TacoPosRepository _repository;
   late final KitchenBundlesFeed _bundlesFeed;
   late String _bundlesScope;
@@ -43,6 +45,10 @@ class _KitchenScreenState extends State<KitchenScreen> {
   bool _reconciled = false;
   int _actionValidationRetries = 0;
   Timer? _actionValidationRetry;
+  StreamSubscription<KitchenSession?>? _kitchenSessionSubscription;
+  int _kitchenSessionWatchRetries = 0;
+  Timer? _kitchenSessionWatchRetry;
+  bool _revalidateActionsQueued = false;
   late String _actionScope;
   final Set<String> _knownKitchenOrderIds = <String>{};
   bool _hasInitializedKitchenOrders = false;
@@ -51,6 +57,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _repository = widget.repository ?? TacoPosRepository();
     _bundlesFeed = KitchenBundlesFeed.synchronized(
       _repository.watchKitchenOrderBundlesState,
@@ -76,6 +83,9 @@ class _KitchenScreenState extends State<KitchenScreen> {
   @override
   void dispose() {
     _bundlesFeed.removeListener(_onSynchronization);
+    WidgetsBinding.instance.removeObserver(this);
+    _kitchenSessionWatchRetry?.cancel();
+    unawaited(_kitchenSessionSubscription?.cancel());
     _actionValidationRetry?.cancel();
     _bundlesFeed.dispose();
     _actionsReady.dispose();
@@ -83,9 +93,86 @@ class _KitchenScreenState extends State<KitchenScreen> {
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshActionGateFromServer();
+    }
+  }
+
+  void _listenForKitchenSessionChanges() {
+    _kitchenSessionWatchRetry?.cancel();
+    final previous = _kitchenSessionSubscription;
+    _kitchenSessionSubscription = null;
+    unawaited(previous?.cancel());
+    try {
+      _kitchenSessionSubscription = _repository
+          .watchOpenKitchenSession()
+          .listen(
+            (_) {
+              _kitchenSessionWatchRetries = 0;
+              _kitchenSessionWatchRetry?.cancel();
+              _kitchenSessionWatchRetry = null;
+              _refreshActionGateFromServer();
+            },
+            onError: (Object error, StackTrace stackTrace) {
+              if (!mounted) return;
+              _actionsReady.value = false;
+              _actionValidationError.value = _actionValidationErrorText(error);
+              if (_isRecoverableActionValidationError(error)) {
+                _scheduleKitchenSessionWatchRetry();
+              }
+            },
+          );
+    } catch (error) {
+      _actionsReady.value = false;
+      _actionValidationError.value = _actionValidationErrorText(error);
+      if (_isRecoverableActionValidationError(error)) {
+        _scheduleKitchenSessionWatchRetry();
+      }
+    }
+  }
+
+  void _scheduleKitchenSessionWatchRetry() {
+    const delays = [
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+      Duration(seconds: 15),
+    ];
+    if (!mounted ||
+        _kitchenSessionWatchRetries >= delays.length ||
+        _kitchenSessionWatchRetry != null) {
+      return;
+    }
+    final delay = delays[_kitchenSessionWatchRetries++];
+    _kitchenSessionWatchRetry = Timer(delay, () {
+      _kitchenSessionWatchRetry = null;
+      if (mounted) _listenForKitchenSessionChanges();
+    });
+  }
+
+  void _refreshActionGateFromServer() {
+    if (!mounted) return;
+    _actionsReady.value = false;
+    _actionValidationError.value = null;
+    _actionValidationRetries = 0;
+    _actionValidationRetry?.cancel();
+    _actionValidationRetry = null;
+    final validation = _repository
+        .hasCompletedOpenKitchenForCurrentBusinessDate();
+    unawaited(validation.then((_) {}, onError: (Object error) {}));
+    setState(() {
+      _kitchenIsOpenFuture = validation;
+    });
+    if (_bundlesFeed.syncState.isConfirmed) {
+      unawaited(_validateActions());
+    }
+  }
+
   void _onSynchronization() {
     if (_actionScope != _bundlesFeed.scope) {
       _actionScope = _bundlesFeed.scope;
+      _listenForKitchenSessionChanges();
       _reconciled = false;
       _wasConfirmed = false;
       _actionsReady.value = false;
@@ -108,6 +195,9 @@ class _KitchenScreenState extends State<KitchenScreen> {
       _actionValidationRetry = null;
     }
     if (confirmed && !_wasConfirmed) {
+      // A confirmed feed signals that Firebase synchronization is available.
+      // Reattach the short-lived session watcher here after a reconnect.
+      _listenForKitchenSessionChanges();
       _actionValidationRetries = 0;
       _actionValidationRetry?.cancel();
       _actionValidationRetry = null;
@@ -117,7 +207,10 @@ class _KitchenScreenState extends State<KitchenScreen> {
   }
 
   Future<void> _validateActions() async {
-    if (_validatingActions) return;
+    if (_validatingActions) {
+      _revalidateActionsQueued = true;
+      return;
+    }
     _validatingActions = true;
     final scope = _bundlesFeed.scope;
     try {
@@ -148,18 +241,44 @@ class _KitchenScreenState extends State<KitchenScreen> {
     } catch (error) {
       debugPrint('Kitchen action validation/reconciliation unavailable.');
       _reconciled = false;
-      _actionValidationError.value = error.toString();
+      _actionValidationError.value = _actionValidationErrorText(error);
       if (_isRecoverableActionValidationError(error)) {
         _scheduleActionValidationRetry(scope);
       }
     } finally {
       _validatingActions = false;
+      final shouldRevalidate = _revalidateActionsQueued;
+      _revalidateActionsQueued = false;
       if (mounted &&
           scope != _bundlesFeed.scope &&
           _bundlesFeed.syncState.isConfirmed) {
         unawaited(_validateActions());
+      } else if (mounted &&
+          shouldRevalidate &&
+          _bundlesFeed.syncState.isConfirmed) {
+        unawaited(_validateActions());
       }
     }
+  }
+
+  String _actionValidationErrorText(Object error) {
+    if (error is FirebaseException) {
+      return switch (error.code) {
+        'permission-denied' =>
+          'No tienes permiso para validar la apertura de Cocina. Contacta al administrador.',
+        'unauthenticated' =>
+          'La sesión no pudo validarse. Vuelve a iniciar sesión.',
+        'unavailable' ||
+        'deadline-exceeded' ||
+        'aborted' ||
+        'internal' ||
+        'resource-exhausted' =>
+          'No se pudo verificar la apertura por un problema de conexión. Reintenta cuando vuelva la señal.',
+        _ =>
+          'No se pudo validar la apertura de Cocina. Verifica la configuración o contacta al administrador.',
+      };
+    }
+    return 'No se pudo validar la apertura de Cocina. Verifica la configuración o contacta al administrador.';
   }
 
   bool _isRecoverableActionValidationError(Object error) =>
@@ -199,6 +318,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
 
   void _retryActionValidation() {
     if (!mounted || !_bundlesFeed.syncState.isConfirmed) return;
+    _listenForKitchenSessionChanges();
     _actionValidationRetry?.cancel();
     _actionValidationRetry = null;
     _actionValidationRetries = 0;
@@ -366,6 +486,7 @@ class _KitchenScreenState extends State<KitchenScreen> {
       KitchenActionRecoveryBanner(
         error: _actionValidationError,
         isConfirmed: _bundlesFeed.syncState.isConfirmed,
+        actionsReady: _actionsReady,
         onRetry: _retryActionValidation,
       ),
       Expanded(child: child),
