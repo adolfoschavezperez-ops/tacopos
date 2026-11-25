@@ -10,7 +10,7 @@ Fecha de validación: 2026-11-25 (America/Mexico_City)
 |---|---|
 | Producto | TacoPOS Android |
 | Versión candidata | `2.0.0-rc.1` |
-| `versionCode` propuesto | `32` — **pendiente de confirmar en Google Play Console** |
+| `versionCode` confirmado | `32` — libre según Google Play Console, confirmado por el propietario |
 | Paquete | `com.renova.tacopos` |
 | Proyecto Firebase de producción | `tacopos-renovadev` |
 | SHA fuente validado | `05323e9ac1fa9cd8f3f28b0c72426155f6fdd65d` |
@@ -21,7 +21,7 @@ Fecha de validación: 2026-11-25 (America/Mexico_City)
 | Artefacto y SHA-256 | No generado |
 | Etiqueta Git | No creada; esperar a verificar artefacto y SHA final |
 
-`pubspec.yaml` permanece en `1.5.13+31`. El propietario aún debe confirmar que `versionCode 32` está libre en todas las pistas. Tras esa confirmación, un commit de versión respaldado en remoto permitirá preparar el AAB autorizado. La firma local está configurada en `android/key.properties`, ignorado por Git.
+`pubspec.yaml` está en `2.0.0-rc.1+32`. El propietario confirmó libre el `versionCode 32` en Google Play Console. La firma local está configurada en `android/key.properties`, ignorado por Git.
 
 ## Integridad de Firebase y distribución
 
@@ -61,9 +61,8 @@ Gradle espera `android/key.properties` con las claves `storePassword`, `keyPassw
 
 ## Condiciones que faltan para autorizar RC.1
 
-1. Confirmar en Play Console que versionCode 32 no se ha usado en ninguna pista.
-2. Tras confirmar el versionCode 32, actualizar la versión en un commit respaldado en remoto y ejecutar el guard de procedencia sobre ese SHA.
-3. Las dos callables ya están desplegadas; validar sus tokens App Check desde una instalación Play antes de ampliar distribución.
-4. Mantener sin cambios `allowUnrecognizedVersion`, TTL y nivel de integridad; validar una instalación interna reconocida por Play Integrity.
-5. Generar el AAB autorizado y validar paquete, versión, código, certificado de carga y SHA-256.
-6. Crear la etiqueta anotada `tacopos-android-v2.0.0-rc.1+32` solo después de verificar el artefacto.
+1. Ejecutar guard de procedencia sobre el SHA exacto de versión respaldado en remoto.
+2. Generar el AAB autorizado y validar paquete, versión, código, certificado de carga y SHA-256.
+3. Validar tokens App Check desde la instalación interna antes de ampliar distribución.
+4. Mantener sin cambios `allowUnrecognizedVersion`, TTL y nivel de integridad.
+5. Crear la etiqueta anotada `tacopos-android-v2.0.0-rc.1+32` solo después de verificar el artefacto.
