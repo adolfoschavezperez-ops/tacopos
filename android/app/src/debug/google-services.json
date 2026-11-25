@@ -1,8 +1,8 @@
 {
   "project_info": {
     "project_number": "000000000000",
-    "project_id": "demo-tacopos-local-capture",
-    "storage_bucket": "demo-tacopos-local-capture.appspot.com"
+    "project_id": "demo-tacopos-2-0-1",
+    "storage_bucket": "demo-tacopos-2-0-1.appspot.com"
   },
   "client": [
     {

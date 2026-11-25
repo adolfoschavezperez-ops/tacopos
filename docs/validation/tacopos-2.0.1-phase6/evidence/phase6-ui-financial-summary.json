@@ -1,0 +1,46 @@
+﻿{
+  "project": "demo-tacopos-2-0-1",
+  "businessDate": "2026-11-25",
+  "source": "Android UI on Android Emulator; Firestore Emulator Admin SDK read-only verification",
+  "orders": [
+    {
+      "purpose": "three-person mixed tender",
+      "total": 74.0,
+      "paymentStatus": "paid",
+      "items": [
+        {"product": "Taco asada", "quantity": 1, "person": "Persona 1", "kitchenStatus": "ready"},
+        {"product": "Taco lengua", "quantity": 1, "person": "Persona 2", "kitchenStatus": "ready"},
+        {"product": "Taco pastor", "quantity": 1, "person": "Persona 3", "kitchenStatus": "ready"}
+      ],
+      "activePayments": [
+        {"method": "cash", "amount": 24.0},
+        {"method": "card", "amount": 30.0},
+        {"method": "cash", "amount": 20.0}
+      ],
+      "tableReleased": true
+    },
+    {
+      "purpose": "two-AVD concurrent capture",
+      "total": 54.0,
+      "captureRevisionAfterConcurrentCaptures": 2,
+      "paymentStatus": "paid",
+      "items": [
+        {"product": "Taco asada", "quantity": 1, "employee": "waiter_a", "kitchenStatus": "ready"},
+        {"product": "Taco lengua", "quantity": 1, "employee": "waiter_b", "kitchenStatus": "ready"}
+      ],
+      "kitchenBatches": 2,
+      "activePayments": [{"method": "cash", "amount": 54.0}],
+      "tableReleased": true
+    }
+  ],
+  "preCloseArithmetic": {
+    "orderTotals": 128.0,
+    "activeCashPayments": 98.0,
+    "activeCardPayments": 30.0,
+    "paymentSum": 128.0,
+    "cashSessionStatus": "open",
+    "kitchenSessionStatus": "open",
+    "sessionCloseVerified": false,
+    "backofficeReportChecked": false
+  }
+}

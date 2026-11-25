@@ -1,0 +1,9 @@
+﻿Firebase app: [DEFAULT] / demo-tacopos-2-0-1
+Restaurant: main_restaurant
+Selected branch: aviacion
+Tables path: restaurants/main_restaurant/tables
+Snapshot 1: fromCache=true, hasPendingWrites=false, raw=4, converted=4, branch-filtered=4, active-filtered=4
+Snapshot 2: fromCache=false, hasPendingWrites=false, raw=4, converted=4, branch-filtered=4, active-filtered=4
+Source.server read: fromCache=false, hasPendingWrites=false, raw=4, converted=4, branch-filtered=4, active-filtered=4
+Reconciliation: candidates=0, cancelled=0, staleLinks=0, releasedLinks=0
+Conclusion: no empty snapshot or old-order reconciliation caused the previous UI; Android debug google-services.json pointed to the other demo project.

@@ -178,3 +178,40 @@ La evidencia de interfaz anterior que no registró los puertos efectivos **no se
 ### Dictamen
 
 La Fase 6 **no queda cerrada**. No se autoriza preparar distribución del candidato: faltan recorridos UI críticos bajo el proyecto y SHA de Rules correctos, incluidos pago por personas, recuperación de Cocina, cancelaciones desde lista larga, persistencia offline después de reiniciar y conciliación con Backoffice Finanzas. El bloqueo de PKIX para Gradle ya fue resuelto de forma segura mediante `Windows-ROOT`. El bloqueo actual es la discrepancia reproducible entre la lectura de mesas desde SDK Android aislado y la lista vacía de Mesas en la app principal. Debe determinarse por qué difieren antes de ejecutar escrituras ficticias de operación; después, repetir sólo los escenarios aún no demostrados.
+
+## Addendum 25 de noviembre de 2026 — discrepancia de Mesas y ejecución UI
+
+### Causa raíz y corrección del entorno
+
+La configuración Android debug (`android/app/src/debug/google-services.json`) apuntaba a `demo-tacopos-local-capture`, mientras la prueba de integración creaba una FirebaseApp nombrada para `demo-tacopos-2-0-1`. La aplicación usa Firebase `[DEFAULT]`, que Android inicializa desde `google-services.json`; por eso el test del SDK podía leer cuatro mesas del candidato mientras la aplicación consultaba otra base vacía. No era un filtro de sucursal ni evidencia de rechazo de Rules.
+
+Se corrigieron solamente `project_id` y `storage_bucket` de la configuración **debug** para que apunten a `demo-tacopos-2-0-1`. Las opciones son valores demo con identificadores ficticios; `android/app/src/release/google-services.json` no se tocó. Se agregó a la integración Android una aserción sobre el proyecto de `[DEFAULT]` y una lectura de sus cuatro mesas, antes de conservar la lectura con la FirebaseApp independiente. El recorrido real mostró Mesa 1–4.
+
+La instrumentación temporal de `main.dart`, `TablesScreen` y `watchTables` registró, con la misma app, autenticación, ruta y sucursal: `restaurants/main_restaurant/tables`, `branchId=aviacion`, cuatro documentos recibidos, cuatro convertidos, cuatro tras el filtro de sucursal y cuatro tras `activeOnly`. Hubo un snapshot de caché con `isFromCache=true`, `hasPendingWrites=false`, y después un snapshot confirmado con `isFromCache=false`, `hasPendingWrites=false`; una lectura `Source.server` devolvió los mismos cuatro documentos. La reconciliación revisó cero órdenes candidatas y no liberó ni cambió mesas. La instrumentación ya se retiró.
+
+`RESOURCE_EXHAUSTED / too_many_pings` apareció en registros antiguos de una ejecución con configuración inconsistente. No apareció en la reproducción corregida; la app obtuvo los snapshots de caché y servidor con cuatro mesas. No hay evidencia de que ese aviso causara la lista vacía reproducida, ni se concluye que nunca pueda ser un problema separado.
+
+### Preparación ficticia del emulador
+
+Las sesiones anteriores de Caja y Cocina estaban cerradas. Se abrieron por sus pantallas normales para el 25-11-2026. Cocina se abrió desde Control de cocina tras ingresar 100 refrescos, 100 kg de lengua y 100 kg de tortilla como stock ficticio. Como la ruta debug Emulator omite `AppUpdateGate`, no crea por sí sola los documentos de registro de dispositivo requeridos por la callable. La primera llamada real a Enviar fue rechazada con `permission-denied: El dispositivo no esta registrado`; el borrador siguió visible y no se perdió. Para continuar se registraron únicamente dispositivos ficticios de los AVDs en `demo-tacopos-2-0-1` (sin cambiar Rules o Functions). El mismo borrador se reintentó desde la UI y el envío se confirmó.
+
+### Escenarios ejecutados desde Android
+
+| Escenario | Resultado | Evidencia y límites |
+|---|---|---|
+| Mesas con `[DEFAULT]` | PASS | Cuatro mesas visibles; caché y servidor coinciden. Captura y logs sanitizados bajo `evidence/`. |
+| Abrir Cocina y procesar | PASS parcial | Se abrió la sesión desde UI. El pedido de tres tacos se vio en Cocina; `Siguiente plato` avanzó entre artículos y `Listo` dejó los tres `ready`. En la operación concurrente se procesaron ambos lotes adicionales mediante `Listo`. No se simuló microcorte ni cambio de sucursal. |
+| Pago por tres personas | PASS | Total $74: persona 1 efectivo $24, persona 2 tarjeta $30, persona 3 efectivo $20. Se verificaron los tres pagos activos, orden `paid` y mesa disponible; la app regresó a Mesas al completar el último pago. No se inyectó fallo de `LivePresenceService`. |
+| Captura concurrente | PASS | AVDs 5560/5562, Mesero A/B, enviaron casi simultáneamente sobre la misma orden. Firestore registró dos artículos de cantidad 1, dos empleados, dos batches/secuencias, total $54 y `captureRevision=2` después de las capturas; sin IDs duplicados ni líneas faltantes. El pedido se procesó en Cocina y se liquidó después con efectivo $54. |
+| Dispositivo con borrador ante orden terminal | PASS parcial | El segundo AVD conservó un taco local sin enviar. Tras la liquidación desde el otro AVD, la UI indicó que la orden estaba cerrada, bloqueó enviarlo a esa orden y ofreció conservarlo en Comandas pendientes. Tras `adb reboot` sin limpiar datos, la app restauró esa advertencia. No se completó la recuperación/reasignación del borrador a una orden nueva; no se probó APK +31. |
+| Caja/Cocina: conciliación y cierre | NO EJECUTADO | Se verificaron documentos activos y saldos antes del cierre. Las sesiones ficticias del 25-11-2026 siguen abiertas; no se verificó el mismo corte desde Backoffice Finanzas. |
+| Cancelaciones, varias solicitudes y UI larga | NO EJECUTADO | No se solicitó ni resolvió cancelación de producto en la UI durante este addendum. |
+| Cocina offline, reconexión, validación inicial false→true, sucursal y respuestas obsoletas | NO EJECUTADO | El snapshot de caché inicial tenía las cuatro mesas; no se sometió Cocina a pérdida de red ni carrera de validaciones. |
+| Compatibilidad terminal con Android +31 | NO EJECUTADO | Los AVDs +31 no se instalaron/ejecutaron contra el candidato; no se infiere compatibilidad por el test de Rules. |
+| Integración SDK Android: app principal y named app | PASS | `flutter test integration_test/phase6_candidate_rules_android_test.dart -d emulator-5564` con defines del proyecto/puertos correctos pasó 1/1. El test ahora verifica que `[DEFAULT]` corresponda al candidato y lea las cuatro mesas; la app nombrada sigue validando Rules, empleados y `collectionGroup('payments')`. |
+
+Las evidencias de Android/Firestore son solo del proyecto `demo-tacopos-2-0-1`; los IDs de pedidos y sesiones corresponden a datos ficticios. La primera apertura de la app con la configuración equivocada llegó únicamente a Auth Emulator y a una reconciliación que no encontró órdenes ni tocó mesas; no se hizo ninguna operación de negocio en ese otro demo. No se consultó ni escribió producción.
+
+### Dictamen actualizado
+
+La causa de la pantalla Mesas vacía quedó demostrada y el arreglo de **entorno debug** está integrado en una prueba Android dirigida. Se validaron desde UI pagos por persona, captura concurrente, envío y acciones `Siguiente plato`/`Listo`, además de la protección de borrador ante una orden terminal. La **Fase 6 no queda cerrada**: faltan conciliación/cierre normal de Caja y Cocina con lectura desde Backoffice Finanzas, cancelaciones de lista larga, recuperación de Cocina bajo cortes y cambios de sucursal, recuperación/reenvío del borrador después del reinicio a una orden abierta y compatibilidad UI de +31. No autorizar preparación del release hasta completar esos bloqueos.

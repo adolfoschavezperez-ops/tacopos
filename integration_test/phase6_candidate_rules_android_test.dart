@@ -27,6 +27,30 @@ void main() {
   testWidgets(
     'Android SDK reads branch tables and payment collectionGroup from candidate Rules',
     (tester) async {
+      // Validate the Android default app created from google-services.json.
+      // The production app uses these default instances; a separately named
+      // Firebase app below must not mask a mismatched native configuration.
+      final defaultApp = await Firebase.initializeApp();
+      expect(defaultApp.options.projectId, _projectId);
+      final defaultAuth = FirebaseAuth.instanceFor(app: defaultApp);
+      defaultAuth.useAuthEmulator(_host, _authPort);
+      await defaultAuth.signInAnonymously();
+      final defaultFirestore = FirebaseFirestore.instanceFor(app: defaultApp);
+      defaultFirestore.useFirestoreEmulator(_host, _firestorePort);
+      final defaultTables = await defaultFirestore
+          .collection('restaurants')
+          .doc('main_restaurant')
+          .collection('tables')
+          .get();
+      expect(defaultTables.docs, hasLength(4));
+      expect(
+        defaultTables.docs.every(
+          (table) => table.data()['branchId'] == 'aviacion',
+        ),
+        isTrue,
+      );
+      await defaultAuth.signOut();
+
       final app = await Firebase.initializeApp(
         name: 'phase6-candidate-rules',
         options: FirebaseOptions(
