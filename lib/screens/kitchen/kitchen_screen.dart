@@ -49,6 +49,7 @@ class _KitchenScreenState extends State<KitchenScreen>
   int _kitchenSessionWatchRetries = 0;
   Timer? _kitchenSessionWatchRetry;
   bool _revalidateActionsQueued = false;
+  int _actionValidationGeneration = 0;
   late String _actionScope;
   final Set<String> _knownKitchenOrderIds = <String>{};
   bool _hasInitializedKitchenOrders = false;
@@ -153,6 +154,7 @@ class _KitchenScreenState extends State<KitchenScreen>
 
   void _refreshActionGateFromServer() {
     if (!mounted) return;
+    _actionValidationGeneration++;
     _actionsReady.value = false;
     _actionValidationError.value = null;
     _actionValidationRetries = 0;
@@ -172,6 +174,7 @@ class _KitchenScreenState extends State<KitchenScreen>
   void _onSynchronization() {
     if (_actionScope != _bundlesFeed.scope) {
       _actionScope = _bundlesFeed.scope;
+      _actionValidationGeneration++;
       _listenForKitchenSessionChanges();
       _reconciled = false;
       _wasConfirmed = false;
@@ -189,6 +192,7 @@ class _KitchenScreenState extends State<KitchenScreen>
     }
     final confirmed = _bundlesFeed.syncState.isConfirmed;
     if (!confirmed) {
+      _actionValidationGeneration++;
       _actionsReady.value = false;
       _actionValidationError.value = null;
       _actionValidationRetry?.cancel();
@@ -213,9 +217,14 @@ class _KitchenScreenState extends State<KitchenScreen>
     }
     _validatingActions = true;
     final scope = _bundlesFeed.scope;
+    final validationGeneration = _actionValidationGeneration;
     try {
       var open = await _kitchenIsOpenFuture.catchError((Object error) => false);
-      if (!mounted || scope != _bundlesFeed.scope) return;
+      if (!mounted ||
+          scope != _bundlesFeed.scope ||
+          validationGeneration != _actionValidationGeneration) {
+        return;
+      }
       if (!open && _bundlesFeed.syncState.isConfirmed) {
         final validation = _repository
             .hasCompletedOpenKitchenForCurrentBusinessDate();
@@ -226,19 +235,30 @@ class _KitchenScreenState extends State<KitchenScreen>
       }
       if (!mounted ||
           scope != _bundlesFeed.scope ||
+          validationGeneration != _actionValidationGeneration ||
           !_bundlesFeed.syncState.isConfirmed) {
         return;
       }
-      _actionValidationRetries = 0;
-      _actionValidationRetry?.cancel();
-      _actionValidationRetry = null;
       _actionsReady.value = open;
       _actionValidationError.value = null;
-      if (open && !_reconciled) {
-        _reconciled = true;
-        await _repository.reconcileOpenOrdersForKitchen();
+      if (open) {
+        _actionValidationRetries = 0;
+        _actionValidationRetry?.cancel();
+        _actionValidationRetry = null;
+        if (!_reconciled) {
+          _reconciled = true;
+          await _repository.reconcileOpenOrdersForKitchen();
+        }
+      } else {
+        // A false result can be transient while a newly opened kitchen's
+        // initial inventory documents are still being committed. Keep actions
+        // disabled and retry only within the same bounded 2/5/15s budget used
+        // for transient read failures. A later confirmed session/feed event
+        // or app resume starts a fresh validation cycle.
+        _scheduleActionValidationRetry(scope);
       }
     } catch (error) {
+      if (validationGeneration != _actionValidationGeneration) return;
       debugPrint('Kitchen action validation/reconciliation unavailable.');
       _reconciled = false;
       _actionValidationError.value = _actionValidationErrorText(error);

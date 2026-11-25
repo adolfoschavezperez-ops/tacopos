@@ -564,7 +564,7 @@ void main() {
   );
 
   testWidgets(
-    'kitchen actions recover by explicit retry after 60s and exhausted backoff',
+    'kitchen actions recover on a new open-session event after exhausted backoff',
     (tester) async {
       debugPrint = tester.binding.debugPrintOverride;
       tester.view.physicalSize = const Size(1280, 900);
@@ -604,10 +604,19 @@ void main() {
       expect(repo.openValidations, 5);
       expect(repo.markedCooking, 0);
 
-      // Connectivity is back. The operator can explicitly refresh the
-      // authoritative kitchen-open check without reopening the screen.
+      // The bounded retries have stopped. A new authoritative open-session
+      // event must start a fresh validation cycle without logout or a manual
+      // retry tap.
       repo.openValidationFailuresRemaining = 0;
-      await tester.tap(find.text('Reintentar'));
+      repo.open = true;
+      repo.kitchenSessions.add(
+        const KitchenSession(
+          id: 'kitchen-2026-11-24',
+          businessDate: '2026-11-24',
+          status: 'open',
+          notes: '',
+        ),
+      );
       await tester.pump();
       await tester.pump();
       expect(repo.openValidations, 6);
@@ -615,6 +624,83 @@ void main() {
       await tester.tap(find.text('Siguiente plato'));
       await _pumpUi(tester);
       expect(find.text('Listo'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a false kitchen-open validation retries and unlocks after initial inventory is confirmed',
+    (tester) async {
+      debugPrint = tester.binding.debugPrintOverride;
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      AppSession.instance.signIn(Employee.fromDoc(_KitchenEmployeeDoc()));
+      await LivePresenceService.instance.stop();
+
+      final repo = _KitchenUiRepository()..open = false;
+      await tester.pumpWidget(
+        MaterialApp(home: KitchenScreen(repository: repo)),
+      );
+      await _pumpUi(tester);
+      repo.db.orders.emit({'a': _order()});
+      repo.db.items('a').emit({'i': _item()});
+      await _pumpUi(tester);
+      await tester.tap(find.text('Abrir comanda').first);
+      await _pumpUi(tester);
+      expect(find.textContaining('Acciones pausadas'), findsOneWidget);
+      expect(repo.markedCooking, 0);
+
+      // The session becomes fully initialized while the route remains mounted.
+      // No connectivity change, relogin, or manual Retry is required.
+      repo.open = true;
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      await tester.pump();
+      expect(repo.markedCooking, 1);
+      expect(find.text('Listo'), findsOneWidget);
+      await tester.tap(find.text('Listo'));
+      await _pumpUi(tester);
+      expect(repo.kitchenStatusUpdates.single.status, 'ready');
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a stale successful kitchen validation cannot enable actions after session state changes',
+    (tester) async {
+      debugPrint = tester.binding.debugPrintOverride;
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      AppSession.instance.signIn(Employee.fromDoc(_KitchenEmployeeDoc()));
+      await LivePresenceService.instance.stop();
+
+      final repo = _KitchenUiRepository();
+      final staleSuccess = Completer<bool>();
+      repo.nextOpenValidation = staleSuccess;
+      await tester.pumpWidget(
+        MaterialApp(home: KitchenScreen(repository: repo)),
+      );
+      await _pumpUi(tester);
+      repo.db.orders.emit({'a': _order()});
+      repo.db.items('a').emit({'i': _item()});
+      await _pumpUi(tester);
+      await tester.tap(find.text('Abrir comanda').first);
+      await _pumpUi(tester);
+
+      // A newer authoritative session event says the kitchen is closed while
+      // the older open check is still in flight. Its late `true` must be ignored.
+      repo.open = false;
+      repo.kitchenSessions.add(null);
+      await _pumpUi(tester);
+      staleSuccess.complete(true);
+      await _pumpUi(tester);
+      expect(repo.markedCooking, 0);
+      expect(find.textContaining('Acciones pausadas'), findsOneWidget);
+      expect(find.text('Siguiente plato'), findsNothing);
       await tester.pumpWidget(const SizedBox());
     },
   );
@@ -1228,6 +1314,7 @@ class _KitchenUiRepository implements TacoPosRepository {
   int openValidationFailuresRemaining = 0;
   int openValidations = 0;
   String? openValidationErrorCode;
+  Completer<bool>? nextOpenValidation;
   final kitchenStatusUpdates = <_KitchenStatusUpdate>[];
   final cancellationResolutions = <(String, bool)>[];
   @override
@@ -1238,6 +1325,11 @@ class _KitchenUiRepository implements TacoPosRepository {
   @override
   Future<bool> hasCompletedOpenKitchenForCurrentBusinessDate() async {
     openValidations++;
+    final pending = nextOpenValidation;
+    if (pending != null) {
+      nextOpenValidation = null;
+      return pending.future;
+    }
     if (openValidationErrorCode != null) {
       throw FirebaseException(
         plugin: 'cloud_firestore',

@@ -84,8 +84,10 @@ Caja Admin se observó desde la UI y mostró venta bruta $118, descuentos $0, ef
 | B: cobro legítimo y cancelación administrativa autorizada | PASS (Rules Emulator) | Prueba de pago final y de cancelación administrativa autorizada. |
 | C: comanda enviada y cambios de Cocina reflejados en Mesas sin reentrar | PASS con corrección local | El antes falló y el después reflejó “Listo para cobrar” en el AVD que permaneció en Mesas. |
 | C: todas las transiciones en vivo enviando/aceptando/preparando/parcial/lista/extra/liquidada/disponible | PARCIAL | Envío, extra, pasar platos, listo, pago y disponible observados; no se recorrieron todos los estados parciales enumerados. |
-| D: validación de apertura false que después se vuelve true | NO EJECUTADO | No se inyectaron respuestas false→true ni respuesta tardía de sesión vieja. |
-| D: microcorte, reconexión y cambio de sucursal en Cocina | NO EJECUTADO | Sin prueba de red controlada en esta corrida. |
+| D: validación de apertura false que después se vuelve true en Android | NO EJECUTADO | Sí hay cobertura widget automatizada; falta repetir la condición en la aplicación corriendo en AVD. |
+| D: validación false→true y evento de nueva sesión | PASS (widget Flutter) | Se reproduce false transitorio de apertura/insumos; con la ruta montada, una revalidación acotada habilita Cocina cuando la apertura queda confirmada. Tras agotar el presupuesto, un nuevo evento de sesión vuelve a validar sin logout ni pulsar Reintentar. No es prueba física Android. |
+| D: respuesta autoritativa antigua después del cierre de sesión de Cocina | PASS (widget Flutter) | Se retiene una respuesta `true`, se recibe después una señal nueva de sesión cerrada y luego llega la respuesta vieja; los botones siguen bloqueados. No es prueba física Android. |
+| D: microcorte, reconexión de red y cambio de sucursal en Cocina | NO EJECUTADO en Android | Hay pruebas automatizadas del cambio de sucursal del stream y eventos confirmados; no se controló una interrupción de red en los AVD en esta corrida. |
 | E: aceptar/rechazar solicitudes de cancelación desde UI en productos al final de comanda larga | NO EJECUTADO | No se crearon solicitudes ni se verificó físicamente el área de botones. |
 | Captura local sobrevive cierre/reinicio Android sin autenticación offline | NO EJECUTADO | No se hizo reinicio con borrador local; no se alteró autenticación. |
 | Dos AVDs con usuarios/dispositivos distintos envían a la misma orden | PASS | Acciones A y B iniciadas con diferencia menor a 100 ms; artículos/lotes/usuarios persistidos sin pérdida o duplicidad. |
@@ -96,7 +98,7 @@ Caja Admin se observó desde la UI y mostró venta bruta $118, descuentos $0, ef
 ## Validaciones automatizadas
 
 - `flutter analyze`: PASS, sin issues.
-- `flutter test`: PASS, **951/951**.
+- `flutter test`: PASS, **953/953** (repetida después del ajuste final de recuperación de Cocina).
 - `npm run test:rules`: PASS, **137/137**, con Firestore Emulator local y guard `demo-*`.
 - Rules exactas del candidato mínimo: pruebas dirigidas de marcador y terminales **9/9 PASS**.
 - `git diff --check`: PASS después de consolidar esta documentación.
@@ -104,6 +106,8 @@ Caja Admin se observó desde la UI y mostró venta bruta $118, descuentos $0, ef
 ## Cambios locales propuestos
 
 - `lib/core/orders/table_operational_status.dart`: un artículo listo ya no cuenta como “en preparación” por conservar un `cookingAt` histórico.
+- `lib/screens/kitchen/kitchen_screen.dart`: reintenta de forma acotada una validación de apertura que responde false y descarta respuestas asíncronas antiguas cuando cambia la sesión/alcance confirmado. Las acciones siguen cerradas hasta una confirmación vigente.
+- `test/kitchen_incremental_items_test.dart`: widget regressions para false→true automático, recuperación mediante nuevo evento de sesión después del presupuesto de reintentos y rechazo de una respuesta true tardía.
 - `test/table_operational_status_test.dart`: regresión del estado listo con timestamps `cookingAt` y `readyAt`.
 - `test/firestore-rules/local_order_capture_marker.rules.test.js` y `test/firestore-rules/order_terminal_protection.rules.test.js`: permiten pasar ruta de Rules candidata por variable de entorno; agregan cobertura del batch terminal y cancelación administrativa autorizada.
 - `firestore.rules.production-candidate`: propuesta mínima de Rules; no desplegada.
@@ -111,7 +115,7 @@ Caja Admin se observó desde la UI y mostró venta bruta $118, descuentos $0, ef
 
 ## Bloqueos para declarar Fase 6 cerrada
 
-1. Ejecutar desde Android la matriz de validación de apertura false→true, respuestas tardías, cambio de sucursal y reconexión.
+1. Repetir desde Android físico/AVD la matriz de validación de apertura false→true, respuestas tardías, cambio de sucursal y microcorte/reconexión; solo se ejecutaron ahora las pruebas widget de false→true y respuesta tardía.
 2. Ejecutar Aceptar/Rechazar cancelación desde UI con comanda larga y varias solicitudes.
 3. Demostrar que el borrador local persiste después de cerrar/reiniciar la app y luego puede enviarse.
 4. Ejecutar Backoffice Finanzas en web contra el mismo corte ficticio y comparar su total/diferencia.
