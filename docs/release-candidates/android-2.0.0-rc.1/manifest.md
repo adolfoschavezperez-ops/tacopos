@@ -15,7 +15,7 @@ Fecha de validación: 2026-11-25 (America/Mexico_City)
 | Proyecto Firebase de producción | `tacopos-renovadev` |
 | SHA fuente validado | `05323e9ac1fa9cd8f3f28b0c72426155f6fdd65d` |
 | Rama fuente respaldada | `feature/durable-local-order-capture` |
-| SHA de rama remota comprobado | `4d2afbead2a5e3f552bc2eb9cde253abcdfac626` |
+| SHA remoto del guard de descubrimiento verificado | `4d2afbead2a5e3f552bc2eb9cde253abcdfac626` |
 | Worktree de preparación | `C:/Users/geren/Documents/RenovaDev/tacopos-release-2.0.0-rc.1` |
 | Rama local de preparación | `release/android-2.0.0-rc.1-prep` |
 | Artefacto y SHA-256 | No generado |
