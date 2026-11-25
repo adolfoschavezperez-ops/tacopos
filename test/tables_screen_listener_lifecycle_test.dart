@@ -117,6 +117,67 @@ void main() {
     expect(repository.ordersFor('aviacion').active, 1);
   });
 
+  testWidgets('kitchen item changes update table state on one stable stream', (
+    tester,
+  ) async {
+    final repository = _TablesRepository();
+    addTearDown(repository.close);
+    await _signIn();
+    await tester.pumpWidget(
+      MaterialApp(home: TablesScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+
+    repository.tablesFor('aviacion').add([_table('Mesa Uno', orderId: 'open')]);
+    await tester.pumpAndSettle();
+    repository.ordersFor('aviacion').add([
+      _order('open', 'Orden de Mesa Uno', 'open'),
+    ]);
+    await tester.pumpAndSettle();
+    final itemStream = repository.itemsFor('open');
+    expect(repository.itemStreamCalls, 1);
+    expect(itemStream.active, 1);
+
+    itemStream.add([_kitchenItem(kitchenStatus: 'pending')]);
+    await tester.pumpAndSettle();
+    expect(find.text('Pendiente de enviar'), findsWidgets);
+
+    itemStream.add([_kitchenItem(kitchenStatus: 'pending', sent: true)]);
+    await tester.pumpAndSettle();
+    expect(find.text('En cocina'), findsWidgets);
+
+    itemStream.add([_kitchenItem(kitchenStatus: 'cooking', sent: true)]);
+    await tester.pumpAndSettle();
+    expect(find.text('En preparacion'), findsWidgets);
+
+    itemStream.add([_kitchenItem(kitchenStatus: 'ready', sent: true)]);
+    await tester.pumpAndSettle();
+    expect(find.text('Listo para cobrar'), findsWidgets);
+
+    // A normal parent/table/order rebuild must retain the same item listener.
+    repository.tablesFor('aviacion').add([_table('Mesa Uno', orderId: 'open')]);
+    repository.ordersFor('aviacion').add([
+      _order('open', 'Orden de Mesa Uno', 'partial'),
+    ]);
+    await tester.pumpAndSettle();
+    expect(repository.itemStreamCalls, 1);
+    expect(itemStream.attaches, 1);
+    expect(itemStream.active, 1);
+
+    itemStream.add([
+      _kitchenItem(kitchenStatus: 'ready', sent: true),
+      _kitchenItem(id: 'extra', kitchenStatus: 'pending'),
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.text('Pendiente de enviar'), findsWidgets);
+
+    repository.tablesFor('aviacion').add([_table('Mesa Uno')]);
+    repository.ordersFor('aviacion').add([]);
+    await tester.pumpAndSettle();
+    expect(itemStream.active, 0);
+    expect(find.text('Lista para tomar orden'), findsOneWidget);
+  });
+
   testWidgets('branch switch clears old rows and attaches only new streams', (
     tester,
   ) async {
@@ -258,12 +319,16 @@ class _TrackedStream<T> {
 class _TablesRepository implements TacoPosRepository {
   final _orders = <String, _TrackedStream<List<PosOrder>>>{};
   final _tables = <String, _TrackedStream<List<PosTable>>>{};
+  final _items = <String, _TrackedStream<List<OrderItem>>>{};
   int orderStreamCalls = 0;
+  int itemStreamCalls = 0;
 
   _TrackedStream<List<PosOrder>> ordersFor(String branch) =>
       _orders.putIfAbsent(branch, _TrackedStream<List<PosOrder>>.new);
   _TrackedStream<List<PosTable>> tablesFor(String branch) =>
       _tables.putIfAbsent(branch, _TrackedStream<List<PosTable>>.new);
+  _TrackedStream<List<OrderItem>> itemsFor(String orderId) =>
+      _items.putIfAbsent(orderId, _TrackedStream<List<OrderItem>>.new);
 
   @override
   Stream<List<PosOrder>> watchOpenOrders() {
@@ -279,7 +344,10 @@ class _TablesRepository implements TacoPosRepository {
   Stream<List<OrderItem>> watchOrderItems(
     String orderId, {
     bool requireServer = false,
-  }) => Stream.value(const []);
+  }) {
+    itemStreamCalls++;
+    return itemsFor(orderId).stream;
+  }
 
   @override
   Future<GhostOrderReconciliationResult> reconcileGhostOrdersAndTableLinks({
@@ -297,7 +365,11 @@ class _TablesRepository implements TacoPosRepository {
   );
 
   Future<void> close() async {
-    for (final stream in [..._orders.values, ..._tables.values]) {
+    for (final stream in [
+      ..._orders.values,
+      ..._tables.values,
+      ..._items.values,
+    ]) {
       await stream.close();
     }
   }
@@ -305,6 +377,28 @@ class _TablesRepository implements TacoPosRepository {
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
+
+OrderItem _kitchenItem({
+  String id = 'item-1',
+  required String kitchenStatus,
+  bool sent = false,
+}) => OrderItem(
+  id: id,
+  personNumber: 1,
+  personName: 'Persona 1',
+  productId: 'taco',
+  productName: 'Taco',
+  category: 'tacos',
+  qty: 1,
+  unitPrice: 20,
+  total: 20,
+  notes: '',
+  sendToKitchen: true,
+  kitchenStatus: kitchenStatus,
+  paymentStatus: 'pending',
+  sentToKitchenAt: sent ? DateTime.utc(2026, 11, 24) : null,
+  kitchenBatchId: sent ? 'batch-1' : null,
+);
 
 // ignore: subtype_of_sealed_class
 class _EmployeeDoc implements DocumentSnapshot<Map<String, dynamic>> {

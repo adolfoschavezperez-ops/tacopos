@@ -42,6 +42,7 @@ class _TablesScreenState extends State<TablesScreen> {
   late Stream<List<PosOrder>> _orders;
   late String _branchId;
   late String _restaurantId;
+  final Map<String, Stream<List<OrderItem>>> _orderItemStreams = {};
   int _streamGeneration = 0;
   bool _opening = false;
   List<LocalOrderCaptureRecoveryEntry> _localCaptureRecoveryEntries = const [];
@@ -61,6 +62,7 @@ class _TablesScreenState extends State<TablesScreen> {
 
   void _bindBranchStreams() {
     _streamGeneration++;
+    _orderItemStreams.clear();
     _reconciliation = _repository.reconcileGhostOrdersAndTableLinks(
       branchId: _branchId,
       triggeredBy: 'waiter_tables',
@@ -576,6 +578,9 @@ class _TablesScreenState extends State<TablesScreen> {
                   .where((order) => order.orderType == standingOrderType)
                   .length;
               final ordersById = {for (final order in orders) order.id: order};
+              _orderItemStreams.removeWhere(
+                (orderId, _) => !ordersById.containsKey(orderId),
+              );
               final physicalTables = tables
                   .where((table) => table.isPhysicalTable)
                   .toList();
@@ -668,7 +673,12 @@ class _TablesScreenState extends State<TablesScreen> {
                               return StreamBuilder<List<OrderItem>>(
                                 stream: order == null
                                     ? null
-                                    : _repository.watchOrderItems(order.id),
+                                    : _orderItemStreams.putIfAbsent(
+                                        order.id,
+                                        () => _repository.watchOrderItems(
+                                          order.id,
+                                        ),
+                                      ),
                                 initialData: const [],
                                 builder: (context, itemsSnapshot) {
                                   return _TableCard(
