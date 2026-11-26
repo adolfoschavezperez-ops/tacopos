@@ -18,6 +18,8 @@ El primer intento usó `demo-tacopos-phase6-1`, mientras la configuración nativ
 
 La suite de Rules se ejecutó aparte contra una instancia Firestore nueva, proyecto `demo-tacopos-rules-final`, puerto `8283`, con el mismo SHA de Rules candidata. Se evitó apuntar la suite al emulador que conserva los fixtures de la prueba Android.
 
+La lectura posterior del endpoint local `:securityRules` para `demo-tacopos-2-0-1` devolvió el texto en uso; su SHA calculado fue `732201CF7C3C8B553EC0E60749F251E3E1AFDAE210847F48A16637C60524DF2F`, igual al archivo temporal. El analizador del Emulator reporta una advertencia no fatal `Unused variable: restaurantId` en la línea 327; las 139 pruebas de Rules pasaron, incluida la cobertura que usa esa regla.
+
 ## Restauración de sesión
 
 La causa de la aserción anterior del test quedó localizada en la precondición: el test tenía un usuario Firebase Auth, pero no una identidad operativa de empleado persistida. `LoginGate` restaura el empleado y sucursal almacenados de forma segura y revalida empleado, permisos y dispositivo; Auth por sí solo no debe iniciar una sesión operativa.
