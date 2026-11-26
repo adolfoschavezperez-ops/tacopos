@@ -140,7 +140,12 @@ export async function submitLocalOrderCaptureCore(
     totalReadDocuments += stockoutRefs.size;
     for (const line of lines) {
       const id = `${safeIdPart(branchId)}_${safeIdPart(currentBusinessDate)}_${safeIdPart(safeString(line.productId))}`;
-      if (stockoutDocs.get(id)?.exists) throw new HttpsError("failed-precondition", "Un producto capturado se agoto antes del envio. El borrador local se conserva.");
+      const stockout = stockoutDocs.get(id);
+      // Historical clients treat a stockout record without a status as active.
+      // A cleared record is retained for audit history and must not block sales.
+      if (stockout?.exists && normalize(stockout.data()?.status ?? "active") === "active") {
+        throw new HttpsError("failed-precondition", "Un producto capturado se agoto antes del envio. El borrador local se conserva.");
+      }
     }
 
     const currentItems = itemQuery.docs.map((doc) => ({id: doc.id, data: doc.data()}));
@@ -413,6 +418,7 @@ function validateLineScope(line: Data, scope: {restaurantId: string; branchId: s
 
 function validateProductSnapshot(line: Data, product: Data, platformId: string) {
   if (product.active === false) throw new HttpsError("failed-precondition", "Un producto fue desactivado. El borrador local se conserva.");
+  // Recipe and stock configuration are administrative snapshots, not sale gates.
   const basePrice = parseNumber(product.price);
   const platformPrices = product.platformPrices && typeof product.platformPrices === "object" ? product.platformPrices as Data : {};
   const effective = platformId && platformPrices[platformId] != null ? parseNumber(platformPrices[platformId]) : basePrice;
@@ -424,48 +430,6 @@ function validateProductSnapshot(line: Data, product: Data, platformId: string) 
   if (category !== safeString(line.categoryName)) throw new HttpsError("failed-precondition", "La categoria del producto cambio. Actualiza el menu antes de enviar.");
   const sendToKitchen = readBool(product.sendToKitchen, category.toLowerCase().trim() !== "bebidas");
   if (sendToKitchen !== (line.sendToKitchen === true)) throw new HttpsError("failed-precondition", "La preparacion del producto cambio. El borrador se conserva.");
-  const liveRecipe = normalizedProductRecipe(product).slice(0, 1);
-  const capturedRecipe = Array.isArray(line.recipeItems) ? line.recipeItems : [];
-  if (JSON.stringify(liveRecipe) !== JSON.stringify(capturedRecipe)) {
-    throw new HttpsError("failed-precondition", "La receta del producto cambio. El borrador se conserva para revisarlo.");
-  }
-  const name = safeString(product.name).toLowerCase().trim();
-  const normalizedCategory = category.toLowerCase().trim();
-  const defaultStock = normalizedCategory === "tacos" || name.includes("taco") || name.includes("gringa") || normalizedCategory === "bebidas" || name.includes("refresco");
-  const affectsStock = readBool(product.affectsKitchenStock, defaultStock) || liveRecipe.length > 0;
-  if (affectsStock !== (line.affectsKitchenStock === true)) {
-    throw new HttpsError("failed-precondition", "La configuracion de inventario del producto cambio. El borrador se conserva.");
-  }
-}
-
-function normalizedProductRecipe(product: Data) {
-  const result: Data[] = [];
-  if (Array.isArray(product.recipeItems)) {
-    for (const value of product.recipeItems) {
-      if (!value || typeof value !== "object") continue;
-      const item = value as Data;
-      const id = safeString(item.kitchenStockItemId);
-      const factor = parseNumber(item.consumptionFactor);
-      if (!id || factor <= 0) continue;
-      result.push({
-        kitchenStockItemId: id,
-        kitchenStockItemName: safeString(item.kitchenStockItemName) || id,
-        kitchenStockUnit: safeString(item.kitchenStockUnit) || "kg",
-        consumptionFactor: factor,
-      });
-    }
-  }
-  if (result.length > 0) return result;
-  const legacyId = safeString(product.kitchenStockItemId);
-  if (!legacyId) return result;
-  const factor = parseNumber(product.stockConsumptionQty ?? product.kitchenConsumptionFactor);
-  result.push({
-    kitchenStockItemId: legacyId,
-    kitchenStockItemName: safeString(product.kitchenStockItemName) || legacyId,
-    kitchenStockUnit: safeString(product.kitchenStockUnit) || "kg",
-    consumptionFactor: factor > 0 ? factor : 1,
-  });
-  return result;
 }
 
 function makeOrderItem(line: Data, employeeId: string, employeeName: string, branchId: string, branchName: string): Data {
