@@ -74,6 +74,16 @@ registrada en `RESULTS.md` incluye 30 minutos idle en un AVD, refresh de token,
 resume y reinicio del proceso online. No hay prueba física reciente de 30
 minutos en la tablet de Andrés.
 
+Intenté ejecutar `integration_test/operational_session_android_test.dart` en el
+AVD conectado con los emuladores Auth/Firestore demo. El build debug terminó
+correctamente; la prueba alcanzó el dispositivo y Auth devolvió un usuario,
+pero `LoginGate` no restauró una identidad operativa en los tres segundos de la
+prueba (`AppSession.instance.isLoggedIn == false`, línea 56). No se ejecutaron
+refresh de token ni pausa/reanudación en esa pasada. Sin la identidad segura
+persistida y su fixture autorizada no se puede distinguir ausencia de fixture
+de defecto de restauración; esta pasada queda inconclusa, no PASS ni FAIL del
+producto. No se escribieron datos de negocio para fabricar esa precondición.
+
 El Emulator activo reporta proyecto demo `demo-tacopos-2-0-1`, con Auth 9101,
 Firestore 8082 y Functions 5002. Sin embargo, el proceso Firestore arrancó con
 `--rules .firestore.rules.emulator-test`, archivo que no está presente ahora;
