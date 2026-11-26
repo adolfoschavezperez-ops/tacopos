@@ -275,6 +275,10 @@ En AVD, la instrumentacion se verifico y sobrevivio `force-stop`; la muestra de 
 
 Validacion final de la instrumentacion: `flutter analyze` PASS; `flutter test` PASS (1066/1066); Cocina incremental PASS (32/32); diagnosticos y sesion PASS (14/14); `git diff --check` PASS. Se corrigio el conteo de documentos para usar `snapshot.docs.length`; el uso de `snapshot.size` hacia fallar los doubles de Firestore y marcaba los snapshots de Cocina como errores permanentes.
 
+### Addendum Fase 6.2 (26 de noviembre de 2026)
+
+El intento de compatibilidad Android con APK debug históricos +31/+32, la prueba de consumo independiente, el estado del AVD y los límites de medición de rendimiento están documentados en [PHASE_6_2_ADDENDUM.md](PHASE_6_2_ADDENDUM.md). Se compilaron ambos APKs con configuración debug de Emulator; el AVD desechable +31 instaló/inició la app, pero Android System UI dejó de responder antes de login. No se ejecutaron operaciones de negocio. Las suites dirigidas de finanzas pasaron 116/116, pero no sustituyen el movimiento/corte UI. No se sembraron 2,001 órdenes ni se hicieron ventanas de 30 minutos. Fase 6 sigue ABIERTA / NO-GO.
+
 
 ### Addendum Fase 6.1 (26 de noviembre de 2026)
 
