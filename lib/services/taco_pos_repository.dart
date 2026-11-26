@@ -4755,105 +4755,69 @@ class TacoPosRepository {
   };
 
   Stream<List<PosOrder>> watchOpenOrders() {
-    return _diagnoseQueryStream('tables.open_orders', _ordersRef.snapshots(), (
-      snapshot,
-    ) {
-      final orders =
-          _filterCurrentBranch(
-            snapshot.docs.map(PosOrder.fromDoc).where(isActiveOrder),
-            (order) => order.branchId,
-          )..sort((a, b) {
-            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            return bDate.compareTo(aDate);
-          });
-      OperationalDiagnosticsService.instance.record(
-        'firestore',
-        'tables_open_orders_snapshot',
-        fields: {
-          'documents': snapshot.docs.length,
-          'results': orders.length,
-          'fromCache': snapshot.metadata.isFromCache,
-          'pendingWrites': snapshot.metadata.hasPendingWrites,
-          'source': 'orders_collection',
-        },
-        branchId: AppSession.instance.currentBranchId,
-      );
-      return orders;
-    });
+    return _watchOperationalOrders(
+      source: 'tables.open_orders',
+      event: 'tables_open_orders_snapshot',
+    );
   }
 
   Stream<List<PosOrder>> watchOpenTakeoutOrders() {
-    return _diagnoseQueryStream('takeout.open_orders', _ordersRef.snapshots(), (
-      snapshot,
-    ) {
-      final orders =
-          _filterCurrentBranch(
-            snapshot.docs
-                .map(PosOrder.fromDoc)
-                .where(
-                  (order) =>
-                      order.orderType == 'takeout' && isActiveOrder(order),
-                ),
-            (order) => order.branchId,
-          )..sort((a, b) {
-            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            return bDate.compareTo(aDate);
-          });
-      OperationalDiagnosticsService.instance.record(
-        'firestore',
-        'takeout_open_orders_snapshot',
-        fields: {
-          'documents': snapshot.docs.length,
-          'results': orders.length,
-          'fromCache': snapshot.metadata.isFromCache,
-          'pendingWrites': snapshot.metadata.hasPendingWrites,
-          'source': 'orders_collection',
-        },
-        branchId: AppSession.instance.currentBranchId,
-      );
-      return orders;
-    });
+    return _watchOperationalOrders(
+      source: 'takeout.open_orders',
+      event: 'takeout_open_orders_snapshot',
+      orderType: 'takeout',
+    );
   }
 
   Stream<List<PosOrder>> watchOpenStandingOrders() {
-    return _diagnoseQueryStream(
-      'standing.open_orders',
-      _ordersRef.snapshots(),
-      (snapshot) {
-        final orders =
-            _filterCurrentBranch(
-              snapshot.docs
-                  .map(PosOrder.fromDoc)
-                  .where(
-                    (order) =>
-                        order.orderType == standingOrderType &&
-                        isActiveOrder(order),
-                  ),
-              (order) => order.branchId,
-            )..sort((a, b) {
+    return _watchOperationalOrders(
+      source: 'standing.open_orders',
+      event: 'standing_open_orders_snapshot',
+      orderType: standingOrderType,
+    );
+  }
+
+  Stream<List<PosOrder>> _watchOperationalOrders({
+    required String source,
+    required String event,
+    String? orderType,
+  }) {
+    final accumulator = _OperationalOrderAccumulator(
+      preserveCoherentOnProvisional: true,
+    );
+    return _diagnoseQueryStream(source, _ordersRef.snapshots(), (snapshot) {
+      final selectedBranchId = AppSession.instance.currentBranchId;
+      final applied = accumulator.apply(snapshot, selectedBranchId);
+      final orders =
+          applied.orders
+              .where(
+                (order) => orderType == null || order.orderType == orderType,
+              )
+              .toList()
+            ..sort((a, b) {
               final aDate =
                   a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
               final bDate =
                   b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
               return bDate.compareTo(aDate);
             });
-        OperationalDiagnosticsService.instance.record(
-          'firestore',
-          'standing_open_orders_snapshot',
-          fields: {
-            'documents': snapshot.docs.length,
-            'results': orders.length,
-            'fromCache': snapshot.metadata.isFromCache,
-            'pendingWrites': snapshot.metadata.hasPendingWrites,
-            'source': 'orders_collection',
-          },
-          branchId: AppSession.instance.currentBranchId,
-        );
-        return orders;
-      },
-    );
+      OperationalDiagnosticsService.instance.record(
+        'firestore',
+        event,
+        fields: {
+          // `documents` is the SDK snapshot size (and therefore still reflects
+          // the full historical query); convertedDocuments counts model parses.
+          'documents': snapshot.docs.length,
+          'convertedDocuments': applied.convertedDocuments,
+          'results': orders.length,
+          'fromCache': snapshot.metadata.isFromCache,
+          'pendingWrites': snapshot.metadata.hasPendingWrites,
+          'source': 'orders_collection',
+        },
+        branchId: selectedBranchId,
+      );
+      return orders;
+    });
   }
 
   Stream<Output> _diagnoseQueryStream<Input, Output>(
@@ -5079,7 +5043,9 @@ class TacoPosRepository {
     late _KitchenQueryWatcher ordersWatcher;
     final states = <String, _KitchenItemsState>{};
     final cancellations = <Future<void>>{};
-    final terminalIds = <String>{};
+    final orderAccumulator = _OperationalOrderAccumulator(
+      preserveCoherentOnProvisional: true,
+    );
     var orders = <PosOrder>[];
     var cancelled = false;
     var ordersReady = false;
@@ -5271,57 +5237,42 @@ class TacoPosRepository {
             ordersPending = snapshot.metadata.hasPendingWrites;
             final provisional = ordersCache || ordersPending;
             try {
-              final decoded = snapshot.docs.map(PosOrder.fromDoc).toList();
-              final received = _filterCurrentBranch(
-                decoded.where(isActiveOrder),
-                (order) => order.branchId,
+              final applied = orderAccumulator.apply(
+                snapshot,
+                AppSession.instance.currentBranchId,
               );
               OperationalDiagnosticsService.instance.record(
                 'firestore',
                 'kitchen_orders_snapshot',
                 fields: {
+                  // Snapshot size remains the full historical query. The
+                  // second counter measures client-side model conversion.
                   'documents': snapshot.docs.length,
-                  'results': received.length,
+                  'convertedDocuments': applied.convertedDocuments,
+                  'results': applied.orders.length,
                   'fromCache': snapshot.metadata.isFromCache,
                   'pendingWrites': snapshot.metadata.hasPendingWrites,
                   'source': 'kitchen.orders',
                 },
                 branchId: AppSession.instance.currentBranchId,
               );
-              final changedIds = snapshot.docChanges
-                  .map((change) => change.doc.id)
-                  .toSet();
-              final next = <String, PosOrder>{
-                if (provisional)
-                  for (final order in orders) order.id: order,
-                for (final order in received)
-                  if (!provisional || !terminalIds.contains(order.id))
-                    order.id: order,
+              final next = {
+                for (final order in applied.orders) order.id: order,
               };
-              if (!provisional) {
-                terminalIds.addAll(
-                  states.keys.where((id) => !next.containsKey(id)),
-                );
-                terminalIds.addAll(
-                  decoded
-                      .where((order) => !isActiveOrder(order))
-                      .map((order) => order.id),
-                );
-                terminalIds.removeAll(next.keys);
-              }
               for (final id in states.keys.toList()) {
                 if (next.containsKey(id)) continue;
                 cancelItems(states.remove(id)!);
               }
-              orders = next.values.toList();
+              orders = applied.orders;
               ordersReady = true;
-              for (final order in orders) {
+              for (final order in applied.orders) {
                 final existing = states[order.id];
                 if (existing == null) {
                   final state = _KitchenItemsState(order);
                   states[order.id] = state;
                   attach(state);
-                } else if (changedIds.contains(order.id) || wasProvisional) {
+                } else if (applied.changedIds.contains(order.id) ||
+                    wasProvisional) {
                   existing.order = order;
                   if (existing.items != null) rebuild(existing);
                 }
@@ -17556,6 +17507,150 @@ class _KitchenItemsState {
   bool pendingWrites = false;
   Object? parseError;
   _KitchenQueryWatcher? watcher;
+}
+
+/// Maintains active order models from Firestore's incremental document changes.
+/// The query itself deliberately remains unfiltered so legacy active orders
+/// cannot disappear because they lack a newer operational field.
+class _OperationalOrderAccumulator {
+  _OperationalOrderAccumulator({this.preserveCoherentOnProvisional = false});
+
+  final bool preserveCoherentOnProvisional;
+  final Map<String, PosOrder> _active = {};
+  // Only IDs observed as active by this listener and later confirmed terminal
+  // are retained. Historical terminal documents never enter this set.
+  final Set<String> _confirmedTerminalIds = {};
+  final Set<String> _pendingTerminalIds = {};
+  String? _branchId;
+  bool _initialized = false;
+
+  _AppliedOperationalOrders apply(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+    String branchId,
+  ) {
+    final provisional =
+        snapshot.metadata.isFromCache || snapshot.metadata.hasPendingWrites;
+    final branchChanged = _initialized && _branchId != branchId;
+    final fullSnapshot = !_initialized || branchChanged;
+    var converted = 0;
+    final changedIds = <String>{};
+
+    if (branchChanged) {
+      _active.clear();
+      _pendingTerminalIds.clear();
+    }
+
+    if (fullSnapshot) {
+      _active.clear();
+      final docs = snapshot.docs;
+      for (final doc in docs) {
+        final order = PosOrder.fromDoc(doc);
+        converted++;
+        changedIds.add(order.id);
+        if (!_matchesOrderBranch(order.branchId, branchId) ||
+            !isActiveOrder(order)) {
+          continue;
+        }
+        if (!provisional || !_confirmedTerminalIds.contains(order.id)) {
+          _active[order.id] = order;
+        }
+      }
+      if (!provisional) {
+        _pendingTerminalIds.clear();
+      }
+    } else {
+      for (final change in snapshot.docChanges) {
+        final id = change.doc.id;
+        changedIds.add(id);
+        if (change.type == DocumentChangeType.removed) {
+          if (provisional && preserveCoherentOnProvisional) {
+            if (_active.containsKey(id)) _pendingTerminalIds.add(id);
+          } else {
+            final wasActive = _active.remove(id) != null;
+            _pendingTerminalIds.remove(id);
+            if (wasActive) _confirmedTerminalIds.add(id);
+          }
+          continue;
+        }
+
+        final order = PosOrder.fromDoc(change.doc);
+        converted++;
+        final belongsToBranch = _matchesOrderBranch(order.branchId, branchId);
+        if (belongsToBranch && isActiveOrder(order)) {
+          if (!provisional || !_confirmedTerminalIds.contains(id)) {
+            _active[id] = order;
+            if (!provisional) _confirmedTerminalIds.remove(id);
+          }
+        } else if (provisional && preserveCoherentOnProvisional) {
+          if (_active.containsKey(id)) _pendingTerminalIds.add(id);
+        } else {
+          final wasActive = _active.remove(id) != null;
+          _pendingTerminalIds.remove(id);
+          if (wasActive) _confirmedTerminalIds.add(id);
+        }
+      }
+      if (!provisional && _pendingTerminalIds.isNotEmpty) {
+        for (final id in _pendingTerminalIds) {
+          QueryDocumentSnapshot<Map<String, dynamic>>? confirmedDoc;
+          for (final doc in snapshot.docs) {
+            if (doc.id == id) {
+              confirmedDoc = doc;
+              break;
+            }
+          }
+          if (confirmedDoc != null) {
+            final order = PosOrder.fromDoc(confirmedDoc);
+            converted++;
+            if (_matchesOrderBranch(order.branchId, branchId) &&
+                isActiveOrder(order)) {
+              _active[id] = order;
+              _confirmedTerminalIds.remove(id);
+              continue;
+            }
+          }
+          final wasActive = _active.remove(id) != null;
+          if (wasActive) _confirmedTerminalIds.add(id);
+        }
+        _pendingTerminalIds.clear();
+      }
+    }
+
+    _branchId = branchId;
+    _initialized = true;
+    // Keep Firestore query order for equal timestamps/sequences, matching the
+    // former full decode. Cache-preserved active orders absent from a
+    // provisional subset remain after the documents present in that snapshot.
+    final result = <PosOrder>[];
+    final emitted = <String>{};
+    for (final doc in snapshot.docs) {
+      final order = _active[doc.id];
+      if (order != null && emitted.add(order.id)) result.add(order);
+    }
+    for (final order in _active.values) {
+      if (emitted.add(order.id)) result.add(order);
+    }
+    return _AppliedOperationalOrders(result, changedIds, converted);
+  }
+
+  bool _matchesOrderBranch(String? orderBranchId, String selectedBranchId) {
+    final cleanBranch = orderBranchId?.trim();
+    if (cleanBranch == null || cleanBranch.isEmpty) {
+      return selectedBranchId == AppConstants.defaultBranchId;
+    }
+    return cleanBranch == selectedBranchId;
+  }
+}
+
+class _AppliedOperationalOrders {
+  const _AppliedOperationalOrders(
+    this.orders,
+    this.changedIds,
+    this.convertedDocuments,
+  );
+
+  final List<PosOrder> orders;
+  final Set<String> changedIds;
+  final int convertedDocuments;
 }
 
 /// Native Firestore listener errors are terminal even though FlutterFire's

@@ -24,6 +24,7 @@ class OperationalDiagnosticsService with WidgetsBindingObserver {
   static const Set<String> _allowedFields = {
     'durationMs',
     'documents',
+    'convertedDocuments',
     'results',
     'listeners',
     'queueDepth',

@@ -19,6 +19,7 @@ import 'package:tacopos/screens/kitchen/kitchen_screen.dart';
 import 'package:tacopos/screens/kitchen/kitchen_order_detail_screen.dart';
 import 'package:tacopos/services/app_session.dart';
 import 'package:tacopos/services/live_presence_service.dart';
+import 'package:tacopos/services/operational_diagnostics_service.dart';
 import 'package:tacopos/services/taco_pos_repository.dart';
 
 const _ordersPath = 'restaurants/${AppConstants.restaurantId}/orders';
@@ -49,6 +50,77 @@ void main() {
     AppSession.instance.signOut();
     AppSession.instance.selectBranch(Branch.defaultBranch);
   });
+
+  test(
+    'active-order streams decode only incremental history changes',
+    () async {
+      final db = _Firestore();
+      final repo = TacoPosRepository(firestore: db, auth: _Auth());
+      final values = <List<PosOrder>>[];
+      final subscription = repo.watchOpenOrders().listen(values.add);
+      final kitchenStates = <KitchenBundlesState>[];
+      final kitchenSubscription = repo.watchKitchenOrderBundlesState().listen(
+        kitchenStates.add,
+      );
+      final historical = <String, Map<String, dynamic>>{
+        for (var index = 0; index < 2000; index++)
+          'closed-$index': _order(status: 'paid'),
+        'legacy-open': _order(),
+      };
+
+      db.orders.emit(historical);
+      await _flush();
+      expect(values.last.map((order) => order.id), ['legacy-open']);
+      expect(kitchenStates.last.activeOrderIds, {'legacy-open'});
+
+      db.orders.emit(
+        {...historical, 'legacy-open': _order(updated: 1)},
+        changed: const ['legacy-open'],
+      );
+      await _flush();
+      expect(values.last.single.id, 'legacy-open');
+      expect(kitchenStates.last.activeOrderIds, {'legacy-open'});
+
+      final rows = await OperationalDiagnosticsService.instance.readRecent(
+        limit: 30,
+      );
+      final snapshots = rows
+          .where((row) => row['event'] == 'tables_open_orders_snapshot')
+          .toList();
+      expect(snapshots.first['documents'], 2001);
+      expect(snapshots.first['convertedDocuments'], 1);
+      expect(snapshots.last['documents'], 2001);
+      expect(snapshots.last['convertedDocuments'], 2001);
+      final kitchenSnapshots = rows
+          .where((row) => row['event'] == 'kitchen_orders_snapshot')
+          .toList();
+      expect(kitchenSnapshots.first['documents'], 2001);
+      expect(kitchenSnapshots.first['convertedDocuments'], 1);
+      expect(kitchenSnapshots.last['convertedDocuments'], 2001);
+
+      db.orders.emit(
+        {...historical, 'legacy-open': _order(status: 'paid')},
+        changed: const ['legacy-open'],
+      );
+      await _flush();
+      expect(values.last, isEmpty);
+      db.orders.emit(
+        {...historical, 'legacy-open': _order()},
+        changed: const ['legacy-open'],
+        cache: true,
+      );
+      await _flush();
+      expect(values.last, isEmpty);
+      db.orders.emit(
+        {...historical, 'legacy-open': _order()},
+        changed: const ['legacy-open'],
+      );
+      await _flush();
+      expect(values.last.single.id, 'legacy-open');
+      await subscription.cancel();
+      await kitchenSubscription.cancel();
+    },
+  );
 
   test(
     'typed startup cache is displayable, partial is explicit, server confirmation completes it',
@@ -963,6 +1035,7 @@ void main() {
             [_Doc('stale', _item(batch: 'stale'))],
             const _Metadata(false, false),
             ['stale'],
+            const [],
           ),
         );
         await _flush();
@@ -1427,7 +1500,6 @@ class _Collection implements CollectionReference<Map<String, dynamic>> {
     bool includeMetadataChanges = false,
     ListenSource source = ListenSource.defaultSource,
   }) {
-    expectSync(includeMetadataChanges, isTrue);
     return _InputStream(db.channel(path));
   }
 
@@ -1471,11 +1543,15 @@ class _Channel {
     final docs = data.entries
         .map((entry) => _Doc(entry.key, Map.of(entry.value)))
         .toList();
-    final query = _Query(
-      docs,
-      _Metadata(cache, pending),
-      changed ?? data.keys.toList(),
-    );
+    final oldDocs =
+        last?.docs ?? const <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    final changedIds =
+        changed ??
+        {
+          ...oldDocs.map((doc) => doc.id),
+          ...docs.map((doc) => doc.id),
+        }.toList();
+    final query = _Query(docs, _Metadata(cache, pending), changedIds, oldDocs);
     last = query;
     snapshots++;
     for (final subscription in listeners.where((s) => !s.cancelled).toList()) {
@@ -1547,24 +1623,41 @@ class _Doc implements QueryDocumentSnapshot<Map<String, dynamic>> {
 }
 
 class _Query implements QuerySnapshot<Map<String, dynamic>> {
-  _Query(this.docs, this.metadata, this.changed);
+  _Query(this.docs, this.metadata, this.changed, this.oldDocs);
   @override
   final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs;
   @override
   final SnapshotMetadata metadata;
   final List<String> changed;
+  final List<QueryDocumentSnapshot<Map<String, dynamic>>> oldDocs;
   @override
-  List<DocumentChange<Map<String, dynamic>>> get docChanges => [
-    for (final id in changed) _Change(_Doc(id, {})),
-  ];
+  List<DocumentChange<Map<String, dynamic>>> get docChanges {
+    final currentById = {for (final doc in docs) doc.id: doc};
+    final oldById = {for (final doc in oldDocs) doc.id: doc};
+    return [
+      for (final id in changed)
+        if (currentById[id] case final doc?)
+          _Change(
+            doc,
+            oldById.containsKey(id)
+                ? DocumentChangeType.modified
+                : DocumentChangeType.added,
+          )
+        else if (oldById[id] case final old?)
+          _Change(old, DocumentChangeType.removed),
+    ];
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _Change implements DocumentChange<Map<String, dynamic>> {
-  _Change(this.doc);
+  _Change(this.doc, this.type);
   @override
   final QueryDocumentSnapshot<Map<String, dynamic>> doc;
+  @override
+  final DocumentChangeType type;
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

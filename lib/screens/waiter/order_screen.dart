@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -11,6 +10,7 @@ import '../../core/orders/order_cancellation.dart';
 import '../../core/orders/order_capture_sort.dart';
 import '../../core/orders/order_capture_queue.dart';
 import '../../core/orders/local_order_capture.dart';
+import '../../core/orders/submission_error_presentation.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
@@ -959,39 +959,23 @@ class _OrderScreenState extends State<OrderScreen> {
   }
 
   void _showSubmissionFailure(Object error, {required VoidCallback onRetry}) {
-    final code = error is FirebaseFunctionsException ? error.code : '';
-    final message = switch (code) {
-      'permission-denied' => 'No tienes permiso para enviar esta comanda.',
-      'unauthenticated' => 'Tu sesion expiro. Inicia sesion y reintenta.',
-      'not-found' =>
-        error is FirebaseFunctionsException &&
-                (error.message?.toLowerCase().contains('servicio') ?? false)
-            ? 'El servicio seguro de envio aun no esta habilitado. Tu pedido esta guardado.'
-            : 'La orden ya no existe. Tu borrador permanece guardado en esta tablet.',
-      'failed-precondition' || 'resource-exhausted' =>
-        error is FirebaseFunctionsException &&
-                (error.message?.trim().isNotEmpty ?? false)
-            ? error.message?.trim() ?? ''
-            : 'No se pudo validar la orden. Tu pedido esta guardado.',
-      _ => 'No se pudo confirmar el envío. Tu pedido está guardado.',
-    };
-    if (code == 'permission-denied' || code == 'unauthenticated') {
-      showAppSnackBar(context, message, type: AppSnackBarType.error);
-      return;
-    }
-    if (code == 'failed-precondition' ||
-        code == 'resource-exhausted' ||
-        code == 'invalid-argument' ||
-        code == 'not-found') {
-      showAppSnackBar(context, message, type: AppSnackBarType.error);
+    final presentation = SubmissionErrorPresentation.from(error);
+    if (!presentation.canRetry) {
+      showAppSnackBar(
+        context,
+        presentation.message,
+        type: AppSnackBarType.error,
+      );
       return;
     }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: const Text('Conexion inestable. Tu pedido esta guardado.'),
-          action: SnackBarAction(label: 'Reintentar', onPressed: onRetry),
+          content: Text(presentation.message),
+          action: presentation.canRetry
+              ? SnackBarAction(label: 'Reintentar', onPressed: onRetry)
+              : null,
         ),
       );
   }

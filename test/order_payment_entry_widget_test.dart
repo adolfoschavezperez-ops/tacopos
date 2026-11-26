@@ -250,7 +250,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(PaymentScreen), findsNothing);
       expect(repo.localItems, hasLength(1));
-      expect(find.textContaining('Conexion inestable'), findsOneWidget);
+      expect(find.textContaining('No se pudo confirmar'), findsOneWidget);
+      expect(find.textContaining('Conexion inestable'), findsNothing);
       expect(find.textContaining('Bad state'), findsNothing);
 
       repo.failureStage = null;
