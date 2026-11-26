@@ -1,0 +1,49 @@
+{
+  "project": "demo-tacopos-2-0-1",
+  "firestoreEmulatorHost": "127.0.0.1:8183",
+  "rulesSha256": "732201CF7C3C8B553EC0E60749F251E3E1AFDAE210847F48A16637C60524DF2F",
+  "uiRoute": "Mesas -> abrir orden -> Cobrar mesa completa -> Consumo empleado -> seleccionar Admin -> confirmar",
+  "order": {
+    "id": "tlPcCV4YvfticS8ZEXmp",
+    "status": "paid",
+    "paymentStatus": "paid",
+    "total": 100,
+    "paidTotal": 100,
+    "pendingTotal": 0,
+    "branchId": "aviacion",
+    "businessDate": "2026-11-26",
+    "folio": "AVI-2026-11-26-0001",
+    "itemCount": 1
+  },
+  "paymentCount": 1,
+  "payments": [
+    {
+      "id": "018e3502-3a54-40fb-a122-42fc41702a07",
+      "method": "employee_consumption",
+      "status": "active",
+      "amount": 100,
+      "baseAmount": 100,
+      "appliedAmount": 100,
+      "employeeId": "admin",
+      "cashSessionId": "aN1MfMoyoCwZHfhqMDA8",
+      "folio": "AVI-2026-11-26-0001"
+    }
+  ],
+  "cashSession": {
+    "id": "aN1MfMoyoCwZHfhqMDA8",
+    "status": "closed",
+    "openingCashAmount": 1000,
+    "expectedCashAmount": 1000,
+    "expectedEmployeeConsumptionAmount": 100,
+    "totalExpectedRealMoney": 1000,
+    "totalCountedRealMoney": 1000,
+    "cashDifference": 0,
+    "cardDifference": 0,
+    "netDifference": 0
+  },
+  "kitchenSession": {
+    "id": "D45HnU75dQp245ebtOS9",
+    "status": "closed",
+    "businessDate": "2026-11-26"
+  }
+}

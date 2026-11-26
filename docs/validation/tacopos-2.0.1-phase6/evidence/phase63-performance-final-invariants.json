@@ -1,0 +1,12 @@
+{
+  "project": "demo-tacopos-2-0-1",
+  "firestoreEmulator": "127.0.0.1:8183",
+  "rulesSha256": "732201CF7C3C8B553EC0E60749F251E3E1AFDAE210847F48A16637C60524DF2F",
+  "orders": 2001,
+  "syntheticOrders": 2000,
+  "syntheticTerminalOrders": 2000,
+  "finalPulse": 30,
+  "pulseTargetStatus": "paid",
+  "noSyntheticOpenOrders": true,
+  "checkedAt": "2026-11-26T23:21:48.986Z"
+}
