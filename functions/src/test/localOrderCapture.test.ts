@@ -263,6 +263,107 @@ describe("submitLocalOrderCapture transaction", () => {
     assert.equal((await root.collection("orders").doc(orderId).collection("items").get()).size, 0);
   });
 
+  it("accepts the 14-taco production combination when Tripa's historical stockout is cleared", async () => {
+    const products = [
+      {id: "arrachera", name: "Arrachera", price: 30},
+      {id: "tripa", name: "Tripa", price: 30},
+      {id: "carnaza", name: "Carnaza", price: 25},
+      {id: "bistec", name: "Bistec Laminado", price: 30},
+    ];
+    for (const product of products) {
+      await root.collection("products").doc(product.id).set({
+        name: product.name, categoryName: "Tacos", active: true, sendToKitchen: true,
+        affectsKitchenStock: true, price: product.price,
+        recipeItems: [{kitchenStockItemId: `stock_${product.id}`, kitchenStockItemName: product.name,
+          kitchenStockUnit: "kg", consumptionFactor: 0.1}],
+      });
+    }
+
+    const specs = [
+      ["arrachera", "Arrachera", 30, 1, 2], ["tripa", "Tripa", 30, 1, 1],
+      ["arrachera", "Arrachera", 30, 2, 2], ["carnaza", "Carnaza", 25, 2, 2],
+      ["arrachera", "Arrachera", 30, 3, 2], ["arrachera", "Arrachera", 30, 4, 2],
+      ["bistec", "Bistec Laminado", 30, 4, 3],
+    ] as const;
+    const lines = specs.flatMap(([productId, productName, unitPrice, personNumber, qty], group) =>
+      Array.from({length: qty}, (_, index) => ({
+        ...line(`line-prod-${group}-${index}`, 1, unitPrice), productId, productName,
+        categoryName: "Tacos", personNumber, personName: `Persona ${personNumber}`,
+        affectsKitchenStock: true,
+        recipeItems: [{kitchenStockItemId: `stock_${productId}`, kitchenStockItemName: productName,
+          kitchenStockUnit: "kg", consumptionFactor: 0.1}],
+      })),
+    );
+    assert.equal(lines.length, 14);
+    const businessDate = currentBusinessDateKey();
+    await root.collection("productStockOuts").doc(`${branchId}_${businessDate}_tripa`).set({
+      branchId, businessDate, productId: "tripa", status: "cleared", reason: "agotado",
+    });
+
+    const result = await submitLocalOrderCaptureCore(
+      db, requestFor("submission-production-14-tacos", lines), context(),
+    ) as Record<string, unknown>;
+    const order = (await root.collection("orders").doc(orderId).get()).data()!;
+    const items = await root.collection("orders").doc(orderId).collection("items").get();
+    const batches = await root.collection("orders").doc(orderId).collection("kitchenBatches").get();
+    assert.equal(result.acceptedQty, 14);
+    assert.equal(order.total, 410);
+    assert.equal(order.pendingTotal, 410);
+    assert.equal(items.size, 14);
+    assert.equal(batches.size, 1);
+    assert.equal(items.docs.reduce((sum, item) => sum + Number(item.data().total), 0), 410);
+  });
+
+  it("still rejects a product explicitly marked active as sold out", async () => {
+    await root.collection("productStockOuts").doc(`${branchId}_${currentBusinessDateKey()}_taco`).set({
+      branchId, businessDate: currentBusinessDateKey(), productId: "taco", status: "active", reason: "agotado",
+    });
+    await assert.rejects(
+      () => submitLocalOrderCaptureCore(db, requestFor("submission-active-stockout", [line("line-active-stockout", 1, 10)]), context()),
+      /failed-precondition|agoto/i,
+    );
+    assert.equal((await root.collection("orders").doc(orderId).collection("items").get()).size, 0);
+    assert.equal((await root.collection("orders").doc(orderId).collection("kitchenBatches").get()).size, 0);
+  });
+
+  it("treats a historical stockout record without status as active, matching Android compatibility", async () => {
+    await root.collection("productStockOuts").doc(`${branchId}_${currentBusinessDateKey()}_taco`).set({
+      branchId, businessDate: currentBusinessDateKey(), productId: "taco", reason: "agotado",
+    });
+    await assert.rejects(
+      () => submitLocalOrderCaptureCore(db, requestFor("submission-legacy-stockout", [line("line-legacy-stockout", 1, 10)]), context()),
+      /failed-precondition|agoto/i,
+    );
+    assert.equal((await root.collection("orders").doc(orderId).collection("items").get()).size, 0);
+  });
+
+  it("does not block a captured line for inventory, recipe, or factor differences", async () => {
+    const capturedRecipe = [{kitchenStockItemId: "stock_taco", kitchenStockItemName: "Res", kitchenStockUnit: "kg", consumptionFactor: 0.1}];
+    await root.collection("products").doc("taco").update({
+      affectsKitchenStock: false,
+      recipeItems: [{kitchenStockItemId: "stock_taco", kitchenStockItemName: "Res", kitchenStockUnit: "kg", consumptionFactor: 0.25}],
+    });
+    const capturedLine = {...line("line-recipe-diff", 2, 10), affectsKitchenStock: true, recipeItems: capturedRecipe};
+    const result = await submitLocalOrderCaptureCore(
+      db, requestFor("submission-recipe-diff", [capturedLine]), context(),
+    ) as Record<string, unknown>;
+    const item = (await root.collection("orders").doc(orderId).collection("items").doc("line-recipe-diff").get()).data()!;
+    assert.equal(result.acceptedQty, 2);
+    assert.deepEqual(item.recipeItems, capturedRecipe);
+    assert.equal(item.affectsKitchenStock, true);
+    assert.equal((await root.collection("orders").doc(orderId).get()).data()?.total, 20);
+  });
+
+  it("preserves the catalog-disabled product block", async () => {
+    await root.collection("products").doc("taco").update({active: false});
+    await assert.rejects(
+      () => submitLocalOrderCaptureCore(db, requestFor("submission-inactive-menu-product", [line("line-inactive-menu-product", 1, 10)]), context()),
+      /failed-precondition|desactivado/i,
+    );
+    assert.equal((await root.collection("orders").doc(orderId).collection("items").get()).size, 0);
+    assert.equal((await root.collection("orders").doc(orderId).collection("kitchenBatches").get()).size, 0);
+  });
+
   it("rejects a UTF-8 payload over the safe request size before any write", async () => {
     const oversized = {...line("line-large", 1, 10), notes: "ñ".repeat(350_001)};
     await assert.rejects(
@@ -319,3 +420,7 @@ function requestFor(id: string, lines: Array<Record<string, unknown>>, sendToKit
 }
 
 function context() { return {auth: {uid}, app: {appId: "emulator"}}; }
+
+function currentBusinessDateKey() {
+  return new Intl.DateTimeFormat("en-CA", {timeZone: "America/Mexico_City", year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date());
+}
