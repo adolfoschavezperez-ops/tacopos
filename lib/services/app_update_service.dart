@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../core/app_update/app_update_policy.dart';
 import '../core/constants/app_constants.dart';
+import 'operational_diagnostics_service.dart';
 
 const MethodChannel _appUpdateChannel = MethodChannel('tacopos/app_update');
 
@@ -443,6 +444,17 @@ class AppUpdateService {
   }
 
   void _logPolicyCheck(AppUpdateCheckResult result) {
+    OperationalDiagnosticsService.instance.record(
+      'app_update',
+      'policy_check',
+      result:
+          result.errorCode ??
+          (result.decision.isRequired ? 'blocked' : 'allowed'),
+      fields: {
+        'versionCode': result.currentVersionCode,
+        'errorCode': result.errorCode,
+      },
+    );
     debugPrint(
       'APP_UPDATE_POLICY_CHECK '
       'checkedAt=${DateTime.now().toIso8601String()} '

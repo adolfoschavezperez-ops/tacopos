@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -9,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'core/theme/app_theme.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
+import 'services/operational_diagnostics_service.dart';
 import 'services/operational_session_service.dart';
 import 'widgets/app_update_gate.dart';
 import 'widgets/expense_cutoff_reminder_coordinator.dart';
@@ -89,6 +92,7 @@ void main() async {
     await _activateAppCheck();
   }
   await _ensureAnonymousLogin();
+  unawaited(OperationalDiagnosticsService.instance.initialize());
 
   runApp(const TacoPosApp());
 }
@@ -97,11 +101,25 @@ Future<void> _activateAppCheck() async {
   if (kIsWeb) {
     return;
   }
-  await FirebaseAppCheck.instance.activate(
-    providerAndroid: kReleaseMode
-        ? const AndroidPlayIntegrityProvider()
-        : const AndroidDebugProvider(),
-  );
+  try {
+    await FirebaseAppCheck.instance.activate(
+      providerAndroid: kReleaseMode
+          ? const AndroidPlayIntegrityProvider()
+          : const AndroidDebugProvider(),
+    );
+    OperationalDiagnosticsService.instance.record(
+      'app_check',
+      'activation',
+      result: 'ready',
+    );
+  } catch (error) {
+    OperationalDiagnosticsService.instance.record(
+      'app_check',
+      'activation',
+      result: error.runtimeType.toString(),
+    );
+    rethrow;
+  }
 }
 
 Future<void> _ensureAnonymousLogin() async {

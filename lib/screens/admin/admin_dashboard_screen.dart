@@ -20,6 +20,7 @@ import '../../widgets/money_text.dart';
 import '../cash/cash_session_screen.dart';
 import 'branch_catalog_screen.dart';
 import 'cash_admin_screen.dart';
+import 'device_diagnostics_screen.dart';
 import 'employee_catalog_screen.dart';
 import 'kitchen_admin_screen.dart';
 import 'order_platform_catalog_screen.dart';
@@ -141,6 +142,19 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     return BrandedScaffold(
       title: kIsWeb ? 'TacoPOS Backoffice' : 'Socio / Admin',
       actions: [
+        if (employee?.hasAdminAccess == true)
+          IconButton(
+            tooltip: 'Diagnóstico del dispositivo',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const DeviceDiagnosticsScreen(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.monitor_heart_outlined),
+          ),
         if (employee?.canManageTables == true)
           IconButton(
             tooltip: 'Mesas',

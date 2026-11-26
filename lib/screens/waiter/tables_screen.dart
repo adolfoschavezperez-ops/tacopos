@@ -11,6 +11,7 @@ import '../../models/order_item.dart';
 import '../../models/pos_table.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
+import '../../services/operational_diagnostics_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
@@ -48,6 +49,7 @@ class _TablesScreenState extends State<TablesScreen> {
   List<LocalOrderCaptureRecoveryEntry> _localCaptureRecoveryEntries = const [];
   bool _selectingTables = false;
   final Set<String> _selectedTableIds = {};
+  int _diagnosticBuilds = 0;
 
   @override
   void initState() {
@@ -499,6 +501,16 @@ class _TablesScreenState extends State<TablesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _diagnosticBuilds++;
+    if (_diagnosticBuilds % 25 == 0) {
+      OperationalDiagnosticsService.instance.record(
+        'ui',
+        'screen_build_batch',
+        fields: {'results': _diagnosticBuilds, 'source': 'tables'},
+        employeeId: AppSession.instance.employee?.id,
+        branchId: AppSession.instance.currentBranchId,
+      );
+    }
     final employee = AppSession.instance.employee;
     if (employee?.canTakeOrders != true && employee?.canCharge != true) {
       return const BrandedScaffold(

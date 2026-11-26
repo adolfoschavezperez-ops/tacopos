@@ -2,8 +2,11 @@ package com.renova.tacopos
 
 import android.content.Intent
 import android.media.MediaPlayer
+import android.net.TrafficStats
 import android.net.Uri
 import android.os.Build
+import android.os.Debug
+import android.os.Process
 import com.google.android.play.core.appupdate.AppUpdateManager
 import com.google.android.play.core.appupdate.AppUpdateManagerFactory
 import com.google.android.play.core.appupdate.AppUpdateOptions
@@ -19,6 +22,7 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val kitchenSoundChannel = "tacopos/kitchen_sound"
     private val appUpdateChannel = "tacopos/app_update"
+    private val diagnosticsChannel = "tacopos/device_diagnostics"
     private val flexibleUpdateRequestCode = 4201
     private val immediateUpdateRequestCode = 4202
     private var kitchenBeepPlayer: MediaPlayer? = null
@@ -43,6 +47,23 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            diagnosticsChannel,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "processMetrics" -> result.success(
+                    mapOf(
+                        "cpuTimeMs" to Process.getElapsedCpuTime(),
+                        "pssBytes" to Debug.getPss().toLong() * 1024L,
+                        "rxBytes" to TrafficStats.getUidRxBytes(Process.myUid()),
+                        "txBytes" to TrafficStats.getUidTxBytes(Process.myUid()),
+                    ),
+                )
+                else -> result.notImplemented()
+            }
+        }
 
         appUpdateManager = AppUpdateManagerFactory.create(this)
         val updateChannel = MethodChannel(

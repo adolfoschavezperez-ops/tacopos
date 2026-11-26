@@ -18,6 +18,7 @@ import '../../models/order_item.dart';
 import '../../models/product.dart';
 import '../../models/product_category.dart';
 import '../../services/app_session.dart';
+import '../../services/operational_diagnostics_service.dart';
 import '../../services/live_presence_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
@@ -81,6 +82,7 @@ class _OrderScreenState extends State<OrderScreen> {
   int _selectedPerson = 1;
   int _personCount = 1;
   bool _busy = false;
+  int _diagnosticBuilds = 0;
   bool _sendingToKitchen = false;
   bool _editingFrozen = false;
   bool _hasPendingLocalSubmission = false;
@@ -1036,6 +1038,16 @@ class _OrderScreenState extends State<OrderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _diagnosticBuilds++;
+    if (_diagnosticBuilds % 50 == 0) {
+      OperationalDiagnosticsService.instance.record(
+        'ui',
+        'screen_build_batch',
+        fields: {'results': _diagnosticBuilds, 'source': 'order_capture'},
+        employeeId: AppSession.instance.employee?.id,
+        branchId: AppSession.instance.currentBranchId,
+      );
+    }
     return StreamBuilder<PosOrder?>(
       stream: _orderStream,
       builder: (context, orderSnapshot) {

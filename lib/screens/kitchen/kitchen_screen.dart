@@ -11,6 +11,7 @@ import '../../core/theme/status_styles.dart';
 import '../../models/kitchen_session.dart';
 import '../../services/app_session.dart';
 import '../../services/live_presence_service.dart';
+import '../../services/operational_diagnostics_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../../widgets/branded_scaffold.dart';
@@ -54,6 +55,7 @@ class _KitchenScreenState extends State<KitchenScreen>
   final Set<String> _knownKitchenOrderIds = <String>{};
   bool _hasInitializedKitchenOrders = false;
   bool _openingHourlySales = false;
+  int _diagnosticBuilds = 0;
 
   @override
   void initState() {
@@ -348,6 +350,16 @@ class _KitchenScreenState extends State<KitchenScreen>
 
   @override
   Widget build(BuildContext context) {
+    _diagnosticBuilds++;
+    if (_diagnosticBuilds % 50 == 0) {
+      OperationalDiagnosticsService.instance.record(
+        'ui',
+        'screen_build_batch',
+        fields: {'results': _diagnosticBuilds, 'source': 'kitchen'},
+        employeeId: AppSession.instance.employee?.id,
+        branchId: AppSession.instance.currentBranchId,
+      );
+    }
     if (AppSession.instance.employee?.canViewKitchen != true) {
       return const BrandedScaffold(
         title: 'Cocina',

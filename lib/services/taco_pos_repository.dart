@@ -66,6 +66,7 @@ import 'kitchen_sync_state.dart';
 import 'device_registry_service.dart';
 import 'local_order_capture_store.dart';
 import 'local_order_capture_submitter.dart';
+import 'operational_diagnostics_service.dart';
 import 'operational_auth_service.dart';
 
 export '../core/orders/order_activity.dart'
@@ -1351,7 +1352,22 @@ class TacoPosRepository {
   static final YieldProfitBundleCache _yieldProfitBundleCache =
       YieldProfitBundleCache();
   static final Map<String, _CashScheduleCacheEntry> _cashScheduleCache = {};
-  static final OrderCaptureQueue _orderCaptureQueue = OrderCaptureQueue();
+  static final OrderCaptureQueue _orderCaptureQueue = OrderCaptureQueue(
+    onStage: (stage, _, _) {
+      OperationalDiagnosticsService.instance.record(
+        'capture_queue',
+        'stage',
+        fields: {'stage': stage},
+      );
+    },
+    onEvent: (event, _, queueDepth, generation, _, _) {
+      OperationalDiagnosticsService.instance.record(
+        'capture_queue',
+        event,
+        fields: {'queueDepth': queueDepth, 'generation': generation},
+      );
+    },
+  );
 
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
@@ -1792,14 +1808,29 @@ class TacoPosRepository {
   }
 
   Stream<List<PosTable>> watchTables({bool activeOnly = true}) {
-    return _tablesRef.snapshots().map((snapshot) {
+    return _diagnoseQueryStream('tables.tables', _tablesRef.snapshots(), (
+      snapshot,
+    ) {
       final tables = _filterCurrentBranch(
         snapshot.docs.map(PosTable.fromDoc),
         (table) => table.branchId,
       )..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
-      return activeOnly
+      final results = activeOnly
           ? tables.where((table) => table.active).toList()
           : tables;
+      OperationalDiagnosticsService.instance.record(
+        'firestore',
+        'tables_snapshot',
+        fields: {
+          'documents': snapshot.docs.length,
+          'results': results.length,
+          'fromCache': snapshot.metadata.isFromCache,
+          'pendingWrites': snapshot.metadata.hasPendingWrites,
+          'source': activeOnly ? 'tables.active' : 'tables.all',
+        },
+        branchId: AppSession.instance.currentBranchId,
+      );
+      return results;
     });
   }
 
@@ -4724,7 +4755,9 @@ class TacoPosRepository {
   };
 
   Stream<List<PosOrder>> watchOpenOrders() {
-    return _ordersRef.snapshots().map((snapshot) {
+    return _diagnoseQueryStream('tables.open_orders', _ordersRef.snapshots(), (
+      snapshot,
+    ) {
       final orders =
           _filterCurrentBranch(
             snapshot.docs.map(PosOrder.fromDoc).where(isActiveOrder),
@@ -4734,12 +4767,26 @@ class TacoPosRepository {
             final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
             return bDate.compareTo(aDate);
           });
+      OperationalDiagnosticsService.instance.record(
+        'firestore',
+        'tables_open_orders_snapshot',
+        fields: {
+          'documents': snapshot.docs.length,
+          'results': orders.length,
+          'fromCache': snapshot.metadata.isFromCache,
+          'pendingWrites': snapshot.metadata.hasPendingWrites,
+          'source': 'orders_collection',
+        },
+        branchId: AppSession.instance.currentBranchId,
+      );
       return orders;
     });
   }
 
   Stream<List<PosOrder>> watchOpenTakeoutOrders() {
-    return _ordersRef.snapshots().map((snapshot) {
+    return _diagnoseQueryStream('takeout.open_orders', _ordersRef.snapshots(), (
+      snapshot,
+    ) {
       final orders =
           _filterCurrentBranch(
             snapshot.docs
@@ -4754,29 +4801,110 @@ class TacoPosRepository {
             final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
             return bDate.compareTo(aDate);
           });
+      OperationalDiagnosticsService.instance.record(
+        'firestore',
+        'takeout_open_orders_snapshot',
+        fields: {
+          'documents': snapshot.docs.length,
+          'results': orders.length,
+          'fromCache': snapshot.metadata.isFromCache,
+          'pendingWrites': snapshot.metadata.hasPendingWrites,
+          'source': 'orders_collection',
+        },
+        branchId: AppSession.instance.currentBranchId,
+      );
       return orders;
     });
   }
 
   Stream<List<PosOrder>> watchOpenStandingOrders() {
-    return _ordersRef.snapshots().map((snapshot) {
-      final orders =
-          _filterCurrentBranch(
-            snapshot.docs
-                .map(PosOrder.fromDoc)
-                .where(
-                  (order) =>
-                      order.orderType == standingOrderType &&
-                      isActiveOrder(order),
-                ),
-            (order) => order.branchId,
-          )..sort((a, b) {
-            final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-            return bDate.compareTo(aDate);
-          });
-      return orders;
-    });
+    return _diagnoseQueryStream(
+      'standing.open_orders',
+      _ordersRef.snapshots(),
+      (snapshot) {
+        final orders =
+            _filterCurrentBranch(
+              snapshot.docs
+                  .map(PosOrder.fromDoc)
+                  .where(
+                    (order) =>
+                        order.orderType == standingOrderType &&
+                        isActiveOrder(order),
+                  ),
+              (order) => order.branchId,
+            )..sort((a, b) {
+              final aDate =
+                  a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+              final bDate =
+                  b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
+              return bDate.compareTo(aDate);
+            });
+        OperationalDiagnosticsService.instance.record(
+          'firestore',
+          'standing_open_orders_snapshot',
+          fields: {
+            'documents': snapshot.docs.length,
+            'results': orders.length,
+            'fromCache': snapshot.metadata.isFromCache,
+            'pendingWrites': snapshot.metadata.hasPendingWrites,
+            'source': 'orders_collection',
+          },
+          branchId: AppSession.instance.currentBranchId,
+        );
+        return orders;
+      },
+    );
+  }
+
+  Stream<Output> _diagnoseQueryStream<Input, Output>(
+    String source,
+    Stream<Input> upstream,
+    Output Function(Input value) convert,
+  ) {
+    StreamSubscription<Input>? subscription;
+    late StreamController<Output> controller;
+    var listenerCounted = false;
+    void recordDetach() {
+      if (!listenerCounted) return;
+      listenerCounted = false;
+      OperationalDiagnosticsService.instance.listenerCancelled(source);
+    }
+
+    controller = StreamController<Output>(
+      onListen: () {
+        listenerCounted = true;
+        OperationalDiagnosticsService.instance.listenerAttached(source);
+        subscription = upstream.listen(
+          (value) {
+            try {
+              controller.add(convert(value));
+            } catch (error, stackTrace) {
+              controller.addError(error, stackTrace);
+            }
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            OperationalDiagnosticsService.instance.record(
+              'firestore',
+              'query_error',
+              result: error is FirebaseException ? error.code : 'error',
+              fields: {'source': source},
+            );
+            controller.addError(error, stackTrace);
+          },
+          onDone: () {
+            recordDetach();
+            controller.close();
+          },
+        );
+      },
+      onPause: () => subscription?.pause(),
+      onResume: () => subscription?.resume(),
+      onCancel: () async {
+        await subscription?.cancel();
+        recordDetach();
+      },
+    );
+    return controller.stream;
   }
 
   Stream<List<LiveStandingOrderBundle>>
@@ -5049,10 +5177,16 @@ class TacoPosRepository {
       state.watcher = _KitchenQueryWatcher(
         onAttach: () {
           attaches++;
+          OperationalDiagnosticsService.instance.listenerAttached(
+            'kitchen.order_items',
+          );
           trace('attach');
         },
         onDetach: () {
           cancels++;
+          OperationalDiagnosticsService.instance.listenerCancelled(
+            'kitchen.order_items',
+          );
           trace('detach');
         },
         watch: () => _ordersRef
@@ -5065,6 +5199,18 @@ class TacoPosRepository {
         onData: (snapshot) {
           if (!current()) return;
           itemSnapshots++;
+          OperationalDiagnosticsService.instance.record(
+            'firestore',
+            'kitchen_items_snapshot',
+            fields: {
+              'documents': snapshot.docs.length,
+              'results': snapshot.docs.length,
+              'fromCache': snapshot.metadata.isFromCache,
+              'pendingWrites': snapshot.metadata.hasPendingWrites,
+              'source': 'kitchen.order_items',
+            },
+            branchId: AppSession.instance.currentBranchId,
+          );
           final provisional =
               snapshot.metadata.isFromCache ||
               snapshot.metadata.hasPendingWrites;
@@ -5111,6 +5257,10 @@ class TacoPosRepository {
     controller = StreamController<KitchenBundlesState>(
       onListen: () {
         ordersWatcher = _KitchenQueryWatcher(
+          onAttach: () => OperationalDiagnosticsService.instance
+              .listenerAttached('kitchen.orders'),
+          onDetach: () => OperationalDiagnosticsService.instance
+              .listenerCancelled('kitchen.orders'),
           watch: () => _ordersRef.snapshots(includeMetadataChanges: true),
           onIssue: emit,
           onData: (snapshot) {
@@ -5125,6 +5275,18 @@ class TacoPosRepository {
               final received = _filterCurrentBranch(
                 decoded.where(isActiveOrder),
                 (order) => order.branchId,
+              );
+              OperationalDiagnosticsService.instance.record(
+                'firestore',
+                'kitchen_orders_snapshot',
+                fields: {
+                  'documents': snapshot.docs.length,
+                  'results': received.length,
+                  'fromCache': snapshot.metadata.isFromCache,
+                  'pendingWrites': snapshot.metadata.hasPendingWrites,
+                  'source': 'kitchen.orders',
+                },
+                branchId: AppSession.instance.currentBranchId,
               );
               final changedIds = snapshot.docChanges
                   .map((change) => change.doc.id)
@@ -11427,6 +11589,14 @@ class TacoPosRepository {
     developer.log(
       '[TacoPOS][LocalCapture.persisted] orderId=${line.orderId} productId=${line.productId} person=${line.personNumber} qty=1 persistenceMs=${persistenceTimer.elapsedMilliseconds} remoteReads=0 remoteWrites=0',
     );
+    OperationalDiagnosticsService.instance.record(
+      'capture',
+      'local_persisted',
+      duration: persistenceTimer.elapsed,
+      fields: {'results': lines.length, 'source': 'local_outbox'},
+      employeeId: AppSession.instance.employee?.id,
+      branchId: AppSession.instance.currentBranchId,
+    );
     return lines.map((entry) => entry.toOrderItem()).toList(growable: false);
   }
 
@@ -11498,6 +11668,17 @@ class TacoPosRepository {
           orderId: orderId.trim(),
           sendToKitchen: sendToKitchen,
         );
+    OperationalDiagnosticsService.instance.record(
+      'capture',
+      'submission_started',
+      fields: {
+        'results': submission.lines.length,
+        'queueDepth': existing == null ? 0 : 1,
+        'source': 'local_outbox',
+      },
+      employeeId: AppSession.instance.employee?.id,
+      branchId: resolvedBranchId,
+    );
     developer.log(
       '[TacoPOS][LocalCapture.callableStart] orderId=${orderId.trim()} submissionId=${submission.id} payloadLines=${submission.lines.length} sendToKitchen=$sendToKitchen',
     );
@@ -11505,6 +11686,17 @@ class TacoPosRepository {
     try {
       response = await _localOrderCaptureSubmitter.submit(submission);
     } catch (submitError, submitStack) {
+      OperationalDiagnosticsService.instance.record(
+        'capture',
+        'submission_error',
+        result: submitError is FirebaseException
+            ? submitError.code
+            : submitError.runtimeType.toString(),
+        duration: submitTimer.elapsed,
+        fields: {'results': submission.lines.length},
+        employeeId: AppSession.instance.employee?.id,
+        branchId: resolvedBranchId,
+      );
       developer.log(
         '[TacoPOS][LocalCapture.callableFailed] orderId=${orderId.trim()} submissionId=${submission.id} error=$submitError',
       );
@@ -11558,6 +11750,22 @@ class TacoPosRepository {
     reconciliationTimer.stop();
     await store.complete(submission);
     submitTimer.stop();
+    OperationalDiagnosticsService.instance.record(
+      'capture',
+      'submission_confirmed',
+      duration: submitTimer.elapsed,
+      fields: {
+        'results': response['acceptedLineCount'] is num
+            ? (response['acceptedLineCount'] as num).toInt()
+            : submission.lines.length,
+        'documents': response['readDocuments'] is num
+            ? (response['readDocuments'] as num).toInt()
+            : 0,
+        'source': 'server_confirmed',
+      },
+      employeeId: AppSession.instance.employee?.id,
+      branchId: resolvedBranchId,
+    );
     developer.log(
       '[TacoPOS][LocalCapture.completed] orderId=${orderId.trim()} submissionId=${submission.id} reconciliationMs=${reconciliationTimer.elapsedMilliseconds} totalElapsedMs=${submitTimer.elapsedMilliseconds}',
     );
@@ -11780,13 +11988,31 @@ class TacoPosRepository {
   Future<void> flushPendingMutations(
     String orderId, {
     bool recalculateWhenQueueEmpty = true,
-  }) {
+  }) async {
+    final timer = Stopwatch()..start();
     final cleanOrderId = orderId.trim();
-    return _orderCaptureQueue.flush(
-      cleanOrderId,
-      recalculateWhenQueueEmpty: recalculateWhenQueueEmpty,
-      recalculate: () => recalculateOrderTotal(cleanOrderId),
-    );
+    try {
+      await _orderCaptureQueue.flush(
+        cleanOrderId,
+        recalculateWhenQueueEmpty: recalculateWhenQueueEmpty,
+        recalculate: () => recalculateOrderTotal(cleanOrderId),
+      );
+      timer.stop();
+      OperationalDiagnosticsService.instance.record(
+        'capture_queue',
+        'flush_completed',
+        duration: timer.elapsed,
+      );
+    } catch (error) {
+      timer.stop();
+      OperationalDiagnosticsService.instance.record(
+        'capture_queue',
+        'flush_failed',
+        result: error is FirebaseException ? error.code : 'error',
+        duration: timer.elapsed,
+      );
+      rethrow;
+    }
   }
 
   Future<void> renamePerson({

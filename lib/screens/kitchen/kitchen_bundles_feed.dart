@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 
 import '../../services/app_session.dart';
+import '../../services/operational_diagnostics_service.dart';
 import '../../services/taco_pos_repository.dart';
 
 /// Owned by one kitchen route; consumers share state, never the upstream stream.
@@ -32,6 +33,7 @@ class KitchenBundlesFeed
   void start() {
     if (_started || _disposed) return;
     _started = true;
+    OperationalDiagnosticsService.instance.listenerAttached('kitchen.feed');
     _listen(_generation);
   }
 
@@ -60,6 +62,23 @@ class KitchenBundlesFeed
 
   void _setState(KitchenBundlesState state) {
     syncState = state;
+    OperationalDiagnosticsService.instance.record(
+      'kitchen',
+      'feed_state',
+      result: state.issues.isNotEmpty
+          ? 'error'
+          : state.isConfirmed
+          ? 'confirmed'
+          : 'provisional',
+      fields: {
+        'results': state.bundles.length,
+        'documents': state.activeOrderIds.length,
+        'fromCache': state.ordersFromCache,
+        'pendingWrites': state.ordersPendingWrites,
+        'queueDepth': state.loadingItemOrderIds.length,
+      },
+      branchId: AppSession.instance.currentBranchId,
+    );
     final previous = value;
     if (state.hasData) {
       value = AsyncSnapshot.withData(ConnectionState.active, state.bundles);
@@ -77,6 +96,13 @@ class KitchenBundlesFeed
   void _onSessionChanged() {
     if (_scope == _currentScope) return;
     _scope = _currentScope;
+    OperationalDiagnosticsService.instance.record(
+      'kitchen',
+      'feed_scope_changed',
+      result: 'restarting',
+      fields: {'generation': _generation + 1},
+      branchId: AppSession.instance.currentBranchId,
+    );
     final generation = ++_generation;
     final previous = _subscription;
     _subscription = null;
@@ -98,6 +124,9 @@ class KitchenBundlesFeed
     _generation++;
     AppSession.instance.removeListener(_onSessionChanged);
     unawaited(_subscription?.cancel());
+    if (_started) {
+      OperationalDiagnosticsService.instance.listenerCancelled('kitchen.feed');
+    }
     super.dispose();
   }
 }

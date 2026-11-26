@@ -9,6 +9,7 @@ import '../../core/theme/status_styles.dart';
 import '../../models/order.dart';
 import '../../models/order_item.dart';
 import '../../services/live_presence_service.dart';
+import '../../services/operational_diagnostics_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../../utils/formatters.dart';
@@ -52,6 +53,7 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
   bool _busy = false;
   bool _returningToList = false;
   bool _markedCooking = false;
+  int _diagnosticBuilds = 0;
 
   @override
   void initState() {
@@ -210,6 +212,14 @@ class _KitchenOrderDetailScreenState extends State<KitchenOrderDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _diagnosticBuilds++;
+    if (_diagnosticBuilds % 50 == 0) {
+      OperationalDiagnosticsService.instance.record(
+        'ui',
+        'screen_build_batch',
+        fields: {'results': _diagnosticBuilds, 'source': 'kitchen_detail'},
+      );
+    }
     return Scaffold(
       body: PremiumBackground(
         child: SafeArea(

@@ -1,0 +1,13 @@
+﻿{"at":"2026-11-26T03:49:50.773775Z","category":"auth","event":"bootstrap","result":"ready","durationMs":358,"deviceTag":"df3212ecf9b0","rssMb":326}
+{"at":"2026-11-26T03:49:50.826518Z","category":"app","event":"diagnostics_started","result":"ok","deviceTag":"df3212ecf9b0","rssMb":331}
+{"at":"2026-11-26T03:49:51.283793Z","category":"device","event":"resource_sample","result":"ok","deviceTag":"df3212ecf9b0","rssMb":357,"pssMb":261}
+{"at":"2026-11-26T03:49:51.408975Z","category":"ui","event":"frame_summary","result":"ok","deviceTag":"df3212ecf9b0","rssMb":360,"frames":1,"slowFrames":1,"maxFrameMs":113}
+{"at":"2026-11-26T03:49:51.489029Z","category":"session","event":"restore","result":"nosavedsession","durationMs":435,"deviceTag":"df3212ecf9b0","rssMb":364}
+{"at":"2026-11-26T03:50:50.795503Z","category":"device","event":"resource_sample","result":"ok","deviceTag":"df3212ecf9b0","rssMb":405,"cpuPercent":5.073011712120448,"pssMb":310,"rxBytesDelta":15935,"txBytesDelta":4084}
+{"at":"2026-11-26T03:51:50.791755Z","category":"device","event":"resource_sample","result":"ok","deviceTag":"df3212ecf9b0","rssMb":405,"cpuPercent":0.09167277818521234,"pssMb":310,"rxBytesDelta":395,"txBytesDelta":380}
+{"at":"2026-11-26T03:52:50.792707Z","category":"device","event":"resource_sample","result":"ok","deviceTag":"df3212ecf9b0","rssMb":405,"cpuPercent":0.18,"pssMb":311,"rxBytesDelta":12993,"txBytesDelta":2765}
+{"at":"2026-11-26T03:53:20.494645Z","category":"auth","event":"bootstrap","result":"ready","durationMs":19,"deviceTag":"df3212ecf9b0","rssMb":325}
+{"at":"2026-11-26T03:53:20.549079Z","category":"app","event":"diagnostics_started","result":"ok","deviceTag":"df3212ecf9b0","rssMb":332}
+{"at":"2026-11-26T03:53:20.985873Z","category":"device","event":"resource_sample","result":"ok","deviceTag":"df3212ecf9b0","rssMb":356,"pssMb":258}
+{"at":"2026-11-26T03:53:21.038238Z","category":"ui","event":"frame_summary","result":"ok","deviceTag":"df3212ecf9b0","rssMb":359,"frames":1,"slowFrames":1,"maxFrameMs":55}
+{"at":"2026-11-26T03:53:21.090264Z","category":"session","event":"restore","result":"nosavedsession","durationMs":287,"deviceTag":"df3212ecf9b0","rssMb":364}
