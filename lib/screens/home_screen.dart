@@ -8,6 +8,7 @@ import '../models/employee.dart';
 import '../models/cash_withdrawal_request.dart';
 import '../services/app_session.dart';
 import '../services/live_presence_service.dart';
+import '../services/operational_employee_session_service.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/glass.dart';
 import '../widgets/mandatory_update_gate.dart';
@@ -55,6 +56,13 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (selected != null) {
+      final employee = AppSession.instance.employee;
+      if (!kIsWeb && employee != null) {
+        await OperationalEmployeeSessionService.instance.persistBranch(
+          employee,
+          selected,
+        );
+      }
       AppSession.instance.selectBranch(selected);
       await _markMainMenu(action: 'Sucursal cambiada');
     }
@@ -80,7 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     if (confirmed == true) {
-      AppSession.instance.signOut();
+      await AppSession.instance.signOut(reason: 'user_requested');
     }
   }
 

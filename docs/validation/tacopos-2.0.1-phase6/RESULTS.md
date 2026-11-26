@@ -262,3 +262,15 @@ Lectura de pagos de la sesión cerrada: 9 documentos, 8 activos y 1 cancelado; b
 #### Dictamen actualizado
 
 Los escenarios pendientes de cancelación larga, progreso/recuperación de Cocina, persistencia y reenvío tras reinicio, cierres normales y conciliación con Backoffice quedaron demostrados con la interfaz real y datos exclusivamente ficticios. No se demostró un defecto que requiera modificar el producto en estos recorridos. La Fase 6 **aún no se considera cerrada**: falta probar APKs reales +31/+32 con las Rules candidatas y falta el movimiento independiente de consumo de empleado. No se autoriza distribución general hasta cerrar esos dos puntos o hasta que el propietario retire formalmente uno de los criterios de aceptación.
+
+### Addendum — Sesion del empleado y diagnostico de rendimiento (25 de noviembre de 2026)
+
+Se implemento persistencia segura de identidad de empleado/sucursal (sin PIN ni token), revalidacion autoritativa, recuperacion transitoria y registro local ligero consultable por Administracion. El registro mide CPU/PSS/RSS, RX/TX por UID Android, frames lentos, listener attach/cancel, documentos de snapshots, fuente cache/servidor, y duracion de persistencia/cola/envio. No envia telemetria a Firebase ni cambia Rules/Functions. Detalle y limites en `DEVICE_PERFORMANCE_INCIDENT.md`.
+
+El ensayo Android de 30 minutos en Mesas termino con el proceso y la sesion sin cambios. Reinicio online y test de token-refresh/lifecycle conservaron empleado/sucursal; unit tests cubren logout voluntario, revocacion, permisos y fallos transitorios. El intento adicional de reinicio offline no se cuenta: el runner de integracion habia desinstalado la app y no habia Activity; se retiro su XML de launcher para no presentarlo como evidencia. Solo hay un AVD disponible; la tablet fisica de Andres no esta conectada.
+
+En AVD, la instrumentacion se verifico y sobrevivio `force-stop`; la muestra de proceso es baseline del emulador y no representa trafico celular. Codigo confirma consultas historicas globales de `orders` en Mesas/Cocina/Para llevar/Parados, pero no hay evidencia suficiente para atribuirles la lentitud exclusiva ni el cierre de sesion reportado. La causa de produccion permanece INDETERMINADA hasta comparar la tablet afectada con una sana.
+
+**Bloqueos vigentes de Fase 6:** compatibilidad UI historica +31/+32 y movimiento independiente de consumo de empleado. Ambos siguen pendientes. La Fase 6 no queda cerrada.
+
+Validacion final de la instrumentacion: `flutter analyze` PASS; `flutter test` PASS (1066/1066); Cocina incremental PASS (32/32); diagnosticos y sesion PASS (14/14); `git diff --check` PASS. Se corrigio el conteo de documentos para usar `snapshot.docs.length`; el uso de `snapshot.size` hacia fallar los doubles de Firestore y marcaba los snapshots de Cocina como errores permanentes.

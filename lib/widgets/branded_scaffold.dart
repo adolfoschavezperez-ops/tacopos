@@ -184,9 +184,9 @@ class _SessionBadge extends StatelessWidget {
             message: 'Cerrar sesion',
             child: InkWell(
               borderRadius: BorderRadius.circular(14),
-              onTap: () {
+              onTap: () async {
                 Navigator.of(context).popUntil((route) => route.isFirst);
-                AppSession.instance.signOut();
+                await AppSession.instance.signOut(reason: 'user_requested');
               },
               child: Container(
                 constraints: BoxConstraints(maxWidth: compact ? 82 : 170),

@@ -25,6 +25,7 @@ import '../../models/payment.dart';
 import '../../services/app_session.dart';
 import '../../services/backoffice_admin_auth_service.dart';
 import '../../services/live_presence_service.dart';
+import '../../services/operational_employee_session_service.dart';
 import '../../services/taco_pos_repository.dart';
 import '../../utils/app_snackbar.dart';
 import '../../utils/csv_exporter.dart';
@@ -207,7 +208,7 @@ class _BackofficeScreenState extends State<BackofficeScreen> {
     if (kIsWeb) {
       await _adminAuthService.signOut();
     } else {
-      AppSession.instance.signOut();
+      await AppSession.instance.signOut(reason: 'user_requested');
     }
   }
 
@@ -5216,12 +5217,17 @@ class _BackofficeBranchSelector extends StatelessWidget {
                           ),
                         )
                         .toList(),
-                    onChanged: (value) {
+                    onChanged: (value) async {
                       if (value == null) return;
                       final branch = visibleBranches
                           .where((branch) => branch.id == value)
                           .firstOrNull;
                       if (branch != null) {
+                        final employee = AppSession.instance.employee;
+                        if (!kIsWeb && employee != null) {
+                          await OperationalEmployeeSessionService.instance
+                              .persistBranch(employee, branch);
+                        }
                         AppSession.instance.selectBranch(branch);
                       }
                     },

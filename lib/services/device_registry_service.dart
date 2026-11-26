@@ -211,7 +211,10 @@ class DeviceRegistryService {
     }
   }
 
-  Future<void> ensureCurrentDeviceReady({bool recordHeartbeat = true}) async {
+  Future<void> ensureCurrentDeviceReady({
+    bool recordHeartbeat = true,
+    String? expectedBranchId,
+  }) async {
     final uid = _auth.currentUser?.uid.trim();
     if (!DeviceRegistryService.isValidDeviceId(uid)) {
       throw const DeviceRegistryException(
@@ -221,7 +224,9 @@ class DeviceRegistryService {
     }
 
     final deviceId = uid!;
-    final doc = await _devicesRef.doc(deviceId).get();
+    final doc = await _devicesRef
+        .doc(deviceId)
+        .get(const GetOptions(source: Source.server));
     if (!doc.exists) {
       throw const DeviceRegistryException(
         'device-not-registered',
@@ -246,7 +251,8 @@ class DeviceRegistryService {
     }
 
     final branchId = data['branchId']?.toString().trim() ?? '';
-    final currentBranchId = AppSession.instance.currentBranchId.trim();
+    final currentBranchId =
+        (expectedBranchId ?? AppSession.instance.currentBranchId).trim();
     if (branchId.isNotEmpty &&
         currentBranchId.isNotEmpty &&
         branchId != currentBranchId) {

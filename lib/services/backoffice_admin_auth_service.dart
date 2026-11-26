@@ -1,3 +1,5 @@
+import 'dart:developer' as developer;
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -107,6 +109,10 @@ class BackofficeAdminAuthService {
       data: doc.data(),
     );
     if (!admin.canAccessBackoffice) {
+      developer.log(
+        'firebase-auth-session-ended reason=backoffice_access_denied',
+        name: 'BackofficeAdminAuthService',
+      );
       await _auth.signOut();
       throw const BackofficeAdminAuthException(
         'No tienes permisos para acceder al Backoffice.',
@@ -127,7 +133,7 @@ class BackofficeAdminAuthService {
 
   Future<void> signOut() async {
     _explicitOperatorSessionUserId = null;
-    AppSession.instance.signOut();
+    await AppSession.instance.signOut(reason: 'backoffice_user_requested');
     await _auth.signOut();
   }
 

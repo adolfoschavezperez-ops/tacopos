@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +13,8 @@ import '../models/employee.dart';
 import '../services/app_session.dart';
 import '../services/app_update_service.dart';
 import '../services/backoffice_admin_auth_service.dart';
+import '../services/operational_employee_session_service.dart';
+import '../services/operational_diagnostics_service.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/app_update_gate.dart';
@@ -18,21 +22,207 @@ import '../widgets/glass.dart';
 import '../widgets/loading_panel.dart';
 import 'home_screen.dart';
 
-class LoginGate extends StatelessWidget {
+class LoginGate extends StatefulWidget {
   const LoginGate({super.key});
+
+  @override
+  State<LoginGate> createState() => _LoginGateState();
+}
+
+class _LoginGateState extends State<LoginGate> with WidgetsBindingObserver {
+  Future<OperationalSessionRestoreResult>? _restoreFuture;
+  Timer? _retryTimer;
+  bool _showPinLogin = false;
+  int _retrySeconds = 2;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!kIsWeb) {
+      WidgetsBinding.instance.addObserver(this);
+      _startRestore();
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (AppSession.instance.isLoggedIn) {
+        unawaited(_revalidateSession());
+      } else if (!_showPinLogin) {
+        _startRestore();
+      }
+    }
+  }
+
+  void _startRestore() {
+    _retryTimer?.cancel();
+    setState(() {
+      _restoreFuture = _restoreSession();
+    });
+  }
+
+  Future<OperationalSessionRestoreResult> _restoreSession() async {
+    final timer = Stopwatch()..start();
+    final result = await OperationalEmployeeSessionService.instance.restore();
+    timer.stop();
+    OperationalDiagnosticsService.instance.record(
+      'session',
+      'restore',
+      result: result.status.name,
+      duration: timer.elapsed,
+    );
+    return result;
+  }
+
+  Future<void> _revalidateSession() async {
+    final timer = Stopwatch()..start();
+    final result = await OperationalEmployeeSessionService.instance
+        .revalidateCurrentSession();
+    timer.stop();
+    OperationalDiagnosticsService.instance.record(
+      'session',
+      'resume_revalidation',
+      result: result.status.name,
+      duration: timer.elapsed,
+      employeeId: AppSession.instance.employee?.id,
+      branchId: AppSession.instance.currentBranchId,
+    );
+  }
+
+  void _scheduleRetry() {
+    if (_retryTimer?.isActive == true) return;
+    _retryTimer?.cancel();
+    final delay = Duration(seconds: _retrySeconds);
+    _retrySeconds = (_retrySeconds * 2).clamp(2, 60);
+    _retryTimer = Timer(delay, () {
+      if (mounted && !_showPinLogin && !AppSession.instance.isLoggedIn) {
+        _startRestore();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     if (kIsWeb) {
       return const BackofficePinLoginGate();
     }
-    return AnimatedBuilder(
-      animation: AppSession.instance,
-      builder: (context, _) {
-        return AppSession.instance.isLoggedIn
-            ? const HomeScreen()
-            : const LoginScreen();
+
+    return FutureBuilder<OperationalSessionRestoreResult>(
+      future: _restoreFuture,
+      builder: (context, snapshot) {
+        final restoreResult = snapshot.data;
+        if (!_showPinLogin &&
+            snapshot.connectionState != ConnectionState.done) {
+          return const _SessionRestorePanel(
+            title: 'Validando sesión',
+            message: 'Comprobando empleado, sucursal y permisos vigentes.',
+            busy: true,
+          );
+        }
+        if (!_showPinLogin &&
+            restoreResult?.status ==
+                OperationalSessionRestoreStatus.waitingForValidation) {
+          _scheduleRetry();
+          return _SessionRestorePanel(
+            title: 'Esperando validación segura',
+            message:
+                '${restoreResult?.message ?? 'Se conserva la sesión mientras vuelve la conexión.'}\n\n'
+                'TacoPOS no habilitará operaciones hasta confirmar los permisos con el servidor.',
+            onRetry: _startRestore,
+            onUseAnotherEmployee: () => setState(() => _showPinLogin = true),
+          );
+        }
+
+        final initialError =
+            restoreResult?.status == OperationalSessionRestoreStatus.revoked
+            ? restoreResult?.message ?? 'Vuelve a iniciar sesión.'
+            : '';
+        return AnimatedBuilder(
+          animation: AppSession.instance,
+          builder: (context, _) {
+            return AppSession.instance.isLoggedIn
+                ? const HomeScreen()
+                : LoginScreen(initialError: initialError);
+          },
+        );
       },
+    );
+  }
+}
+
+class _SessionRestorePanel extends StatelessWidget {
+  const _SessionRestorePanel({
+    required this.title,
+    required this.message,
+    this.busy = false,
+    this.onRetry,
+    this.onUseAnotherEmployee,
+  });
+
+  final String title;
+  final String message;
+  final bool busy;
+  final VoidCallback? onRetry;
+  final VoidCallback? onUseAnotherEmployee;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: PremiumBackground(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (busy) const CircularProgressIndicator(),
+                  const SizedBox(height: 18),
+                  Text(
+                    title,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    message,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Color(0xFFB8B8B8)),
+                  ),
+                  if (onRetry != null) ...[
+                    const SizedBox(height: 18),
+                    FilledButton.icon(
+                      onPressed: onRetry,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Reintentar'),
+                    ),
+                  ],
+                  if (onUseAnotherEmployee != null) ...[
+                    const SizedBox(height: 8),
+                    TextButton(
+                      onPressed: onUseAnotherEmployee,
+                      child: const Text('Ingresar con otro empleado'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -57,7 +247,9 @@ class _BackofficePinLoginGateState extends State<BackofficePinLoginGate> {
         if (user == null ||
             user.isAnonymous ||
             !_authService.hasExplicitOperatorSession) {
-          AppSession.instance.signOut();
+          unawaited(
+            AppSession.instance.signOut(reason: 'backoffice_auth_missing'),
+          );
           _sessionLoad = null;
           return LoginScreen(backofficeAuthService: _authService);
         }
@@ -267,6 +459,17 @@ class _LoginScreenState extends State<LoginScreen> {
           _error = 'Selecciona una sucursal para continuar.';
         });
         return;
+      }
+      if (!kIsWeb) {
+        final branchToPersist =
+            selectedBranch ??
+            (branches.isEmpty ? Branch.defaultBranch : branches.first);
+        await OperationalEmployeeSessionService.instance
+            .validateDeviceForOperationalLogin(branchToPersist.id);
+        await OperationalEmployeeSessionService.instance.persistLogin(
+          employee,
+          branchToPersist,
+        );
       }
       AppSession.instance.signIn(
         employee,

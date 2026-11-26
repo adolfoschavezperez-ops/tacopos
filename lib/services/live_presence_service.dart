@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
@@ -6,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import '../core/constants/app_constants.dart';
 import '../models/branch.dart';
 import '../models/employee.dart';
+import 'operational_diagnostics_service.dart';
 
 class LivePresenceService {
   LivePresenceService._();
@@ -57,23 +59,28 @@ class LivePresenceService {
       _employee = null;
       return;
     }
-    await _sessionsRef.doc(sessionId).set({
-      'isOnline': false,
-      'currentOrderId': null,
-      'currentTableId': null,
-      'currentTableName': null,
-      'currentTakeoutOrderId': null,
-      'currentKitchenBundleId': null,
-      'currentPersonNumber': null,
-      'currentAction': 'Sesion cerrada',
-      'lastSeenAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-    _employee = null;
-    _sessionId = null;
-    _lastState = const {};
-    _lastWriteAt = null;
-    _createdCurrentSession = false;
+    try {
+      await _sessionsRef.doc(sessionId).set({
+        'isOnline': false,
+        'currentOrderId': null,
+        'currentTableId': null,
+        'currentTableName': null,
+        'currentTakeoutOrderId': null,
+        'currentKitchenBundleId': null,
+        'currentPersonNumber': null,
+        'currentAction': 'Sesion cerrada',
+        'lastSeenAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (error) {
+      _logPresenceFailure('stop', error);
+    } finally {
+      _employee = null;
+      _sessionId = null;
+      _lastState = const {};
+      _lastWriteAt = null;
+      _createdCurrentSession = false;
+    }
   }
 
   Future<void> clearCurrentOrder({
@@ -263,8 +270,6 @@ class LivePresenceService {
       return;
     }
 
-    _lastState = nextState;
-    _lastWriteAt = DateTime.now();
     final platform = kIsWeb ? 'web' : defaultTargetPlatform.name;
     final sessionType =
         platform == 'web' ||
@@ -272,33 +277,56 @@ class LivePresenceService {
             (nextState['currentScreen'] ?? '') == 'Backoffice'
         ? 'backoffice'
         : 'operational';
-    await _sessionsRef.doc(sessionId).set({
-      'employeeId': employee.id,
-      'employeeName': employee.name,
-      'restaurantId': _branch.restaurantId,
-      'restaurantName': _branch.restaurantName,
-      'branchId': _branch.id,
-      'branchName': _branch.name,
-      'deviceId': deviceId,
-      'platform': platform,
-      'sessionType': sessionType,
-      'appMode': nextState['appMode'] ?? 'app',
-      'currentScreen': nextState['currentScreen'] ?? 'Inicio',
-      'currentAction': nextState['currentAction'] ?? 'Activo',
-      'currentTableId': nextState['currentTableId'],
-      'currentTableName': nextState['currentTableName'],
-      'currentOrderId': nextState['currentOrderId'],
-      'currentTakeoutOrderId': nextState['currentTakeoutOrderId'],
-      'currentKitchenBundleId': nextState['currentKitchenBundleId'],
-      'currentPersonNumber': nextState['currentPersonNumber'],
-      'isOnline': true,
-      'archived': false,
-      'archivedAt': null,
-      'lastSeenAt': FieldValue.serverTimestamp(),
-      if (!_createdCurrentSession) 'createdAt': FieldValue.serverTimestamp(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
-    _createdCurrentSession = true;
+    try {
+      await _sessionsRef.doc(sessionId).set({
+        'employeeId': employee.id,
+        'employeeName': employee.name,
+        'restaurantId': _branch.restaurantId,
+        'restaurantName': _branch.restaurantName,
+        'branchId': _branch.id,
+        'branchName': _branch.name,
+        'deviceId': deviceId,
+        'platform': platform,
+        'sessionType': sessionType,
+        'appMode': nextState['appMode'] ?? 'app',
+        'currentScreen': nextState['currentScreen'] ?? 'Inicio',
+        'currentAction': nextState['currentAction'] ?? 'Activo',
+        'currentTableId': nextState['currentTableId'],
+        'currentTableName': nextState['currentTableName'],
+        'currentOrderId': nextState['currentOrderId'],
+        'currentTakeoutOrderId': nextState['currentTakeoutOrderId'],
+        'currentKitchenBundleId': nextState['currentKitchenBundleId'],
+        'currentPersonNumber': nextState['currentPersonNumber'],
+        'isOnline': true,
+        'archived': false,
+        'archivedAt': null,
+        'lastSeenAt': FieldValue.serverTimestamp(),
+        if (!_createdCurrentSession) 'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      _lastState = nextState;
+      _lastWriteAt = DateTime.now();
+      _createdCurrentSession = true;
+    } catch (error) {
+      // Presence is an operational convenience, not an authentication or
+      // authorization signal. A denied/transient write must not throw through
+      // session startup or screen navigation.
+      _logPresenceFailure('update', error);
+    }
+  }
+
+  void _logPresenceFailure(String operation, Object error) {
+    final code = error is FirebaseException ? error.code : 'unknown';
+    OperationalDiagnosticsService.instance.record(
+      'presence',
+      operation,
+      result: code,
+    );
+    developer.log(
+      'presence-write-failed operation=$operation code=$code',
+      name: 'LivePresenceService',
+      error: error.runtimeType.toString(),
+    );
   }
 
   String _buildDeviceId() {
