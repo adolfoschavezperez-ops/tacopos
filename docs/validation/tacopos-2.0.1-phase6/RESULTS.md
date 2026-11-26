@@ -274,3 +274,8 @@ En AVD, la instrumentacion se verifico y sobrevivio `force-stop`; la muestra de 
 **Bloqueos vigentes de Fase 6:** compatibilidad UI historica +31/+32 y movimiento independiente de consumo de empleado. Ambos siguen pendientes. La Fase 6 no queda cerrada.
 
 Validacion final de la instrumentacion: `flutter analyze` PASS; `flutter test` PASS (1066/1066); Cocina incremental PASS (32/32); diagnosticos y sesion PASS (14/14); `git diff --check` PASS. Se corrigio el conteo de documentos para usar `snapshot.docs.length`; el uso de `snapshot.size` hacia fallar los doubles de Firestore y marcaba los snapshots de Cocina como errores permanentes.
+
+
+### Addendum Fase 6.1 (26 de noviembre de 2026)
+
+El detalle de la revisión de proyecto/Rules, restauración Android, artefactos históricos, suites finales, pendientes y limitaciones del AVD está en [PHASE_6_1_ADDENDUM.md](PHASE_6_1_ADDENDUM.md). La Fase 6 sigue abierta: no se ejecutaron compatibilidad +31/+32, consumo independiente de empleado ni rendimiento sostenido de 2,001 órdenes.

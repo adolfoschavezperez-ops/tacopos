@@ -7,6 +7,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:tacopos/screens/login_screen.dart';
 import 'package:tacopos/services/app_session.dart';
 import 'package:tacopos/services/operational_employee_session_service.dart';
+import 'package:tacopos/services/taco_pos_repository.dart';
 
 const _projectId = String.fromEnvironment(
   'TACOPOS_EMULATOR_PROJECT_ID',
@@ -24,6 +25,12 @@ const _firestorePort = int.fromEnvironment(
   'TACOPOS_FIRESTORE_EMULATOR_PORT',
   defaultValue: 8082,
 );
+const _email = String.fromEnvironment('TACOPOS_TEST_EMAIL');
+const _password = String.fromEnvironment('TACOPOS_TEST_PASSWORD');
+const _employeeName = String.fromEnvironment(
+  'TACOPOS_TEST_EMPLOYEE_NAME',
+  defaultValue: 'Mesero Demo F6.1',
+);
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -33,6 +40,11 @@ void main() {
     (tester) async {
       if (_projectId.startsWith('demo-') != true) {
         throw StateError('This integration test only permits a demo project.');
+      }
+      if (_email.isEmpty || _password.isEmpty) {
+        throw StateError(
+          'Set TACOPOS_TEST_EMAIL/PASSWORD to a seeded Auth Emulator account.',
+        );
       }
       final app = Firebase.apps.isEmpty
           ? await Firebase.initializeApp(
@@ -44,12 +56,40 @@ void main() {
               ),
             )
           : Firebase.app();
+      if (app.options.projectId != _projectId) {
+        throw StateError(
+          'Firebase nativo apunta a ${app.options.projectId}, no a $_projectId.',
+        );
+      }
       final auth = FirebaseAuth.instanceFor(app: app);
       auth.useAuthEmulator(_host, _authPort);
       final firestore = FirebaseFirestore.instanceFor(app: app);
       firestore.useFirestoreEmulator(_host, _firestorePort);
 
+      await auth.signInWithEmailAndPassword(
+        email: _email,
+        password: _password,
+      );
       expect(auth.currentUser, isNotNull);
+
+      // LoginGate restores an already validated employee identity, not just a
+      // Firebase Auth user. The old test only created the latter, so it could
+      // never satisfy its own postcondition without this explicit demo setup.
+      final repository = TacoPosRepository();
+      final employees = await repository.getEmployeesOnce();
+      final employee = employees.firstWhere(
+        (candidate) => candidate.name == _employeeName,
+      );
+      final branches = await repository.getAccessibleBranches(employee);
+      final branch = branches.first;
+      await OperationalEmployeeSessionService.instance
+          .validateDeviceForOperationalLogin(branch.id);
+      await OperationalEmployeeSessionService.instance.persistLogin(
+        employee,
+        branch,
+      );
+
+      expect(AppSession.instance.isLoggedIn, isFalse);
       await tester.pumpWidget(const MaterialApp(home: LoginGate()));
       await tester.pump(const Duration(seconds: 3));
 
