@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/order.dart';
 import '../../../models/purchase_models.dart';
 import '../../core/adapters/sales_adapter.dart';
+import '../../core/preview/preview_api_client.dart';
+import '../../core/read_only_guard.dart';
 import 'purchases_analytics.dart';
 
 class PurchasesCursorPage {
@@ -66,10 +68,17 @@ class PurchasesDashboardData {
 /// Strictly scoped to `restaurants/{restaurantId}` with bounded queries,
 /// cursor pagination, and Android-compatible document writes (DEV-safe).
 class PurchasesRepository {
-  PurchasesRepository({FirebaseFirestore? firestore})
-    : _db = firestore ?? FirebaseFirestore.instance;
+  PurchasesRepository({
+    FirebaseFirestore? firestore,
+    PreviewApiClient? previewClient,
+    this.isReadOnly = false,
+  }) : _dbOverride = firestore,
+       _previewClient = previewClient;
 
-  final FirebaseFirestore _db;
+  final FirebaseFirestore? _dbOverride;
+  FirebaseFirestore get _db => _dbOverride ?? FirebaseFirestore.instance;
+  final PreviewApiClient? _previewClient;
+  final bool isReadOnly;
 
   Future<PurchasesDashboardData> loadDashboard({
     required String restaurantId,
@@ -80,6 +89,155 @@ class PurchasesRepository {
     String? branchId,
     required Map<String, String> branchNames,
   }) async {
+    final preview = _previewClient;
+    if (preview != null) {
+      final results = await Future.wait([
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'suppliers',
+          maxDocs: 200,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'purchaseItems',
+          maxDocs: 500,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'supplierPurchases',
+          branchId: branchId,
+          startBusinessDate: startBusinessDate,
+          endBusinessDate: endBusinessDate,
+          maxDocs: 500,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'supplierPurchases',
+          branchId: branchId,
+          startBusinessDate: prevStartBusinessDate,
+          endBusinessDate: prevEndBusinessDate,
+          maxDocs: 500,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'supplierPayments',
+          branchId: branchId,
+          startBusinessDate: startBusinessDate,
+          endBusinessDate: endBusinessDate,
+          maxDocs: 500,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'supplierPurchases',
+          branchId: branchId,
+          statusFilter: 'pending',
+          maxDocs: 250,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'supplierPurchases',
+          branchId: branchId,
+          statusFilter: 'partial',
+          maxDocs: 250,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'orders',
+          branchId: branchId,
+          startBusinessDate: startBusinessDate,
+          endBusinessDate: endBusinessDate,
+          maxDocs: 600,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'orders',
+          branchId: branchId,
+          startBusinessDate: prevStartBusinessDate,
+          endBusinessDate: prevEndBusinessDate,
+          maxDocs: 600,
+        ),
+      ]);
+
+      final suppliers = results[0].docs.map(Supplier.fromDoc).toList(growable: false)
+        ..sort((a, b) => a.commercialName.compareTo(b.commercialName));
+      final catalogItems = results[1].docs.map(PurchaseItem.fromDoc).toList(growable: false)
+        ..sort((a, b) => a.name.compareTo(b.name));
+      final currentPurchases = results[2].docs.map(SupplierPurchase.fromDoc).toList(growable: false);
+      final previousPurchases = results[3].docs.map(SupplierPurchase.fromDoc).toList(growable: false);
+      final payments = results[4].docs.map(SupplierPayment.fromDoc).toList(growable: false);
+      final openPayables = [
+        ...results[5].docs.map(SupplierPurchase.fromDoc),
+        ...results[6].docs.map(SupplierPurchase.fromDoc),
+      ];
+      final currentOrders = results[7].docs.map(PosOrder.fromDoc).toList(growable: false);
+      final prevOrders = results[8].docs.map(PosOrder.fromDoc).toList(growable: false);
+      final currentNetSales = currentOrders
+          .where((o) => o.status.trim().toLowerCase() != 'cancelled')
+          .fold<double>(0.0, (a, o) => a + o.total);
+      final previousNetSales = prevOrders
+          .where((o) => o.status.trim().toLowerCase() != 'cancelled')
+          .fold<double>(0.0, (a, o) => a + o.total);
+
+      final currentItemsByPurchase = <String, List<SupplierPurchaseItem>>{};
+      final previousItemsByPurchase = <String, List<SupplierPurchaseItem>>{};
+      var itemReads = 0;
+      for (final p in currentPurchases) {
+        final itemRes = await preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'supplierPurchases',
+          parentDocId: p.id,
+          subcollection: 'items',
+          maxDocs: 100,
+        );
+        itemReads += itemRes.dataReads;
+        currentItemsByPurchase[p.id] = itemRes.docs
+            .map(SupplierPurchaseItem.fromDoc)
+            .toList(growable: false);
+      }
+      for (final p in previousPurchases) {
+        final itemRes = await preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'supplierPurchases',
+          parentDocId: p.id,
+          subcollection: 'items',
+          maxDocs: 100,
+        );
+        itemReads += itemRes.dataReads;
+        previousItemsByPurchase[p.id] = itemRes.docs
+            .map(SupplierPurchaseItem.fromDoc)
+            .toList(growable: false);
+      }
+
+      final metrics = PurchasesAnalytics.computeDashboard(
+        currentPurchases: currentPurchases,
+        previousPurchases: previousPurchases,
+        currentItemsByPurchase: currentItemsByPurchase,
+        previousItemsByPurchase: previousItemsByPurchase,
+        catalogItems: catalogItems,
+        branchNames: branchNames,
+      );
+      final accountsPayable = PurchasesAnalytics.computeAccountsPayable(
+        purchases: openPayables,
+      );
+
+      final readCount =
+          results.fold<int>(0, (a, r) => a + r.dataReads) + itemReads;
+      return PurchasesDashboardData(
+        suppliers: suppliers,
+        catalogItems: catalogItems,
+        currentPurchases: currentPurchases,
+        previousPurchases: previousPurchases,
+        currentItemsByPurchase: currentItemsByPurchase,
+        previousItemsByPurchase: previousItemsByPurchase,
+        payments: payments,
+        openPayables: openPayables,
+        metrics: metrics,
+        accountsPayable: accountsPayable,
+        currentNetSales: currentNetSales,
+        previousNetSales: previousNetSales,
+        readCount: readCount,
+      );
+    }
     final suppliersQuery = _db
         .collection('restaurants')
         .doc(restaurantId)
@@ -306,6 +464,30 @@ class PurchasesRepository {
     required String restaurantId,
     required String purchaseId,
   }) async {
+    final preview = _previewClient;
+    if (preview != null) {
+      final docSnap = await preview.fetchDoc(
+        restaurantId: restaurantId,
+        collection: 'supplierPurchases',
+        docId: purchaseId,
+      );
+      if (docSnap == null || !docSnap.exists) return null;
+      final itemsRes = await preview.queryAllPages(
+        restaurantId: restaurantId,
+        collection: 'supplierPurchases',
+        parentDocId: purchaseId,
+        subcollection: 'items',
+        maxDocs: 200,
+      );
+      return PurchaseDetailData(
+        purchase: SupplierPurchase.fromDoc(docSnap),
+        items: itemsRes.docs
+            .map(SupplierPurchaseItem.fromDoc)
+            .toList(growable: false),
+        payments: const [],
+      );
+    }
+
     final docRef = _db
         .collection('restaurants')
         .doc(restaurantId)
@@ -355,6 +537,10 @@ class PurchasesRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Operación de compras/proveedores',
+    );
     final ref = _db
         .collection('restaurants')
         .doc(restaurantId)
@@ -638,6 +824,10 @@ class PurchasesRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Operación de compras/proveedores',
+    );
     if (lines.isEmpty) {
       throw ArgumentError('Agrega al menos una partida.');
     }
@@ -752,6 +942,10 @@ class PurchasesRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Cancelación de compra/pago',
+    );
     final cleanReason = reason.trim();
     if (cleanReason.isEmpty) {
       throw ArgumentError('Captura el motivo de cancelación.');
@@ -822,6 +1016,10 @@ class PurchasesRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Cancelación de compra/pago',
+    );
     final cleanReason = reason.trim();
     if (cleanReason.isEmpty) {
       throw ArgumentError('Captura el motivo de cancelación.');

@@ -1,0 +1,17 @@
+{
+  "name": "tacopos-preview-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Authenticated Read-Only Preview API for TacoPOS Backoffice 2.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "mocha --timeout 30000 test/preview_api.test.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.4.0"
+  }
+}

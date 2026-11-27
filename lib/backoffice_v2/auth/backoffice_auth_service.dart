@@ -6,6 +6,7 @@ import '../../models/branch.dart';
 import '../../models/employee.dart';
 import '../../services/backoffice_admin_auth_service.dart';
 import '../core/env/backoffice_env.dart';
+import '../core/preview/preview_api_client.dart';
 
 class BackofficeAuthException implements Exception {
   const BackofficeAuthException(
@@ -48,16 +49,19 @@ class BackofficeV2AuthService {
     FirebaseAuth? auth,
     FirebaseFirestore? firestore,
     FirebaseFunctions? functions,
+    PreviewApiClient? previewClient,
   }) : _auth = auth ?? FirebaseAuth.instance,
        _firestore = firestore ?? FirebaseFirestore.instance,
        _functions =
            functions ??
-           FirebaseFunctions.instanceFor(region: config.functionsRegion);
+           FirebaseFunctions.instanceFor(region: config.functionsRegion),
+       _previewClient = previewClient;
 
   final BackofficeConfig config;
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
   final FirebaseFunctions _functions;
+  final PreviewApiClient? _previewClient;
 
   Future<List<BackofficeLoginUser>> listUsers({
     required String restaurantId,
@@ -208,6 +212,12 @@ class BackofficeV2AuthService {
     }
     try {
       await user.getIdToken(true);
+      if (config.isPreview) {
+        final preview = _previewClient;
+        if (preview == null) return false;
+        await preview.fetchSession(restaurantId: restaurantId);
+        return true;
+      }
       final authDoc = await _firestore
           .collection('restaurants')
           .doc(restaurantId)
@@ -256,6 +266,48 @@ class BackofficeV2AuthService {
       throw const BackofficeAuthException(
         'Se requiere una sesión autenticada autorizada.',
       );
+    }
+
+    if (config.isPreview) {
+      final preview = _previewClient;
+      if (preview == null) {
+        await _auth.signOut();
+        throw const BackofficeAuthException(
+          'Preview API no configurada. No se permite fallback a Firestore.',
+        );
+      }
+      try {
+        final session = await preview.fetchSession(restaurantId: restaurantId);
+        final allowedBranches = session.branches
+            .map(Branch.fromDoc)
+            .where((b) => b.active)
+            .toList(growable: false);
+        final record = BackofficeAdminRecord(
+          uid: session.uid,
+          email: user.email ?? '',
+          displayName: session.displayName,
+          employeeId: session.employeeId,
+          exists: true,
+          active: true,
+          isSuperAdmin: session.isSuperAdmin,
+          permissions: session.permissions,
+        );
+        final employee = record.toEmployee(
+          restaurantId: session.restaurantId,
+          defaultBranchId:
+              allowedBranches.isEmpty ? null : allowedBranches.first.id,
+        );
+        return BackofficeAuthResult(
+          employee: employee,
+          isSuperAdmin: session.isSuperAdmin,
+          restaurantId: session.restaurantId,
+          restaurantName: session.restaurantName,
+          branches: allowedBranches,
+        );
+      } on PreviewApiException catch (e) {
+        await _auth.signOut();
+        throw BackofficeAuthException(e.message);
+      }
     }
 
     final authDoc = await _firestore

@@ -12,6 +12,7 @@ import '../../../models/purchase_models.dart';
 import '../../../models/yield_profit_models.dart';
 import '../../core/adapters/sales_adapter.dart';
 import '../../core/cache/backoffice_cache_scope.dart';
+import '../../core/preview/preview_api_client.dart';
 import '../../core/read_only_guard.dart';
 import 'finance_analytics.dart';
 
@@ -63,14 +64,18 @@ class FinanceRepository {
   FinanceRepository({
     FirebaseFirestore? firestore,
     BackofficeCacheScope? cacheScope,
+    PreviewApiClient? previewClient,
     this.isReadOnly = false,
-  }) : _db = firestore ?? FirebaseFirestore.instance,
-       _cacheScope = cacheScope ?? BackofficeCacheScope() {
+  }) : _dbOverride = firestore,
+       _cacheScope = cacheScope ?? BackofficeCacheScope(),
+       _previewClient = previewClient {
     _cacheScope.registerInvalidator(invalidateCache);
   }
 
-  final FirebaseFirestore _db;
+  final FirebaseFirestore? _dbOverride;
+  FirebaseFirestore get _db => _dbOverride ?? FirebaseFirestore.instance;
   final BackofficeCacheScope _cacheScope;
+  final PreviewApiClient? _previewClient;
   final bool isReadOnly;
   final Map<String, _CachedFinanceBundle> _bundleCache = {};
 
@@ -138,7 +143,10 @@ class FinanceRepository {
     final prevStartStr = BackofficeSalesAdapter.formatBusinessDate(prevStart);
     final prevEndStr = BackofficeSalesAdapter.formatBusinessDate(prevEnd);
 
-    final restRef = _db.collection('restaurants').doc(restaurantId);
+    final preview = _previewClient;
+    final restRef = preview == null
+        ? _db.collection('restaurants').doc(restaurantId)
+        : null;
 
     Query<Map<String, dynamic>> boundedByDate(
       String collection, {
@@ -147,195 +155,269 @@ class FinanceRepository {
       required String to,
       int limit = 300,
     }) {
-      return restRef
+      return restRef!
           .collection(collection)
           .where(dateField, isGreaterThanOrEqualTo: from)
           .where(dateField, isLessThanOrEqualTo: to)
           .orderBy(dateField, descending: true)
           .limit(limit);
     }
+    late final List<DocumentSnapshot<Map<String, dynamic>>> ordersDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> prevOrdersDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> cashDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> prevCashDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> withdrawalDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> prevWithdrawalDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> purchaseDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> prevPurchaseDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> supplierPaymentDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> partnerDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> contributionDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> recipeDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> yieldDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> policyDocs;
+    late final DocumentSnapshot<Map<String, dynamic>>? policySettingsDoc;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> kitchenDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> targetDocs;
+    late final List<DocumentSnapshot<Map<String, dynamic>>> budgetDocs;
+    var hitLimit = false;
+    var readCount = 0;
 
-    final ordersCursorFuture = _fetchAllWithCursor(
-      boundedByDate('orders', from: startStr, to: endStr),
-    );
-    final prevOrdersCursorFuture = _fetchAllWithCursor(
-      boundedByDate('orders', from: prevStartStr, to: prevEndStr),
-    );
+    if (preview != null) {
+      final pResults = await Future.wait([
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'orders', branchId: branchId, startBusinessDate: startStr, endBusinessDate: endStr, maxDocs: 3000),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'orders', branchId: branchId, startBusinessDate: prevStartStr, endBusinessDate: prevEndStr, maxDocs: 3000),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'cashSessions', branchId: branchId, startBusinessDate: startStr, endBusinessDate: endStr, maxDocs: 200),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'cashSessions', branchId: branchId, startBusinessDate: prevStartStr, endBusinessDate: prevEndStr, maxDocs: 200),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'cashWithdrawalRequests', branchId: branchId, startBusinessDate: startStr, endBusinessDate: endStr, maxDocs: 200),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'cashWithdrawalRequests', branchId: branchId, startBusinessDate: prevStartStr, endBusinessDate: prevEndStr, maxDocs: 200),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'supplierPurchases', branchId: branchId, startBusinessDate: startStr, endBusinessDate: endStr, maxDocs: 200),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'supplierPurchases', branchId: branchId, startBusinessDate: prevStartStr, endBusinessDate: prevEndStr, maxDocs: 200),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'supplierPayments', branchId: branchId, startBusinessDate: startStr, endBusinessDate: endStr, maxDocs: 200),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'partners', maxDocs: 50),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'partnerContributions', branchId: branchId, maxDocs: 150),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'productRecipes', maxDocs: 200),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'ingredientYieldProfiles', maxDocs: 100),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'expensePolicies', maxDocs: 50),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'kitchenSessions', branchId: branchId, startBusinessDate: startStr, endBusinessDate: endStr, maxDocs: 40),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'backofficePurchaseTargets', maxDocs: 50),
+        preview.queryAllPages(restaurantId: restaurantId, collection: 'backofficeFinanceBudgets', maxDocs: 50),
+      ]);
+      policySettingsDoc = await preview.fetchDoc(
+        restaurantId: restaurantId,
+        collection: 'settings',
+        docId: 'expensePolicies',
+      );
+      ordersDocs = pResults[0].docs;
+      prevOrdersDocs = pResults[1].docs;
+      cashDocs = pResults[2].docs;
+      prevCashDocs = pResults[3].docs;
+      withdrawalDocs = pResults[4].docs;
+      prevWithdrawalDocs = pResults[5].docs;
+      purchaseDocs = pResults[6].docs;
+      prevPurchaseDocs = pResults[7].docs;
+      supplierPaymentDocs = pResults[8].docs;
+      partnerDocs = pResults[9].docs;
+      contributionDocs = pResults[10].docs;
+      recipeDocs = pResults[11].docs;
+      yieldDocs = pResults[12].docs;
+      policyDocs = pResults[13].docs;
+      kitchenDocs = pResults[14].docs;
+      targetDocs = pResults[15].docs;
+      budgetDocs = pResults[16].docs;
+      hitLimit = pResults[0].isPartial || pResults[1].isPartial;
+      readCount = pResults.fold<int>(1, (a, r) => a + r.dataReads);
+    } else {
+      final ordersCursorFuture = _fetchAllWithCursor(
+        boundedByDate('orders', from: startStr, to: endStr),
+      );
+      final prevOrdersCursorFuture = _fetchAllWithCursor(
+        boundedByDate('orders', from: prevStartStr, to: prevEndStr),
+      );
 
-    final results = await Future.wait([
-      ordersCursorFuture,
-      prevOrdersCursorFuture,
-      boundedByDate('cashSessions', from: startStr, to: endStr, limit: 200)
-          .get(),
-      boundedByDate(
-        'cashSessions',
-        from: prevStartStr,
-        to: prevEndStr,
-        limit: 200,
-      ).get(),
-      boundedByDate(
-        'cashWithdrawalRequests',
-        from: startStr,
-        to: endStr,
-        limit: 200,
-      ).get(),
-      boundedByDate(
-        'cashWithdrawalRequests',
-        from: prevStartStr,
-        to: prevEndStr,
-        limit: 200,
-      ).get(),
-      boundedByDate(
-        'supplierPurchases',
-        from: startStr,
-        to: endStr,
-        limit: 200,
-      ).get(),
-      boundedByDate(
-        'supplierPurchases',
-        from: prevStartStr,
-        to: prevEndStr,
-        limit: 200,
-      ).get(),
-      boundedByDate(
-        'supplierPayments',
-        from: startStr,
-        to: endStr,
-        limit: 200,
-      ).get(),
-      restRef.collection('partners').limit(50).get(),
-      boundedByDate(
-        'partnerContributions',
-        dateField: 'date',
-        from: startStr,
-        to: endStr,
-        limit: 150,
-      ).get(),
-      restRef.collection('productRecipes').limit(200).get(),
-      restRef.collection('ingredientYieldProfiles').limit(100).get(),
-      restRef.collection('expensePolicies').limit(50).get(),
-      restRef.collection('settings').doc('expensePolicies').get(),
-      restRef.collection('kitchenSessions')
-          .where('businessDate', isGreaterThanOrEqualTo: startStr)
-          .where('businessDate', isLessThanOrEqualTo: endStr)
-          .limit(40)
-          .get(),
-      restRef.collection('backofficePurchaseTargets').limit(50).get(),
-      restRef.collection('backofficeFinanceBudgets').limit(50).get(),
-    ]);
+      final results = await Future.wait([
+        ordersCursorFuture,
+        prevOrdersCursorFuture,
+        boundedByDate('cashSessions', from: startStr, to: endStr, limit: 200)
+            .get(),
+        boundedByDate(
+          'cashSessions',
+          from: prevStartStr,
+          to: prevEndStr,
+          limit: 200,
+        ).get(),
+        boundedByDate(
+          'cashWithdrawalRequests',
+          from: startStr,
+          to: endStr,
+          limit: 200,
+        ).get(),
+        boundedByDate(
+          'cashWithdrawalRequests',
+          from: prevStartStr,
+          to: prevEndStr,
+          limit: 200,
+        ).get(),
+        boundedByDate(
+          'supplierPurchases',
+          from: startStr,
+          to: endStr,
+          limit: 200,
+        ).get(),
+        boundedByDate(
+          'supplierPurchases',
+          from: prevStartStr,
+          to: prevEndStr,
+          limit: 200,
+        ).get(),
+        boundedByDate(
+          'supplierPayments',
+          from: startStr,
+          to: endStr,
+          limit: 200,
+        ).get(),
+        restRef!.collection('partners').limit(50).get(),
+        boundedByDate(
+          'partnerContributions',
+          dateField: 'date',
+          from: startStr,
+          to: endStr,
+          limit: 150,
+        ).get(),
+        restRef.collection('productRecipes').limit(200).get(),
+        restRef.collection('ingredientYieldProfiles').limit(100).get(),
+        restRef.collection('expensePolicies').limit(50).get(),
+        restRef.collection('settings').doc('expensePolicies').get(),
+        restRef.collection('kitchenSessions')
+            .where('businessDate', isGreaterThanOrEqualTo: startStr)
+            .where('businessDate', isLessThanOrEqualTo: endStr)
+            .limit(40)
+            .get(),
+        restRef.collection('backofficePurchaseTargets').limit(50).get(),
+        restRef.collection('backofficeFinanceBudgets').limit(50).get(),
+      ]);
 
-    final ordersCursor =
-        results[0]
-            as ({
-              List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
-              bool hitLimit,
-            });
-    final prevOrdersCursor =
-        results[1]
-            as ({
-              List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
-              bool hitLimit,
-            });
+      final ordersCursor =
+          results[0]
+              as ({
+                List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+                bool hitLimit,
+              });
+      final prevOrdersCursor =
+          results[1]
+              as ({
+                List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+                bool hitLimit,
+              });
 
-    var readCount = ordersCursor.docs.length + prevOrdersCursor.docs.length;
-    for (var idx = 2; idx < results.length; idx++) {
-      final r = results[idx];
-      if (r is QuerySnapshot) {
-        readCount += r.docs.length;
-      } else {
-        readCount += 1;
+      readCount = ordersCursor.docs.length + prevOrdersCursor.docs.length;
+      for (var idx = 2; idx < results.length; idx++) {
+        final r = results[idx];
+        if (r is QuerySnapshot) {
+          readCount += r.docs.length;
+        } else {
+          readCount += 1;
+        }
       }
+      ordersDocs = ordersCursor.docs;
+      prevOrdersDocs = prevOrdersCursor.docs;
+      cashDocs = (results[2] as QuerySnapshot<Map<String, dynamic>>).docs;
+      prevCashDocs = (results[3] as QuerySnapshot<Map<String, dynamic>>).docs;
+      withdrawalDocs = (results[4] as QuerySnapshot<Map<String, dynamic>>).docs;
+      prevWithdrawalDocs = (results[5] as QuerySnapshot<Map<String, dynamic>>).docs;
+      purchaseDocs = (results[6] as QuerySnapshot<Map<String, dynamic>>).docs;
+      prevPurchaseDocs = (results[7] as QuerySnapshot<Map<String, dynamic>>).docs;
+      supplierPaymentDocs = (results[8] as QuerySnapshot<Map<String, dynamic>>).docs;
+      partnerDocs = (results[9] as QuerySnapshot<Map<String, dynamic>>).docs;
+      contributionDocs = (results[10] as QuerySnapshot<Map<String, dynamic>>).docs;
+      recipeDocs = (results[11] as QuerySnapshot<Map<String, dynamic>>).docs;
+      yieldDocs = (results[12] as QuerySnapshot<Map<String, dynamic>>).docs;
+      policyDocs = (results[13] as QuerySnapshot<Map<String, dynamic>>).docs;
+      policySettingsDoc = results[14] as DocumentSnapshot<Map<String, dynamic>>;
+      kitchenDocs = (results[15] as QuerySnapshot<Map<String, dynamic>>).docs;
+      targetDocs = (results[16] as QuerySnapshot<Map<String, dynamic>>).docs;
+      budgetDocs = (results[17] as QuerySnapshot<Map<String, dynamic>>).docs;
+      hitLimit = ordersCursor.hitLimit || prevOrdersCursor.hitLimit;
     }
 
     bool matchesBranch(String docBranch) =>
         branchId == null || branchId.isEmpty || docBranch == branchId;
 
-    final orders = ordersCursor.docs
+    final orders = ordersDocs
         .map(PosOrder.fromDoc)
         .where((o) => matchesBranch(o.branchId))
         .toList(growable: false);
-    final prevOrders = prevOrdersCursor.docs
+    final prevOrders = prevOrdersDocs
         .map(PosOrder.fromDoc)
         .where((o) => matchesBranch(o.branchId))
         .toList(growable: false);
 
-    final cashSessions =
-        (results[2] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(CashSession.fromDoc)
-            .where((s) => matchesBranch(s.branchId))
-            .toList(growable: false);
-    final prevCashSessions =
-        (results[3] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(CashSession.fromDoc)
-            .where((s) => matchesBranch(s.branchId))
-            .toList(growable: false);
+    final cashSessions = cashDocs
+        .map(CashSession.fromDoc)
+        .where((s) => matchesBranch(s.branchId))
+        .toList(growable: false);
+    final prevCashSessions = prevCashDocs
+        .map(CashSession.fromDoc)
+        .where((s) => matchesBranch(s.branchId))
+        .toList(growable: false);
 
-    final withdrawals =
-        (results[4] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(CashWithdrawalRequest.fromDoc)
-            .where((w) => matchesBranch(w.branchId))
-            .toList(growable: false);
-    final prevWithdrawals =
-        (results[5] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(CashWithdrawalRequest.fromDoc)
-            .where((w) => matchesBranch(w.branchId))
-            .toList(growable: false);
+    final withdrawals = withdrawalDocs
+        .map(CashWithdrawalRequest.fromDoc)
+        .where((w) => matchesBranch(w.branchId))
+        .toList(growable: false);
+    final prevWithdrawals = prevWithdrawalDocs
+        .map(CashWithdrawalRequest.fromDoc)
+        .where((w) => matchesBranch(w.branchId))
+        .toList(growable: false);
 
-    final purchases = (results[6] as QuerySnapshot<Map<String, dynamic>>).docs
+    final purchases = purchaseDocs
         .map(SupplierPurchase.fromDoc)
         .where((p) => matchesBranch(p.branchId))
         .toList(growable: false);
-    final prevPurchases =
-        (results[7] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(SupplierPurchase.fromDoc)
-            .where((p) => matchesBranch(p.branchId))
-            .toList(growable: false);
+    final prevPurchases = prevPurchaseDocs
+        .map(SupplierPurchase.fromDoc)
+        .where((p) => matchesBranch(p.branchId))
+        .toList(growable: false);
 
-    final supplierPayments =
-        (results[8] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(SupplierPayment.fromDoc)
-            .where((p) => matchesBranch(p.branchId))
-            .toList(growable: false);
+    final supplierPayments = supplierPaymentDocs
+        .map(SupplierPayment.fromDoc)
+        .where((p) => matchesBranch(p.branchId))
+        .toList(growable: false);
 
-    final partners = (results[9] as QuerySnapshot<Map<String, dynamic>>).docs
+    final partners = partnerDocs
         .map(Partner.fromDoc)
         .toList(growable: false);
 
-    final contributions =
-        (results[10] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(PartnerContribution.fromDoc)
-            .where((c) => matchesBranch(c.branchId))
-            .toList(growable: false);
+    final contributions = contributionDocs
+        .map(PartnerContribution.fromDoc)
+        .where((c) => matchesBranch(c.branchId))
+        .toList(growable: false);
 
-    final recipes = (results[11] as QuerySnapshot<Map<String, dynamic>>).docs
+    final recipes = recipeDocs
         .map(TheoreticalProductRecipe.fromDoc)
         .toList(growable: false);
 
-    final yieldProfiles =
-        (results[12] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(IngredientYieldProfile.fromDoc)
-            .toList(growable: false);
+    final yieldProfiles = yieldDocs
+        .map(IngredientYieldProfile.fromDoc)
+        .toList(growable: false);
 
-    final expensePolicies =
-        (results[13] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map((d) => ExpensePolicy.fromMap(d.id, d.data()))
-            .toList(growable: false);
+    final expensePolicies = policyDocs
+        .map((d) => ExpensePolicy.fromMap(d.id, d.data() ?? const {}))
+        .toList(growable: false);
 
-    final settingsSnap = results[14] as DocumentSnapshot<Map<String, dynamic>>;
-    final expensePolicySettings = settingsSnap.exists
-        ? ExpensePolicySettings.fromMap(settingsSnap.data())
+    final expensePolicySettings =
+        policySettingsDoc != null && policySettingsDoc.exists
+        ? ExpensePolicySettings.fromMap(policySettingsDoc.data())
         : const ExpensePolicySettings();
 
-    final kitchenSessions =
-        (results[15] as QuerySnapshot<Map<String, dynamic>>).docs
-            .map(KitchenSession.fromDoc)
-            .where((s) => matchesBranch(s.branchId))
-            .toList(growable: false);
+    final kitchenSessions = kitchenDocs
+        .map(KitchenSession.fromDoc)
+        .where((s) => matchesBranch(s.branchId))
+        .toList(growable: false);
 
     final savedTargets = <String, double>{};
-    for (final doc
-        in (results[16] as QuerySnapshot<Map<String, dynamic>>).docs) {
-      final d = doc.data();
+    for (final doc in targetDocs) {
+      final d = doc.data() ?? const {};
       final b = (d['branchId'] ?? '').toString();
       if (!matchesBranch(b)) continue;
       final cat = (d['category'] ?? '').toString();
@@ -345,9 +427,8 @@ class FinanceRepository {
 
     double? salesTargetAmount;
     double? expenseBudgetAmount;
-    for (final doc
-        in (results[17] as QuerySnapshot<Map<String, dynamic>>).docs) {
-      final d = doc.data();
+    for (final doc in budgetDocs) {
+      final d = doc.data() ?? const {};
       final b = (d['branchId'] ?? '').toString();
       if (!matchesBranch(b)) continue;
       final key = (d['budgetType'] ?? '').toString();
@@ -366,10 +447,10 @@ class FinanceRepository {
         .toList(growable: false);
 
     final subResults = await Future.wait([
-      _fetchOrderItemSubcollections(restRef, activeOrders),
-      _fetchOrderPaymentSubcollections(restRef, activeOrders),
-      _fetchPurchaseItemSubcollections(restRef, activePurchases),
-      _fetchKitchenItems(restRef, kitchenSessions.take(10).toList()),
+      _fetchOrderItemSubcollections(restaurantId, restRef, activeOrders),
+      _fetchOrderPaymentSubcollections(restaurantId, restRef, activeOrders),
+      _fetchPurchaseItemSubcollections(restaurantId, restRef, activePurchases),
+      _fetchKitchenItems(restaurantId, restRef, kitchenSessions.take(10).toList()),
     ]);
     final itemsByOrder = subResults[0] as Map<String, List<OrderItem>>;
     final paymentsByOrder = subResults[1] as Map<String, List<Payment>>;
@@ -432,7 +513,6 @@ class FinanceRepository {
       distributableBase: summary.operatingCashFlow,
     );
 
-    final hitLimit = ordersCursor.hitLimit || prevOrdersCursor.hitLimit;
     final bundle = FinanceDashboardBundle(
       summary: summary,
       previousSummary: previousSummary,
@@ -466,13 +546,31 @@ class FinanceRepository {
   }
 
   Future<List<KitchenSessionItem>> _fetchKitchenItems(
-    DocumentReference<Map<String, dynamic>> restRef,
+    String restaurantId,
+    DocumentReference<Map<String, dynamic>>? restRef,
     List<KitchenSession> sessions,
   ) async {
     if (sessions.isEmpty) return const [];
+    final preview = _previewClient;
+    if (preview != null) {
+      final snaps = await Future.wait(
+        sessions.map(
+          (ks) => preview.queryAllPages(
+            restaurantId: restaurantId,
+            collection: 'kitchenSessions',
+            parentDocId: ks.id,
+            subcollection: 'items',
+            maxDocs: 60,
+          ),
+        ),
+      );
+      return snaps
+          .expand((s) => s.docs.map(KitchenSessionItem.fromDoc))
+          .toList(growable: false);
+    }
     final snaps = await Future.wait(
       sessions.map(
-        (ks) => restRef
+        (ks) => restRef!
             .collection('kitchenSessions')
             .doc(ks.id)
             .collection('items')
@@ -486,70 +584,135 @@ class FinanceRepository {
   }
 
   Future<Map<String, List<OrderItem>>> _fetchOrderItemSubcollections(
-    DocumentReference<Map<String, dynamic>> restRef,
+    String restaurantId,
+    DocumentReference<Map<String, dynamic>>? restRef,
     List<PosOrder> orders,
   ) async {
+    final preview = _previewClient;
     final out = <String, List<OrderItem>>{};
     for (var i = 0; i < orders.length; i += 50) {
       final chunk = orders.sublist(i, (i + 50).clamp(0, orders.length));
-      final snaps = await Future.wait(
-        chunk.map(
-          (o) => restRef.collection('orders').doc(o.id).collection('items').get(),
-        ),
-      );
-      for (var j = 0; j < chunk.length; j++) {
-        out[chunk[j].id] = snaps[j].docs
-            .map(OrderItem.fromDoc)
-            .where(
-              (item) =>
-                  item.status.trim().toLowerCase() != 'cancelled' &&
-                  item.cancelStatus.trim().toLowerCase() != 'cancelled',
-            )
-            .toList(growable: false);
+      if (preview != null) {
+        final snaps = await Future.wait(
+          chunk.map(
+            (o) => preview.queryAllPages(
+              restaurantId: restaurantId,
+              collection: 'orders',
+              parentDocId: o.id,
+              subcollection: 'items',
+              maxDocs: 200,
+            ),
+          ),
+        );
+        for (var j = 0; j < chunk.length; j++) {
+          out[chunk[j].id] = snaps[j].docs
+              .map(OrderItem.fromDoc)
+              .where(
+                (item) =>
+                    item.status.trim().toLowerCase() != 'cancelled' &&
+                    item.cancelStatus.trim().toLowerCase() != 'cancelled',
+              )
+              .toList(growable: false);
+        }
+      } else {
+        final snaps = await Future.wait(
+          chunk.map(
+            (o) => restRef!.collection('orders').doc(o.id).collection('items').get(),
+          ),
+        );
+        for (var j = 0; j < chunk.length; j++) {
+          out[chunk[j].id] = snaps[j].docs
+              .map(OrderItem.fromDoc)
+              .where(
+                (item) =>
+                    item.status.trim().toLowerCase() != 'cancelled' &&
+                    item.cancelStatus.trim().toLowerCase() != 'cancelled',
+              )
+              .toList(growable: false);
+        }
       }
     }
     return out;
   }
 
   Future<Map<String, List<Payment>>> _fetchOrderPaymentSubcollections(
-    DocumentReference<Map<String, dynamic>> restRef,
+    String restaurantId,
+    DocumentReference<Map<String, dynamic>>? restRef,
     List<PosOrder> orders,
   ) async {
+    final preview = _previewClient;
     final out = <String, List<Payment>>{};
     for (var i = 0; i < orders.length; i += 50) {
       final chunk = orders.sublist(i, (i + 50).clamp(0, orders.length));
-      final snaps = await Future.wait(
-        chunk.map(
-          (o) =>
-              restRef.collection('orders').doc(o.id).collection('payments').get(),
-        ),
-      );
-      for (var j = 0; j < chunk.length; j++) {
-        out[chunk[j].id] =
-            snaps[j].docs.map(Payment.fromDoc).toList(growable: false);
+      if (preview != null) {
+        final snaps = await Future.wait(
+          chunk.map(
+            (o) => preview.queryAllPages(
+              restaurantId: restaurantId,
+              collection: 'orders',
+              parentDocId: o.id,
+              subcollection: 'payments',
+              maxDocs: 100,
+            ),
+          ),
+        );
+        for (var j = 0; j < chunk.length; j++) {
+          out[chunk[j].id] =
+              snaps[j].docs.map(Payment.fromDoc).toList(growable: false);
+        }
+      } else {
+        final snaps = await Future.wait(
+          chunk.map(
+            (o) =>
+                restRef!.collection('orders').doc(o.id).collection('payments').get(),
+          ),
+        );
+        for (var j = 0; j < chunk.length; j++) {
+          out[chunk[j].id] =
+              snaps[j].docs.map(Payment.fromDoc).toList(growable: false);
+        }
       }
     }
     return out;
   }
 
   Future<List<SupplierPurchaseItem>> _fetchPurchaseItemSubcollections(
-    DocumentReference<Map<String, dynamic>> restRef,
+    String restaurantId,
+    DocumentReference<Map<String, dynamic>>? restRef,
     List<SupplierPurchase> purchases,
   ) async {
+    final preview = _previewClient;
     final out = <SupplierPurchaseItem>[];
     for (var i = 0; i < purchases.length; i += 20) {
       final chunk = purchases.sublist(i, (i + 20).clamp(0, purchases.length));
-      final snaps = await Future.wait(
-        chunk.map(
-          (p) => restRef
-              .collection('supplierPurchases')
-              .doc(p.id)
-              .collection('items')
-              .get(),
-        ),
-      );
-      for (final s in snaps) {
-        out.addAll(s.docs.map(SupplierPurchaseItem.fromDoc));
+      if (preview != null) {
+        final snaps = await Future.wait(
+          chunk.map(
+            (p) => preview.queryAllPages(
+              restaurantId: restaurantId,
+              collection: 'supplierPurchases',
+              parentDocId: p.id,
+              subcollection: 'items',
+              maxDocs: 100,
+            ),
+          ),
+        );
+        for (final s in snaps) {
+          out.addAll(s.docs.map(SupplierPurchaseItem.fromDoc));
+        }
+      } else {
+        final snaps = await Future.wait(
+          chunk.map(
+            (p) => restRef!
+                .collection('supplierPurchases')
+                .doc(p.id)
+                .collection('items')
+                .get(),
+          ),
+        );
+        for (final s in snaps) {
+          out.addAll(s.docs.map(SupplierPurchaseItem.fromDoc));
+        }
       }
     }
     return out;

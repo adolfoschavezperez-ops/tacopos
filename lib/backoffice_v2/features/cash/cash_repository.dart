@@ -6,6 +6,8 @@ import '../../../models/cash_withdrawal_request.dart';
 import '../../../models/order.dart';
 import '../../../models/payment.dart';
 import '../../core/adapters/sales_adapter.dart';
+import '../../core/preview/preview_api_client.dart';
+import '../../core/read_only_guard.dart';
 
 class CashReadMetrics {
   const CashReadMetrics({
@@ -251,10 +253,17 @@ class CashDashboardData {
 /// `businessDate` / `branchId` filters, never executing global
 /// `collectionGroup('payments')` scans.
 class CashRepository {
-  CashRepository({FirebaseFirestore? firestore})
-    : _db = firestore ?? FirebaseFirestore.instance;
+  CashRepository({
+    FirebaseFirestore? firestore,
+    PreviewApiClient? previewClient,
+    this.isReadOnly = false,
+  }) : _dbOverride = firestore,
+       _previewClient = previewClient;
 
-  final FirebaseFirestore _db;
+  final FirebaseFirestore? _dbOverride;
+  FirebaseFirestore get _db => _dbOverride ?? FirebaseFirestore.instance;
+  final PreviewApiClient? _previewClient;
+  final bool isReadOnly;
 
   Future<CashDashboardData> loadCashDashboard({
     required String restaurantId,
@@ -264,39 +273,68 @@ class CashRepository {
     String? employeeQuery,
     String? selectedSessionId,
   }) async {
-    Query<Map<String, dynamic>> sessionsQuery = _db
-        .collection('restaurants')
-        .doc(restaurantId)
-        .collection('cashSessions')
-        .where('businessDate', isGreaterThanOrEqualTo: startBusinessDate)
-        .where('businessDate', isLessThanOrEqualTo: endBusinessDate)
-        .orderBy('businessDate', descending: true);
+    final preview = _previewClient;
+    final List<DocumentSnapshot<Map<String, dynamic>>> sessionDocs;
+    final List<DocumentSnapshot<Map<String, dynamic>>> withdrawalDocs;
 
-    Query<Map<String, dynamic>> withdrawalsQuery = _db
-        .collection('restaurants')
-        .doc(restaurantId)
-        .collection('cashWithdrawalRequests')
-        .where('businessDate', isGreaterThanOrEqualTo: startBusinessDate)
-        .where('businessDate', isLessThanOrEqualTo: endBusinessDate)
-        .orderBy('businessDate', descending: true);
+    if (preview != null) {
+      final results = await Future.wait([
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'cashSessions',
+          branchId: branchId,
+          startBusinessDate: startBusinessDate,
+          endBusinessDate: endBusinessDate,
+          maxDocs: 200,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'cashWithdrawalRequests',
+          branchId: branchId,
+          startBusinessDate: startBusinessDate,
+          endBusinessDate: endBusinessDate,
+          maxDocs: 300,
+        ),
+      ]);
+      sessionDocs = results[0].docs;
+      withdrawalDocs = results[1].docs;
+    } else {
+      Query<Map<String, dynamic>> sessionsQuery = _db
+          .collection('restaurants')
+          .doc(restaurantId)
+          .collection('cashSessions')
+          .where('businessDate', isGreaterThanOrEqualTo: startBusinessDate)
+          .where('businessDate', isLessThanOrEqualTo: endBusinessDate)
+          .orderBy('businessDate', descending: true);
 
-    if (branchId != null && branchId.isNotEmpty) {
-      sessionsQuery = sessionsQuery.where('branchId', isEqualTo: branchId);
-      withdrawalsQuery = withdrawalsQuery.where(
-        'branchId',
-        isEqualTo: branchId,
-      );
+      Query<Map<String, dynamic>> withdrawalsQuery = _db
+          .collection('restaurants')
+          .doc(restaurantId)
+          .collection('cashWithdrawalRequests')
+          .where('businessDate', isGreaterThanOrEqualTo: startBusinessDate)
+          .where('businessDate', isLessThanOrEqualTo: endBusinessDate)
+          .orderBy('businessDate', descending: true);
+
+      if (branchId != null && branchId.isNotEmpty) {
+        sessionsQuery = sessionsQuery.where('branchId', isEqualTo: branchId);
+        withdrawalsQuery = withdrawalsQuery.where(
+          'branchId',
+          isEqualTo: branchId,
+        );
+      }
+
+      final results = await Future.wait([
+        sessionsQuery.limit(100).get(),
+        withdrawalsQuery.limit(200).get(),
+      ]);
+      sessionDocs = results[0].docs;
+      withdrawalDocs = results[1].docs;
     }
 
-    final results = await Future.wait([
-      sessionsQuery.limit(100).get(),
-      withdrawalsQuery.limit(200).get(),
-    ]);
-
-    var sessions = results[0].docs
+    var sessions = sessionDocs
         .map(CashSession.fromDoc)
         .toList(growable: false);
-    final withdrawals = results[1].docs
+    final withdrawals = withdrawalDocs
         .map(CashWithdrawalRequest.fromDoc)
         .toList(growable: false);
 
@@ -354,8 +392,8 @@ class CashRepository {
       openSession: openSession,
       selectedDetail: selectedDetail,
       metrics: CashReadMetrics(
-        sessionsRead: results[0].docs.length,
-        withdrawalsRead: results[1].docs.length,
+        sessionsRead: sessionDocs.length,
+        withdrawalsRead: withdrawalDocs.length,
         ordersRead: ordersRead,
         paymentsRead: paymentsRead,
       ),
@@ -367,16 +405,31 @@ class CashRepository {
     required CashSession session,
     List<CashWithdrawalRequest>? preloadedWithdrawals,
   }) async {
-    final ordersSnap = await _db
-        .collection('restaurants')
-        .doc(restaurantId)
-        .collection('orders')
-        .where('branchId', isEqualTo: session.branchId)
-        .where('businessDate', isEqualTo: session.businessDate)
-        .limit(400)
-        .get();
+    final preview = _previewClient;
+    final List<DocumentSnapshot<Map<String, dynamic>>> orderDocs;
+    if (preview != null) {
+      final res = await preview.queryAllPages(
+        restaurantId: restaurantId,
+        collection: 'orders',
+        branchId: session.branchId,
+        startBusinessDate: session.businessDate,
+        endBusinessDate: session.businessDate,
+        maxDocs: 400,
+      );
+      orderDocs = res.docs;
+    } else {
+      final ordersSnap = await _db
+          .collection('restaurants')
+          .doc(restaurantId)
+          .collection('orders')
+          .where('branchId', isEqualTo: session.branchId)
+          .where('businessDate', isEqualTo: session.businessDate)
+          .limit(400)
+          .get();
+      orderDocs = ordersSnap.docs;
+    }
 
-    final orders = ordersSnap.docs
+    final orders = orderDocs
         .map(PosOrder.fromDoc)
         .where(
           (o) =>
@@ -395,19 +448,42 @@ class CashRepository {
     final payments = <Payment>[];
     var paymentsRead = 0;
     const batchSize = 15;
-    final docs = ordersSnap.docs;
-    for (var i = 0; i < docs.length; i += batchSize) {
-      final chunk = docs.sublist(i, (i + batchSize).clamp(0, docs.length));
-      final snaps = await Future.wait(
-        chunk.map((doc) => doc.reference.collection('payments').get()),
-      );
-      for (final snap in snaps) {
-        paymentsRead += snap.docs.length;
-        for (final pDoc in snap.docs) {
-          final payment = Payment.fromDoc(pDoc);
-          final sid = (payment.cashSessionId ?? '').trim();
-          if (sid == session.id || sid.isEmpty) {
-            payments.add(payment);
+    for (var i = 0; i < orderDocs.length; i += batchSize) {
+      final chunk = orderDocs.sublist(i, (i + batchSize).clamp(0, orderDocs.length));
+      if (preview != null) {
+        final snaps = await Future.wait(
+          chunk.map(
+            (doc) => preview.queryAllPages(
+              restaurantId: restaurantId,
+              collection: 'orders',
+              parentDocId: doc.id,
+              subcollection: 'payments',
+              maxDocs: 50,
+            ),
+          ),
+        );
+        for (final snap in snaps) {
+          paymentsRead += snap.dataReads;
+          for (final pDoc in snap.docs) {
+            final payment = Payment.fromDoc(pDoc);
+            final sid = (payment.cashSessionId ?? '').trim();
+            if (sid == session.id || sid.isEmpty) {
+              payments.add(payment);
+            }
+          }
+        }
+      } else {
+        final snaps = await Future.wait(
+          chunk.map((doc) => doc.reference.collection('payments').get()),
+        );
+        for (final snap in snaps) {
+          paymentsRead += snap.docs.length;
+          for (final pDoc in snap.docs) {
+            final payment = Payment.fromDoc(pDoc);
+            final sid = (payment.cashSessionId ?? '').trim();
+            if (sid == session.id || sid.isEmpty) {
+              payments.add(payment);
+            }
           }
         }
       }
@@ -429,7 +505,7 @@ class CashRepository {
       metrics: CashReadMetrics(
         sessionsRead: 1,
         withdrawalsRead: preloadedWithdrawals == null ? withdrawals.length : 0,
-        ordersRead: ordersSnap.docs.length,
+        ordersRead: orderDocs.length,
         paymentsRead: paymentsRead,
       ),
     );
@@ -439,11 +515,27 @@ class CashRepository {
     required String restaurantId,
     required CashSession session,
   }) async {
+    final preview = _previewClient;
+    if (preview != null) {
+      final res = await preview.queryAllPages(
+        restaurantId: restaurantId,
+        collection: 'cashWithdrawalRequests',
+        branchId: session.branchId,
+        startBusinessDate: session.businessDate,
+        endBusinessDate: session.businessDate,
+        maxDocs: 100,
+      );
+      return res.docs
+          .map(CashWithdrawalRequest.fromDoc)
+          .where((w) => w.cashSessionId == session.id)
+          .toList(growable: false);
+    }
     final snap = await _db
         .collection('restaurants')
         .doc(restaurantId)
         .collection('cashWithdrawalRequests')
-        .where('businessDate', isEqualTo: session.businessDate)
+        .where('businessDate', isGreaterThanOrEqualTo: session.businessDate)
+        .where('businessDate', isLessThanOrEqualTo: session.businessDate)
         .where('branchId', isEqualTo: session.branchId)
         .limit(100)
         .get();
@@ -465,6 +557,10 @@ class CashRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Agregar gasto histórico en caja',
+    );
     final trimmedReason = reason.trim();
     if (amount <= 0) {
       throw ArgumentError('El monto del gasto debe ser mayor a cero.');
@@ -569,6 +665,10 @@ class CashRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Recalcular corte de caja cerrado',
+    );
     final restaurantRef = _db.collection('restaurants').doc(restaurantId);
     final sessionRef = restaurantRef.collection('cashSessions').doc(sessionId);
     final logRef = restaurantRef.collection('activityLog').doc();

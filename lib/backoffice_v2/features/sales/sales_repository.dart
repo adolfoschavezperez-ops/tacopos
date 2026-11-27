@@ -6,6 +6,8 @@ import '../../../models/order.dart';
 import '../../../models/order_item.dart';
 import '../../../models/payment.dart';
 import '../../core/adapters/sales_adapter.dart';
+import '../../core/preview/preview_api_client.dart';
+import '../../core/read_only_guard.dart';
 
 class SalesCursorPage {
   const SalesCursorPage({
@@ -13,12 +15,14 @@ class SalesCursorPage {
     required this.lastDocument,
     required this.hasNext,
     this.readCount = 0,
+    this.previewCursor,
   });
 
   final List<PosOrder> orders;
   final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
   final bool hasNext;
   final int readCount;
+  final Map<String, dynamic>? previewCursor;
 }
 
 class SalesBoundedBatch {
@@ -56,10 +60,17 @@ class SaleDetailData {
 /// Never downloads entire historical collections; pages in Firestore using
 /// `limit(pageSize + 1)` and `startAfterDocument(cursor)`.
 class SalesRepository {
-  SalesRepository({FirebaseFirestore? firestore})
-    : _db = firestore ?? FirebaseFirestore.instance;
+  SalesRepository({
+    FirebaseFirestore? firestore,
+    PreviewApiClient? previewClient,
+    this.isReadOnly = false,
+  }) : _dbOverride = firestore,
+       _previewClient = previewClient;
 
-  final FirebaseFirestore _db;
+  final FirebaseFirestore? _dbOverride;
+  FirebaseFirestore get _db => _dbOverride ?? FirebaseFirestore.instance;
+  final PreviewApiClient? _previewClient;
+  final bool isReadOnly;
 
   Future<SalesCursorPage> fetchSalesPage({
     required String restaurantId,
@@ -68,8 +79,30 @@ class SalesRepository {
     String? branchId,
     String? statusFilter,
     DocumentSnapshot<Map<String, dynamic>>? startAfter,
+    Map<String, dynamic>? previewStartAfter,
     int pageSize = 20,
   }) async {
+    final preview = _previewClient;
+    if (preview != null) {
+      final page = await preview.queryPage(
+        restaurantId: restaurantId,
+        collection: 'orders',
+        branchId: branchId,
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+        statusFilter: statusFilter,
+        limit: pageSize,
+        cursor: previewStartAfter,
+      );
+      return SalesCursorPage(
+        orders: page.docs.map(PosOrder.fromDoc).toList(growable: false),
+        lastDocument: page.docs.isEmpty ? null : page.docs.last,
+        hasNext: page.hasMore,
+        readCount: page.dataReads,
+        previewCursor: page.nextCursor,
+      );
+    }
+
     final query = _buildOrdersQuery(
       restaurantId: restaurantId,
       startBusinessDate: startBusinessDate,
@@ -163,6 +196,30 @@ class SalesRepository {
     void Function(int loadedCount, int chunkCount)? onProgress,
     bool Function()? isCancelled,
   }) async {
+    final preview = _previewClient;
+    if (preview != null) {
+      final res = await preview.queryAllPages(
+        restaurantId: restaurantId,
+        collection: 'orders',
+        branchId: branchId,
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+        statusFilter: statusFilter,
+        pageSize: pageSize,
+        maxDocs: maxLimit ?? 3000,
+        isCancelled: isCancelled,
+      );
+      final orders = res.docs.map(PosOrder.fromDoc).toList(growable: false);
+      onProgress?.call(orders.length, (orders.length / pageSize).ceil());
+      return SalesBoundedBatch(
+        orders: orders,
+        readCount: res.dataReads,
+        chunkCount: (orders.length / pageSize).ceil(),
+        truncated: res.isPartial,
+        wasCancelled: isCancelled?.call() == true,
+      );
+    }
+
     final baseQuery = _buildOrdersQuery(
       restaurantId: restaurantId,
       startBusinessDate: startBusinessDate,
@@ -258,6 +315,46 @@ class SalesRepository {
     required String restaurantId,
     required String orderId,
   }) async {
+    final preview = _previewClient;
+    if (preview != null) {
+      final orderSnap = await preview.fetchDoc(
+        restaurantId: restaurantId,
+        collection: 'orders',
+        docId: orderId,
+      );
+      if (orderSnap == null || !orderSnap.exists) return null;
+      final order = PosOrder.fromDoc(orderSnap);
+      final results = await Future.wait([
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'orders',
+          parentDocId: orderId,
+          subcollection: 'items',
+          maxDocs: 200,
+        ),
+        preview.queryAllPages(
+          restaurantId: restaurantId,
+          collection: 'orders',
+          parentDocId: orderId,
+          subcollection: 'payments',
+          maxDocs: 100,
+        ),
+      ]);
+      final items = results[0].docs.map(OrderItem.fromDoc).toList(growable: false);
+      final payments = results[1].docs.map(Payment.fromDoc).toList(growable: false);
+      final summary = BackofficeSalesAdapter.buildCanonicalSummary(
+        orders: [order],
+        itemsByOrder: {order.id: items},
+        paymentsByOrder: {order.id: payments},
+      );
+      return SaleDetailData(
+        order: order,
+        items: items,
+        payments: payments,
+        canonicalSummary: summary,
+      );
+    }
+
     final orderRef = _db
         .collection('restaurants')
         .doc(restaurantId)
@@ -302,6 +399,10 @@ class SalesRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Cancelar pago',
+    );
     final cleanReason = reason.trim();
     if (!isValidCancellationReason(cleanReason)) {
       throw ArgumentError('Captura el motivo de cancelación.');
@@ -421,6 +522,10 @@ class SalesRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Cancelar pago',
+    );
     final cleanReason = reason.trim();
     if (!isValidCancellationReason(cleanReason)) {
       throw ArgumentError('Captura el motivo de cancelación.');

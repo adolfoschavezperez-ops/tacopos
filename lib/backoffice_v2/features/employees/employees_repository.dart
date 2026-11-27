@@ -141,9 +141,10 @@ class EmployeesRepository {
   EmployeesRepository({
     FirebaseFirestore? firestore,
     this.isReadOnly = false,
-  }) : _db = firestore ?? FirebaseFirestore.instance;
+  }) : _dbOverride = firestore;
 
-  final FirebaseFirestore _db;
+  final FirebaseFirestore? _dbOverride;
+  FirebaseFirestore get _db => _dbOverride ?? FirebaseFirestore.instance;
   final bool isReadOnly;
 
   Future<EmployeesDashboardData> loadEmployees({

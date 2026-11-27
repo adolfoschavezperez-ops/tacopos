@@ -10,13 +10,15 @@
 ### Alternativa A — Identidad Firebase Auth directa contra Firestore productivo (**DESCARTADA**)
 - **Por qué se descarta:** Las Firestore Rules productivas heredadas permiten escrituras amplias mediante `signedIn()`. Agregar una regla que niegue escrituras a un usuario específico **no protege** si otra regla `allow write: if signedIn()` permite la operación. Además, leer `employees` directamente entregaría campos `pin` en texto plano al navegador (`P0-4`), y modificar las Rules productivas conlleva riesgo de bloquear Android (+32) o Backoffice 1.0.
 
-### Alternativa B — API Intermedia Autenticada de Solo Lectura con IAM `roles/datastore.viewer` (**RECOMENDADA**)
-- **Flujo:**
-  1. El cliente Flutter Web (`ENV=preview`) se autentica contra Firebase Auth en un proyecto aislado (`tacopos-backoffice-dev`) con la cuenta dedicada del propietario (sin PINs heredados).
-  2. El navegador envía el `Firebase ID Token` al servicio **Preview Read-Only API** (`tools/preview_api/server.js`).
-  3. El servidor valida el token con `checkRevoked = true`, verifica que el correo pertenezca a `PREVIEW_OWNER_EMAILS` (allowlist explícita del propietario), valida `authUsers.active == true`, `employees.active == true` y `branchAccess`.
-  4. El servidor ejecuta consultas acotadas (`MAX_DOCS_PER_QUERY = 500`) sobre Firestore usando **únicamente** una Cuenta de Servicio con el rol IAM **`roles/datastore.viewer`** (cero permisos de escritura a nivel GCP/IAM).
-  5. Antes de responder al navegador, `projection.js` elimina `pin`, `pinHash`, `passwordHash`, tokens y secretos de `employees`.
+### Alternativa B — API Intermedia Autenticada de Solo Lectura con separación Auth/Authz/Data e IAM `roles/datastore.viewer` (**RECOMENDADA E INTEGRADA EN FLUTTER**)
+- **Flujo (Fase 9.1.2):**
+  1. El cliente Flutter Web (`ENV=preview`) se autentica contra Firebase Auth en un proyecto aislado (`tacopos-backoffice-dev`, sin PINs heredados).
+  2. `BackofficeV2AuthService` y los 7 módulos prioritarios (`DashboardRepository`, `SalesRepository`, `CashRepository`, `PurchasesRepository` [Compras/Proveedores/CXP], `FinanceRepository`) consumen **exclusivamente** `PreviewApiClient` (`POST /v1/preview/session`, `/v1/preview/query`, `/v1/preview/doc`) con token Bearer renovable y **cero fallback** a Firestore DEV o producción.
+  3. El servidor **Preview Read-Only API** (`tools/preview_api/server.js`) separa explícitamente `auth` (Firebase Auth aislado), `authzDb` (`previewUsers/{uid}` aislado) y `dataDb` (Firestore de datos operativos con **únicamente `roles/datastore.viewer`**).
+  4. Para subcolecciones (`orders/{id}/items`, `orders/{id}/payments`, `kitchenSessions/{id}/items`, `supplierPurchases/{id}/items`), el servidor valida primero el documento padre y su `branchId` (denegando alcance ambiguo).
+  5. `projection.js` aplica proyecciones explícitas en `employees`, `devices`, `activityLog`, `settings` y `payments`, más sanitización recursiva de llaves sensibles (`pin`, `password`, `token`, `secret`, `credential`, `apiKey`).
+  6. Paginación determinista por cursor (`nextCursor`, `hasMore`, `filterHash`), rate-limit por UID, límite de concurrencia, CORS restringido y tope de rango histórico (`maxDaysRange`).
+- **Módulos prioritarios integrados en Preview (Fase 9.1.2):** `Dashboard`, `Ventas` (+ detalle), `Caja`, `Compras`, `Proveedores`, `Cuentas por pagar` y `Finanzas`. Los módulos secundarios (`Inventarios`, `Reportes`, `Auditoría`, `Empleados`, `Configuración`) permanecen sin fallback y se conectarán progresivamente sobre el mismo `PreviewApiClient` (sin mostrar datos sintéticos).
 - **Ventajas:** Cero modificaciones a `firestore.rules` de producción, cero impacto en Android (+32) y Backoffice 1.0, protección criptográfica de `pin`, imposible escribir incluso ante un error de código porque la cuenta de servicio carece de permisos IAM de escritura.
 
 ### Alternativa C — Copias periódicas / Exportación a proyecto secundario (**DESCARTADA**)
@@ -29,8 +31,11 @@
 Para la Cuenta de Servicio dedicada (`tacopos-preview-reader@<proyecto>.iam.gserviceaccount.com`):
 - **En el proyecto productivo (lectura de datos):**
   - `roles/datastore.viewer` (**exclusivamente lectura** de Cloud Firestore; prohíbe `datastore.entities.create/update/delete`).
-- **Prohibido asignar:** `roles/datastore.user`, `roles/editor`, `roles/owner`, `roles/firebase.admin` o permisos de escritura.
+- **En el proyecto aislado de autenticación/autorización (`tacopos-backoffice-dev`):**
+  - Lectura de `previewUsers/{uid}` y verificación de tokens/revocación Firebase Auth (`roles/firebaseauth.viewer` + lectura Firestore de `previewUsers`).
+- **Prohibido asignar en producción:** `roles/datastore.user`, `roles/editor`, `roles/owner`, `roles/firebase.admin` o cualquier permiso de escritura.
 - **Credenciales en cliente:** Cero llaves de servicio en Flutter Web o navegador.
+- **Nota sobre verificación IAM real:** Las pruebas actuales validan la lógica contra Emulator; la verificación efectiva de permisos IAM (`roles/datastore.viewer` rechazando escrituras en GCP) deberá completarse durante la habilitación controlada cuando el propietario autorice la cuenta de servicio.
 
 ---
 

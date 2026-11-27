@@ -9,6 +9,7 @@ import '../auth/login_page.dart';
 import '../core/cache/backoffice_cache_scope.dart';
 import '../core/design/backoffice_theme.dart';
 import '../core/env/backoffice_env.dart';
+import '../core/preview/preview_api_client.dart';
 import '../features/audit/audit_page.dart';
 import '../features/audit/audit_repository.dart';
 import '../features/authorizations/authorizations_page.dart';
@@ -76,15 +77,34 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     _session = BackofficeSession(config: widget.config);
     _cacheScope = BackofficeCacheScope();
     _session.addListener(_syncCacheScope);
-    _authService = BackofficeV2AuthService(config: widget.config);
-    _dashboardRepository = DashboardRepository(cacheScope: _cacheScope);
-    _salesRepository = SalesRepository();
-    _cashRepository = CashRepository();
+    final previewClient = widget.config.isPreview
+        ? PreviewApiClient(baseUrl: widget.config.previewApiUrl)
+        : null;
+    _authService = BackofficeV2AuthService(
+      config: widget.config,
+      previewClient: previewClient,
+    );
+    _dashboardRepository = DashboardRepository(
+      cacheScope: _cacheScope,
+      previewClient: previewClient,
+    );
+    _salesRepository = SalesRepository(
+      previewClient: previewClient,
+      isReadOnly: widget.config.isReadOnly,
+    );
+    _cashRepository = CashRepository(
+      previewClient: previewClient,
+      isReadOnly: widget.config.isReadOnly,
+    );
     _authorizationsRepository = AuthorizationsRepository();
     _inventoryRepository = InventoryRepository();
-    _purchasesRepository = PurchasesRepository();
+    _purchasesRepository = PurchasesRepository(
+      previewClient: previewClient,
+      isReadOnly: widget.config.isReadOnly,
+    );
     _financeRepository = FinanceRepository(
       cacheScope: _cacheScope,
+      previewClient: previewClient,
       isReadOnly: widget.config.isReadOnly,
     );
     _reportsRepository = ReportsRepository(cacheScope: _cacheScope);

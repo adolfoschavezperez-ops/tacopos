@@ -8,6 +8,7 @@ import '../../../models/order_item.dart';
 import '../../../models/payment.dart';
 import '../../core/adapters/sales_adapter.dart';
 import '../../core/cache/backoffice_cache_scope.dart';
+import '../../core/preview/preview_api_client.dart';
 
 class DailyRevenuePoint {
   const DailyRevenuePoint({
@@ -142,13 +143,17 @@ class DashboardRepository {
   DashboardRepository({
     FirebaseFirestore? firestore,
     BackofficeCacheScope? cacheScope,
-  }) : _db = firestore ?? FirebaseFirestore.instance,
-       _cacheScope = cacheScope ?? BackofficeCacheScope() {
+    PreviewApiClient? previewClient,
+  }) : _dbOverride = firestore,
+       _cacheScope = cacheScope ?? BackofficeCacheScope(),
+       _previewClient = previewClient {
     _cacheScope.registerInvalidator(invalidateCache);
   }
 
-  final FirebaseFirestore _db;
+  final FirebaseFirestore? _dbOverride;
+  FirebaseFirestore get _db => _dbOverride ?? FirebaseFirestore.instance;
   final BackofficeCacheScope _cacheScope;
+  final PreviewApiClient? _previewClient;
   final Map<String, _CachedEntry> _cache = {};
 
   static const int maxOrdersPerQuery = 600;
@@ -380,23 +385,43 @@ class DashboardRepository {
     required String endBusinessDate,
     String? branchId,
   }) async {
-    Query<Map<String, dynamic>> query = _db
-        .collection('restaurants')
-        .doc(restaurantId)
-        .collection('orders')
-        .where('businessDate', isGreaterThanOrEqualTo: startBusinessDate)
-        .where('businessDate', isLessThanOrEqualTo: endBusinessDate)
-        .orderBy('businessDate', descending: true);
+    final preview = _previewClient;
+    final List<DocumentSnapshot<Map<String, dynamic>>> docs;
+    final bool truncated;
+    var orderReads = 0;
 
-    if (branchId != null && branchId.isNotEmpty) {
-      query = query.where('branchId', isEqualTo: branchId);
+    if (preview != null) {
+      final res = await preview.queryAllPages(
+        restaurantId: restaurantId,
+        collection: 'orders',
+        branchId: branchId,
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+        maxDocs: maxOrdersPerQuery,
+      );
+      docs = res.docs;
+      truncated = res.isPartial;
+      orderReads = res.dataReads;
+    } else {
+      Query<Map<String, dynamic>> query = _db
+          .collection('restaurants')
+          .doc(restaurantId)
+          .collection('orders')
+          .where('businessDate', isGreaterThanOrEqualTo: startBusinessDate)
+          .where('businessDate', isLessThanOrEqualTo: endBusinessDate)
+          .orderBy('businessDate', descending: true);
+
+      if (branchId != null && branchId.isNotEmpty) {
+        query = query.where('branchId', isEqualTo: branchId);
+      }
+
+      final snapshot = await query.limit(maxOrdersPerQuery + 1).get();
+      truncated = snapshot.docs.length > maxOrdersPerQuery;
+      docs = truncated
+          ? snapshot.docs.take(maxOrdersPerQuery).toList(growable: false)
+          : snapshot.docs;
+      orderReads = docs.length;
     }
-
-    final snapshot = await query.limit(maxOrdersPerQuery + 1).get();
-    final truncated = snapshot.docs.length > maxOrdersPerQuery;
-    final docs = truncated
-        ? snapshot.docs.take(maxOrdersPerQuery).toList(growable: false)
-        : snapshot.docs;
 
     final orders = docs.map(PosOrder.fromDoc).toList(growable: false);
     final itemsByOrder = <String, List<OrderItem>>{};
@@ -416,23 +441,50 @@ class DashboardRepository {
       );
       await Future.wait(
         chunk.map((order) async {
-          final orderRef = _db
-              .collection('restaurants')
-              .doc(restaurantId)
-              .collection('orders')
-              .doc(order.id);
-          final results = await Future.wait([
-            orderRef.collection('items').get(),
-            orderRef.collection('payments').get(),
-          ]);
-          itemReads += results[0].docs.length;
-          paymentReads += results[1].docs.length;
-          itemsByOrder[order.id] = results[0].docs
-              .map(OrderItem.fromDoc)
-              .toList(growable: false);
-          paymentsByOrder[order.id] = results[1].docs
-              .map(Payment.fromDoc)
-              .toList(growable: false);
+          if (preview != null) {
+            final results = await Future.wait([
+              preview.queryAllPages(
+                restaurantId: restaurantId,
+                collection: 'orders',
+                parentDocId: order.id,
+                subcollection: 'items',
+                maxDocs: 200,
+              ),
+              preview.queryAllPages(
+                restaurantId: restaurantId,
+                collection: 'orders',
+                parentDocId: order.id,
+                subcollection: 'payments',
+                maxDocs: 100,
+              ),
+            ]);
+            itemReads += results[0].dataReads;
+            paymentReads += results[1].dataReads;
+            itemsByOrder[order.id] = results[0].docs
+                .map(OrderItem.fromDoc)
+                .toList(growable: false);
+            paymentsByOrder[order.id] = results[1].docs
+                .map(Payment.fromDoc)
+                .toList(growable: false);
+          } else {
+            final orderRef = _db
+                .collection('restaurants')
+                .doc(restaurantId)
+                .collection('orders')
+                .doc(order.id);
+            final results = await Future.wait([
+              orderRef.collection('items').get(),
+              orderRef.collection('payments').get(),
+            ]);
+            itemReads += results[0].docs.length;
+            paymentReads += results[1].docs.length;
+            itemsByOrder[order.id] = results[0].docs
+                .map(OrderItem.fromDoc)
+                .toList(growable: false);
+            paymentsByOrder[order.id] = results[1].docs
+                .map(Payment.fromDoc)
+                .toList(growable: false);
+          }
         }),
       );
     }
@@ -447,7 +499,7 @@ class DashboardRepository {
       paymentsByOrder: paymentsByOrder,
       summary: summary,
       truncated: truncated,
-      orderReads: docs.length,
+      orderReads: orderReads,
       itemReads: itemReads,
       paymentReads: paymentReads,
     );
