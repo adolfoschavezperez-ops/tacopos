@@ -11,29 +11,62 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid));
     }
 
+    // P1-8: If authUser is linked to an employeeId that exists in employees/,
+    // require employees/{employeeId}.active == true in addition to authUsers.active == true.
+    function isEmployeeActiveIfLinked(restaurantId, empId) {
+      return empId == '' ||
+        !exists(/databases/$(database)/documents/restaurants/$(restaurantId)/employees/$(empId)) ||
+        get(/databases/$(database)/documents/restaurants/$(restaurantId)/employees/$(empId)).data.active == true;
+    }
+
     function isAuthorizedInRestaurant(restaurantId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid)) &&
-        authUserDoc(restaurantId).data.active == true;
+        authUserDoc(restaurantId).data.active == true &&
+        isEmployeeActiveIfLinked(restaurantId, authUserDoc(restaurantId).data.get('employeeId', ''));
     }
 
     function isSuperAdmin(restaurantId) {
       return isAuthorizedInRestaurant(restaurantId) &&
-        authUserDoc(restaurantId).data.isSuperAdmin == true;
+        authUserDoc(restaurantId).data.get('isSuperAdmin', false) == true;
     }
 
     function hasPermission(restaurantId, permission) {
+      let u = authUserDoc(restaurantId).data;
       return isAuthorizedInRestaurant(restaurantId) &&
-        (isSuperAdmin(restaurantId) ||
-          authUserDoc(restaurantId).data.permissions[permission] == true);
+        (u.get('isSuperAdmin', false) == true ||
+          u.permissions.get(permission, false) == true);
     }
 
+    // P2-1 / Branch Isolation: Empty or missing branchAccess NEVER grants universal access
+    // unless the user is superAdmin or has explicit allBranchesAccess == true.
     function canAccessBranch(restaurantId, branchId) {
-      return isAuthorizedInRestaurant(restaurantId) &&
-        (isSuperAdmin(restaurantId) ||
-          !('branchAccess' in authUserDoc(restaurantId).data) ||
-          authUserDoc(restaurantId).data.branchAccess.size() == 0 ||
-          branchId in authUserDoc(restaurantId).data.branchAccess);
+      let u = authUserDoc(restaurantId).data;
+      return branchId is string &&
+        branchId.size() > 0 &&
+        (u.get('isSuperAdmin', false) == true ||
+          u.get('allBranchesAccess', false) == true ||
+          ('branchAccess' in u &&
+            u.branchAccess is list &&
+            branchId in u.branchAccess));
+    }
+
+    function actorMatchesEmployeeId(restaurantId, fieldValue) {
+      let u = authUserDoc(restaurantId).data;
+      return fieldValue is string &&
+        fieldValue.size() > 0 &&
+        (!('employeeId' in u) ||
+          !(u.employeeId is string) ||
+          u.employeeId.size() == 0 ||
+          fieldValue == u.employeeId);
+    }
+
+    function isNonNegNumber(val) {
+      return val is number && val >= 0;
+    }
+
+    function isPosNumber(val) {
+      return val is number && val > 0;
     }
 
     function canReadCash(restaurantId) {
@@ -87,17 +120,6 @@ service cloud.firestore {
         hasPermission(restaurantId, 'canViewAdmin');
     }
 
-    function canUpdateSupplierPurchase(restaurantId) {
-      let u = authUserDoc(restaurantId).data;
-      return isAuthorizedInRestaurant(restaurantId) && (
-        u.isSuperAdmin == true ||
-        u.permissions.canViewAdmin == true ||
-        u.permissions.canRegisterPurchases == true ||
-        u.permissions.canPaySuppliers == true ||
-        u.permissions.canCancelSupplierPayments == true
-      );
-    }
-
     function canAuthorizeOps(restaurantId) {
       return hasPermission(restaurantId, 'canAuthorizeCashWithdrawals') ||
         hasPermission(restaurantId, 'canViewAdmin');
@@ -126,6 +148,81 @@ service cloud.firestore {
         hasPermission(restaurantId, 'canViewAdmin');
     }
 
+    // P0-2: Individual validation of all 28 permissions (evaluates perms map once)
+    function canGrantPermCreate(perms, data, key) {
+      return !(key in data) ||
+        data[key] == false ||
+        (data[key] == true && perms.get(key, false) == true);
+    }
+
+    function validAll28PermsCreate(perms, data) {
+      return canGrantPermCreate(perms, data, 'canTakeOrders') &&
+        canGrantPermCreate(perms, data, 'canCharge') &&
+        canGrantPermCreate(perms, data, 'canViewKitchen') &&
+        canGrantPermCreate(perms, data, 'canViewAdmin') &&
+        canGrantPermCreate(perms, data, 'canManageProducts') &&
+        canGrantPermCreate(perms, data, 'canManageTables') &&
+        canGrantPermCreate(perms, data, 'canManagePlatforms') &&
+        canGrantPermCreate(perms, data, 'canManageEmployees') &&
+        canGrantPermCreate(perms, data, 'canManageCash') &&
+        canGrantPermCreate(perms, data, 'canAuthorizeCashWithdrawals') &&
+        canGrantPermCreate(perms, data, 'canOpenKitchen') &&
+        canGrantPermCreate(perms, data, 'canCloseKitchen') &&
+        canGrantPermCreate(perms, data, 'canViewKitchenReports') &&
+        canGrantPermCreate(perms, data, 'canViewKitchenHourlySalesComparison') &&
+        canGrantPermCreate(perms, data, 'canManageKitchenStock') &&
+        canGrantPermCreate(perms, data, 'canCancelOrders') &&
+        canGrantPermCreate(perms, data, 'canCancelPayments') &&
+        canGrantPermCreate(perms, data, 'canCancelItems') &&
+        canGrantPermCreate(perms, data, 'canApproveKitchenCancellations') &&
+        canGrantPermCreate(perms, data, 'canViewLiveOperations') &&
+        canGrantPermCreate(perms, data, 'canControlLiveOperations') &&
+        canGrantPermCreate(perms, data, 'canViewPurchases') &&
+        canGrantPermCreate(perms, data, 'canManageSuppliers') &&
+        canGrantPermCreate(perms, data, 'canRegisterPurchases') &&
+        canGrantPermCreate(perms, data, 'canPaySuppliers') &&
+        canGrantPermCreate(perms, data, 'canCancelSupplierPayments') &&
+        canGrantPermCreate(perms, data, 'canViewAccountsPayable') &&
+        canGrantPermCreate(perms, data, 'canViewPurchaseReports');
+    }
+
+    function canChangePermUpdate(perms, affected, newData, key) {
+      return !(key in affected) ||
+        (newData[key] is bool && perms.get(key, false) == true);
+    }
+
+    function validAll28PermsUpdate(perms, newData, oldData) {
+      let affected = newData.diff(oldData).affectedKeys();
+      return canChangePermUpdate(perms, affected, newData, 'canTakeOrders') &&
+        canChangePermUpdate(perms, affected, newData, 'canCharge') &&
+        canChangePermUpdate(perms, affected, newData, 'canViewKitchen') &&
+        canChangePermUpdate(perms, affected, newData, 'canViewAdmin') &&
+        canChangePermUpdate(perms, affected, newData, 'canManageProducts') &&
+        canChangePermUpdate(perms, affected, newData, 'canManageTables') &&
+        canChangePermUpdate(perms, affected, newData, 'canManagePlatforms') &&
+        canChangePermUpdate(perms, affected, newData, 'canManageEmployees') &&
+        canChangePermUpdate(perms, affected, newData, 'canManageCash') &&
+        canChangePermUpdate(perms, affected, newData, 'canAuthorizeCashWithdrawals') &&
+        canChangePermUpdate(perms, affected, newData, 'canOpenKitchen') &&
+        canChangePermUpdate(perms, affected, newData, 'canCloseKitchen') &&
+        canChangePermUpdate(perms, affected, newData, 'canViewKitchenReports') &&
+        canChangePermUpdate(perms, affected, newData, 'canViewKitchenHourlySalesComparison') &&
+        canChangePermUpdate(perms, affected, newData, 'canManageKitchenStock') &&
+        canChangePermUpdate(perms, affected, newData, 'canCancelOrders') &&
+        canChangePermUpdate(perms, affected, newData, 'canCancelPayments') &&
+        canChangePermUpdate(perms, affected, newData, 'canCancelItems') &&
+        canChangePermUpdate(perms, affected, newData, 'canApproveKitchenCancellations') &&
+        canChangePermUpdate(perms, affected, newData, 'canViewLiveOperations') &&
+        canChangePermUpdate(perms, affected, newData, 'canControlLiveOperations') &&
+        canChangePermUpdate(perms, affected, newData, 'canViewPurchases') &&
+        canChangePermUpdate(perms, affected, newData, 'canManageSuppliers') &&
+        canChangePermUpdate(perms, affected, newData, 'canRegisterPurchases') &&
+        canChangePermUpdate(perms, affected, newData, 'canPaySuppliers') &&
+        canChangePermUpdate(perms, affected, newData, 'canCancelSupplierPayments') &&
+        canChangePermUpdate(perms, affected, newData, 'canViewAccountsPayable') &&
+        canChangePermUpdate(perms, affected, newData, 'canViewPurchaseReports');
+    }
+
     match /restaurants/{restaurantId} {
       allow read: if isAuthorizedInRestaurant(restaurantId);
       allow write: if false;
@@ -138,19 +235,59 @@ service cloud.firestore {
       match /branches/{branchId} {
         allow read: if isAuthorizedInRestaurant(restaurantId) &&
           canAccessBranch(restaurantId, branchId);
-        allow create, update: if isSuperAdmin(restaurantId) ||
-          hasPermission(restaurantId, 'canViewAdmin');
+        allow create: if (isSuperAdmin(restaurantId) || hasPermission(restaurantId, 'canViewAdmin')) &&
+          request.resource.data.restaurantId == restaurantId &&
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 &&
+          request.resource.data.active is bool;
+        allow update: if (isSuperAdmin(restaurantId) || hasPermission(restaurantId, 'canViewAdmin')) &&
+          canAccessBranch(restaurantId, branchId) &&
+          request.resource.data.restaurantId == resource.data.restaurantId &&
+          request.resource.data.id == resource.data.id;
         allow delete: if false;
       }
 
+      // P0-1: Strict field allowlists, immutability, types, and state transitions on orders
       match /orders/{orderId} {
         allow read: if (hasPermission(restaurantId, 'canViewAdmin') || canReadFinance(restaurantId)) &&
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create, delete: if false;
-        allow update: if (hasPermission(restaurantId, 'canCancelOrders') ||
-            hasPermission(restaurantId, 'canCancelPayments') ||
-            hasPermission(restaurantId, 'canViewAdmin')) &&
-          canAccessBranch(restaurantId, resource.data.branchId);
+        allow update: if canAccessBranch(restaurantId, resource.data.branchId) &&
+          request.resource.data.restaurantId == resource.data.restaurantId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.total == resource.data.total &&
+          isNonNegNumber(request.resource.data.paidTotal) &&
+          isNonNegNumber(request.resource.data.pendingTotal) &&
+          (
+            // Payment cancellation flow (canCancelPayments or canViewAdmin)
+            (
+              (hasPermission(restaurantId, 'canCancelPayments') || hasPermission(restaurantId, 'canViewAdmin')) &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'paidTotal', 'pendingTotal', 'paymentStatus', 'status', 'updatedAt'
+              ]) &&
+              request.resource.data.paymentStatus in ['pending', 'partial', 'paid'] &&
+              request.resource.data.status != 'cancelled'
+            ) ||
+            // Full order cancellation flow (canCancelOrders or canViewAdmin)
+            (
+              (hasPermission(restaurantId, 'canCancelOrders') || hasPermission(restaurantId, 'canViewAdmin')) &&
+              resource.data.status != 'cancelled' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status', 'kitchenStatus', 'paymentStatus', 'cancelStatus',
+                'cancelledAt', 'cancelledByEmployeeId', 'cancelledByEmployeeName',
+                'cancelReason', 'pendingTotal', 'paidTotal', 'updatedAt'
+              ]) &&
+              request.resource.data.status == 'cancelled' &&
+              request.resource.data.kitchenStatus == 'cancelled' &&
+              request.resource.data.paymentStatus == 'cancelled' &&
+              request.resource.data.cancelStatus == 'accepted' &&
+              request.resource.data.pendingTotal == 0 &&
+              request.resource.data.paidTotal == 0 &&
+              request.resource.data.cancelReason is string &&
+              request.resource.data.cancelReason.size() >= 3 &&
+              actorMatchesEmployeeId(restaurantId, request.resource.data.cancelledByEmployeeId)
+            )
+          );
 
         match /items/{itemId} {
           allow read: if (hasPermission(restaurantId, 'canViewAdmin') || canReadFinance(restaurantId)) &&
@@ -164,7 +301,18 @@ service cloud.firestore {
             canAccessBranch(
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
-            );
+            ) &&
+            resource.data.status != 'cancelled' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'kitchenStatus', 'paymentStatus',
+              'cancelledAt', 'cancelledByEmployeeId', 'cancelledByEmployeeName', 'cancelReason'
+            ]) &&
+            request.resource.data.status == 'cancelled' &&
+            request.resource.data.kitchenStatus == 'cancelled' &&
+            request.resource.data.paymentStatus == 'cancelled' &&
+            request.resource.data.cancelReason is string &&
+            request.resource.data.cancelReason.size() >= 3 &&
+            actorMatchesEmployeeId(restaurantId, request.resource.data.cancelledByEmployeeId);
         }
 
         match /payments/{paymentId} {
@@ -179,10 +327,20 @@ service cloud.firestore {
             canAccessBranch(
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
-            );
+            ) &&
+            resource.data.status != 'cancelled' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'cancelledAt', 'cancelledByEmployeeId',
+              'cancelledByEmployeeName', 'cancelReason', 'updatedAt'
+            ]) &&
+            request.resource.data.status == 'cancelled' &&
+            request.resource.data.cancelReason is string &&
+            request.resource.data.cancelReason.size() >= 3 &&
+            actorMatchesEmployeeId(restaurantId, request.resource.data.cancelledByEmployeeId);
         }
       }
 
+      // P0-1: Closed cash session corrections only, immutable identifiers & opening/counted amounts
       match /cashSessions/{sessionId} {
         allow read: if (canReadCash(restaurantId) || canReadFinance(restaurantId)) &&
           canAccessBranch(restaurantId, resource.data.branchId);
@@ -190,29 +348,81 @@ service cloud.firestore {
         allow update: if canManageCashAdmin(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId) &&
           resource.data.status == 'closed' &&
-          request.resource.data.status == 'closed';
+          request.resource.data.status == 'closed' &&
+          request.resource.data.restaurantId == resource.data.restaurantId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'approvedWithdrawalsTotal', 'pendingWithdrawalsTotal',
+            'expectedCashAmount', 'expectedCardChargedAmount', 'expectedPlatformAmount',
+            'cashDifference', 'cardDifference', 'netDifference',
+            'shortageAmount', 'overAmount',
+            'totalExpectedRealMoney', 'totalCountedRealMoney',
+            'recalculatedByEmployeeId', 'recalculatedByEmployeeName',
+            'recalculatedAt', 'updatedAt'
+          ]) &&
+          (!('approvedWithdrawalsTotal' in request.resource.data) ||
+            isNonNegNumber(request.resource.data.approvedWithdrawalsTotal)) &&
+          (!('shortageAmount' in request.resource.data) ||
+            isNonNegNumber(request.resource.data.shortageAmount)) &&
+          (!('overAmount' in request.resource.data) ||
+            isNonNegNumber(request.resource.data.overAmount));
       }
 
+      // P0-1: Historical cash withdrawals & pending withdrawal authorization
       match /cashWithdrawalRequests/{requestId} {
         allow read: if (canReadCash(restaurantId) || canReadFinance(restaurantId)) &&
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create: if canManageCashAdmin(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId) &&
+          request.resource.data.restaurantId == restaurantId &&
           request.resource.data.isHistorical == true &&
-          request.resource.data.restaurantId == restaurantId;
+          request.resource.data.status == 'approved' &&
+          request.resource.data.source == 'historical_backoffice' &&
+          isPosNumber(request.resource.data.amount) &&
+          request.resource.data.reason is string &&
+          request.resource.data.reason.size() >= 3 &&
+          actorMatchesEmployeeId(restaurantId, request.resource.data.approvedByEmployeeId) &&
+          request.resource.data.keys().hasOnly([
+            'id', 'restaurantId', 'branchId', 'branchName', 'cashSessionId',
+            'businessDate', 'amount', 'reason', 'status', 'isHistorical',
+            'source', 'sourceName', 'requestedByEmployeeId', 'requestedByEmployeeName',
+            'authorizedByEmployeeId', 'authorizedByEmployeeName',
+            'approvedByEmployeeId', 'approvedByEmployeeName',
+            'requestedAt', 'createdAt', 'authorizedAt', 'approvedAt'
+          ]);
         allow update: if canAuthorizeOps(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId) &&
-          resource.data.status == 'pending';
+          resource.data.status == 'pending' &&
+          request.resource.data.status in ['approved', 'rejected'] &&
+          request.resource.data.restaurantId == resource.data.restaurantId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.amount == resource.data.amount &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'authorizedByEmployeeId', 'authorizedByEmployeeName',
+            'adminNotes', 'authorizedAt', 'updatedAt',
+            'approvedByEmployeeId', 'approvedByEmployeeName', 'approvedAt',
+            'rejectedByEmployeeId', 'rejectedByEmployeeName', 'rejectReason', 'rejectedAt'
+          ]) &&
+          actorMatchesEmployeeId(restaurantId, request.resource.data.authorizedByEmployeeId);
         allow delete: if false;
       }
 
+      // P0-1: Discount authorizations
       match /discountAuthorizationRequests/{requestId} {
         allow read: if canReadAuthorizations(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create, delete: if false;
         allow update: if canAuthorizeOps(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId) &&
-          resource.data.status == 'pending';
+          resource.data.status == 'pending' &&
+          request.resource.data.status in ['approved', 'rejected'] &&
+          request.resource.data.restaurantId == resource.data.restaurantId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'updatedAt',
+            'approvedAt', 'approvedByEmployeeId', 'approvedByEmployeeName',
+            'rejectedAt', 'rejectedByEmployeeId', 'rejectedByEmployeeName', 'rejectReason'
+          ]);
       }
 
       match /kitchenSessions/{sessionId} {
@@ -221,7 +431,8 @@ service cloud.firestore {
         allow create: if canManageKitchenOps(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId);
         allow update: if canManageKitchenOps(restaurantId) &&
-          canAccessBranch(restaurantId, resource.data.branchId);
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          request.resource.data.branchId == resource.data.branchId;
         allow delete: if false;
 
         match /items/{itemId} {
@@ -269,20 +480,67 @@ service cloud.firestore {
         allow create: if canManageKitchenOps(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId);
         allow update: if canManageKitchenOps(restaurantId) &&
-          canAccessBranch(restaurantId, resource.data.branchId);
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          request.resource.data.branchId == resource.data.branchId;
         allow delete: if false;
       }
 
+      // P0-1: Protected activityLog — blocks reserved capture/server markers and validates actor identity
       match /activityLog/{logId} {
         allow read: if isAuthorizedInRestaurant(restaurantId);
-        allow create: if isAuthorizedInRestaurant(restaurantId);
+        allow create: if isAuthorizedInRestaurant(restaurantId) &&
+          !logId.matches('^capture_submission_.*$') &&
+          !logId.matches('^payment_cancelled_.*$') &&
+          !('submissionId' in request.resource.data) &&
+          !('localCapture' in request.resource.data) &&
+          !('payloadHash' in request.resource.data) &&
+          request.resource.data.restaurantId == restaurantId &&
+          request.resource.data.type is string &&
+          request.resource.data.type in [
+            'payment_cancelled',
+            'order_cancelled',
+            'historical_cash_expense_added',
+            'historical_cash_correction',
+            'withdrawal_approved',
+            'withdrawal_rejected',
+            'discount_approved',
+            'discount_rejected',
+            'supplier_purchase_cancelled',
+            'supplier_payment_cancelled',
+            'partner_contribution_created',
+            'product_created',
+            'product_updated',
+            'product_toggled',
+            'category_created',
+            'category_updated',
+            'branch_created',
+            'branch_updated',
+            'table_created',
+            'table_updated',
+            'platform_created',
+            'platform_updated',
+            'discount_settings_updated',
+            'app_updates_settings_updated',
+            'employee_created',
+            'employee_updated',
+            'employee_activated',
+            'employee_deactivated'
+          ] &&
+          (!('actionSource' in request.resource.data) ||
+            request.resource.data.actionSource == 'backoffice_v2') &&
+          (!('branchId' in request.resource.data) ||
+            request.resource.data.branchId == null ||
+            request.resource.data.branchId == '' ||
+            canAccessBranch(restaurantId, request.resource.data.branchId)) &&
+          actorMatchesEmployeeId(restaurantId, request.resource.data.employeeId);
         allow update, delete: if false;
       }
 
       match /products/{productId} {
         allow read: if isAuthorizedInRestaurant(restaurantId);
-        allow create, update: if hasPermission(restaurantId, 'canManageProducts') ||
-          hasPermission(restaurantId, 'canViewAdmin');
+        allow create, update: if (hasPermission(restaurantId, 'canManageProducts') ||
+            hasPermission(restaurantId, 'canViewAdmin')) &&
+          (!('price' in request.resource.data) || isNonNegNumber(request.resource.data.price));
         allow delete: if false;
       }
 
@@ -301,7 +559,8 @@ service cloud.firestore {
           canAccessBranch(restaurantId, request.resource.data.branchId);
         allow update: if (hasPermission(restaurantId, 'canManageTables') ||
             hasPermission(restaurantId, 'canViewAdmin')) &&
-          canAccessBranch(restaurantId, resource.data.branchId);
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          request.resource.data.branchId == resource.data.branchId;
         allow delete: if false;
       }
 
@@ -312,16 +571,50 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // P0-2 & P0-4: Strict privilege escalation prevention + PIN exposure containment
       match /employees/{employeeId} {
-        allow read: if hasPermission(restaurantId, 'canManageEmployees') ||
-          hasPermission(restaurantId, 'canViewAdmin');
-        allow create: if hasPermission(restaurantId, 'canManageEmployees') ||
-          isSuperAdmin(restaurantId);
-        allow update: if (hasPermission(restaurantId, 'canManageEmployees') ||
-            isSuperAdmin(restaurantId)) &&
-          (resource.data.id != authUserDoc(restaurantId).data.employeeId ||
-            (request.resource.data.isSuperAdmin == resource.data.isSuperAdmin &&
-              request.resource.data.canManageEmployees == resource.data.canManageEmployees));
+        allow read: if (hasPermission(restaurantId, 'canManageEmployees') ||
+            hasPermission(restaurantId, 'canViewAdmin')) &&
+          !('pin' in resource.data);
+
+        allow create: if isAuthorizedInRestaurant(restaurantId) &&
+          (authUserDoc(restaurantId).data.get('isSuperAdmin', false) == true ||
+            authUserDoc(restaurantId).data.permissions.get('canManageEmployees', false) == true) &&
+          !('pin' in request.resource.data) &&
+          request.resource.data.restaurantId == restaurantId &&
+          request.resource.data.name is string &&
+          request.resource.data.name.size() > 0 &&
+          request.resource.data.active is bool &&
+          (authUserDoc(restaurantId).data.get('isSuperAdmin', false) == true ||
+            (request.resource.data.get('isSuperAdmin', false) == false &&
+              validAll28PermsCreate(authUserDoc(restaurantId).data.permissions, request.resource.data)));
+
+        allow update: if isAuthorizedInRestaurant(restaurantId) &&
+          !('pin' in request.resource.data.diff(resource.data).affectedKeys()) &&
+          request.resource.data.get('restaurantId', restaurantId) == resource.data.get('restaurantId', restaurantId) &&
+          (
+            // Self-edit: strictly limited to name & audit metadata; cannot touch any permission, role, branch, or active
+            (
+              employeeId == authUserDoc(restaurantId).data.get('employeeId', '') &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'name', 'updatedAt', 'updatedByEmployeeId', 'updatedByEmployeeName'
+              ])
+            ) ||
+            // Editing another employee
+            (
+              employeeId != authUserDoc(restaurantId).data.get('employeeId', '') &&
+              (
+                authUserDoc(restaurantId).data.get('isSuperAdmin', false) == true ||
+                (
+                  authUserDoc(restaurantId).data.permissions.get('canManageEmployees', false) == true &&
+                  resource.data.get('isSuperAdmin', false) == false &&
+                  request.resource.data.get('isSuperAdmin', false) == false &&
+                  validAll28PermsUpdate(authUserDoc(restaurantId).data.permissions, request.resource.data, resource.data)
+                )
+              )
+            )
+          );
+
         allow delete: if false;
       }
 
@@ -348,13 +641,52 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // P0-1: Strict supplierPurchases rules
       match /supplierPurchases/{purchaseId} {
         allow read: if canReadPurchases(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create: if canCreatePurchase(restaurantId) &&
-          canAccessBranch(restaurantId, request.resource.data.branchId);
-        allow update: if canUpdateSupplierPurchase(restaurantId) &&
-          canAccessBranch(restaurantId, resource.data.branchId);
+          canAccessBranch(restaurantId, request.resource.data.branchId) &&
+          request.resource.data.restaurantId == restaurantId &&
+          isNonNegNumber(request.resource.data.subtotal) &&
+          isNonNegNumber(request.resource.data.total) &&
+          isNonNegNumber(request.resource.data.paidTotal) &&
+          isNonNegNumber(request.resource.data.balance) &&
+          request.resource.data.status in ['paid', 'pending', 'partial'] &&
+          actorMatchesEmployeeId(restaurantId, request.resource.data.createdByEmployeeId);
+        allow update: if canAccessBranch(restaurantId, resource.data.branchId) &&
+          request.resource.data.restaurantId == resource.data.restaurantId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.supplierId == resource.data.supplierId &&
+          request.resource.data.total == resource.data.total &&
+          isNonNegNumber(request.resource.data.paidTotal) &&
+          isNonNegNumber(request.resource.data.balance) &&
+          (
+            // Payment balance update (canPaySuppliers or canCancelSupplierPayments or canViewAdmin)
+            (
+              (canPaySupplierBalance(restaurantId) || canCancelSupplierOps(restaurantId)) &&
+              resource.data.status != 'cancelled' &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'paidTotal', 'balance', 'status', 'updatedAt'
+              ]) &&
+              request.resource.data.status in ['paid', 'partial', 'pending']
+            ) ||
+            // Purchase cancellation (canCancelSupplierPayments or canViewAdmin)
+            (
+              canCancelSupplierOps(restaurantId) &&
+              resource.data.status != 'cancelled' &&
+              resource.data.paidTotal == 0 &&
+              request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status', 'balance', 'cancelledAt', 'updatedAt',
+                'cancelledByEmployeeId', 'cancelledByEmployeeName', 'cancelReason'
+              ]) &&
+              request.resource.data.status == 'cancelled' &&
+              request.resource.data.balance == 0 &&
+              request.resource.data.cancelReason is string &&
+              request.resource.data.cancelReason.size() >= 3 &&
+              actorMatchesEmployeeId(restaurantId, request.resource.data.cancelledByEmployeeId)
+            )
+          );
         allow delete: if false;
 
         match /items/{itemId} {
@@ -363,41 +695,75 @@ service cloud.firestore {
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/supplierPurchases/$(purchaseId)).data.branchId
             );
-          allow create, update: if canCreatePurchase(restaurantId) &&
+          allow create: if canCreatePurchase(restaurantId) &&
             canAccessBranch(
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/supplierPurchases/$(purchaseId)).data.branchId
-            );
+            ) &&
+            isPosNumber(request.resource.data.quantity) &&
+            isNonNegNumber(request.resource.data.total);
+          allow update: if false;
           allow delete: if false;
         }
       }
 
+      // P0-1: Strict supplierPayments rules (amount immutable, active -> cancelled only)
       match /supplierPayments/{paymentId} {
         allow read: if canReadPurchases(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create: if canPaySupplierBalance(restaurantId) &&
-          canAccessBranch(restaurantId, request.resource.data.branchId);
+          canAccessBranch(restaurantId, request.resource.data.branchId) &&
+          request.resource.data.restaurantId == restaurantId &&
+          request.resource.data.status == 'active' &&
+          isPosNumber(request.resource.data.amount) &&
+          actorMatchesEmployeeId(restaurantId, request.resource.data.createdByEmployeeId);
         allow update: if canCancelSupplierOps(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId) &&
-          resource.data.status == 'active';
+          resource.data.status == 'active' &&
+          request.resource.data.status == 'cancelled' &&
+          request.resource.data.restaurantId == resource.data.restaurantId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.amount == resource.data.amount &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'cancelledAt', 'updatedAt',
+            'cancelledByEmployeeId', 'cancelledByEmployeeName', 'cancelReason'
+          ]) &&
+          request.resource.data.cancelReason is string &&
+          request.resource.data.cancelReason.size() >= 3 &&
+          actorMatchesEmployeeId(restaurantId, request.resource.data.cancelledByEmployeeId);
         allow delete: if false;
       }
 
       match /partners/{partnerId} {
         allow read: if canReadFinance(restaurantId);
-        allow create, update: if canManagePartnersOps(restaurantId);
+        allow create, update: if canManagePartnersOps(restaurantId) &&
+          request.resource.data.restaurantId == restaurantId &&
+          isNonNegNumber(request.resource.data.ownershipPercent);
         allow delete: if false;
       }
 
+      // P0-1: Strict partnerContributions rules (amount immutable, active -> cancelled only)
       match /partnerContributions/{contributionId} {
         allow read: if canReadFinance(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create: if (canPaySupplierBalance(restaurantId) ||
             canManagePartnersOps(restaurantId)) &&
-          canAccessBranch(restaurantId, request.resource.data.branchId);
+          canAccessBranch(restaurantId, request.resource.data.branchId) &&
+          request.resource.data.restaurantId == restaurantId &&
+          request.resource.data.status == 'active' &&
+          isPosNumber(request.resource.data.amount) &&
+          actorMatchesEmployeeId(restaurantId, request.resource.data.createdByEmployeeId);
         allow update: if canCancelSupplierOps(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId) &&
-          resource.data.status == 'active';
+          resource.data.status == 'active' &&
+          request.resource.data.status == 'cancelled' &&
+          request.resource.data.restaurantId == resource.data.restaurantId &&
+          request.resource.data.branchId == resource.data.branchId &&
+          request.resource.data.amount == resource.data.amount &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'cancelledAt', 'updatedAt',
+            'cancelledByEmployeeId', 'cancelledByEmployeeName', 'cancelReason'
+          ]);
         allow delete: if false;
       }
 
@@ -427,7 +793,8 @@ service cloud.firestore {
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create, update: if canManageSuppliersCatalog(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId) &&
-          request.resource.data.restaurantId == restaurantId;
+          request.resource.data.restaurantId == restaurantId &&
+          isNonNegNumber(request.resource.data.targetPer100Sales);
         allow delete: if false;
       }
 
@@ -436,7 +803,8 @@ service cloud.firestore {
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create, update: if canManageSuppliersCatalog(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId) &&
-          request.resource.data.restaurantId == restaurantId;
+          request.resource.data.restaurantId == restaurantId &&
+          isNonNegNumber(request.resource.data.targetWeeklyQty);
         allow delete: if false;
       }
 
@@ -445,7 +813,8 @@ service cloud.firestore {
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create, update: if canManageSuppliersCatalog(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId) &&
-          request.resource.data.restaurantId == restaurantId;
+          request.resource.data.restaurantId == restaurantId &&
+          isNonNegNumber(request.resource.data.amount);
         allow delete: if false;
       }
 

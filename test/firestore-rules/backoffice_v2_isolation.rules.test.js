@@ -199,6 +199,8 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
         businessDate: '2026-11-26',
         status: 'paid',
         total: 320,
+        paidTotal: 320,
+        pendingTotal: 0,
       });
       await db.doc('restaurants/rest_alpha/orders/ord_alpha_norte').set({
         restaurantId: 'rest_alpha',
@@ -457,10 +459,15 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
     await assertSucceeds(
       dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_2').set({
         id: 'sp_centro_2',
+        restaurantId: 'rest_alpha',
         branchId: 'suc_centro',
         supplierId: 'sup_1',
+        subtotal: 500,
         total: 500,
+        paidTotal: 0,
         balance: 500,
+        status: 'pending',
+        createdByEmployeeId: 'alpha_centro_mgr',
       }),
     );
     // Cross-branch denied
@@ -519,6 +526,7 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
     await assertSucceeds(
       dbDoc(mgrDb, 'restaurants/rest_alpha/cashWithdrawalRequests/cw_centro_1').update({
         status: 'approved',
+        authorizedByEmployeeId: 'alpha_centro_mgr',
         approvedByEmployeeId: 'alpha_centro_mgr',
       }),
     );
@@ -539,6 +547,13 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
     await assertSucceeds(
       dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').update({
         status: 'cancelled',
+        kitchenStatus: 'cancelled',
+        paymentStatus: 'cancelled',
+        cancelStatus: 'accepted',
+        pendingTotal: 0,
+        paidTotal: 0,
+        cancelReason: 'Error de captura',
+        cancelledByEmployeeId: 'alpha_centro_mgr',
       }),
     );
     await assertFails(
@@ -563,6 +578,8 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
     await assertSucceeds(
       dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPayments/spay_centro_1').update({
         status: 'cancelled',
+        cancelReason: 'Pago duplicado',
+        cancelledByEmployeeId: 'alpha_centro_mgr',
       }),
     );
     await assertFails(
@@ -595,12 +612,12 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
       mgrDb.runTransaction(async (tx) => {
         const snap = await tx.get(discRef1);
         if (snap.data().status !== 'pending') throw new Error('already resolved');
-        tx.update(discRef1, { status: 'approved', authorizedByEmployeeId: 'mgr1' });
+        tx.update(discRef1, { status: 'approved', approvedByEmployeeId: 'mgr1' });
       }),
       mgrDb.runTransaction(async (tx) => {
         const snap = await tx.get(discRef2);
         if (snap.data().status !== 'pending') throw new Error('already resolved');
-        tx.update(discRef2, { status: 'rejected', authorizedByEmployeeId: 'mgr2' });
+        tx.update(discRef2, { status: 'rejected', rejectedByEmployeeId: 'mgr2' });
       }),
     ]);
     const fulfilled = raceResults.filter((r) => r.status === 'fulfilled').length;
@@ -623,6 +640,8 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
     await assertSucceeds(
       dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro/payments/pay_1').update({
         status: 'cancelled',
+        cancelReason: 'Pago duplicado',
+        cancelledByEmployeeId: 'alpha_centro_mgr',
       }),
     );
     await assertSucceeds(
@@ -630,6 +649,7 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
         type: 'payment_cancelled',
         restaurantId: 'rest_alpha',
         branchId: 'suc_centro',
+        employeeId: 'alpha_centro_mgr',
       }),
     );
 
@@ -637,6 +657,9 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
     await assertSucceeds(
       dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_1').update({
         status: 'cancelled',
+        balance: 0,
+        cancelReason: 'Compra cancelada',
+        cancelledByEmployeeId: 'alpha_centro_mgr',
       }),
     );
     await assertSucceeds(
@@ -647,6 +670,7 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
         partnerId: 'part_1',
         amount: 500,
         status: 'active',
+        createdByEmployeeId: 'alpha_centro_mgr',
       }),
     );
     await assertSucceeds(
@@ -693,8 +717,11 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
         branchId: 'suc_centro',
         cashSessionId: 'cs_centro_closed',
         isHistorical: true,
+        source: 'historical_backoffice',
         amount: 120,
+        reason: 'Gasto histórico válido',
         status: 'approved',
+        approvedByEmployeeId: 'alpha_centro_mgr',
       }),
     );
     // Non-historical withdrawal creation from Backoffice MUST fail
@@ -854,6 +881,312 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
         active: true,
         minimumSupportedVersionCode: 99,
       }),
+    );
+  });
+
+  it('Phase 9.1 critical security: P0-1 financial/activityLog hardening, P0-2 28-perm anti-escalation, P0-4 PIN containment, P1-8 revocation, and empty branchAccess denial', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      // Manager with canManageEmployees & canManageProducts (NOT superAdmin, NOT canCancelOrders)
+      await adminDb.doc('restaurants/rest_alpha/authUsers/alpha_emp_mgr').set({
+        active: true,
+        isSuperAdmin: false,
+        employeeId: 'emp_self',
+        branchAccess: ['suc_centro'],
+        permissions: {
+          canManageEmployees: true,
+          canManageProducts: true,
+          canViewAdmin: false,
+          canCancelOrders: false,
+        },
+      });
+      // SuperAdmin
+      await adminDb.doc('restaurants/rest_alpha/authUsers/alpha_super').set({
+        active: true,
+        isSuperAdmin: true,
+        employeeId: 'emp_super',
+        permissions: { canViewAdmin: true },
+      });
+      // P1-8: authUsers.active == true, BUT employees.active == false
+      await adminDb.doc('restaurants/rest_alpha/authUsers/alpha_emp_revoked').set({
+        active: true,
+        isSuperAdmin: false,
+        employeeId: 'emp_revoked',
+        branchAccess: ['suc_centro'],
+        permissions: { canViewAdmin: true, canManageCash: true },
+      });
+      // Empty branchAccess non-superAdmin (must NOT get universal access)
+      await adminDb.doc('restaurants/rest_alpha/authUsers/alpha_empty_branch').set({
+        active: true,
+        isSuperAdmin: false,
+        employeeId: 'emp_empty_branch',
+        branchAccess: [],
+        permissions: { canViewAdmin: true, canManageCash: true },
+      });
+      // Explicit allBranchesAccess == true non-superAdmin
+      await adminDb.doc('restaurants/rest_alpha/authUsers/alpha_all_branches').set({
+        active: true,
+        isSuperAdmin: false,
+        allBranchesAccess: true,
+        permissions: { canViewAdmin: true },
+      });
+
+      await adminDb.doc('restaurants/rest_alpha/employees/emp_self').set({
+        id: 'emp_self',
+        restaurantId: 'rest_alpha',
+        name: 'Manager Self',
+        active: true,
+        isSuperAdmin: false,
+        canManageEmployees: true,
+        canManageProducts: true,
+      });
+      await adminDb.doc('restaurants/rest_alpha/employees/emp_other').set({
+        id: 'emp_other',
+        restaurantId: 'rest_alpha',
+        name: 'Other Employee',
+        active: true,
+        isSuperAdmin: false,
+        canManageEmployees: false,
+      });
+      await adminDb.doc('restaurants/rest_alpha/employees/emp_super').set({
+        id: 'emp_super',
+        restaurantId: 'rest_alpha',
+        name: 'Owner Super',
+        active: true,
+        isSuperAdmin: true,
+      });
+      await adminDb.doc('restaurants/rest_alpha/employees/emp_revoked').set({
+        id: 'emp_revoked',
+        restaurantId: 'rest_alpha',
+        name: 'Revoked Employee',
+        active: false,
+        isSuperAdmin: false,
+      });
+      await adminDb.doc('restaurants/rest_alpha/employees/emp_with_pin').set({
+        id: 'emp_with_pin',
+        restaurantId: 'rest_alpha',
+        name: 'Legacy PIN Employee',
+        active: true,
+        pin: '9999',
+      });
+      await adminDb.doc('restaurants/rest_alpha/orders/ord_alpha_centro/payments/pay_p0').set({
+        orderId: 'ord_alpha_centro',
+        method: 'cash',
+        status: 'paid',
+        amount: 320,
+      });
+      await adminDb.doc('restaurants/rest_alpha/cashSessions/cs_closed_p0').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        status: 'closed',
+        openingAmount: 500,
+        countedCashAmount: 800,
+      });
+      await adminDb.doc('restaurants/rest_alpha/supplierPurchases/sp_paid_p0').set({
+        id: 'sp_paid_p0',
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        supplierId: 'sup_1',
+        status: 'paid',
+        total: 1000,
+        paidTotal: 1000,
+        balance: 0,
+      });
+    });
+
+    const mgrDb = testEnv.authenticatedContext('alpha_centro_mgr', { firebase: { sign_in_provider: 'custom' } }).firestore();
+    const empMgrDb = testEnv.authenticatedContext('alpha_emp_mgr', { firebase: { sign_in_provider: 'custom' } }).firestore();
+    const superDb = testEnv.authenticatedContext('alpha_super', { firebase: { sign_in_provider: 'custom' } }).firestore();
+    const revokedEmpDb = testEnv.authenticatedContext('alpha_emp_revoked', { firebase: { sign_in_provider: 'custom' } }).firestore();
+    const emptyBranchDb = testEnv.authenticatedContext('alpha_empty_branch', { firebase: { sign_in_provider: 'custom' } }).firestore();
+    const allBranchDb = testEnv.authenticatedContext('alpha_all_branches', { firebase: { sign_in_provider: 'custom' } }).firestore();
+
+    // --- P0-1: Financial field immutability & transition checks ---
+    // Arbitrary payment amount change MUST fail
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro/payments/pay_p0').update({
+        status: 'cancelled',
+        amount: 1,
+        cancelReason: 'Alterado',
+        cancelledByEmployeeId: 'alpha_centro_mgr',
+      }),
+    );
+    // Arbitrary order total/branchId change MUST fail
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').update({
+        total: 1,
+        paidTotal: 1,
+        pendingTotal: 0,
+        paymentStatus: 'paid',
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').update({
+        branchId: 'suc_norte',
+        paidTotal: 320,
+        pendingTotal: 0,
+        paymentStatus: 'paid',
+      }),
+    );
+    // Arbitrary cashSession openingAmount or reopening MUST fail
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashSessions/cs_closed_p0').update({
+        openingAmount: 9999,
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashSessions/cs_closed_p0').update({
+        status: 'open',
+      }),
+    );
+    // Arbitrary withdrawal amount change MUST fail
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashWithdrawalRequests/cw_centro_1').update({
+        status: 'approved',
+        amount: 99999,
+        authorizedByEmployeeId: 'alpha_centro_mgr',
+      }),
+    );
+    // Cancelling a purchase with paidTotal > 0 MUST fail
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_paid_p0').update({
+        status: 'cancelled',
+        balance: 0,
+        cancelReason: 'Intento invalido',
+        cancelledByEmployeeId: 'alpha_centro_mgr',
+      }),
+    );
+
+    // --- P0-1: activityLog reserved markers & spoofing ---
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/activityLog/capture_submission_fake_1').set({
+        type: 'order_cancelled',
+        restaurantId: 'rest_alpha',
+        employeeId: 'alpha_centro_mgr',
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/activityLog/payment_cancelled_ord_1_pay_1').set({
+        type: 'payment_cancelled',
+        restaurantId: 'rest_alpha',
+        employeeId: 'alpha_centro_mgr',
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/activityLog/log_spoof_sub').set({
+        type: 'order_cancelled',
+        restaurantId: 'rest_alpha',
+        employeeId: 'alpha_centro_mgr',
+        submissionId: 'sub_fake',
+      }),
+    );
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/activityLog/log_spoof_actor').set({
+        type: 'employee_updated',
+        restaurantId: 'rest_alpha',
+        employeeId: 'emp_super',
+        actionSource: 'backoffice_v2',
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/activityLog/log_valid_91').set({
+        type: 'employee_updated',
+        restaurantId: 'rest_alpha',
+        employeeId: 'emp_self',
+        actionSource: 'backoffice_v2',
+      }),
+    );
+
+    // --- P0-2: Privilege escalation prevention ---
+    // Non-superAdmin creating superAdmin MUST fail
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_new_super').set({
+        id: 'emp_new_super',
+        restaurantId: 'rest_alpha',
+        name: 'Fake Super',
+        active: true,
+        isSuperAdmin: true,
+      }),
+    );
+    // Non-superAdmin creating employee with permission actor lacks MUST fail
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_new_perm').set({
+        id: 'emp_new_perm',
+        restaurantId: 'rest_alpha',
+        name: 'Fake Canceller',
+        active: true,
+        isSuperAdmin: false,
+        canCancelOrders: true,
+      }),
+    );
+    // Self-edit changing permission or active MUST fail; changing only name SUCCEEDS
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_self').update({
+        canViewAdmin: true,
+      }),
+    );
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_self').update({
+        active: false,
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_self').update({
+        name: 'Manager Renamed',
+      }),
+    );
+    // Non-superAdmin modifying an existing superAdmin MUST fail
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_super').update({
+        active: false,
+      }),
+    );
+    // Non-superAdmin granting permission they do NOT hold MUST fail
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_other').update({
+        canCancelOrders: true,
+      }),
+    );
+    // SuperAdmin CAN modify superAdmin & grant any permission
+    await assertSucceeds(
+      dbDoc(superDb, 'restaurants/rest_alpha/employees/emp_other').update({
+        canCancelOrders: true,
+      }),
+    );
+
+    // --- P0-4: PIN exposure containment ---
+    // Reading an employee document containing legacy `pin` MUST fail
+    await assertFails(
+      dbDoc(superDb, 'restaurants/rest_alpha/employees/emp_with_pin').get(),
+    );
+    // Writing `pin` from Backoffice MUST fail
+    await assertFails(
+      dbDoc(superDb, 'restaurants/rest_alpha/employees/emp_other').update({
+        pin: '1234',
+      }),
+    );
+    // Reading sanitized employee without `pin` SUCCEEDS
+    await assertSucceeds(
+      dbDoc(superDb, 'restaurants/rest_alpha/employees/emp_other').get(),
+    );
+
+    // --- P1-8: Revoked employee (`employees.active == false`) even if `authUsers.active == true` ---
+    await assertFails(
+      dbDoc(revokedEmpDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').get(),
+    );
+    await assertFails(
+      dbDoc(revokedEmpDb, 'restaurants/rest_alpha/cashSessions/cs_centro_1').get(),
+    );
+
+    // --- Branch isolation: empty branchAccess MUST NOT grant universal access ---
+    await assertFails(
+      dbDoc(emptyBranchDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').get(),
+    );
+    await assertSucceeds(
+      dbDoc(allBranchDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').get(),
+    );
+    await assertSucceeds(
+      dbDoc(allBranchDb, 'restaurants/rest_alpha/orders/ord_alpha_norte').get(),
     );
   });
 });
