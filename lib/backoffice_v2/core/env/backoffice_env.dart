@@ -1,0 +1,215 @@
+import 'package:firebase_core/firebase_core.dart';
+
+import 'firebase_options_dev.dart';
+
+enum BackofficeEnv { local, dev, prod }
+
+class EnvironmentGuardException implements Exception {
+  const EnvironmentGuardException(this.code, this.message);
+
+  final String code;
+  final String message;
+
+  @override
+  String toString() => 'EnvironmentGuardException($code): $message';
+}
+
+class BackofficeConfig {
+  const BackofficeConfig({
+    required this.env,
+    required this.firebaseOptions,
+    required this.useEmulators,
+    required this.emulatorHost,
+    required this.authEmulatorPort,
+    required this.firestoreEmulatorPort,
+    required this.functionsEmulatorPort,
+    required this.functionsRegion,
+    required this.defaultRestaurantId,
+  });
+
+  final BackofficeEnv env;
+  final FirebaseOptions firebaseOptions;
+  final bool useEmulators;
+  final String emulatorHost;
+  final int authEmulatorPort;
+  final int firestoreEmulatorPort;
+  final int functionsEmulatorPort;
+  final String functionsRegion;
+  final String defaultRestaurantId;
+
+  String get projectId => firebaseOptions.projectId;
+
+  String get badgeLabel => switch (env) {
+    BackofficeEnv.local => 'LOCAL • EMULADOR',
+    BackofficeEnv.dev => 'DEV • $projectId',
+    BackofficeEnv.prod => 'PROD',
+  };
+
+  bool get isLocal => env == BackofficeEnv.local;
+  bool get isDev => env == BackofficeEnv.dev;
+}
+
+class EnvironmentGuard {
+  const EnvironmentGuard._();
+
+  /// Production and other protected project IDs that Backoffice 2.0 must NEVER
+  /// connect to during Phase 2 or in local/dev builds.
+  static const Set<String> forbiddenProjectIds = {
+    'tacopos-renovadev',
+    'tacopos-control',
+  };
+
+  static const Set<String> forbiddenHostFragments = {
+    'tacopos-renovadev',
+    'tacopos-control',
+    'github.io',
+  };
+
+  static const Set<String> allowedEmulatorHosts = {
+    'localhost',
+    '127.0.0.1',
+  };
+
+  static const String compileTimeEnv = String.fromEnvironment('ENV');
+  static const String compileTimeProjectId = String.fromEnvironment(
+    'FIREBASE_PROJECT_ID',
+  );
+  static const String compileTimeEmulatorHost = String.fromEnvironment(
+    'EMULATOR_HOST',
+    defaultValue: '127.0.0.1',
+  );
+  static const String compileTimeRestaurantId = String.fromEnvironment(
+    'DEFAULT_RESTAURANT_ID',
+    defaultValue: 'rest_alpha',
+  );
+
+  static BackofficeConfig resolveFromEnvironment() {
+    return resolveAndValidate(
+      rawEnv: compileTimeEnv,
+      overrideProjectId: compileTimeProjectId,
+      emulatorHost: compileTimeEmulatorHost,
+      defaultRestaurantId: compileTimeRestaurantId,
+    );
+  }
+
+  static BackofficeConfig resolveAndValidate({
+    required String rawEnv,
+    String overrideProjectId = '',
+    String emulatorHost = '127.0.0.1',
+    String defaultRestaurantId = 'rest_alpha',
+    FirebaseOptions? customOptions,
+  }) {
+    final normalizedEnv = rawEnv.trim().toLowerCase();
+    if (normalizedEnv.isEmpty) {
+      throw const EnvironmentGuardException(
+        'MISSING_ENV',
+        'Falta la variable de ambiente ENV. Especifica --dart-define=ENV=local o --dart-define=ENV=dev.',
+      );
+    }
+
+    final BackofficeEnv env;
+    switch (normalizedEnv) {
+      case 'local':
+        env = BackofficeEnv.local;
+        break;
+      case 'dev':
+        env = BackofficeEnv.dev;
+        break;
+      case 'prod':
+        throw const EnvironmentGuardException(
+          'PROD_BLOCKED',
+          'El ambiente PROD está reservado y bloqueado en Fase 2. No se permite conexión a producción.',
+        );
+      default:
+        throw EnvironmentGuardException(
+          'UNKNOWN_ENV',
+          'Configuración de ambiente desconocida: "$rawEnv". Valores permitidos: local, dev.',
+        );
+    }
+
+    final FirebaseOptions options =
+        customOptions ??
+        switch (env) {
+          BackofficeEnv.local => BackofficeDevFirebaseOptions.localEmulator,
+          BackofficeEnv.dev => BackofficeDevFirebaseOptions.web,
+          BackofficeEnv.prod => throw const EnvironmentGuardException(
+            'PROD_BLOCKED',
+            'PROD bloqueado.',
+          ),
+        };
+
+    final effectiveProjectId = overrideProjectId.trim().isNotEmpty
+        ? overrideProjectId.trim()
+        : options.projectId.trim();
+
+    if (effectiveProjectId.isEmpty) {
+      throw const EnvironmentGuardException(
+        'MISSING_PROJECT_ID',
+        'Falta el projectId de Firebase en la configuración.',
+      );
+    }
+
+    if (forbiddenProjectIds.contains(effectiveProjectId.toLowerCase())) {
+      throw EnvironmentGuardException(
+        'FORBIDDEN_PROD_PROJECT',
+        'Bloqueado por seguridad: el projectId "$effectiveProjectId" corresponde a un ambiente productivo o protegido.',
+      );
+    }
+
+    final authDomain = (options.authDomain ?? '').toLowerCase();
+    final storageBucket = (options.storageBucket ?? '').toLowerCase();
+    for (final fragment in forbiddenHostFragments) {
+      if (authDomain.contains(fragment) || storageBucket.contains(fragment)) {
+        throw EnvironmentGuardException(
+          'FORBIDDEN_ENDPOINT',
+          'Se detectó un endpoint no autorizado ("$fragment") en la configuración de $normalizedEnv.',
+        );
+      }
+    }
+
+    if (env == BackofficeEnv.dev) {
+      if (effectiveProjectId != BackofficeDevFirebaseOptions.projectId) {
+        throw EnvironmentGuardException(
+          'INVALID_DEV_PROJECT',
+          'La compilación DEV solo puede apuntar a "${BackofficeDevFirebaseOptions.projectId}", pero recibió "$effectiveProjectId".',
+        );
+      }
+      if (!authDomain.contains(BackofficeDevFirebaseOptions.projectId)) {
+        throw const EnvironmentGuardException(
+          'INVALID_DEV_AUTH_DOMAIN',
+          'El authDomain de DEV no coincide con tacopos-backoffice-dev.',
+        );
+      }
+    }
+
+    if (env == BackofficeEnv.local) {
+      if (!effectiveProjectId.startsWith('demo-')) {
+        throw EnvironmentGuardException(
+          'INVALID_LOCAL_PROJECT',
+          'El ambiente LOCAL requiere un projectId aislado con prefijo "demo-", recibido: "$effectiveProjectId".',
+        );
+      }
+      final normalizedHost = emulatorHost.trim().toLowerCase();
+      if (!allowedEmulatorHosts.contains(normalizedHost)) {
+        throw EnvironmentGuardException(
+          'UNAUTHORIZED_EMULATOR_HOST',
+          'Host de emulador no autorizado: "$emulatorHost". Solo se permite localhost o 127.0.0.1.',
+        );
+      }
+    }
+
+    return BackofficeConfig(
+      env: env,
+      firebaseOptions: options,
+      useEmulators: env == BackofficeEnv.local,
+      emulatorHost: emulatorHost.trim(),
+      authEmulatorPort: 9199,
+      firestoreEmulatorPort: 8180,
+      functionsEmulatorPort: 5101,
+      functionsRegion: 'us-central1',
+      defaultRestaurantId: defaultRestaurantId.trim().isEmpty
+          ? 'rest_alpha'
+          : defaultRestaurantId.trim(),
+    );
+  }
+}
