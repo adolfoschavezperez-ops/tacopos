@@ -8294,7 +8294,7 @@ class TacoPosRepository {
     required String branchId,
     String? businessDate,
     String triggeredBy = 'operational_reconciliation',
-    bool applyAutomaticRepairs = true,
+    required bool applyAutomaticRepairs,
   }) async {
     if (restaurantId.trim() != AppConstants.restaurantId) {
       throw ArgumentError('El restaurante no corresponde a esta sesion.');
