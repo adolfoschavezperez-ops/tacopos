@@ -267,6 +267,39 @@ async function main() {
 
     for (const br of branches) {
       const cashSessionId = `cs_${br.id}_${businessDate}`;
+      const isOpen = dayOffset === 0;
+      const openedAt = new Date(
+        dateObj.getFullYear(),
+        dateObj.getMonth(),
+        dateObj.getDate(),
+        10,
+        0,
+      );
+      const closedAt = isOpen
+        ? null
+        : new Date(
+            dateObj.getFullYear(),
+            dateObj.getMonth(),
+            dateObj.getDate(),
+            23,
+            30,
+          );
+      const openingCashAmount = 1500;
+      const expectedCashAmount = 2500 + ((dayOffset * 173) % 1400);
+      const diffDelta = isOpen
+        ? 0
+        : dayOffset === 1 && br.id === 'suc_centro'
+        ? -45
+        : dayOffset === 2 && br.id === 'suc_norte'
+        ? 30
+        : 0;
+      const countedCashAmount = isOpen ? 0 : expectedCashAmount + diffDelta;
+      const expectedCard = 1800 + ((dayOffset * 131) % 900);
+      const terminalCard = isOpen ? 0 : expectedCard;
+      const expectedPlatform = 950 + ((dayOffset * 97) % 600);
+      const approvedWithdrawals = dayOffset < 7 ? 350 : 0;
+      const pendingWithdrawals = isOpen ? 200 : 0;
+
       writes.push(
         makeWrite(`restaurants/${restaurantId}/cashSessions/${cashSessionId}`, {
           id: cashSessionId,
@@ -275,10 +308,35 @@ async function main() {
           branchId: br.id,
           branchName: br.name,
           businessDate,
-          status: dayOffset === 0 ? 'open' : 'closed',
-          openingFloat: 1500,
-          expectedCash: 2500 + ((dayOffset * 173) % 1400),
-          countedCash: 2500 + ((dayOffset * 173) % 1400),
+          status: isOpen ? 'open' : 'closed',
+          openingCashAmount,
+          openedByEmployeeId: employees[0].id,
+          openedByEmployeeName: employees[0].name,
+          openedAt,
+          closedByEmployeeId: isOpen ? null : employees[1].id,
+          closedByEmployeeName: isOpen ? null : employees[1].name,
+          closedAt,
+          expectedCashAmount,
+          countedCashAmount,
+          expectedCardChargedAmount: expectedCard,
+          expectedCardBaseAmount: expectedCard,
+          expectedCardSurchargeAmount: 0,
+          expectedCardFeeAbsorbedAmount: Number((expectedCard * 0.036).toFixed(2)),
+          terminalReportedAmount: terminalCard,
+          expectedPlatformAmount: expectedPlatform,
+          expectedEmployeeConsumptionAmount: dayOffset % 5 === 0 ? 180 : 0,
+          totalExpectedRealMoney: expectedCashAmount + expectedCard + expectedPlatform,
+          totalCountedRealMoney: isOpen
+            ? 0
+            : countedCashAmount + terminalCard + expectedPlatform,
+          cashDifference: diffDelta,
+          cardDifference: 0,
+          netDifference: diffDelta,
+          shortageAmount: diffDelta < 0 ? Math.abs(diffDelta) : 0,
+          overAmount: diffDelta > 0 ? diffDelta : 0,
+          approvedWithdrawalsTotal: approvedWithdrawals,
+          pendingWithdrawalsTotal: pendingWithdrawals,
+          withdrawalRequestCount: approvedWithdrawals > 0 || pendingWithdrawals > 0 ? 1 : 0,
         }),
       );
 
@@ -426,6 +484,273 @@ async function main() {
       }
     }
   }
+
+  // Phase 4: Cash Withdrawals, Discount Authorizations, Kitchen & Inventory
+  const stockCatalog = [
+    {
+      id: 'ksi_pastor',
+      name: 'Carne al Pastor',
+      category: 'Carnes',
+      unit: 'kg',
+      optimal: 0.12,
+      supplier: 'Carnicería El Buen Corte',
+    },
+    {
+      id: 'ksi_suadero',
+      name: 'Suadero Cocido',
+      category: 'Carnes',
+      unit: 'kg',
+      optimal: 0.12,
+      supplier: 'Carnicería El Buen Corte',
+    },
+    {
+      id: 'ksi_bistec',
+      name: 'Bistec de Res',
+      category: 'Carnes',
+      unit: 'kg',
+      optimal: 0.15,
+      supplier: 'Distribuidora Norte',
+    },
+    {
+      id: 'ksi_tortilla',
+      name: 'Tortilla de Maíz',
+      category: 'Abarrotes',
+      unit: 'kg',
+      optimal: 0.08,
+      supplier: 'Tortillería La Esperanza',
+    },
+    {
+      id: 'ksi_limon',
+      name: 'Limón Verde',
+      category: 'Verduras',
+      unit: 'kg',
+      optimal: 0.03,
+      supplier: 'Central de Abastos',
+    },
+  ];
+
+  for (let i = 0; i < stockCatalog.length; i++) {
+    const item = stockCatalog[i];
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/kitchenStockItems/${item.id}`, {
+        id: item.id,
+        name: item.name,
+        category: item.category,
+        unit: item.unit,
+        active: true,
+        sortOrder: i + 1,
+        optimalConsumptionPerSaleQty: item.optimal,
+        optimalConsumptionUnit: item.unit,
+        affectsKitchenPerformance: true,
+        defaultSupplierName: item.supplier,
+      }),
+    );
+  }
+
+  for (let i = 0; i < products.length; i++) {
+    const prod = products[i];
+    const stockRef = stockCatalog[i % stockCatalog.length];
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/products/${prod.id}`, {
+        id: prod.id,
+        name: prod.name,
+        categoryId: prod.category.toLowerCase(),
+        categoryName: prod.category,
+        category: prod.category,
+        price: prod.price,
+        active: true,
+        sendToKitchen: true,
+        sortOrder: i + 1,
+        affectsKitchenStock: true,
+        kitchenStockItemId: stockRef.id,
+        kitchenStockItemName: stockRef.name,
+        kitchenStockUnit: stockRef.unit,
+        stockConsumptionQty: stockRef.optimal,
+        recipeItems: [
+          {
+            kitchenStockItemId: stockRef.id,
+            kitchenStockItemName: stockRef.name,
+            kitchenStockUnit: stockRef.unit,
+            consumptionFactor: stockRef.optimal,
+          },
+        ],
+      }),
+    );
+  }
+
+  for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+    const dateObj = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() - dayOffset,
+    );
+    const businessDate = formatDate(dateObj);
+    const reqAt = new Date(
+      dateObj.getFullYear(),
+      dateObj.getMonth(),
+      dateObj.getDate(),
+      15,
+      30,
+    );
+
+    for (const br of branches) {
+      const cashSessionId = `cs_${br.id}_${businessDate}`;
+      const cwStatus =
+        dayOffset === 0 ? 'pending' : dayOffset === 3 ? 'rejected' : 'approved';
+      writes.push(
+        makeWrite(
+          `restaurants/${restaurantId}/cashWithdrawalRequests/cw_${br.id}_${businessDate}`,
+          {
+            id: `cw_${br.id}_${businessDate}`,
+            restaurantId,
+            branchId: br.id,
+            branchName: br.name,
+            cashSessionId,
+            businessDate,
+            amount: dayOffset === 0 ? 200 : 350,
+            reason:
+              dayOffset === 0
+                ? 'Compra urgente de hielo y cilantro'
+                : 'Pago a proveedor de tortillas',
+            status: cwStatus,
+            requestedByEmployeeId: employees[1].id,
+            requestedByEmployeeName: employees[1].name,
+            requestedAt: reqAt,
+            createdAt: reqAt,
+            approvedByEmployeeId: cwStatus === 'approved' ? employees[0].id : null,
+            approvedByEmployeeName:
+              cwStatus === 'approved' ? employees[0].name : null,
+            approvedAt: cwStatus === 'approved' ? reqAt : null,
+            rejectedByEmployeeId: cwStatus === 'rejected' ? employees[0].id : null,
+            rejectedByEmployeeName:
+              cwStatus === 'rejected' ? employees[0].name : null,
+            rejectedAt: cwStatus === 'rejected' ? reqAt : null,
+            rejectReason:
+              cwStatus === 'rejected' ? 'Falta comprobante fiscal' : null,
+          },
+        ),
+      );
+
+      if (dayOffset < 5) {
+        const daStatus =
+          dayOffset === 0
+            ? 'pending'
+            : dayOffset === 2
+            ? 'rejected'
+            : 'approved';
+        writes.push(
+          makeWrite(
+            `restaurants/${restaurantId}/discountAuthorizationRequests/da_${br.id}_${businessDate}`,
+            {
+              id: `da_${br.id}_${businessDate}`,
+              restaurantId,
+              branchId: br.id,
+              branchName: br.name,
+              orderId: `ord_${br.id}_${businessDate}_1`,
+              businessDate,
+              tableName: 'Mesa 4',
+              orderType: 'dine_in',
+              requestedDiscountType: 'percent',
+              requestedDiscountName: 'Cortesía Cliente Frecuente',
+              requestedDiscountPercent: 15,
+              amountBeforeDiscount: 420,
+              estimatedDiscountAmount: 63,
+              estimatedTotalAfterDiscount: 357,
+              requestReason: 'Aniversario de cliente habitual',
+              status: daStatus,
+              requestedAt: reqAt,
+              requestedByEmployeeId: employees[2].id,
+              requestedByEmployeeName: employees[2].name,
+              approvedAt: daStatus === 'approved' ? reqAt : null,
+              approvedByEmployeeId:
+                daStatus === 'approved' ? employees[0].id : null,
+              approvedByEmployeeName:
+                daStatus === 'approved' ? employees[0].name : null,
+              rejectedAt: daStatus === 'rejected' ? reqAt : null,
+              rejectedByEmployeeId:
+                daStatus === 'rejected' ? employees[0].id : null,
+              rejectedByEmployeeName:
+                daStatus === 'rejected' ? employees[0].name : null,
+              rejectReason:
+                daStatus === 'rejected' ? 'Descuento fuera de horario' : null,
+            },
+          ),
+        );
+      }
+
+      const ksId = `ks_${br.id}_${businessDate}`;
+      const ksOpen = dayOffset === 0;
+      writes.push(
+        makeWrite(`restaurants/${restaurantId}/kitchenSessions/${ksId}`, {
+          id: ksId,
+          restaurantId,
+          branchId: br.id,
+          branchName: br.name,
+          businessDate,
+          status: ksOpen ? 'open' : 'closed',
+          cashSessionId,
+          openedAt: reqAt,
+          openedByEmployeeId: employees[2].id,
+          openedByEmployeeName: employees[2].name,
+          closedAt: ksOpen ? null : reqAt,
+          closedByEmployeeId: ksOpen ? null : employees[0].id,
+          closedByEmployeeName: ksOpen ? null : employees[0].name,
+        }),
+      );
+
+      for (const item of stockCatalog) {
+        const prev = 4.5;
+        const input = 12.0;
+        const finalRem = ksOpen ? 0 : 3.2;
+        const waste = ksOpen ? 0 : 0.4;
+        const used = ksOpen ? 0 : Number((prev + input - finalRem).toFixed(2));
+        const useful = ksOpen ? 0 : Number((used - waste).toFixed(2));
+        const sold = ksOpen ? 6.4 : Number((useful - 0.15).toFixed(2));
+        writes.push(
+          makeWrite(
+            `restaurants/${restaurantId}/kitchenSessions/${ksId}/items/${item.id}`,
+            {
+              kitchenStockItemId: item.id,
+              name: item.name,
+              category: item.category,
+              unit: item.unit,
+              previousRemainingQty: prev,
+              todayInputQty: input,
+              additionalEntriesQty: 0,
+              availableQty: prev + input,
+              finalRemainingQty: finalRem,
+              wasteQty: waste,
+              usedQty: used,
+              usefulConsumedQty: useful,
+              soldQty: sold,
+              yieldQtyPerUnit: 1,
+            },
+          ),
+        );
+      }
+    }
+  }
+
+  writes.push(
+    makeWrite(
+      `restaurants/${restaurantId}/productStockOuts/so_suc_centro_${formatDate(now)}`,
+      {
+        id: `so_suc_centro_${formatDate(now)}`,
+        businessDate: formatDate(now),
+        branchId: 'suc_centro',
+        branchName: 'Centro',
+        productId: products[2].id,
+        productName: products[2].name,
+        categoryId: 'bebidas',
+        categoryName: 'Bebidas',
+        status: 'active',
+        reason: 'Lote de horchata agotado en barra',
+        soldOutAt: now,
+        soldOutByEmployeeId: employees[1].id,
+        soldOutByEmployeeName: employees[1].name,
+      },
+    ),
+  );
 
   writes.push(
     makeWrite('restaurants/rest_beta', {

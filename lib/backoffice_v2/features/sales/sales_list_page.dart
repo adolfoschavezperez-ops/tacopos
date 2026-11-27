@@ -41,7 +41,7 @@ class _SalesListPageState extends State<SalesListPage> {
   final List<DocumentSnapshot<Map<String, dynamic>>?> _cursorStack = [null];
   int _pageIndex = 0;
   Future<SalesCursorPage>? _future;
-  Future<List<PosOrder>>? _searchFuture;
+  Future<SalesBoundedBatch>? _searchFuture;
   String? _lastBranchId;
   bool _exporting = false;
 
@@ -132,7 +132,7 @@ class _SalesListPageState extends State<SalesListPage> {
   void _loadCurrentPage() {
     setState(() {
       if (_hasSearch) {
-        _searchFuture = widget.repository.fetchOrdersInRange(
+        _searchFuture = widget.repository.searchOrdersInRange(
           restaurantId: widget.session.restaurantId,
           startBusinessDate: BackofficeSalesAdapter.formatBusinessDate(
             _startDate,
@@ -180,14 +180,14 @@ class _SalesListPageState extends State<SalesListPage> {
     if (_exporting) return;
     setState(() => _exporting = true);
     try {
-      final all = await widget.repository.fetchOrdersInRange(
+      final batch = await widget.repository.exportOrdersInRange(
         restaurantId: widget.session.restaurantId,
         startBusinessDate: BackofficeSalesAdapter.formatBusinessDate(_startDate),
         endBusinessDate: BackofficeSalesAdapter.formatBusinessDate(_endDate),
         branchId: widget.session.selectedBranchId,
         statusFilter: _statusFilter,
       );
-      final filtered = _filterOrders(all);
+      final filtered = _filterOrders(batch.orders);
       final buf = StringBuffer()
         ..writeln('Folio,Sucursal,Canal,FechaOperativa,Estado,Descuento,Total');
       for (final o in filtered) {
@@ -327,7 +327,7 @@ class _SalesListPageState extends State<SalesListPage> {
         ),
         const SizedBox(height: 16),
         if (_hasSearch)
-          FutureBuilder<List<PosOrder>>(
+          FutureBuilder<SalesBoundedBatch>(
             future: _searchFuture,
             builder: (context, snapshot) {
               if (snapshot.connectionState == ConnectionState.waiting) {
@@ -341,8 +341,12 @@ class _SalesListPageState extends State<SalesListPage> {
                   onRetry: _resetAndLoad,
                 );
               }
-              final all = snapshot.data ?? const [];
+              final batch = snapshot.data;
+              final all = batch?.orders ?? const <PosOrder>[];
               final filtered = _filterOrders(all);
+              final truncatedNote = batch?.truncated == true
+                  ? ' (acotado a las primeras ${all.length} operaciones)'
+                  : '';
               return _buildOrdersBody(
                 context: context,
                 tokens: tokens,
@@ -353,8 +357,8 @@ class _SalesListPageState extends State<SalesListPage> {
                 hasNext: false,
                 lastDocument: null,
                 footerSummary:
-                    '${filtered.length} coincidencia(s) en todo el periodo seleccionado',
-                pageLabel: 'Búsqueda completa',
+                    '${filtered.length} coincidencia(s) en el periodo$truncatedNote',
+                pageLabel: 'Búsqueda en periodo',
               );
             },
           )

@@ -48,6 +48,99 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
         branchAccess: ['suc_centro'],
         permissions: { canViewAdmin: true },
       });
+      await db.doc('restaurants/rest_alpha/authUsers/alpha_cash_only').set({
+        active: true,
+        isSuperAdmin: false,
+        branchAccess: ['suc_centro'],
+        permissions: {
+          canViewAdmin: false,
+          canManageCash: true,
+          canAuthorizeCashWithdrawals: false,
+          canManageKitchenStock: false,
+          canViewKitchenReports: false,
+        },
+      });
+      await db.doc('restaurants/rest_alpha/authUsers/alpha_revoked').set({
+        active: false,
+        isSuperAdmin: true,
+        branchAccess: ['suc_centro', 'suc_norte'],
+        permissions: {
+          canViewAdmin: true,
+          canManageCash: true,
+          canAuthorizeCashWithdrawals: true,
+          canManageKitchenStock: true,
+        },
+      });
+      await db.doc('restaurants/rest_alpha/cashSessions/cs_centro_1').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        businessDate: '2026-11-26',
+        status: 'open',
+      });
+      await db.doc('restaurants/rest_alpha/cashSessions/cs_norte_1').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_norte',
+        businessDate: '2026-11-26',
+        status: 'open',
+      });
+      await db.doc('restaurants/rest_alpha/cashWithdrawalRequests/cw_centro_1').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        businessDate: '2026-11-26',
+        status: 'pending',
+        amount: 250,
+      });
+      await db.doc('restaurants/rest_alpha/cashWithdrawalRequests/cw_norte_1').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_norte',
+        businessDate: '2026-11-26',
+        status: 'pending',
+        amount: 400,
+      });
+      await db.doc('restaurants/rest_alpha/discountAuthorizationRequests/da_centro_1').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        businessDate: '2026-11-26',
+        status: 'pending',
+      });
+      await db.doc('restaurants/rest_alpha/kitchenSessions/ks_centro_1').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        businessDate: '2026-11-26',
+        status: 'open',
+      });
+      await db.doc('restaurants/rest_alpha/kitchenSessions/ks_centro_1/items/ksi_1').set({
+        kitchenStockItemId: 'ksi_1',
+        name: 'Carne al Pastor',
+      });
+      await db.doc('restaurants/rest_alpha/kitchenSessions/ks_norte_1').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_norte',
+        businessDate: '2026-11-26',
+        status: 'open',
+      });
+      await db.doc('restaurants/rest_alpha/kitchenSessions/ks_norte_1/items/ksi_1').set({
+        kitchenStockItemId: 'ksi_1',
+        name: 'Carne al Pastor',
+      });
+      await db.doc('restaurants/rest_alpha/kitchenStockItems/ksi_1').set({
+        name: 'Carne al Pastor',
+        active: true,
+      });
+      await db.doc('restaurants/rest_alpha/products/prod_1').set({
+        name: 'Orden de Pastor',
+        active: true,
+      });
+      await db.doc('restaurants/rest_alpha/productStockOuts/so_centro_1').set({
+        branchId: 'suc_centro',
+        businessDate: '2026-11-26',
+        status: 'active',
+      });
+      await db.doc('restaurants/rest_alpha/productStockOuts/so_norte_1').set({
+        branchId: 'suc_norte',
+        businessDate: '2026-11-26',
+        status: 'active',
+      });
       await db.doc('restaurants/rest_alpha/orders/ord_alpha_centro').set({
         restaurantId: 'rest_alpha',
         branchId: 'suc_centro',
@@ -169,5 +262,125 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
       })
       .firestore();
     await assertFails(db.collectionGroup('payments').get());
+  });
+
+  it('allows authorized manager to read cash, authorizations, and inventory in own branch', async () => {
+    const db = testEnv
+      .authenticatedContext('alpha_centro_mgr', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    await assertSucceeds(
+      db.doc('restaurants/rest_alpha/cashSessions/cs_centro_1').get(),
+    );
+    await assertSucceeds(
+      db.doc('restaurants/rest_alpha/cashWithdrawalRequests/cw_centro_1').get(),
+    );
+    await assertSucceeds(
+      db
+        .doc('restaurants/rest_alpha/discountAuthorizationRequests/da_centro_1')
+        .get(),
+    );
+    await assertSucceeds(
+      db.doc('restaurants/rest_alpha/kitchenSessions/ks_centro_1').get(),
+    );
+    await assertSucceeds(
+      db
+        .doc('restaurants/rest_alpha/kitchenSessions/ks_centro_1/items/ksi_1')
+        .get(),
+    );
+    await assertSucceeds(
+      db.doc('restaurants/rest_alpha/kitchenStockItems/ksi_1').get(),
+    );
+    await assertSucceeds(
+      db.doc('restaurants/rest_alpha/products/prod_1').get(),
+    );
+    await assertSucceeds(
+      db.doc('restaurants/rest_alpha/productStockOuts/so_centro_1').get(),
+    );
+  });
+
+  it('denies cross-branch reads for cash, withdrawals, kitchen sessions, and stock outs', async () => {
+    const db = testEnv
+      .authenticatedContext('alpha_centro_mgr', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    await assertFails(
+      db.doc('restaurants/rest_alpha/cashSessions/cs_norte_1').get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/cashWithdrawalRequests/cw_norte_1').get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/kitchenSessions/ks_norte_1').get(),
+    );
+    await assertFails(
+      db
+        .doc('restaurants/rest_alpha/kitchenSessions/ks_norte_1/items/ksi_1')
+        .get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/productStockOuts/so_norte_1').get(),
+    );
+  });
+
+  it('denies reads when user lacks module permissions', async () => {
+    const db = testEnv
+      .authenticatedContext('alpha_cash_only', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    await assertSucceeds(
+      db.doc('restaurants/rest_alpha/cashSessions/cs_centro_1').get(),
+    );
+    await assertFails(
+      db
+        .doc('restaurants/rest_alpha/discountAuthorizationRequests/da_centro_1')
+        .get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/kitchenSessions/ks_centro_1').get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/kitchenStockItems/ksi_1').get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/productStockOuts/so_centro_1').get(),
+    );
+  });
+
+  it('denies cross-tenant reads for Phase 4 collections', async () => {
+    const db = testEnv
+      .authenticatedContext('beta_admin', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    await assertFails(
+      db.doc('restaurants/rest_alpha/cashSessions/cs_centro_1').get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/kitchenStockItems/ksi_1').get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/products/prod_1').get(),
+    );
+  });
+
+  it('denies all operational reads for inactive/revoked authUsers', async () => {
+    const db = testEnv
+      .authenticatedContext('alpha_revoked', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    await assertFails(
+      db.doc('restaurants/rest_alpha/orders/ord_alpha_centro').get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/cashSessions/cs_centro_1').get(),
+    );
+    await assertFails(
+      db.doc('restaurants/rest_alpha/kitchenStockItems/ksi_1').get(),
+    );
   });
 });

@@ -11,11 +11,27 @@ class SalesCursorPage {
     required this.orders,
     required this.lastDocument,
     required this.hasNext,
+    this.readCount = 0,
   });
 
   final List<PosOrder> orders;
   final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
   final bool hasNext;
+  final int readCount;
+}
+
+class SalesBoundedBatch {
+  const SalesBoundedBatch({
+    required this.orders,
+    required this.readCount,
+    required this.chunkCount,
+    required this.truncated,
+  });
+
+  final List<PosOrder> orders;
+  final int readCount;
+  final int chunkCount;
+  final bool truncated;
 }
 
 class SaleDetailData {
@@ -73,17 +89,18 @@ class SalesRepository {
       orders: pageDocs.map(PosOrder.fromDoc).toList(growable: false),
       lastDocument: pageDocs.isEmpty ? null : pageDocs.last,
       hasNext: hasNext,
+      readCount: snapshot.docs.length,
     );
   }
 
-  /// Bounded full-range fetch for full-set search and complete CSV export.
-  Future<List<PosOrder>> fetchOrdersInRange({
+  /// Bounded range search (strictly capped to prevent unbounded reads).
+  Future<SalesBoundedBatch> searchOrdersInRange({
     required String restaurantId,
     required String startBusinessDate,
     required String endBusinessDate,
     String? branchId,
     String? statusFilter,
-    int limit = 600,
+    int maxSearchLimit = 250,
   }) async {
     final query = _buildOrdersQuery(
       restaurantId: restaurantId,
@@ -92,8 +109,75 @@ class SalesRepository {
       branchId: branchId,
       statusFilter: statusFilter,
     );
-    final snapshot = await query.limit(limit).get();
-    return snapshot.docs.map(PosOrder.fromDoc).toList(growable: false);
+    final snapshot = await query.limit(maxSearchLimit + 1).get();
+    final truncated = snapshot.docs.length > maxSearchLimit;
+    final docs = truncated
+        ? snapshot.docs.take(maxSearchLimit).toList(growable: false)
+        : snapshot.docs;
+    return SalesBoundedBatch(
+      orders: docs.map(PosOrder.fromDoc).toList(growable: false),
+      readCount: snapshot.docs.length,
+      chunkCount: 1,
+      truncated: truncated,
+    );
+  }
+
+  /// Chunked cursor-paginated bulk export, bounded by [maxExportLimit].
+  Future<SalesBoundedBatch> exportOrdersInRange({
+    required String restaurantId,
+    required String startBusinessDate,
+    required String endBusinessDate,
+    String? branchId,
+    String? statusFilter,
+    int pageSize = 200,
+    int maxExportLimit = 1000,
+  }) async {
+    final baseQuery = _buildOrdersQuery(
+      restaurantId: restaurantId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      branchId: branchId,
+      statusFilter: statusFilter,
+    );
+
+    final orders = <PosOrder>[];
+    DocumentSnapshot<Map<String, dynamic>>? cursor;
+    var readCount = 0;
+    var chunkCount = 0;
+    var truncated = false;
+
+    while (orders.length < maxExportLimit) {
+      final remaining = maxExportLimit - orders.length;
+      final batchLimit = remaining < pageSize ? remaining : pageSize;
+      final effectiveQuery = cursor != null
+          ? baseQuery.startAfterDocument(cursor)
+          : baseQuery;
+      final snapshot = await effectiveQuery.limit(batchLimit + 1).get();
+      chunkCount += 1;
+      readCount += snapshot.docs.length;
+
+      final hasMore = snapshot.docs.length > batchLimit;
+      final batchDocs = hasMore
+          ? snapshot.docs.take(batchLimit).toList(growable: false)
+          : snapshot.docs;
+
+      orders.addAll(batchDocs.map(PosOrder.fromDoc));
+      if (!hasMore || batchDocs.isEmpty) {
+        break;
+      }
+      if (orders.length >= maxExportLimit) {
+        truncated = true;
+        break;
+      }
+      cursor = batchDocs.last;
+    }
+
+    return SalesBoundedBatch(
+      orders: orders,
+      readCount: readCount,
+      chunkCount: chunkCount,
+      truncated: truncated,
+    );
   }
 
   Query<Map<String, dynamic>> _buildOrdersQuery({

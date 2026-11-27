@@ -10,9 +10,9 @@ Inventario realizado exclusivamente mediante inspección de código fuente (`lib
 | --- | --- | --- | --- |
 | **Dashboard** | `_DashboardSection` (`backoffice_screen.dart`) | `DashboardPage` + `DashboardRepository` | **Implementado (Fase 3)** |
 | **Ventas** | `_SalesSection` (`backoffice_screen.dart`) | `SalesListPage` + `SaleDetailPage` + `SalesRepository` | **Implementado (Fase 3)** |
-| **Caja** | `CashAdminScreen` | `CashRepository` + módulo Caja | **Planificado (Fase 4)** |
-| **Autorizaciones** | `AuthorizationAdminScreen` | Submódulo Autorizaciones en Caja/Descuentos | **Planificado (Fase 4)** |
-| **Control de cocina / Inventarios** | `KitchenAdminScreen`, `RecipeYieldConfigScreen` | Módulo Inventarios | **Planificado (Fase 4)** |
+| **Caja** | `CashAdminScreen` | `CashPage` + `CashRepository` + `CashReconciliationSummary` | **Implementado (Fase 4)** |
+| **Autorizaciones** | `AuthorizationAdminScreen` | `AuthorizationsPage` + `AuthorizationsRepository` | **Implementado (Fase 4)** |
+| **Control de cocina / Inventarios** | `KitchenAdminScreen`, `RecipeYieldConfigScreen` | `InventoryPage` + `InventoryRepository` | **Implementado (Fase 4)** |
 | **Compras / CXP / Proveedores** | `PurchaseAdminScreen` (8 pestañas) | Módulo Compras | **Planificado (Fase 5)** |
 | **Finanzas / Socios** | `FinanceAdminScreen`, `FinanceMainDashboardScreen`, `WeeklyFinanceComparisonView` | Módulo Finanzas | **Planificado (Fase 5)** |
 | **Reportes (25 variantes)** | `_ReportsSection` (`_ReportKind`) | Módulo Reportes | **Planificado (Fase 5)** |
@@ -31,7 +31,7 @@ Inventario realizado exclusivamente mediante inspección de código fuente (`lib
 | **Comparativo multi-sucursal** | Selector único de sucursal | Selector `"Todas las sucursales"` + comparativo visual por sucursal |
 | **Ventas por canal / producto / empleado** | Reportes separados (`platform`, `products`, `employee`) | Integrados en Dashboard (`ChannelBreakdown`, `productRows`, `employeeBreakdown`) |
 | **Propinas y comisiones absorbidas** | En detalle de pago/corte | Sumarizados en Dashboard y mostrados en Detalle de Venta |
-| **Búsqueda de ventas** | En memoria tras descarga | Paginación por cursores (`20`/pág) sin búsqueda + búsqueda acotada sobre todo el periodo (`fetchOrdersInRange`) |
+| **Búsqueda de ventas** | En memoria tras descarga | Paginación por cursores (`20`/pág) sin búsqueda + búsqueda acotada (`searchOrdersInRange`, máx. `250` docs) y exportación paginada por bloques (`exportOrdersInRange`, `200`/bloque hasta `1000`) |
 | **Exportación CSV** | `exportCsvFile` | Exportación CSV completa en Dashboard y Ventas (independiente de la página visible) |
 | **Cancelación de ventas/pagos** | `backoffice_sales_cancellation.dart` | Permisos evaluados en `BackofficePermissions`; acción de escritura diferida tras validación con Codex |
 

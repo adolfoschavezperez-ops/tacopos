@@ -34,7 +34,14 @@ class BackofficePermissions {
       isAuthenticated &&
       (isSuperAdmin ||
           employee!.canManageCash ||
-          employee!.canAuthorizeCashWithdrawals);
+          employee!.canAuthorizeCashWithdrawals ||
+          employee!.canViewAdmin);
+
+  bool get canViewAuthorizations =>
+      isAuthenticated &&
+      (isSuperAdmin ||
+          employee!.canAuthorizeCashWithdrawals ||
+          employee!.canViewAdmin);
 
   bool get canViewPurchases =>
       isAuthenticated &&
@@ -47,7 +54,8 @@ class BackofficePermissions {
       isAuthenticated &&
       (isSuperAdmin ||
           employee!.canViewKitchenReports ||
-          employee!.canManageKitchenStock);
+          employee!.canManageKitchenStock ||
+          employee!.canViewAdmin);
 
   bool get canViewFinance =>
       isAuthenticated && (isSuperAdmin || employee!.canViewAdmin);
@@ -78,6 +86,7 @@ class BackofficePermissions {
       BackofficeSection.dashboard => canViewDashboard,
       BackofficeSection.sales => canViewSales,
       BackofficeSection.cash => canManageCash,
+      BackofficeSection.authorizations => canViewAuthorizations,
       BackofficeSection.purchases => canViewPurchases,
       BackofficeSection.inventory => canViewInventory,
       BackofficeSection.finance => canViewFinance,

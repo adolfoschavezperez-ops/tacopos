@@ -189,9 +189,44 @@ class BackofficeV2AuthService {
       return null;
     }
     try {
+      await user.getIdToken(true);
       return await _loadAuthorizedSession(restaurantId: restaurantId);
     } catch (_) {
+      await _auth.signOut();
       return null;
+    }
+  }
+
+  /// Forces ID token refresh and verifies that `authUsers/{uid}` remains
+  /// active and authorized for the current restaurant.
+  Future<bool> verifyActiveSession({
+    required String restaurantId,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null || user.isAnonymous) {
+      return false;
+    }
+    try {
+      await user.getIdToken(true);
+      final authDoc = await _firestore
+          .collection('restaurants')
+          .doc(restaurantId)
+          .collection('authUsers')
+          .doc(user.uid)
+          .get();
+      final record = BackofficeAdminRecord.fromMap(
+        uid: user.uid,
+        email: user.email ?? '',
+        data: authDoc.data(),
+      );
+      if (!record.canAccessBackoffice) {
+        await _auth.signOut();
+        return false;
+      }
+      return true;
+    } catch (_) {
+      await _auth.signOut();
+      return false;
     }
   }
 

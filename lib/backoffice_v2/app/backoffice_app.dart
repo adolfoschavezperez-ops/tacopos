@@ -8,8 +8,14 @@ import '../auth/backoffice_session.dart';
 import '../auth/login_page.dart';
 import '../core/design/backoffice_theme.dart';
 import '../core/env/backoffice_env.dart';
+import '../features/authorizations/authorizations_page.dart';
+import '../features/authorizations/authorizations_repository.dart';
+import '../features/cash/cash_page.dart';
+import '../features/cash/cash_repository.dart';
 import '../features/dashboard/dashboard_page.dart';
 import '../features/dashboard/dashboard_repository.dart';
+import '../features/inventory/inventory_page.dart';
+import '../features/inventory/inventory_repository.dart';
 import '../features/placeholders/module_stub_page.dart';
 import '../features/sales/sale_detail_page.dart';
 import '../features/sales/sales_list_page.dart';
@@ -28,24 +34,33 @@ class BackofficeV2App extends StatefulWidget {
   State<BackofficeV2App> createState() => _BackofficeV2AppState();
 }
 
-class _BackofficeV2AppState extends State<BackofficeV2App> {
+class _BackofficeV2AppState extends State<BackofficeV2App>
+    with WidgetsBindingObserver {
   late final BackofficeSession _session;
   late final BackofficeV2AuthService _authService;
   late final DashboardRepository _dashboardRepository;
   late final SalesRepository _salesRepository;
+  late final CashRepository _cashRepository;
+  late final AuthorizationsRepository _authorizationsRepository;
+  late final InventoryRepository _inventoryRepository;
   late final BackofficeRouterDelegate _routerDelegate;
   final BackofficeRouteParser _routeParser = const BackofficeRouteParser();
   StreamSubscription<User?>? _authSub;
   bool _restoringSession = true;
   bool _explicitSignOut = false;
+  DateTime? _lastSessionCheckAt;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _session = BackofficeSession(config: widget.config);
     _authService = BackofficeV2AuthService(config: widget.config);
     _dashboardRepository = DashboardRepository();
     _salesRepository = SalesRepository();
+    _cashRepository = CashRepository();
+    _authorizationsRepository = AuthorizationsRepository();
+    _inventoryRepository = InventoryRepository();
     _routerDelegate = BackofficeRouterDelegate(
       session: _session,
       loginBuilder: (context) => BackofficeLoginPage(
@@ -65,15 +80,39 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
       ),
     );
     _restoreSession();
-    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+    _authSub = FirebaseAuth.instance.idTokenChanges().listen((user) {
       if (!_restoringSession && user == null && _session.isAuthenticated) {
         final notice = _explicitSignOut
             ? null
-            : 'Tu sesión expiró. Inicia sesión nuevamente.';
+            : 'Tu sesión expiró o fue revocada. Inicia sesión nuevamente.';
         _explicitSignOut = false;
         _session.signOut(notice: notice);
       }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _verifyActiveSessionIfNeeded();
+    }
+  }
+
+  Future<void> _verifyActiveSessionIfNeeded() async {
+    if (_restoringSession || !_session.isAuthenticated) return;
+    final now = DateTime.now();
+    if (_lastSessionCheckAt != null &&
+        now.difference(_lastSessionCheckAt!) < const Duration(seconds: 45)) {
+      return;
+    }
+    _lastSessionCheckAt = now;
+    final stillActive = await _authService.verifyActiveSession(
+      restaurantId: _session.restaurantId,
+    );
+    if (!mounted || stillActive || !_session.isAuthenticated) return;
+    _session.signOut(
+      notice: 'Tu sesión expiró o fue revocada. Inicia sesión nuevamente.',
+    );
   }
 
   Future<void> _restoreSession() async {
@@ -95,6 +134,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _authSub?.cancel();
     _routerDelegate.dispose();
     _session.dispose();
@@ -140,37 +180,28 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
         repository: _salesRepository,
         onSelectSale: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
-      BackofficeSection.cash => const ModuleStubPage(
-        section: BackofficeSection.cash,
-        targetPhase: 'Fase 3',
-        description:
-            'Cortes de caja, retiros y auditoría de diferencias acotada por sucursal.',
-        plannedCapabilities: [
-          'Consulta de cortes por fecha operativa sin lecturas globales.',
-          'Auditoría de diferencias multi-tenant segura (reemplazo de collectionGroup sin filtro).',
-          'Autorización y trazabilidad de retiros de efectivo.',
-        ],
+      BackofficeSection.cash => CashPage(
+        session: _session,
+        repository: _cashRepository,
+      ),
+      BackofficeSection.authorizations => AuthorizationsPage(
+        session: _session,
+        repository: _authorizationsRepository,
       ),
       BackofficeSection.purchases => const ModuleStubPage(
         section: BackofficeSection.purchases,
-        targetPhase: 'Fase 4',
+        targetPhase: 'Fase 5',
         description:
             'Proveedores, compras, cuentas por pagar (CXP), pagos y kardex.',
         plannedCapabilities: [
-          'Paginación real en servidor mediante cursores (reemplazo de LocalPage).',
+          'Paginación real en servidor mediante cursores.',
           'Estado de cuenta por proveedor y vencimientos CXP.',
           'Exportación completa independiente de la página visible.',
         ],
       ),
-      BackofficeSection.inventory => const ModuleStubPage(
-        section: BackofficeSection.inventory,
-        targetPhase: 'Fase 3',
-        description:
-            'Control de cocina, mermas, recetas y existencias por sucursal.',
-        plannedCapabilities: [
-          'Sesiones de apertura/cierre de cocina.',
-          'Rendimiento y costo unitario por receta.',
-        ],
+      BackofficeSection.inventory => InventoryPage(
+        session: _session,
+        repository: _inventoryRepository,
       ),
       BackofficeSection.finance => const ModuleStubPage(
         section: BackofficeSection.finance,

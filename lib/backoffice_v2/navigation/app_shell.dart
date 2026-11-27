@@ -48,6 +48,13 @@ const List<_NavGroup> _navGroups = [
       section: BackofficeSection.cash,
       icon: Icons.point_of_sale_outlined,
       activeIcon: Icons.point_of_sale_rounded,
+      available: true,
+    ),
+    _NavItem(
+      section: BackofficeSection.authorizations,
+      icon: Icons.verified_outlined,
+      activeIcon: Icons.verified_rounded,
+      available: true,
     ),
     _NavItem(
       section: BackofficeSection.purchases,
@@ -58,6 +65,7 @@ const List<_NavGroup> _navGroups = [
       section: BackofficeSection.inventory,
       icon: Icons.inventory_2_outlined,
       activeIcon: Icons.inventory_2_rounded,
+      available: true,
     ),
     _NavItem(
       section: BackofficeSection.finance,

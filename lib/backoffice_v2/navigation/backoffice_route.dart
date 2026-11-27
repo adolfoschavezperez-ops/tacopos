@@ -2,6 +2,7 @@ enum BackofficeSection {
   dashboard('/dashboard', 'Dashboard'),
   sales('/sales', 'Ventas'),
   cash('/cash', 'Caja'),
+  authorizations('/authorizations', 'Autorizaciones'),
   purchases('/purchases', 'Compras'),
   inventory('/inventory', 'Inventarios'),
   finance('/finance', 'Finanzas'),

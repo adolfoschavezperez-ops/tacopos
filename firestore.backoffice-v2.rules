@@ -3,7 +3,8 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function isSignedIn() {
-      return request.auth != null && request.auth.token.firebase.sign_in_provider != 'anonymous';
+      return request.auth != null &&
+        request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
 
     function authUserDoc(restaurantId) {
@@ -33,6 +34,23 @@ service cloud.firestore {
           !('branchAccess' in authUserDoc(restaurantId).data) ||
           authUserDoc(restaurantId).data.branchAccess.size() == 0 ||
           branchId in authUserDoc(restaurantId).data.branchAccess);
+    }
+
+    function canReadCash(restaurantId) {
+      return hasPermission(restaurantId, 'canManageCash') ||
+        hasPermission(restaurantId, 'canAuthorizeCashWithdrawals') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canReadAuthorizations(restaurantId) {
+      return hasPermission(restaurantId, 'canAuthorizeCashWithdrawals') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canReadInventory(restaurantId) {
+      return hasPermission(restaurantId, 'canManageKitchenStock') ||
+        hasPermission(restaurantId, 'canViewKitchenReports') ||
+        hasPermission(restaurantId, 'canViewAdmin');
     }
 
     match /restaurants/{restaurantId} {
@@ -75,8 +93,51 @@ service cloud.firestore {
       }
 
       match /cashSessions/{sessionId} {
-        allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
+        allow read: if canReadCash(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
+        allow write: if false;
+      }
+
+      match /cashWithdrawalRequests/{requestId} {
+        allow read: if canReadCash(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow write: if false;
+      }
+
+      match /discountAuthorizationRequests/{requestId} {
+        allow read: if canReadAuthorizations(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow write: if false;
+      }
+
+      match /kitchenSessions/{sessionId} {
+        allow read: if canReadInventory(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow write: if false;
+
+        match /items/{itemId} {
+          allow read: if canReadInventory(restaurantId) &&
+            canAccessBranch(
+              restaurantId,
+              get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(sessionId)).data.branchId
+            );
+          allow write: if false;
+        }
+      }
+
+      match /kitchenStockItems/{itemId} {
+        allow read: if canReadInventory(restaurantId);
+        allow write: if false;
+      }
+
+      match /productStockOuts/{stockOutId} {
+        allow read: if canReadInventory(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow write: if false;
+      }
+
+      match /products/{productId} {
+        allow read: if isAuthorizedInRestaurant(restaurantId);
         allow write: if false;
       }
 
