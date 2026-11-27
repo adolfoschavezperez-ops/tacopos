@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
 
-import '../../services/backoffice_admin_auth_service.dart';
-import '../core/design/design_tokens.dart';
-import '../core/env/backoffice_env.dart';
-import '../widgets/environment_banner.dart';
-import '../widgets/saas_card.dart';
 import 'backoffice_auth_service.dart';
 import 'backoffice_session.dart';
+import 'widgets/login_showcase_panel.dart';
+import 'widgets/tacopos_brand_mark.dart';
 
 class BackofficeLoginPage extends StatefulWidget {
   const BackofficeLoginPage({
@@ -23,18 +20,17 @@ class BackofficeLoginPage extends StatefulWidget {
 }
 
 class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   late final TextEditingController _restaurantController;
-  final TextEditingController _pinController = TextEditingController();
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
-  bool _useEmailMode = false;
-  bool _loadingUsers = false;
+  final FocusNode _emailFocus = FocusNode();
+  final FocusNode _passwordFocus = FocusNode();
+
+  bool _obscurePassword = true;
   bool _submitting = false;
-  bool _functionsUnavailableInSpark = false;
   String? _error;
-  List<BackofficeLoginUser> _users = const [];
-  String? _selectedUserId;
 
   @override
   void initState() {
@@ -42,112 +38,33 @@ class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
     _restaurantController = TextEditingController(
       text: widget.session.config.defaultRestaurantId,
     );
-    _useEmailMode = true;
   }
 
   @override
   void dispose() {
     _restaurantController.dispose();
-    _pinController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _emailFocus.dispose();
+    _passwordFocus.dispose();
     super.dispose();
   }
 
-  Future<void> _loadUsers() async {
-    final restaurantId = _restaurantController.text.trim();
-    if (restaurantId.isEmpty) return;
-    setState(() {
-      _loadingUsers = true;
-      _error = null;
-    });
-    try {
-      final users = await widget.authService.listUsers(
-        restaurantId: restaurantId,
-      );
-      if (!mounted) return;
-      setState(() {
-        _users = users;
-        _selectedUserId = users.isNotEmpty ? users.first.id : null;
-        _functionsUnavailableInSpark = false;
-      });
-    } on BackofficeAuthException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _users = const [];
-        _selectedUserId = null;
-        _functionsUnavailableInSpark = e.functionsUnavailableInSpark;
-        _error = e.message;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _error = 'No se pudo conectar al servicio de usuarios: $e';
-      });
-    } finally {
-      if (mounted) {
-        setState(() => _loadingUsers = false);
-      }
-    }
-  }
+  Future<void> _submit() async {
+    if (_submitting) return;
+    final valid = _formKey.currentState?.validate() ?? false;
+    if (!valid) return;
 
-  Future<void> _submitPin() async {
-    final restaurantId = _restaurantController.text.trim();
-    final userId = _selectedUserId ?? '';
-    final pin = _pinController.text.trim();
-    if (userId.isEmpty || pin.isEmpty) {
-      setState(() => _error = 'Selecciona un usuario e ingresa tu PIN.');
-      return;
-    }
     setState(() {
       _submitting = true;
       _error = null;
     });
-    try {
-      final result = await widget.authService.signInWithPin(
-        restaurantId: restaurantId,
-        employeeId: userId,
-        pin: pin,
-      );
-      if (!mounted) return;
-      widget.session.signIn(
-        employee: result.employee,
-        restaurantId: result.restaurantId,
-        restaurantName: result.restaurantName,
-        branches: result.branches,
-      );
-    } on BackofficeAuthException catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _functionsUnavailableInSpark = e.functionsUnavailableInSpark;
-        _error = e.message;
-      });
-    } finally {
-      if (mounted) {
-        setState(() => _submitting = false);
-      }
-    }
-  }
 
-  Future<void> _submitEmail() async {
-    final restaurantId = _restaurantController.text.trim();
-    final email = _emailController.text.trim();
-    final password = _passwordController.text;
-    if (restaurantId.isEmpty || email.isEmpty || password.isEmpty) {
-      setState(
-        () => _error = 'Completa restaurante, correo electrónico y contraseña.',
-      );
-      return;
-    }
-    setState(() {
-      _submitting = true;
-      _error = null;
-    });
     try {
       final result = await widget.authService.signInWithEmail(
-        restaurantId: restaurantId,
-        email: email,
-        password: password,
+        restaurantId: _restaurantController.text.trim(),
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
       );
       if (!mounted) return;
       widget.session.signIn(
@@ -159,6 +76,11 @@ class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
     } on BackofficeAuthException catch (e) {
       if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(
+        () => _error = 'Ocurrió un problema al iniciar sesión. Intenta de nuevo.',
+      );
     } finally {
       if (mounted) {
         setState(() => _submitting = false);
@@ -168,281 +90,253 @@ class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final tokens = BackofficeTokens.of(context);
+    final isDark = widget.session.isDarkMode;
     final width = MediaQuery.sizeOf(context).width;
-    final showSplit = width >= 960;
+    final showSplit = width >= 1024;
+
+    final Color panelBg = isDark
+        ? const Color(0xFF0D0F14)
+        : const Color(0xFFFAFAF9);
+    final Color cardBg = isDark
+        ? const Color(0xFF161920)
+        : const Color(0xFFFFFFFF);
+    final Color borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.08)
+        : const Color(0xFFE4E4E7);
+    final Color titleColor = isDark
+        ? const Color(0xFFFAFAF9)
+        : const Color(0xFF111318);
+    final Color subtitleColor = isDark
+        ? const Color(0xFFA1A1AA)
+        : const Color(0xFF71717A);
 
     return Scaffold(
-      backgroundColor: tokens.canvas,
+      backgroundColor: panelBg,
       body: Row(
         children: [
           if (showSplit)
-            Expanded(
-              flex: 5,
-              child: _BrandShowcasePanel(config: widget.session.config),
+            const Expanded(
+              flex: 55,
+              child: LoginShowcasePanel(),
             ),
           Expanded(
-            flex: 6,
-            child: Stack(
-              children: [
-                Positioned(
-                  top: 16,
-                  right: 20,
-                  child: Row(
-                    children: [
-                      EnvironmentIndicatorPill(config: widget.session.config),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        onPressed: widget.session.toggleThemeMode,
-                        tooltip: widget.session.isDarkMode
-                            ? 'Modo claro'
-                            : 'Modo oscuro',
-                        icon: Icon(
-                          widget.session.isDarkMode
-                              ? Icons.light_mode_outlined
-                              : Icons.dark_mode_outlined,
-                          size: 18,
-                          color: tokens.textSecondary,
-                        ),
+            flex: 45,
+            child: Container(
+              color: panelBg,
+              child: SafeArea(
+                child: Column(
+                  children: [
+                    // Top bar with discreet env badge + theme toggle
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 16,
                       ),
-                    ],
-                  ),
-                ),
-                Center(
-                  child: SingleChildScrollView(
-                    padding: const EdgeInsets.all(24),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 420),
-                      child: SaasCard(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Row(
-                              children: [
-                                Container(
-                                  width: 30,
-                                  height: 30,
-                                  decoration: BoxDecoration(
-                                    color: tokens.brandAccent,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      'T',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w800,
-                                        color: tokens.brandOnAccent,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'TacoPOS Backoffice 2.0',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.titleLarge,
-                                    ),
-                                    Text(
-                                      'Acceso administrativo SaaS • RenovaDev',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodySmall,
-                                    ),
-                                  ],
-                                ),
-                              ],
+                      child: Row(
+                        children: [
+                          if (!showSplit)
+                            TacoPosBrandMark(
+                              size: 30,
+                              showWordmark: true,
+                              lightText: isDark,
                             ),
-                            const SizedBox(height: 20),
-                            _AuthModeSwitcher(
-                              useEmailMode: _useEmailMode,
-                              onChanged: (val) => setState(() {
-                                _useEmailMode = val;
-                                _error = null;
-                              }),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'ID de Restaurante (Tenant)',
-                              style: Theme.of(context).textTheme.labelLarge,
-                            ),
-                            const SizedBox(height: 6),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: _restaurantController,
-                                    style: const TextStyle(fontSize: 13),
-                                    decoration: const InputDecoration(
-                                      hintText: 'ej. rest_alpha',
-                                      prefixIcon: Icon(
-                                        Icons.storefront_outlined,
-                                        size: 16,
-                                      ),
+                          const Spacer(),
+                          _DiscreetEnvBadge(
+                            isLocal: widget.session.config.isLocal,
+                            isDark: isDark,
+                          ),
+                          const SizedBox(width: 8),
+                          _ThemeToggleButton(
+                            isDark: isDark,
+                            onPressed: widget.session.toggleThemeMode,
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Centered commercial login form
+                    Expanded(
+                      child: Center(
+                        child: SingleChildScrollView(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 16,
+                          ),
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 430),
+                            child: Container(
+                              padding: EdgeInsets.all(width < 480 ? 24 : 32),
+                              decoration: BoxDecoration(
+                                color: cardBg,
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(color: borderColor),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(
+                                      alpha: isDark ? 0.35 : 0.05,
                                     ),
-                                  ),
-                                ),
-                                if (!_useEmailMode) ...[
-                                  const SizedBox(width: 8),
-                                  OutlinedButton(
-                                    onPressed: _loadingUsers ? null : _loadUsers,
-                                    child: _loadingUsers
-                                        ? const SizedBox(
-                                            width: 14,
-                                            height: 14,
-                                            child: CircularProgressIndicator(
-                                              strokeWidth: 2,
-                                            ),
-                                          )
-                                        : const Text('Cargar'),
+                                    blurRadius: isDark ? 32 : 24,
+                                    offset: const Offset(0, 10),
                                   ),
                                 ],
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-                            if (!_useEmailMode) ...[
-                              Text(
-                                'Usuario administrativo',
-                                style: Theme.of(context).textTheme.labelLarge,
                               ),
-                              const SizedBox(height: 6),
-                              DropdownButtonFormField<String>(
-                                initialValue: _selectedUserId,
-                                isExpanded: true,
-                                decoration: const InputDecoration(
-                                  prefixIcon: Icon(
-                                    Icons.person_outline,
-                                    size: 16,
-                                  ),
-                                ),
-                                hint: const Text('Selecciona un administrador'),
-                                items: _users
-                                    .map(
-                                      (u) => DropdownMenuItem<String>(
-                                        value: u.id,
-                                        child: Text(
-                                          u.displayName,
-                                          style: const TextStyle(fontSize: 13),
+                              child: Form(
+                                key: _formKey,
+                                child: AutofillGroup(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        'Bienvenido de nuevo',
+                                        style: TextStyle(
+                                          fontFamily: 'Inter',
+                                          fontFamilyFallback: const [
+                                            'Segoe UI',
+                                            'Roboto',
+                                            'sans-serif',
+                                          ],
+                                          fontSize: 25,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: -0.6,
+                                          color: titleColor,
                                         ),
                                       ),
-                                    )
-                                    .toList(),
-                                onChanged: (val) =>
-                                    setState(() => _selectedUserId = val),
-                              ),
-                              const SizedBox(height: 14),
-                              Text(
-                                'PIN operativo',
-                                style: Theme.of(context).textTheme.labelLarge,
-                              ),
-                              const SizedBox(height: 6),
-                              TextField(
-                                controller: _pinController,
-                                obscureText: true,
-                                keyboardType: TextInputType.number,
-                                onSubmitted: (_) => _submitPin(),
-                                decoration: const InputDecoration(
-                                  hintText: '••••',
-                                  prefixIcon: Icon(
-                                    Icons.lock_outline,
-                                    size: 16,
-                                  ),
-                                ),
-                              ),
-                            ] else ...[
-                              Text(
-                                'Correo electrónico',
-                                style: Theme.of(context).textTheme.labelLarge,
-                              ),
-                              const SizedBox(height: 6),
-                              TextField(
-                                controller: _emailController,
-                                keyboardType: TextInputType.emailAddress,
-                                decoration: const InputDecoration(
-                                  hintText: 'correo@ejemplo.com',
-                                  prefixIcon: Icon(
-                                    Icons.email_outlined,
-                                    size: 16,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              Text(
-                                'Contraseña',
-                                style: Theme.of(context).textTheme.labelLarge,
-                              ),
-                              const SizedBox(height: 6),
-                              TextField(
-                                controller: _passwordController,
-                                obscureText: true,
-                                onSubmitted: (_) => _submitEmail(),
-                                decoration: const InputDecoration(
-                                  hintText: '••••••••',
-                                  prefixIcon: Icon(
-                                    Icons.lock_outline,
-                                    size: 16,
-                                  ),
-                                ),
-                              ),
-                            ],
-                            if (_error != null) ...[
-                              const SizedBox(height: 14),
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: _functionsUnavailableInSpark
-                                      ? tokens.warningSoft
-                                      : tokens.dangerSoft,
-                                  borderRadius: BorderRadius.circular(
-                                    BackofficeSpacing.radiusMd,
-                                  ),
-                                  border: Border.all(
-                                    color:
-                                        (_functionsUnavailableInSpark
-                                                ? tokens.warning
-                                                : tokens.danger)
-                                            .withValues(alpha: 0.35),
-                                  ),
-                                ),
-                                child: Text(
-                                  _error!,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: _functionsUnavailableInSpark
-                                        ? tokens.warning
-                                        : tokens.danger,
-                                  ),
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 18),
-                            FilledButton(
-                              onPressed: _submitting
-                                  ? null
-                                  : (_useEmailMode ? _submitEmail : _submitPin),
-                              child: _submitting
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        'Inicia sesión para administrar tu negocio.',
+                                        style: TextStyle(
+                                          fontSize: 14,
+                                          color: subtitleColor,
+                                        ),
                                       ),
-                                    )
-                                  : const Text('Iniciar sesión'),
+                                      const SizedBox(height: 26),
+                                      _FieldLabel(
+                                        label: 'Restaurante',
+                                        color: titleColor,
+                                      ),
+                                      const SizedBox(height: 7),
+                                      _StyledTextField(
+                                        controller: _restaurantController,
+                                        hintText: 'Nombre o clave de restaurante',
+                                        prefixIcon: Icons.storefront_outlined,
+                                        isDark: isDark,
+                                        textInputAction: TextInputAction.next,
+                                        onFieldSubmitted: (_) =>
+                                            _emailFocus.requestFocus(),
+                                        validator: (value) {
+                                          if (value == null ||
+                                              value.trim().isEmpty) {
+                                            return 'Ingresa tu restaurante.';
+                                          }
+                                          return null;
+                                        },
+                                      ),
+                                      const SizedBox(height: 18),
+                                      _FieldLabel(
+                                        label: 'Correo electrónico',
+                                        color: titleColor,
+                                      ),
+                                      const SizedBox(height: 7),
+                                      _StyledTextField(
+                                        controller: _emailController,
+                                        focusNode: _emailFocus,
+                                        hintText: 'nombre@restaurante.com',
+                                        prefixIcon: Icons.mail_outline_rounded,
+                                        isDark: isDark,
+                                        keyboardType:
+                                            TextInputType.emailAddress,
+                                        autofillHints: const [
+                                          AutofillHints.email,
+                                        ],
+                                        textInputAction: TextInputAction.next,
+                                        onFieldSubmitted: (_) =>
+                                            _passwordFocus.requestFocus(),
+                                        validator: (value) {
+                                          final text = value?.trim() ?? '';
+                                          if (text.isEmpty) {
+                                            return 'Ingresa tu correo electrónico.';
+                                          }
+                                          if (!text.contains('@') ||
+                                              !text.contains('.')) {
+                                            return 'Ingresa un correo electrónico válido.';
+                                          }
+                                          return null;
+                                        },
+                                      ),
+                                      const SizedBox(height: 18),
+                                      _FieldLabel(
+                                        label: 'Contraseña',
+                                        color: titleColor,
+                                      ),
+                                      const SizedBox(height: 7),
+                                      _StyledTextField(
+                                        controller: _passwordController,
+                                        focusNode: _passwordFocus,
+                                        hintText: 'Ingresa tu contraseña',
+                                        prefixIcon: Icons.lock_outline_rounded,
+                                        isDark: isDark,
+                                        obscureText: _obscurePassword,
+                                        autofillHints: const [
+                                          AutofillHints.password,
+                                        ],
+                                        textInputAction: TextInputAction.done,
+                                        onFieldSubmitted: (_) => _submit(),
+                                        suffixIcon: IconButton(
+                                          onPressed: () => setState(
+                                            () => _obscurePassword =
+                                                !_obscurePassword,
+                                          ),
+                                          tooltip: _obscurePassword
+                                              ? 'Mostrar contraseña'
+                                              : 'Ocultar contraseña',
+                                          icon: Icon(
+                                            _obscurePassword
+                                                ? Icons.visibility_outlined
+                                                : Icons.visibility_off_outlined,
+                                            size: 18,
+                                            color: subtitleColor,
+                                          ),
+                                        ),
+                                        validator: (value) {
+                                          if (value == null || value.isEmpty) {
+                                            return 'Ingresa tu contraseña.';
+                                          }
+                                          return null;
+                                        },
+                                      ),
+                                      if (_error != null) ...[
+                                        const SizedBox(height: 16),
+                                        _ErrorBanner(
+                                          message: _error!,
+                                          isDark: isDark,
+                                        ),
+                                      ],
+                                      const SizedBox(height: 22),
+                                      _BrandSubmitButton(
+                                        label: 'Iniciar sesión',
+                                        loading: _submitting,
+                                        onPressed: _submit,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 18),
+                      child: Text(
+                        'Desarrollado por RenovaDev.',
+                        style: TextStyle(fontSize: 12, color: subtitleColor),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ],
@@ -451,78 +345,183 @@ class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
   }
 }
 
-class _AuthModeSwitcher extends StatelessWidget {
-  const _AuthModeSwitcher({
-    required this.useEmailMode,
-    required this.onChanged,
-  });
+class _FieldLabel extends StatelessWidget {
+  const _FieldLabel({required this.label, required this.color});
 
-  final bool useEmailMode;
-  final ValueChanged<bool> onChanged;
+  final String label;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = BackofficeTokens.of(context);
-    return Container(
-      padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        color: tokens.surfaceSubtle,
-        borderRadius: BorderRadius.circular(BackofficeSpacing.radiusMd),
-        border: Border.all(color: tokens.border),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _ModeTab(
-              label: 'PIN (Functions)',
-              selected: !useEmailMode,
-              onTap: () => onChanged(false),
-            ),
-          ),
-          Expanded(
-            child: _ModeTab(
-              label: 'Email / Auth DEV',
-              selected: useEmailMode,
-              onTap: () => onChanged(true),
-            ),
-          ),
-        ],
+    return Text(
+      label,
+      style: TextStyle(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        color: color,
       ),
     );
   }
 }
 
-class _ModeTab extends StatelessWidget {
-  const _ModeTab({
+class _StyledTextField extends StatelessWidget {
+  const _StyledTextField({
+    required this.controller,
+    required this.hintText,
+    required this.prefixIcon,
+    required this.isDark,
+    this.focusNode,
+    this.obscureText = false,
+    this.keyboardType,
+    this.autofillHints,
+    this.textInputAction,
+    this.onFieldSubmitted,
+    this.suffixIcon,
+    this.validator,
+  });
+
+  final TextEditingController controller;
+  final String hintText;
+  final IconData prefixIcon;
+  final bool isDark;
+  final FocusNode? focusNode;
+  final bool obscureText;
+  final TextInputType? keyboardType;
+  final Iterable<String>? autofillHints;
+  final TextInputAction? textInputAction;
+  final ValueChanged<String>? onFieldSubmitted;
+  final Widget? suffixIcon;
+  final FormFieldValidator<String>? validator;
+
+  @override
+  Widget build(BuildContext context) {
+    final fill = isDark ? const Color(0xFF1B1E25) : const Color(0xFFFAFAF9);
+    final border = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : const Color(0xFFE4E4E7);
+    final textColor = isDark
+        ? const Color(0xFFFAFAF9)
+        : const Color(0xFF111318);
+    final mutedColor = isDark
+        ? const Color(0xFF71717A)
+        : const Color(0xFFA1A1AA);
+
+    return TextFormField(
+      controller: controller,
+      focusNode: focusNode,
+      obscureText: obscureText,
+      keyboardType: keyboardType,
+      autofillHints: autofillHints,
+      textInputAction: textInputAction,
+      onFieldSubmitted: onFieldSubmitted,
+      validator: validator,
+      style: TextStyle(fontSize: 14, color: textColor),
+      decoration: InputDecoration(
+        hintText: hintText,
+        hintStyle: TextStyle(fontSize: 13.5, color: mutedColor),
+        filled: true,
+        fillColor: fill,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 15,
+        ),
+        constraints: const BoxConstraints(minHeight: 50),
+        prefixIcon: Icon(prefixIcon, size: 18, color: mutedColor),
+        suffixIcon: suffixIcon,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: border),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFF97316), width: 1.6),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFEF4444)),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFFEF4444), width: 1.5),
+        ),
+      ),
+    );
+  }
+}
+
+class _BrandSubmitButton extends StatefulWidget {
+  const _BrandSubmitButton({
     required this.label,
-    required this.selected,
-    required this.onTap,
+    required this.loading,
+    required this.onPressed,
   });
 
   final String label;
-  final bool selected;
-  final VoidCallback onTap;
+  final bool loading;
+  final VoidCallback onPressed;
+
+  @override
+  State<_BrandSubmitButton> createState() => _BrandSubmitButtonState();
+}
+
+class _BrandSubmitButtonState extends State<_BrandSubmitButton> {
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = BackofficeTokens.of(context);
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 7),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        height: 50,
         decoration: BoxDecoration(
-          color: selected ? tokens.surface : Colors.transparent,
-          borderRadius: BorderRadius.circular(6),
-          border: selected ? Border.all(color: tokens.border) : null,
+          borderRadius: BorderRadius.circular(10),
+          gradient: LinearGradient(
+            colors: widget.loading
+                ? const [Color(0xFFFB923C), Color(0xFFFBBF24)]
+                : _hovered
+                ? const [Color(0xFFEA580C), Color(0xFFD97706)]
+                : const [Color(0xFFF97316), Color(0xFFF59E0B)],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFF97316).withValues(
+                alpha: _hovered ? 0.36 : 0.24,
+              ),
+              blurRadius: _hovered ? 18 : 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
-        child: Center(
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-              color: selected ? tokens.textPrimary : tokens.textMuted,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: widget.loading ? null : widget.onPressed,
+            borderRadius: BorderRadius.circular(10),
+            child: Center(
+              child: widget.loading
+                  ? const SizedBox(
+                      width: 19,
+                      height: 19,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    )
+                  : Text(
+                      widget.label,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                        letterSpacing: 0.1,
+                      ),
+                    ),
             ),
           ),
         ),
@@ -531,103 +530,39 @@ class _ModeTab extends StatelessWidget {
   }
 }
 
-class _BrandShowcasePanel extends StatelessWidget {
-  const _BrandShowcasePanel({required this.config});
+class _ErrorBanner extends StatelessWidget {
+  const _ErrorBanner({required this.message, required this.isDark});
 
-  final BackofficeConfig config;
+  final String message;
+  final bool isDark;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = BackofficeTokens.of(context);
+    final fg = isDark ? const Color(0xFFFCA5A5) : const Color(0xFFB91C1C);
+    final bg = isDark
+        ? const Color(0xFFEF4444).withValues(alpha: 0.12)
+        : const Color(0xFFFEF2F2);
+    final border = isDark
+        ? const Color(0xFFEF4444).withValues(alpha: 0.30)
+        : const Color(0xFFFECACA);
 
     return Container(
-      padding: const EdgeInsets.all(40),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: tokens.sidebarBg,
-        border: Border(right: BorderSide(color: tokens.border)),
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: border),
       ),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 28,
-                height: 28,
-                decoration: BoxDecoration(
-                  color: tokens.brandAccent,
-                  borderRadius: BorderRadius.circular(7),
-                ),
-                child: Center(
-                  child: Text(
-                    'R',
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: tokens.brandOnAccent,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                'RenovaDev  •  TacoPOS',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: tokens.textPrimary,
-                ),
-              ),
-            ],
-          ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Control operativo y financiero multi-sucursal.',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -0.6,
-                    height: 1.15,
-                    color: tokens.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  'Nueva generación de TacoPOS Backoffice diseñada para escalar en múltiples restaurantes y sucursales con consultas acotadas, paginación por cursores y consistencia financiera canónica.',
-                  style: Theme.of(context).textTheme.bodyLarge,
-                ),
-                const SizedBox(height: 28),
-                const _FeatureBullet(
-                  icon: Icons.shield_outlined,
-                  title: 'Aislamiento por ambiente y tenant',
-                  subtitle:
-                      'Protección estricta contra conexiones accidentales a producción.',
-                ),
-                const SizedBox(height: 14),
-                const _FeatureBullet(
-                  icon: Icons.bolt_outlined,
-                  title: 'Consultas acotadas y paginadas',
-                  subtitle:
-                      'Filtros de fechas en Firestore y cursores para grandes volúmenes.',
-                ),
-                const SizedBox(height: 14),
-                const _FeatureBullet(
-                  icon: Icons.account_balance_outlined,
-                  title: 'Compatibilidad total con Android POS',
-                  subtitle:
-                      'Reutiliza CanonicalSalesSummary y contratos documentales vigentes.',
-                ),
-              ],
+          Icon(Icons.error_outline_rounded, size: 17, color: fg),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(fontSize: 12.5, height: 1.35, color: fg),
             ),
-          ),
-          Text(
-            'Proyecto activo: ${config.projectId}',
-            style: TextStyle(fontSize: 12, color: tokens.textMuted),
           ),
         ],
       ),
@@ -635,45 +570,85 @@ class _BrandShowcasePanel extends StatelessWidget {
   }
 }
 
-class _FeatureBullet extends StatelessWidget {
-  const _FeatureBullet({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
+class _DiscreetEnvBadge extends StatelessWidget {
+  const _DiscreetEnvBadge({required this.isLocal, required this.isDark});
 
-  final IconData icon;
-  final String title;
-  final String subtitle;
+  final bool isLocal;
+  final bool isDark;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = BackofficeTokens.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          width: 28,
-          height: 28,
+    final label = isLocal ? 'LOCAL' : 'DEV';
+    final fg = isDark ? const Color(0xFFFBBF24) : const Color(0xFFB45309);
+    final bg = isDark
+        ? const Color(0xFFF59E0B).withValues(alpha: 0.12)
+        : const Color(0xFFFEF3C7);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: fg.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 5.5,
+            height: 5.5,
+            decoration: BoxDecoration(color: fg, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.4,
+              color: fg,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ThemeToggleButton extends StatelessWidget {
+  const _ThemeToggleButton({required this.isDark, required this.onPressed});
+
+  final bool isDark;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final border = isDark
+        ? Colors.white.withValues(alpha: 0.10)
+        : const Color(0xFFE4E4E7);
+    final bg = isDark ? const Color(0xFF161920) : const Color(0xFFFFFFFF);
+    final fg = isDark ? const Color(0xFFD4D4D8) : const Color(0xFF3F3F46);
+
+    return Tooltip(
+      message: isDark ? 'Modo claro' : 'Modo oscuro',
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(9),
+        child: Container(
+          width: 34,
+          height: 34,
           decoration: BoxDecoration(
-            color: tokens.surfaceSubtle,
-            borderRadius: BorderRadius.circular(7),
-            border: Border.all(color: tokens.border),
+            color: bg,
+            borderRadius: BorderRadius.circular(9),
+            border: Border.all(color: border),
           ),
-          child: Icon(icon, size: 15, color: tokens.brandAccent),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 2),
-              Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
-            ],
+          child: Icon(
+            isDark ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
+            size: 17,
+            color: fg,
           ),
         ),
-      ],
+      ),
     );
   }
 }

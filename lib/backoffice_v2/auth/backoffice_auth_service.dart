@@ -146,7 +146,9 @@ class BackofficeV2AuthService {
   }) async {
     final cleanRestaurant = restaurantId.trim();
     if (cleanRestaurant.isEmpty) {
-      throw const BackofficeAuthException('Ingresa el ID del restaurante.');
+      throw const BackofficeAuthException(
+        'Ingresa el identificador de tu restaurante.',
+      );
     }
     await _auth.setPersistence(Persistence.LOCAL);
     try {
@@ -156,10 +158,25 @@ class BackofficeV2AuthService {
       );
       return _loadAuthorizedSession(restaurantId: cleanRestaurant);
     } on FirebaseAuthException catch (e) {
-      throw BackofficeAuthException(
-        e.message ?? 'No se pudo autenticar con Firebase Auth.',
-      );
+      throw BackofficeAuthException(_friendlyAuthError(e));
     }
+  }
+
+  static String _friendlyAuthError(FirebaseAuthException e) {
+    return switch (e.code) {
+      'invalid-credential' ||
+      'wrong-password' ||
+      'user-not-found' =>
+        'Correo o contraseña incorrectos. Verifica tus datos e intenta de nuevo.',
+      'invalid-email' => 'El formato del correo electrónico no es válido.',
+      'user-disabled' =>
+        'Esta cuenta ha sido deshabilitada. Contacta al administrador.',
+      'too-many-requests' =>
+        'Demasiados intentos fallidos. Espera un momento antes de volver a intentar.',
+      'network-request-failed' =>
+        'No se pudo conectar. Verifica tu conexión a internet.',
+      _ => e.message ?? 'No se pudo iniciar sesión. Intenta nuevamente.',
+    };
   }
 
   Future<BackofficeAuthResult?> restoreSessionIfSignedIn({
@@ -202,7 +219,7 @@ class BackofficeV2AuthService {
     if (!record.canAccessBackoffice) {
       await _auth.signOut();
       throw const BackofficeAuthException(
-        'Tu cuenta no tiene autorización en authUsers para este restaurante.',
+        'Tu cuenta no tiene permisos administrativos para este restaurante.',
       );
     }
 

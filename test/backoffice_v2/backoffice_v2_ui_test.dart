@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/backoffice_v2/app/isolation_blocked_screen.dart';
 import 'package:tacopos/backoffice_v2/auth/backoffice_session.dart';
+import 'package:tacopos/backoffice_v2/auth/widgets/login_showcase_panel.dart';
 import 'package:tacopos/backoffice_v2/core/design/backoffice_theme.dart';
 import 'package:tacopos/backoffice_v2/core/env/backoffice_env.dart';
 import 'package:tacopos/backoffice_v2/navigation/app_shell.dart';
@@ -114,5 +115,29 @@ void main() {
     await tester.tap(find.byTooltip('Modo oscuro'));
     await tester.pump();
     expect(session.isDarkMode, isTrue);
+  });
+
+  testWidgets('LoginShowcasePanel renders without errors at 1920x1080 and 1366x768', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() => tester.view.resetPhysicalSize());
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: Row(
+            children: [
+              Expanded(flex: 55, child: LoginShowcasePanel()),
+              Expanded(flex: 45, child: SizedBox()),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Tu restaurante, bajo control.'), findsOneWidget);
+    expect(find.text('Ventas del día'), findsOneWidget);
   });
 }
