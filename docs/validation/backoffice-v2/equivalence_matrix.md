@@ -1,53 +1,56 @@
-# Matriz de Equivalencia Funcional — Backoffice Anterior vs. Backoffice 2.0
+# Matriz de Equivalencia Funcional Obligatoria — Backoffice 1.0 vs. Backoffice 2.0
 
-Inventario realizado exclusivamente mediante inspección de código fuente (`lib/screens/admin/`, `lib/core/`, `lib/services/`), sin acceso a producción.
+Auditoría exhaustiva por funcionalidad individual realizada mediante inspección directa del código fuente de Backoffice 1.0 (`lib/screens/admin/`, `lib/core/`, `lib/services/taco_pos_repository.dart`) y Backoffice 2.0 (`lib/backoffice_v2/`), sin acceso a producción.
+
+**Principio rector:** Backoffice 1.0 es el piso funcional mínimo obligatorio; ninguna funcionalidad se considera terminada al 100% si Backoffice 1.0 permite acciones administrativas u operativas que aún no están disponibles en Backoffice 2.0.
 
 ---
 
-## 1. Módulos principales
+## 1. Resumen por módulo
 
-| Módulo Backoffice 1.x | Ubicación origen | Equivalente Backoffice 2.0 | Estado |
+| Módulo | Equivalente Backoffice 1.0 | Equivalente Backoffice 2.0 | Estado general |
 | --- | --- | --- | --- |
-| **Dashboard** | `_DashboardSection` (`backoffice_screen.dart`) | `DashboardPage` + `DashboardRepository` | **Implementado (Fase 3)** |
-| **Ventas** | `_SalesSection` (`backoffice_screen.dart`) | `SalesListPage` + `SaleDetailPage` + `SalesRepository` | **Implementado (Fase 3)** |
-| **Caja** | `CashAdminScreen` | `CashPage` + `CashRepository` + `CashReconciliationSummary` | **Implementado (Fase 4)** |
-| **Autorizaciones** | `AuthorizationAdminScreen` | `AuthorizationsPage` + `AuthorizationsRepository` | **Implementado (Fase 4)** |
-| **Control de cocina / Inventarios** | `KitchenAdminScreen`, `RecipeYieldConfigScreen` | `InventoryPage` + `InventoryRepository` | **Implementado (Fase 4)** |
-| **Compras / CXP / Proveedores** | `PurchaseAdminScreen` (8 pestañas) | `PurchasesPage` + `PurchasesRepository` + `PurchasesAnalytics` (7 sub-vistas: Dashboard, Historial, Por Proveedor, Por Insumo, Proveedores, CXP, Eficiencia y Presupuestos) | **Implementado (Fase 5)** |
-| **Finanzas / Socios** | `FinanceAdminScreen`, `FinanceMainDashboardScreen`, `WeeklyFinanceComparisonView` | Módulo Finanzas | **Planificado (Fase 5)** |
-| **Reportes (25 variantes)** | `_ReportsSection` (`_ReportKind`) | Módulo Reportes | **Planificado (Fase 5)** |
-| **Visor operativo** | `LiveOperationsScreen` | Integrado en Dashboard / Auditoría | **Planificado (Fase 5)** |
-| **Configuración y Catálogos** | `BranchCatalogScreen`, `EmployeeCatalogScreen`, `ProductCatalogScreen`, `ProductCategoryCatalogScreen`, `TableCatalogScreen`, `OrderPlatformCatalogScreen`, `DiscountAdminScreen`, `ExpensePolicyAdminScreen`, `DeviceVersionsScreen`, `OperationResetScreen` | Módulos Empleados, Auditoría y Configuración | **Planificado (Fase 6)** |
+| **Dashboard** | `_DashboardSection` / `AdminDashboardScreen` | `DashboardPage` + `DashboardRepository` | Paridad analítica completa + mejoras |
+| **Ventas** | `_SalesSection` (`backoffice_screen.dart`) | `SalesListPage` + `SaleDetailPage` + `SalesRepository` | Consulta y exportación completas; pendiente acción de cancelación |
+| **Caja** | `CashAdminScreen` | `CashPage` + `CashRepository` | Resumen, arqueo y retiros implementados; pendientes sub-vistas y acciones |
+| **Autorizaciones** | `AuthorizationAdminScreen` | `AuthorizationsPage` + `AuthorizationsRepository` | Consulta implementada; pendiente acciones de aprobar/rechazar |
+| **Inventarios y Cocina** | `KitchenAdminScreen`, `RecipeYieldConfigScreen` | `InventoryPage` + `InventoryRepository` | Consulta implementada; pendiente CRUD de insumos, sesiones y rendimientos |
+| **Compras, Proveedores y CXP** | `PurchaseAdminScreen` (8 pestañas) | `PurchasesPage` + `PurchasesRepository` + `PurchasesAnalytics` | Core + Dashboard + CXP + Eficiencia implementados; pendientes catálogo de insumos, Estado de cuenta, Kardex y cancelaciones |
 
 ---
 
-## 2. Submódulos, indicadores y reglas consolidados en Dashboard y Ventas (Fase 3)
+## 2. Matriz detallada por funcionalidad individual
 
-| Capacidad | Backoffice 1.x | Backoffice 2.0 (Fase 3) |
-| --- | --- | --- |
-| **Ventas netas / brutas / conciliación** | `CanonicalSalesSummary` | `CanonicalSalesSummary` vía `BackofficeSalesAdapter` (idéntico) |
-| **Separación monetario vs consumo interno** | Mezclado en resumen textual | Gráfica de dona exclusivamente monetaria (`monetaryCollected`) + tarjeta separada de consumo interno no monetario |
-| **Comparativo vs periodo anterior** | No incluido en Dashboard | Cálculo real de periodo equivalente anterior (`netSalesDeltaPct`, `ordersDeltaPct`, `avgTicketDeltaPct`) |
-| **Comparativo multi-sucursal** | Selector único de sucursal | Selector `"Todas las sucursales"` + comparativo visual por sucursal |
-| **Ventas por canal / producto / empleado** | Reportes separados (`platform`, `products`, `employee`) | Integrados en Dashboard (`ChannelBreakdown`, `productRows`, `employeeBreakdown`) |
-| **Propinas y comisiones absorbidas** | En detalle de pago/corte | Sumarizados en Dashboard y mostrados en Detalle de Venta |
-| **Búsqueda de ventas** | En memoria tras descarga | Paginación por cursores (`20`/pág) sin búsqueda + búsqueda acotada por bloques con cursor (`searchOrdersInRange`, notificando si existen resultados adicionales) y exportación completa por cursores (`exportOrdersInRange` con progreso y cancelación) |
-| **Exportación CSV** | `exportCsvFile` | Exportación CSV completa en Dashboard y Ventas (independiente de la página visible) |
-| **Cancelación de ventas/pagos** | `backoffice_sales_cancellation.dart` | Permisos evaluados en `BackofficePermissions`; acción de escritura diferida tras validación con Codex |
+| Módulo | Funcionalidad | Comportamiento en Backoffice 1.0 | Comportamiento en Backoffice 2.0 | Estado implementación | Estado validación | Mejoras incorporadas | Diferencias | Funcionalidades pendientes | Evidencia de pruebas |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **Dashboard** | KPIs de ventas netas, brutas, órdenes y ticket promedio | Cálculos vía `CanonicalSalesSummary` con streams vivos | `DashboardRepository` acotado por `businessDate` + caché TTL 60s usando `CanonicalSalesSummary` | Implementado | Validado en DEV y Chrome | Comparativo real vs periodo anterior (`%` delta) y caché TTL 60s | Sin listeners permanentes | Ninguna | `financial_and_permissions_test.dart`, `phase4_cash_desktop.png` |
+| **Dashboard** | Separación monetario vs consumo interno | Mezclado en resumen textual | Gráfica de dona exclusivamente monetaria + tarjeta separada de consumo interno | Implementado | Validado | Visualización clara que evita inflar ingresos reales | Presentación gráfica dedicada | Ninguna | `financial_and_permissions_test.dart` |
+| **Dashboard** | Comparativo multi-sucursal, canales, productos y empleados | Reportes separados | Integrado en Dashboard + selector "Todas las sucursales" | Implementado | Validado | Gráficas interactivas y exportación CSV | Unificado en vista ejecutiva | Ninguna | `backoffice_v2_ui_test.dart` |
+| **Ventas** | Listado paginado y filtros | Descarga histórica / `LocalPage` en memoria | Paginación real por cursores en Firestore (`20`/pág) + filtros por fecha, sucursal y estado | Implementado | Validado | Lecturas constantes (`21` docs/pág) sin importar histórico | Cursores de servidor vs memoria | Ninguna | `SalesRepository` |
+| **Ventas** | Búsqueda en rango de fechas | Búsqueda en memoria sobre histórico cargado | `searchOrdersInRange` por bloques con cursor (`250` docs) y aviso si existen más resultados | Implementado | Validado | Avisa explícitamente cuando hay resultados adicionales | Límite de búsqueda rápida acotado | Opción de continuar cargando lotes en búsqueda | `SalesRepository` |
+| **Ventas** | Exportación CSV completa | `exportCsvFile` sobre colección cargada | `exportOrdersInRange` paginado completo por cursores (`200`/bloque) con progreso y cancelación | Implementado | Validado | Progreso en vivo, cancelación cooperativa, sin truncamiento silencioso | Paginado por bloques | Prueba automatizada >1,000 docs con emulador | `SalesRepository`, `SalesListPage` |
+| **Ventas** | Detalle de venta (partidas, pagos, propinas, folios) | Vista de detalle en `backoffice_screen.dart` | `SaleDetailPage` bajo demanda (1 orden + items + payments) | Implementado | Validado | Carga bajo demanda y diseño limpio | Ninguna pérdida de datos | Ninguna | `SaleDetailPage` |
+| **Ventas** | Cancelación de órdenes y pagos | `backoffice_sales_cancellation.dart` con motivo obligatorio y permiso | Solo lectura; permisos evaluados en `BackofficePermissions` | **Pendiente** | No implementado | Permisos granulares ya listos | 2.0 aún no ejecuta cancelación | Diálogo y transacción de cancelación de orden/pago compatible con Android | `BackofficePermissions` |
+| **Caja** | Resumen de caja abierta y último corte | `CashAdminScreen` (consultas globales / `collectionGroup`) | `CashPage` + `CashRepository` acotado por `restaurantId`, `branchId`, `businessDate` | Implementado | Validado en DEV | Hero card con faltante/sobrante, 0 `collectionGroup` globales | Seguro multi-tenant | Ninguna | `phase4_reconciliation_test.dart`, `phase4_cash_desktop.png` |
+| **Caja** | Separación monetario vs beneficios/descuentos/cancelaciones | Mezclado en vistas heredadas | Tarjeta dedicada de comida empleados, consumo independiente, descuentos y cancelaciones | Implementado | Validado | Exactitud financiera verificada en unit tests | Claridad contable | Ninguna | `phase4_reconciliation_test.dart` |
+| **Caja** | Historial de cortes y exportación CSV | Tabla en `CashAdminScreen` | Tabla escritorio + tarjetas móviles + CSV de cortes | Implementado | Validado | Diseño móvil dedicado | Ninguna | Ninguna | `phase4_cash_mobile_360.png` |
+| **Caja** | Auditoría detallada (Por orden, Por pago, Fondo/arrastre, Terminal, Hallazgos) | 9 pestañas en `CashAdminScreen` | Solo resumen consolidado por sesión + retiros | **Parcial** | Parcial | Arqueo consolidado limpio | Faltan sub-vistas por orden/pago/terminal/hallazgos | Implementar sub-pestañas de auditoría detallada y acciones de corrección/cierre | Pendiente |
+| **Autorizaciones** | Consulta de retiros de caja y descuentos familia/amigos | `AuthorizationAdminScreen` (2 pestañas) | `AuthorizationsPage` con filtros por tipo, estado, fecha y sucursal | Implementado | Validado en DEV | KPIs y tarjetas móviles táctiles | Vista unificada | Ninguna en consulta | `phase4_authorizations_desktop.png` |
+| **Autorizaciones** | Aprobar / Rechazar retiros y descuentos | Botones `Autorizar` / `Rechazar` con notas/motivo (`authorizeCashWithdrawal`, etc.) | Solo lectura | **Pendiente** | No implementado | Permisos listos en Rules y UI | Falta acción de escritura | Botones y diálogos de aprobar/rechazar compatibles con Android y Rules | Pendiente |
+| **Inventarios y Cocina** | Consulta de sesiones, insumos, recetas y agotados | `KitchenAdminScreen` | `InventoryPage` (4 pestañas) acotado por fecha y sucursal | Implementado | Validado en DEV | Separación limpia por pestañas y diseño móvil | Sin listeners permanentes | Ninguna en consulta | `phase4_inventory_desktop.png` |
+| **Inventarios y Cocina** | Alta/edición de insumos, apertura/cierre de cocina y rendimientos | `KitchenStockItem` CRUD + `RecipeYieldConfigScreen` | Solo lectura | **Pendiente** | No implementado | Ninguna | Faltan flujos de edición y `RecipeYieldConfig` | CRUD `kitchenStockItems`, entradas adicionales, y módulo de rendimientos teóricos | Pendiente |
+| **Compras** | Dashboard ejecutivo de compras y alertas de precio | Reportes básicos en `PurchaseAdminScreen` | `PurchasesDashboardTab` con KPIs, variación %, evolución diario/semanal/mensual, dona categorías, alertas >=8% | Implementado | Validado en DEV | Gráficas interactivas, modo oscuro y alertas automáticas | Superior a 1.0 | Ninguna | `phase5_purchases_test.dart`, `phase5_purchases_dashboard_desktop.png` |
+| **Compras** | Registro e historial de compras + detalle | `Registrar compra` (múltiples líneas, descuentos por línea/general) | `PurchasesHistoryTab` paginado con cursores + alta de 1 línea DEV-safe + detalle | **Parcial** | Validado en DEV | Paginación por cursores y exportación paginada | Alta actual soporta 1 partida sin descuentos por línea | Multi-línea en alta, descuentos por línea/general y cancelación (`cancelSupplierPurchase`) | `PurchasesRepository` |
+| **Compras** | Reporte por proveedor e insumo (unidades incompatibles, promedio ponderado) | `Reportes` en `PurchaseAdminScreen` | `SupplierReportTab` y `ItemReportTab` agrupando por `(id/nombre, unidad)` | Implementado | Validado | Diferencia homónimos y no suma unidades incompatibles | Superior a 1.0 | Ninguna | `phase5_purchases_test.dart` |
+| **Compras** | Catálogo de proveedores (alta/edición/activo) | `_SuppliersTab` (`saveSupplier`) | `SuppliersCatalogTab` con alta/edición, crédito, día de pago y saldo | Implementado | Validado | Saldo pendiente integrado por proveedor | Paridad alcanzada | Ninguna | `phase5_purchases_suppliers_mobile_440.png` |
+| **Compras** | Catálogo de insumos de compra (alta/edición) | `_PurchaseItemsTab` (`savePurchaseItem`) | Solo lectura en alta de compra | **Pendiente** | No implementado | Ninguna | Falta pestaña CRUD de `purchaseItems` | Pestaña/diálogo CRUD de `purchaseItems` | Pendiente |
+| **Compras** | Cuentas por pagar, antigüedad y registro de pagos | `_AccountsPayableTab` + `_SupplierPaymentsTab` | `AccountsPayableTab` con antigüedad, conciliación, pago parcial/total transaccional | **Parcial** | Validado | Antigüedad de saldos y conciliación automática | Falta pago con aportación de socios y cancelación de pago (`cancelSupplierPayment`) | Aportación de socios y cancelación de pagos a proveedor | `phase5_purchases_test.dart`, `phase5_purchases_cxp_desktop.png` |
+| **Compras** | Estado de cuenta por proveedor y Kardex de insumos | `_SupplierStatementTab` y `_PurchaseKardexTab` | No implementados como vistas dedicadas | **Pendiente** | No implementado | Ninguna | Faltan en 2.0 | Implementar Estado de cuenta corrido por proveedor y Kardex cronológico | Pendiente |
+| **Compras** | Eficiencia vs ventas y presupuestos semanales por insumo | No existe en 1.0 | `EfficiencyAndBudgetsTab` configurable en sesión (sin bloqueo POS) | Implementado (mejora) | Validado | Nuevo indicador `$ / $100 venta` y control semanal | Mejora exclusiva de 2.0 | Persistencia sujeta a aprobación de nuevo contrato documental | `phase5_purchases_test.dart`, `phase5_purchases_efficiency_desktop.png` |
 
 ---
 
-## 3. Inventario de los 25 Reportes pendientes para Fase 5 (`_ReportKind`)
+## 3. Contratos propuestos pendientes de revisión (Fase 5)
 
-1. Ventas: `products`, `hourly`, `hourlyYesterdayLastSales`, `hourlyPreviousWeek`, `dates`, `platform`, `paymentMethod`, `employee`, `discountsByDay`, `visitClassification`, `saleFolios`.
-2. Auditorías: `salesDiscrepancyAudit`, `rapidCardSalesAudit`, `cancellationShortageAudit`, `predictiveConsumptionAudit`.
-3. Caja: `cashHistory`, `withdrawals`, `cashSchedule`.
-4. Cocina y costos: `kitchenWaste`, `kitchenInventory`, `kitchenYield`, `productStockOuts`, `yieldProfit`.
-5. Cancelaciones: `cancellations`, `cancelledPayments`.
-
----
-
-## 4. Contratos propuestos pendientes de revisión (Fase 5)
-
-- **Evidencias fotográficas e impuestos en compras**: `SupplierPurchase` y `SupplierPurchaseItem` no cuentan actualmente con campos de URL de comprobante/fotografía ni desglose de impuestos (IVA) en el contrato compartido de Android. Se documenta como pendiente para no introducir escrituras incompatibles.
-- **Persistencia de Metas de Eficiencia y Presupuestos Semanales**: actualmente configurables en sesión sin escribir colecciones nuevas no autorizadas. Propuesta para revisión: `restaurants/{restaurantId}/backofficePurchaseTargets/{category}` y `restaurants/{restaurantId}/backofficePurchaseBudgets/{branchId}_{purchaseItemId}` (solo lectura/escritura administrativa, sin impacto en POS Android).
+- **Evidencias fotográficas e impuestos en compras**: `SupplierPurchase` y `SupplierPurchaseItem` no cuentan actualmente con campos de URL de comprobante/fotografía ni desglose de impuestos (IVA) en el contrato compartido de Android.
+- **Persistencia de Metas de Eficiencia y Presupuestos Semanales**: actualmente configurables en sesión. Propuesta para revisión: `restaurants/{restaurantId}/backofficePurchaseTargets/{category}` y `restaurants/{restaurantId}/backofficePurchaseBudgets/{branchId}_{purchaseItemId}`.
