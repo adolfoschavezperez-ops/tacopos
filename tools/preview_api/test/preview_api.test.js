@@ -370,4 +370,58 @@ describe('Preview Read-Only API 9.1.2 (Separated Auth/Authz/Data + Real Cursor P
     assert.equal(afterRevoke.status, 401);
     assert.equal(afterRevoke.data.code, 'INVALID_OR_REVOKED_TOKEN');
   });
+
+  it('enforces unified active/enabled revocation, strict empty CORS denial, and kill switch', async () => {
+    await authzDb.doc(`previewUsers/${OWNER_UID}`).update({ enabled: false });
+    const disabledByEnabled = await postJson('/v1/preview/session', ownerIdToken, {
+      restaurantId: 'rest_alpha',
+    });
+    assert.equal(disabledByEnabled.status, 403);
+    assert.equal(disabledByEnabled.data.code, 'PREVIEW_USER_REVOKED');
+
+    await authzDb.doc(`previewUsers/${OWNER_UID}`).update({ enabled: true, active: false });
+    const disabledByActive = await postJson('/v1/preview/session', ownerIdToken, {
+      restaurantId: 'rest_alpha',
+    });
+    assert.equal(disabledByActive.status, 403);
+    assert.equal(disabledByActive.data.code, 'PREVIEW_USER_REVOKED');
+
+    await authzDb.doc(`previewUsers/${OWNER_UID}`).update({ active: true, enabled: true });
+
+    // Strict empty allowedOrigins must reject browser Origin
+    const emptyCorsServer = createPreviewServer({ auth, authzDb, dataDb, allowedOrigins: [] });
+    await new Promise((r) => emptyCorsServer.listen(0, '127.0.0.1', r));
+    try {
+      const emptyCorsPort = emptyCorsServer.address().port;
+      const corsRes = await fetch(`http://127.0.0.1:${emptyCorsPort}/health`, {
+        headers: { Origin: 'https://any-origin.example.com' },
+      });
+      assert.equal(corsRes.status, 403);
+      const corsJson = await corsRes.json();
+      assert.equal(corsJson.code, 'CORS_ORIGIN_DENIED');
+    } finally {
+      await new Promise((r) => emptyCorsServer.close(r));
+    }
+
+    // Kill switch must return 503 immediately
+    const killServer = createPreviewServer({ auth, authzDb, dataDb, allowedOrigins: ['https://tacopos-backoffice-preview.web.app'], disabled: true });
+    await new Promise((r) => killServer.listen(0, '127.0.0.1', r));
+    try {
+      const killPort = killServer.address().port;
+      const killRes = await fetch(`http://127.0.0.1:${killPort}/v1/preview/session`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ownerIdToken}`,
+          'Content-Type': 'application/json',
+          Origin: 'https://tacopos-backoffice-preview.web.app',
+        },
+        body: JSON.stringify({ restaurantId: 'rest_alpha' }),
+      });
+      assert.equal(killRes.status, 503);
+      const killJson = await killRes.json();
+      assert.equal(killJson.code, 'PREVIEW_SERVICE_DISABLED');
+    } finally {
+      await new Promise((r) => killServer.close(r));
+    }
+  });
 });

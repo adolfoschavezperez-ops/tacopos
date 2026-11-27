@@ -41,6 +41,20 @@ void main() {
           ),
         ),
       );
+      expect(
+        () => EnvironmentGuard.resolveAndValidate(
+          rawEnv: 'preview',
+          previewApiUrl: 'https://preview-api.tacopos-dev.run.app',
+          defaultRestaurantId: 'rest_alpha',
+        ),
+        throwsA(
+          isA<EnvironmentGuardException>().having(
+            (e) => e.code,
+            'code',
+            'INVALID_PREVIEW_RESTAURANT_ID',
+          ),
+        ),
+      );
     });
 
     test('BackofficeReadOnlyGuard blocks all writes in Preview mode', () {

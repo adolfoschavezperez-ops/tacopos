@@ -145,8 +145,18 @@ async function authorizePreviewRequest({ auth, authzDb, dataDb, req, restaurantI
   }
 
   const authzUser = authzSnap.data() || {};
-  if (authzUser.active !== true) {
+  const isExplicitlyDisabled = authzUser.active === false || authzUser.enabled === false;
+  const isExplicitlyEnabled = authzUser.active === true || authzUser.enabled === true;
+  if (isExplicitlyDisabled || !isExplicitlyEnabled) {
     return { ok: false, status: 403, code: 'PREVIEW_USER_REVOKED', message: 'Acceso Preview revocado.', authzReads, dataReads };
+  }
+  if (authzUser.expiresAt) {
+    const expDate = typeof authzUser.expiresAt.toDate === 'function'
+      ? authzUser.expiresAt.toDate()
+      : new Date(authzUser.expiresAt);
+    if (!Number.isNaN(expDate.getTime()) && expDate.getTime() <= Date.now()) {
+      return { ok: false, status: 403, code: 'PREVIEW_ACCESS_EXPIRED', message: 'Acceso Preview expirado.', authzReads, dataReads };
+    }
   }
 
   // Validate UID allowlist binding and restaurant access
@@ -195,6 +205,7 @@ function createPreviewServer({
   maxConcurrentPerUid = 6,
   maxDaysRange = 93,
   requestTimeoutMs = 15000,
+  disabled = false,
   logger = () => {},
 }) {
   const originSet = new Set(allowedOrigins.map((o) => String(o).trim()).filter(Boolean));
@@ -203,11 +214,14 @@ function createPreviewServer({
 
   const server = http.createServer(async (req, res) => {
     const reqOrigin = req.headers.origin ? String(req.headers.origin).trim() : '';
-    const corsAllowed = !reqOrigin || originSet.size === 0 || originSet.has(reqOrigin);
+    const corsAllowed = !reqOrigin || (originSet.size > 0 && originSet.has(reqOrigin));
     const corsHeader = reqOrigin && corsAllowed ? reqOrigin : null;
 
     if (!corsAllowed) {
       return sendJson(res, 403, { code: 'CORS_ORIGIN_DENIED' }, null);
+    }
+    if (disabled) {
+      return sendJson(res, 503, { code: 'PREVIEW_SERVICE_DISABLED', message: 'Servicio Preview deshabilitado temporalmente.' }, corsHeader);
     }
     if (req.method === 'OPTIONS') {
       res.writeHead(204, {
@@ -356,7 +370,7 @@ function createPreviewServer({
         const snap = await dataDb.doc(docPath).get();
         dataReads += 1;
         if (!snap.exists) {
-          return sendJson(res, 404, { code: 'NOT_FOUND' }, corsHeader);
+          return sendJson(res, 200, { exists: false, doc: null }, corsHeader);
         }
         const data = snap.data() || {};
         if (!subcollectionName && BRANCH_SCOPED_COLLECTIONS.has(collectionName)) {

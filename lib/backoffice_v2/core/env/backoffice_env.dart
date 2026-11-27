@@ -245,6 +245,14 @@ class EnvironmentGuard {
           'PREVIEW_API_URL no puede apuntar a github.io.',
         );
       }
+      if (!effectiveUseEmulators &&
+          (defaultRestaurantId.trim().isEmpty ||
+              defaultRestaurantId.trim() == 'rest_alpha')) {
+        throw const EnvironmentGuardException(
+          'INVALID_PREVIEW_RESTAURANT_ID',
+          'En ambiente PREVIEW real se debe configurar DEFAULT_RESTAURANT_ID con el identificador real del restaurante (no rest_alpha).',
+        );
+      }
     }
 
     return BackofficeConfig(

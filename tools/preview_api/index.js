@@ -29,6 +29,7 @@ const server = createPreviewServer({
   maxRequestsPerMin: Number(process.env.PREVIEW_RATE_LIMIT_PER_MIN || 120),
   maxConcurrentPerUid: Number(process.env.PREVIEW_MAX_CONCURRENT || 6),
   maxDaysRange: Number(process.env.PREVIEW_MAX_DAYS_RANGE || 93),
+  disabled: process.env.PREVIEW_DISABLED === 'true',
   logger: (entry) => console.log(JSON.stringify(entry)),
 });
 

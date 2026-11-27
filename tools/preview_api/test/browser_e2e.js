@@ -229,6 +229,7 @@ async function main() {
   const firestoreOperationalCalls = [];
   const prodCalls = [];
   const consoleErrors = [];
+  const httpErrors = [];
 
   const browser = await chromium.launch({
     executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
@@ -242,6 +243,13 @@ async function main() {
     // Enable Flutter web semantics for reliable DOM inspection
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('response', async (res) => {
+      if (res.status() >= 400) {
+        let body = '';
+        try { body = await res.text(); } catch {}
+        httpErrors.push({ route: page.url(), status: res.status(), url: res.url(), body: body.slice(0, 300) });
+      }
     });
     page.on('request', (req) => {
       const u = req.url();
@@ -286,10 +294,27 @@ async function main() {
       fullPage: false,
     });
 
-    const dashText = await page.evaluate(() => document.body.innerText || '');
-    // Verify Preview banner & $8,000 (or 8,000) in semantics/canvas text if available
+    const readSemanticsText = async () => {
+      await page.evaluate(() => {
+        const placeholder = document.querySelector('flt-semantics-placeholder');
+        if (placeholder) placeholder.click();
+      });
+      await page.waitForTimeout(400);
+      return page.evaluate(() => {
+        const labels = Array.from(document.querySelectorAll('[aria-label]'))
+          .map((el) => el.getAttribute('aria-label') || '');
+        return `${document.body.innerText || ''}\n${labels.join('\n')}`;
+      });
+    };
+
+    const dashText = await readSemanticsText();
+    assert.ok(dashText.includes('8,000'), `Expected $8,000 Preview data in Dashboard, got: ${dashText.slice(0, 400)}`);
+    assert.ok(!dashText.includes('1,000.00'), 'DEV $1,000.00 must NOT appear in Preview Dashboard');
+
     await page.goto('http://127.0.0.1:5055/#/purchases', { waitUntil: 'networkidle' });
     await page.waitForTimeout(3500);
+    const purchasesText = await readSemanticsText();
+    assert.ok(purchasesText.includes('2,400') && purchasesText.includes('1,200'), `Expected $2,400/$1,200 in Purchases, got: ${purchasesText.slice(0, 400)}`);
     await page.screenshot({
       path: path.join(screenshotsDir, 'preview_e2e_purchases_desktop.png'),
       fullPage: false,
@@ -307,6 +332,8 @@ async function main() {
     // Direct URL access to unintegrated module (#/employees) MUST be blocked
     await page.goto('http://127.0.0.1:5055/#/employees', { waitUntil: 'networkidle' });
     await page.waitForTimeout(2000);
+    const blockedText = await readSemanticsText();
+    assert.ok(blockedText.includes('Módulo no habilitado en Preview'), `Expected blocked screen on #/employees, got: ${blockedText.slice(0, 400)}`);
     await page.screenshot({
       path: path.join(screenshotsDir, 'preview_e2e_blocked_module.png'),
       fullPage: false,
@@ -324,6 +351,8 @@ async function main() {
     assert.ok(previewApiCalls.length >= 4, `Expected >=4 Preview API calls, got ${previewApiCalls.length}`);
     assert.equal(firestoreOperationalCalls.length, 0, `Expected 0 direct Firestore calls, got ${JSON.stringify(firestoreOperationalCalls)}`);
     assert.equal(prodCalls.length, 0, `Expected 0 prod calls, got ${JSON.stringify(prodCalls)}`);
+    assert.equal(httpErrors.length, 0, `Expected 0 HTTP >=400 errors, got ${JSON.stringify(httpErrors)}`);
+    assert.equal(consoleErrors.length, 0, `Expected 0 console errors, got ${JSON.stringify(consoleErrors)}`);
 
     console.log(JSON.stringify({
       ok: true,
@@ -332,6 +361,8 @@ async function main() {
       firestoreOperationalCallsCount: firestoreOperationalCalls.length,
       prodCallsCount: prodCalls.length,
       consoleErrorsCount: consoleErrors.length,
+      consoleErrors,
+      httpErrors,
     }, null, 2));
   } finally {
     await browser.close();

@@ -32,6 +32,8 @@ const ALLOWED_RESTAURANT_COLLECTIONS = new Set([
   'orderPlatforms',
   'devices',
   'discountUsage',
+  'backofficePurchaseTargets',
+  'backofficeFinanceBudgets',
   'settings',
   'employees',
 ]);
