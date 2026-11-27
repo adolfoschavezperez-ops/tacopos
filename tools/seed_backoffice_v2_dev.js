@@ -752,6 +752,227 @@ async function main() {
     ),
   );
 
+  // Phase 5: Suppliers, Purchase Items, Supplier Purchases & Payments
+  const suppliers = [
+    {
+      id: 'sup_buen_corte',
+      commercialName: 'Carnicería El Buen Corte',
+      phone: '55 4120 8890',
+      creditDays: 7,
+      paymentWeekday: 'friday',
+      paymentWeekdayName: 'Viernes',
+      preferredPaymentMethod: 'transfer',
+    },
+    {
+      id: 'sup_esperanza',
+      commercialName: 'Tortillería La Esperanza',
+      phone: '55 3811 2245',
+      creditDays: 0,
+      paymentWeekday: 'none',
+      paymentWeekdayName: 'Sin dia fijo',
+      preferredPaymentMethod: 'cash',
+    },
+    {
+      id: 'sup_dist_norte',
+      commercialName: 'Distribuidora Norte',
+      phone: '55 5902 1140',
+      creditDays: 15,
+      paymentWeekday: 'monday',
+      paymentWeekdayName: 'Lunes',
+      preferredPaymentMethod: 'transfer',
+    },
+    {
+      id: 'sup_bebidas_valle',
+      commercialName: 'Bebidas y Abarrotes del Valle',
+      phone: '55 6120 7731',
+      creditDays: 10,
+      paymentWeekday: 'wednesday',
+      paymentWeekdayName: 'Miércoles',
+      preferredPaymentMethod: 'both',
+    },
+  ];
+
+  for (const sup of suppliers) {
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/suppliers/${sup.id}`, {
+        ...sup,
+        active: true,
+        legalName: `${sup.commercialName} S.A. de C.V.`,
+        contactName: 'Ventas Mayoreo',
+      }),
+    );
+  }
+
+  const purchaseItems = [
+    {
+      id: 'pi_pastor',
+      name: 'Carne al Pastor',
+      category: 'Carnes',
+      unit: 'kg',
+      defaultSupplierId: 'sup_buen_corte',
+      defaultSupplierName: 'Carnicería El Buen Corte',
+      basePrice: 118,
+    },
+    {
+      id: 'pi_suadero',
+      name: 'Suadero Cocido',
+      category: 'Carnes',
+      unit: 'kg',
+      defaultSupplierId: 'sup_buen_corte',
+      defaultSupplierName: 'Carnicería El Buen Corte',
+      basePrice: 124,
+    },
+    {
+      id: 'pi_tripa',
+      name: 'Tripa Limpia',
+      category: 'Carnes',
+      unit: 'kg',
+      defaultSupplierId: 'sup_dist_norte',
+      defaultSupplierName: 'Distribuidora Norte',
+      basePrice: 142,
+    },
+    {
+      id: 'pi_tortilla',
+      name: 'Tortilla de Maíz',
+      category: 'Abarrotes',
+      unit: 'kg',
+      defaultSupplierId: 'sup_esperanza',
+      defaultSupplierName: 'Tortillería La Esperanza',
+      basePrice: 22,
+    },
+    {
+      id: 'pi_jamaica',
+      name: 'Concentrado de Jamaica',
+      category: 'Bebidas',
+      unit: 'lt',
+      defaultSupplierId: 'sup_bebidas_valle',
+      defaultSupplierName: 'Bebidas y Abarrotes del Valle',
+      basePrice: 48,
+    },
+  ];
+
+  for (const pi of purchaseItems) {
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/purchaseItems/${pi.id}`, {
+        id: pi.id,
+        name: pi.name,
+        category: pi.category,
+        unit: pi.unit,
+        active: true,
+        defaultSupplierId: pi.defaultSupplierId,
+        defaultSupplierName: pi.defaultSupplierName,
+      }),
+    );
+  }
+
+  let purchaseFolioSeq = 1;
+  for (let dayOffset = 0; dayOffset < 28; dayOffset += 2) {
+    const pDate = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() - dayOffset,
+      11,
+      15,
+    );
+    const businessDate = formatDate(pDate);
+    for (let bi = 0; bi < branches.length; bi++) {
+      const br = branches[bi];
+      const pi = purchaseItems[(dayOffset + bi) % purchaseItems.length];
+      const sup = suppliers.find((s) => s.id === pi.defaultSupplierId) || suppliers[0];
+      const qty = pi.unit === 'kg' ? 12 + ((dayOffset + bi) % 15) : 20;
+      // Simulate recent +13.5% price increase on Carne al Pastor in last 2 days
+      const unitCost =
+        pi.id === 'pi_pastor' && dayOffset <= 2
+          ? 134
+          : pi.basePrice + ((dayOffset % 3) * 2);
+      const total = Number((qty * unitCost).toFixed(2));
+
+      const isPaid = dayOffset >= 8;
+      const isPartial = dayOffset >= 4 && dayOffset < 8;
+      const paidTotal = isPaid ? total : isPartial ? Number((total * 0.5).toFixed(2)) : 0;
+      const balance = Number((total - paidTotal).toFixed(2));
+      const status = isPaid ? 'paid' : isPartial ? 'partial' : 'pending';
+      const dueDate = new Date(
+        pDate.getTime() + (sup.creditDays > 0 ? sup.creditDays : 3) * 86400000,
+      );
+
+      const spId = `sp_${br.id}_${businessDate}_${bi}`;
+      const folio = `C-${String(purchaseFolioSeq++).padStart(4, '0')}`;
+
+      writes.push(
+        makeWrite(`restaurants/${restaurantId}/supplierPurchases/${spId}`, {
+          id: spId,
+          restaurantId,
+          restaurantName,
+          branchId: br.id,
+          branchName: br.name,
+          supplierId: sup.id,
+          supplierName: sup.commercialName,
+          purchaseDate: pDate,
+          businessDate,
+          dueDate,
+          folio,
+          documentType: sup.creditDays > 0 ? 'invoice' : 'note',
+          status,
+          subtotal: total,
+          total,
+          paidTotal,
+          balance,
+          notes: isPartial ? 'Abono inicial del 50%' : '',
+          createdByEmployeeId: employees[0].id,
+          createdByEmployeeName: employees[0].name,
+          createdAt: pDate,
+        }),
+      );
+
+      writes.push(
+        makeWrite(`restaurants/${restaurantId}/supplierPurchases/${spId}/items/line_1`, {
+          id: 'line_1',
+          purchaseItemId: pi.id,
+          purchaseItemName: pi.name,
+          quantity: qty,
+          unit: pi.unit,
+          unitCost,
+          unitCostCalculated: unitCost,
+          total,
+          lineTotal: total,
+          lineTotalCents: Math.round(total * 100),
+          calculationMode: 'line_total',
+          status: 'active',
+        }),
+      );
+
+      if (paidTotal > 0) {
+        writes.push(
+          makeWrite(`restaurants/${restaurantId}/supplierPayments/spay_${spId}`, {
+            id: `spay_${spId}`,
+            restaurantId,
+            restaurantName,
+            branchId: br.id,
+            branchName: br.name,
+            supplierId: sup.id,
+            supplierName: sup.commercialName,
+            purchaseId: spId,
+            purchaseFolio: folio,
+            paymentDate: pDate,
+            businessDate,
+            amount: paidTotal,
+            method: sup.preferredPaymentMethod === 'cash' ? 'cash' : 'transfer',
+            fundingSource: sup.preferredPaymentMethod === 'cash' ? 'cash' : 'transfer',
+            fundingSourceName:
+              sup.preferredPaymentMethod === 'cash' ? 'Efectivo' : 'Transferencia',
+            reference: `REF-${folio}`,
+            notes: isPartial ? 'Pago parcial' : 'Liquidación total',
+            status: 'active',
+            createdByEmployeeId: employees[0].id,
+            createdByEmployeeName: employees[0].name,
+            createdAt: pDate,
+          }),
+        );
+      }
+    }
+  }
+
   writes.push(
     makeWrite('restaurants/rest_beta', {
       name: 'Tacos El Norte • Tenant Aislado',

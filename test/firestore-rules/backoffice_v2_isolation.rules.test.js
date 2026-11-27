@@ -141,6 +141,58 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
         businessDate: '2026-11-26',
         status: 'active',
       });
+      await db.doc('restaurants/rest_alpha/suppliers/sup_1').set({
+        id: 'sup_1',
+        commercialName: 'Carnicería El Buen Corte',
+        active: true,
+      });
+      await db.doc('restaurants/rest_alpha/purchaseItems/pi_1').set({
+        id: 'pi_1',
+        name: 'Carne al Pastor',
+        category: 'Carnes',
+        unit: 'kg',
+        active: true,
+      });
+      await db.doc('restaurants/rest_alpha/supplierPurchases/sp_centro_1').set({
+        id: 'sp_centro_1',
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        supplierId: 'sup_1',
+        businessDate: '2026-11-26',
+        status: 'pending',
+        total: 1200,
+        paidTotal: 0,
+        balance: 1200,
+      });
+      await db
+        .doc('restaurants/rest_alpha/supplierPurchases/sp_centro_1/items/li_1')
+        .set({
+          purchaseItemId: 'pi_1',
+          purchaseItemName: 'Carne al Pastor',
+          quantity: 10,
+          unit: 'kg',
+          lineTotal: 1200,
+        });
+      await db.doc('restaurants/rest_alpha/supplierPurchases/sp_norte_1').set({
+        id: 'sp_norte_1',
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_norte',
+        supplierId: 'sup_1',
+        businessDate: '2026-11-26',
+        status: 'pending',
+        total: 800,
+        paidTotal: 0,
+        balance: 800,
+      });
+      await db.doc('restaurants/rest_alpha/supplierPayments/spay_centro_1').set({
+        id: 'spay_centro_1',
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        supplierId: 'sup_1',
+        purchaseId: 'sp_centro_1',
+        amount: 500,
+        status: 'active',
+      });
       await db.doc('restaurants/rest_alpha/orders/ord_alpha_centro').set({
         restaurantId: 'rest_alpha',
         branchId: 'suc_centro',
@@ -383,4 +435,75 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
       db.doc('restaurants/rest_alpha/kitchenStockItems/ksi_1').get(),
     );
   });
+
+  it('allows authorized manager to read and write purchases/suppliers in own branch and denies cross-branch or missing permissions', async () => {
+    const mgrDb = testEnv
+      .authenticatedContext('alpha_centro_mgr', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+
+    await assertSucceeds(dbDoc(mgrDb, 'restaurants/rest_alpha/suppliers/sup_1').get());
+    await assertSucceeds(dbDoc(mgrDb, 'restaurants/rest_alpha/purchaseItems/pi_1').get());
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_1').get(),
+    );
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_1/items/li_1').get(),
+    );
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPayments/spay_centro_1').get(),
+    );
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_2').set({
+        id: 'sp_centro_2',
+        branchId: 'suc_centro',
+        supplierId: 'sup_1',
+        total: 500,
+        balance: 500,
+      }),
+    );
+    // Cross-branch denied
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_norte_1').get(),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_norte_2').set({
+        id: 'sp_norte_2',
+        branchId: 'suc_norte',
+        supplierId: 'sup_1',
+      }),
+    );
+    // Delete always denied
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_1').delete(),
+    );
+
+    // User without purchase permissions denied
+    const cashOnlyDb = testEnv
+      .authenticatedContext('alpha_cash_only', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    await assertFails(
+      dbDoc(cashOnlyDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_1').get(),
+    );
+    await assertFails(
+      dbDoc(cashOnlyDb, 'restaurants/rest_alpha/suppliers/sup_1').get(),
+    );
+
+    // Cross-tenant denied
+    const betaDb = testEnv
+      .authenticatedContext('beta_admin', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    await assertFails(
+      dbDoc(betaDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_1').get(),
+    );
+  });
 });
+
+function dbDoc(db, p) {
+  return db.doc(p);
+}

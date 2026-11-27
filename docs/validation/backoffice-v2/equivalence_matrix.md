@@ -13,7 +13,7 @@ Inventario realizado exclusivamente mediante inspección de código fuente (`lib
 | **Caja** | `CashAdminScreen` | `CashPage` + `CashRepository` + `CashReconciliationSummary` | **Implementado (Fase 4)** |
 | **Autorizaciones** | `AuthorizationAdminScreen` | `AuthorizationsPage` + `AuthorizationsRepository` | **Implementado (Fase 4)** |
 | **Control de cocina / Inventarios** | `KitchenAdminScreen`, `RecipeYieldConfigScreen` | `InventoryPage` + `InventoryRepository` | **Implementado (Fase 4)** |
-| **Compras / CXP / Proveedores** | `PurchaseAdminScreen` (8 pestañas) | Módulo Compras | **Planificado (Fase 5)** |
+| **Compras / CXP / Proveedores** | `PurchaseAdminScreen` (8 pestañas) | `PurchasesPage` + `PurchasesRepository` + `PurchasesAnalytics` (7 sub-vistas: Dashboard, Historial, Por Proveedor, Por Insumo, Proveedores, CXP, Eficiencia y Presupuestos) | **Implementado (Fase 5)** |
 | **Finanzas / Socios** | `FinanceAdminScreen`, `FinanceMainDashboardScreen`, `WeeklyFinanceComparisonView` | Módulo Finanzas | **Planificado (Fase 5)** |
 | **Reportes (25 variantes)** | `_ReportsSection` (`_ReportKind`) | Módulo Reportes | **Planificado (Fase 5)** |
 | **Visor operativo** | `LiveOperationsScreen` | Integrado en Dashboard / Auditoría | **Planificado (Fase 5)** |
@@ -31,7 +31,7 @@ Inventario realizado exclusivamente mediante inspección de código fuente (`lib
 | **Comparativo multi-sucursal** | Selector único de sucursal | Selector `"Todas las sucursales"` + comparativo visual por sucursal |
 | **Ventas por canal / producto / empleado** | Reportes separados (`platform`, `products`, `employee`) | Integrados en Dashboard (`ChannelBreakdown`, `productRows`, `employeeBreakdown`) |
 | **Propinas y comisiones absorbidas** | En detalle de pago/corte | Sumarizados en Dashboard y mostrados en Detalle de Venta |
-| **Búsqueda de ventas** | En memoria tras descarga | Paginación por cursores (`20`/pág) sin búsqueda + búsqueda acotada (`searchOrdersInRange`, máx. `250` docs) y exportación paginada por bloques (`exportOrdersInRange`, `200`/bloque hasta `1000`) |
+| **Búsqueda de ventas** | En memoria tras descarga | Paginación por cursores (`20`/pág) sin búsqueda + búsqueda acotada por bloques con cursor (`searchOrdersInRange`, notificando si existen resultados adicionales) y exportación completa por cursores (`exportOrdersInRange` con progreso y cancelación) |
 | **Exportación CSV** | `exportCsvFile` | Exportación CSV completa en Dashboard y Ventas (independiente de la página visible) |
 | **Cancelación de ventas/pagos** | `backoffice_sales_cancellation.dart` | Permisos evaluados en `BackofficePermissions`; acción de escritura diferida tras validación con Codex |
 
@@ -44,3 +44,10 @@ Inventario realizado exclusivamente mediante inspección de código fuente (`lib
 3. Caja: `cashHistory`, `withdrawals`, `cashSchedule`.
 4. Cocina y costos: `kitchenWaste`, `kitchenInventory`, `kitchenYield`, `productStockOuts`, `yieldProfit`.
 5. Cancelaciones: `cancellations`, `cancelledPayments`.
+
+---
+
+## 4. Contratos propuestos pendientes de revisión (Fase 5)
+
+- **Evidencias fotográficas e impuestos en compras**: `SupplierPurchase` y `SupplierPurchaseItem` no cuentan actualmente con campos de URL de comprobante/fotografía ni desglose de impuestos (IVA) en el contrato compartido de Android. Se documenta como pendiente para no introducir escrituras incompatibles.
+- **Persistencia de Metas de Eficiencia y Presupuestos Semanales**: actualmente configurables en sesión sin escribir colecciones nuevas no autorizadas. Propuesta para revisión: `restaurants/{restaurantId}/backofficePurchaseTargets/{category}` y `restaurants/{restaurantId}/backofficePurchaseBudgets/{branchId}_{purchaseItemId}` (solo lectura/escritura administrativa, sin impacto en POS Android).

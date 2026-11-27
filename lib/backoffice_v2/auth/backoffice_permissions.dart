@@ -48,7 +48,30 @@ class BackofficePermissions {
       (isSuperAdmin ||
           employee!.canViewPurchases ||
           employee!.canViewAccountsPayable ||
-          employee!.canViewPurchaseReports);
+          employee!.canViewPurchaseReports ||
+          employee!.canManageSuppliers ||
+          employee!.canRegisterPurchases ||
+          employee!.canPaySuppliers ||
+          employee!.canViewAdmin);
+
+  bool get canManageSuppliers =>
+      isAuthenticated &&
+      (isSuperAdmin || employee!.canManageSuppliers || employee!.canViewAdmin);
+
+  bool get canRegisterPurchases =>
+      isAuthenticated &&
+      (isSuperAdmin || employee!.canRegisterPurchases || employee!.canViewAdmin);
+
+  bool get canPaySuppliers =>
+      isAuthenticated &&
+      (isSuperAdmin || employee!.canPaySuppliers || employee!.canViewAdmin);
+
+  bool get canViewAccountsPayable =>
+      isAuthenticated &&
+      (isSuperAdmin ||
+          employee!.canViewAccountsPayable ||
+          employee!.canPaySuppliers ||
+          employee!.canViewAdmin);
 
   bool get canViewInventory =>
       isAuthenticated &&

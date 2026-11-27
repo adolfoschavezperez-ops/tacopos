@@ -60,6 +60,7 @@ const List<_NavGroup> _navGroups = [
       section: BackofficeSection.purchases,
       icon: Icons.shopping_bag_outlined,
       activeIcon: Icons.shopping_bag_rounded,
+      available: true,
     ),
     _NavItem(
       section: BackofficeSection.inventory,

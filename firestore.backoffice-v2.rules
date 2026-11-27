@@ -53,6 +53,35 @@ service cloud.firestore {
         hasPermission(restaurantId, 'canViewAdmin');
     }
 
+    function canReadPurchases(restaurantId) {
+      let u = authUserDoc(restaurantId).data;
+      return isAuthorizedInRestaurant(restaurantId) && (
+        u.isSuperAdmin == true ||
+        u.permissions.canViewAdmin == true ||
+        u.permissions.canViewPurchases == true ||
+        u.permissions.canViewAccountsPayable == true ||
+        u.permissions.canViewPurchaseReports == true ||
+        u.permissions.canManageSuppliers == true ||
+        u.permissions.canRegisterPurchases == true ||
+        u.permissions.canPaySuppliers == true
+      );
+    }
+
+    function canManageSuppliersCatalog(restaurantId) {
+      return hasPermission(restaurantId, 'canManageSuppliers') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canCreatePurchase(restaurantId) {
+      return hasPermission(restaurantId, 'canRegisterPurchases') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canPaySupplierBalance(restaurantId) {
+      return hasPermission(restaurantId, 'canPaySuppliers') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
     match /restaurants/{restaurantId} {
       allow read: if isAuthorizedInRestaurant(restaurantId);
       allow write: if false;
@@ -139,6 +168,51 @@ service cloud.firestore {
       match /products/{productId} {
         allow read: if isAuthorizedInRestaurant(restaurantId);
         allow write: if false;
+      }
+
+      match /suppliers/{supplierId} {
+        allow read: if canReadPurchases(restaurantId);
+        allow create, update: if canManageSuppliersCatalog(restaurantId);
+        allow delete: if false;
+      }
+
+      match /purchaseItems/{itemId} {
+        allow read: if canReadPurchases(restaurantId);
+        allow create, update: if canManageSuppliersCatalog(restaurantId);
+        allow delete: if false;
+      }
+
+      match /supplierPurchases/{purchaseId} {
+        allow read: if canReadPurchases(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow create: if canCreatePurchase(restaurantId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId);
+        allow update: if (canCreatePurchase(restaurantId) || canPaySupplierBalance(restaurantId)) &&
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId);
+        allow delete: if false;
+
+        match /items/{itemId} {
+          allow read: if canReadPurchases(restaurantId) &&
+            canAccessBranch(
+              restaurantId,
+              get(/databases/$(database)/documents/restaurants/$(restaurantId)/supplierPurchases/$(purchaseId)).data.branchId
+            );
+          allow create, update: if canCreatePurchase(restaurantId) &&
+            canAccessBranch(
+              restaurantId,
+              get(/databases/$(database)/documents/restaurants/$(restaurantId)/supplierPurchases/$(purchaseId)).data.branchId
+            );
+          allow delete: if false;
+        }
+      }
+
+      match /supplierPayments/{paymentId} {
+        allow read: if canReadPurchases(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow create: if canPaySupplierBalance(restaurantId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId);
+        allow update, delete: if false;
       }
 
       match /{document=**} {

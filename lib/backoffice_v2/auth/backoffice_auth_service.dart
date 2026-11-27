@@ -310,3 +310,40 @@ class BackofficeV2AuthService {
 
   Future<void> signOut() => _auth.signOut();
 }
+
+/// Prevents redundant token-refresh / Firestore `authUsers` checks when
+/// `idTokenChanges()` and `getIdToken(true)` interact across lifecycle events.
+class SessionRenewalGuard {
+  SessionRenewalGuard({this.cooldown = const Duration(seconds: 60)});
+
+  final Duration cooldown;
+  DateTime? _lastCheckAt;
+  bool _inFlight = false;
+  int executedChecks = 0;
+  int skippedChecks = 0;
+
+  bool get isInFlight => _inFlight;
+
+  Future<bool?> runGuarded(
+    Future<bool> Function() check, {
+    DateTime? now,
+  }) async {
+    final current = now ?? DateTime.now();
+    if (_inFlight) {
+      skippedChecks += 1;
+      return null;
+    }
+    if (_lastCheckAt != null && current.difference(_lastCheckAt!) < cooldown) {
+      skippedChecks += 1;
+      return null;
+    }
+    _inFlight = true;
+    _lastCheckAt = current;
+    executedChecks += 1;
+    try {
+      return await check();
+    } finally {
+      _inFlight = false;
+    }
+  }
+}

@@ -26,12 +26,14 @@ class SalesBoundedBatch {
     required this.readCount,
     required this.chunkCount,
     required this.truncated,
+    this.wasCancelled = false,
   });
 
   final List<PosOrder> orders;
   final int readCount;
   final int chunkCount;
   final bool truncated;
+  final bool wasCancelled;
 }
 
 class SaleDetailData {
@@ -93,36 +95,38 @@ class SalesRepository {
     );
   }
 
-  /// Bounded range search (strictly capped to prevent unbounded reads).
+  /// Bounded range search with cursor batching.
+  ///
+  /// When [maxSearchLimit] is reached, `truncated` is set to `true` so the UI
+  /// informs the user that additional records exist in the selected range.
   Future<SalesBoundedBatch> searchOrdersInRange({
     required String restaurantId,
     required String startBusinessDate,
     required String endBusinessDate,
     String? branchId,
     String? statusFilter,
+    int pageSize = 200,
     int maxSearchLimit = 250,
+    bool Function()? isCancelled,
   }) async {
-    final query = _buildOrdersQuery(
+    return _fetchRangeInChunks(
       restaurantId: restaurantId,
       startBusinessDate: startBusinessDate,
       endBusinessDate: endBusinessDate,
       branchId: branchId,
       statusFilter: statusFilter,
-    );
-    final snapshot = await query.limit(maxSearchLimit + 1).get();
-    final truncated = snapshot.docs.length > maxSearchLimit;
-    final docs = truncated
-        ? snapshot.docs.take(maxSearchLimit).toList(growable: false)
-        : snapshot.docs;
-    return SalesBoundedBatch(
-      orders: docs.map(PosOrder.fromDoc).toList(growable: false),
-      readCount: snapshot.docs.length,
-      chunkCount: 1,
-      truncated: truncated,
+      pageSize: pageSize,
+      maxLimit: maxSearchLimit,
+      isCancelled: isCancelled,
     );
   }
 
-  /// Chunked cursor-paginated bulk export, bounded by [maxExportLimit].
+  /// Complete cursor-paginated bulk export for all authorized records in the
+  /// selected date range.
+  ///
+  /// Processes in chunks of [pageSize], reports progress via [onProgress], and
+  /// supports cooperative cancellation via [isCancelled]. Never marks a
+  /// cancelled or capped export as complete (`truncated == true`).
   Future<SalesBoundedBatch> exportOrdersInRange({
     required String restaurantId,
     required String startBusinessDate,
@@ -130,7 +134,33 @@ class SalesRepository {
     String? branchId,
     String? statusFilter,
     int pageSize = 200,
-    int maxExportLimit = 1000,
+    int? maxExportLimit,
+    void Function(int loadedCount, int chunkCount)? onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    return _fetchRangeInChunks(
+      restaurantId: restaurantId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      branchId: branchId,
+      statusFilter: statusFilter,
+      pageSize: pageSize,
+      maxLimit: maxExportLimit,
+      onProgress: onProgress,
+      isCancelled: isCancelled,
+    );
+  }
+
+  Future<SalesBoundedBatch> _fetchRangeInChunks({
+    required String restaurantId,
+    required String startBusinessDate,
+    required String endBusinessDate,
+    String? branchId,
+    String? statusFilter,
+    required int pageSize,
+    int? maxLimit,
+    void Function(int loadedCount, int chunkCount)? onProgress,
+    bool Function()? isCancelled,
   }) async {
     final baseQuery = _buildOrdersQuery(
       restaurantId: restaurantId,
@@ -145,10 +175,25 @@ class SalesRepository {
     var readCount = 0;
     var chunkCount = 0;
     var truncated = false;
+    var wasCancelled = false;
 
-    while (orders.length < maxExportLimit) {
-      final remaining = maxExportLimit - orders.length;
-      final batchLimit = remaining < pageSize ? remaining : pageSize;
+    while (true) {
+      if (isCancelled?.call() == true) {
+        wasCancelled = true;
+        truncated = true;
+        break;
+      }
+
+      var batchLimit = pageSize;
+      if (maxLimit != null) {
+        final remaining = maxLimit - orders.length;
+        if (remaining <= 0) {
+          truncated = true;
+          break;
+        }
+        batchLimit = remaining < pageSize ? remaining : pageSize;
+      }
+
       final effectiveQuery = cursor != null
           ? baseQuery.startAfterDocument(cursor)
           : baseQuery;
@@ -162,10 +207,12 @@ class SalesRepository {
           : snapshot.docs;
 
       orders.addAll(batchDocs.map(PosOrder.fromDoc));
+      onProgress?.call(orders.length, chunkCount);
+
       if (!hasMore || batchDocs.isEmpty) {
         break;
       }
-      if (orders.length >= maxExportLimit) {
+      if (maxLimit != null && orders.length >= maxLimit) {
         truncated = true;
         break;
       }
@@ -177,6 +224,7 @@ class SalesRepository {
       readCount: readCount,
       chunkCount: chunkCount,
       truncated: truncated,
+      wasCancelled: wasCancelled,
     );
   }
 

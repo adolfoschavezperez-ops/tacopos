@@ -17,6 +17,8 @@ import '../features/dashboard/dashboard_repository.dart';
 import '../features/inventory/inventory_page.dart';
 import '../features/inventory/inventory_repository.dart';
 import '../features/placeholders/module_stub_page.dart';
+import '../features/purchases/purchases_page.dart';
+import '../features/purchases/purchases_repository.dart';
 import '../features/sales/sale_detail_page.dart';
 import '../features/sales/sales_list_page.dart';
 import '../features/sales/sales_repository.dart';
@@ -43,12 +45,13 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
   late final CashRepository _cashRepository;
   late final AuthorizationsRepository _authorizationsRepository;
   late final InventoryRepository _inventoryRepository;
+  late final PurchasesRepository _purchasesRepository;
   late final BackofficeRouterDelegate _routerDelegate;
   final BackofficeRouteParser _routeParser = const BackofficeRouteParser();
   StreamSubscription<User?>? _authSub;
   bool _restoringSession = true;
   bool _explicitSignOut = false;
-  DateTime? _lastSessionCheckAt;
+  final SessionRenewalGuard _sessionGuard = SessionRenewalGuard();
 
   @override
   void initState() {
@@ -61,6 +64,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     _cashRepository = CashRepository();
     _authorizationsRepository = AuthorizationsRepository();
     _inventoryRepository = InventoryRepository();
+    _purchasesRepository = PurchasesRepository();
     _routerDelegate = BackofficeRouterDelegate(
       session: _session,
       loginBuilder: (context) => BackofficeLoginPage(
@@ -100,16 +104,14 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
 
   Future<void> _verifyActiveSessionIfNeeded() async {
     if (_restoringSession || !_session.isAuthenticated) return;
-    final now = DateTime.now();
-    if (_lastSessionCheckAt != null &&
-        now.difference(_lastSessionCheckAt!) < const Duration(seconds: 45)) {
+    final stillActive = await _sessionGuard.runGuarded(
+      () => _authService.verifyActiveSession(
+        restaurantId: _session.restaurantId,
+      ),
+    );
+    if (stillActive == null || !mounted || stillActive || !_session.isAuthenticated) {
       return;
     }
-    _lastSessionCheckAt = now;
-    final stillActive = await _authService.verifyActiveSession(
-      restaurantId: _session.restaurantId,
-    );
-    if (!mounted || stillActive || !_session.isAuthenticated) return;
     _session.signOut(
       notice: 'Tu sesión expiró o fue revocada. Inicia sesión nuevamente.',
     );
@@ -188,16 +190,9 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
         session: _session,
         repository: _authorizationsRepository,
       ),
-      BackofficeSection.purchases => const ModuleStubPage(
-        section: BackofficeSection.purchases,
-        targetPhase: 'Fase 5',
-        description:
-            'Proveedores, compras, cuentas por pagar (CXP), pagos y kardex.',
-        plannedCapabilities: [
-          'Paginación real en servidor mediante cursores.',
-          'Estado de cuenta por proveedor y vencimientos CXP.',
-          'Exportación completa independiente de la página visible.',
-        ],
+      BackofficeSection.purchases => PurchasesPage(
+        session: _session,
+        repository: _purchasesRepository,
       ),
       BackofficeSection.inventory => InventoryPage(
         session: _session,

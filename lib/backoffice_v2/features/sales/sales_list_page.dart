@@ -44,6 +44,8 @@ class _SalesListPageState extends State<SalesListPage> {
   Future<SalesBoundedBatch>? _searchFuture;
   String? _lastBranchId;
   bool _exporting = false;
+  bool _exportCancelRequested = false;
+  int _exportProgressCount = 0;
 
   bool get _hasSearch => _searchController.text.trim().isNotEmpty;
 
@@ -178,7 +180,11 @@ class _SalesListPageState extends State<SalesListPage> {
 
   Future<void> _exportFullCsv(Map<String, String> branchNames) async {
     if (_exporting) return;
-    setState(() => _exporting = true);
+    setState(() {
+      _exporting = true;
+      _exportCancelRequested = false;
+      _exportProgressCount = 0;
+    });
     try {
       final batch = await widget.repository.exportOrdersInRange(
         restaurantId: widget.session.restaurantId,
@@ -186,7 +192,22 @@ class _SalesListPageState extends State<SalesListPage> {
         endBusinessDate: BackofficeSalesAdapter.formatBusinessDate(_endDate),
         branchId: widget.session.selectedBranchId,
         statusFilter: _statusFilter,
+        onProgress: (loaded, _) {
+          if (mounted) setState(() => _exportProgressCount = loaded);
+        },
+        isCancelled: () => _exportCancelRequested || !mounted,
       );
+      if (batch.wasCancelled) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Exportación cancelada (${batch.orders.length} registros leídos; no se generó archivo parcial).',
+            ),
+          ),
+        );
+        return;
+      }
       final filtered = _filterOrders(batch.orders);
       final buf = StringBuffer()
         ..writeln('Folio,Sucursal,Canal,FechaOperativa,Estado,Descuento,Total');
@@ -206,11 +227,19 @@ class _SalesListPageState extends State<SalesListPage> {
         content: buf.toString(),
       );
       if (!mounted) return;
+      final suffix = batch.truncated
+          ? ' (exportación parcial: ${filtered.length} operaciones)'
+          : ' (${filtered.length} operaciones completas)';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$msg (${filtered.length} operaciones)')),
+        SnackBar(content: Text('$msg$suffix')),
       );
     } finally {
-      if (mounted) setState(() => _exporting = false);
+      if (mounted) {
+        setState(() {
+          _exporting = false;
+          _exportCancelRequested = false;
+        });
+      }
     }
   }
 
@@ -272,8 +301,20 @@ class _SalesListPageState extends State<SalesListPage> {
                         ? null
                         : () => _exportFullCsv(branchNames),
                     icon: const Icon(Icons.download_rounded, size: 15),
-                    label: Text(_exporting ? 'Exportando...' : 'Exportar CSV'),
+                    label: Text(
+                      _exporting
+                          ? 'Exportando ($_exportProgressCount)...'
+                          : 'Exportar CSV',
+                    ),
                   ),
+                  if (_exporting) ...[
+                    const SizedBox(width: 6),
+                    TextButton(
+                      onPressed: () =>
+                          setState(() => _exportCancelRequested = true),
+                      child: const Text('Cancelar'),
+                    ),
+                  ],
                   const SizedBox(width: 8),
                 ],
                 OutlinedButton.icon(
@@ -345,7 +386,7 @@ class _SalesListPageState extends State<SalesListPage> {
               final all = batch?.orders ?? const <PosOrder>[];
               final filtered = _filterOrders(all);
               final truncatedNote = batch?.truncated == true
-                  ? ' (acotado a las primeras ${all.length} operaciones)'
+                  ? ' — mostrando las primeras ${all.length} operaciones; existen resultados adicionales no mostrados'
                   : '';
               return _buildOrdersBody(
                 context: context,
