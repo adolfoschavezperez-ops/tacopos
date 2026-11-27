@@ -1188,7 +1188,6 @@ async function main() {
       ordersSeeded: folioSeq - 1,
       writesCommitted: writes.length,
       evalEmail: evalUser.email,
-      evalPassword: evalUser.password,
       evalUid: evalUser.uid,
     }),
   );

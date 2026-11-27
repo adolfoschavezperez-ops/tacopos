@@ -14,7 +14,7 @@ node tools/seed_backoffice_v2_emulator.js
 ```
 
 Abrir: `http://127.0.0.1:5050`  
-Usuario sintético `rest_alpha`: `admin.alpha@tacopos-dev.local` / `DevPass2026!`
+Usuario sintético `rest_alpha`: `admin.alpha@tacopos-dev.local` (contraseña configurada vía `BACKOFFICE_EMULATOR_PASSWORD` al ejecutar el seed)
 
 ## 2. Resultados de pruebas ejecutadas
 

@@ -5,6 +5,7 @@
  * Refuses to run if FIRESTORE_EMULATOR_HOST is not pointing to localhost/127.0.0.1.
  */
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -57,7 +58,6 @@ async function seedRestaurant({
   adminUid,
   adminEmail,
   adminName,
-  pin,
   daysCount,
 }) {
   const restRef = db.collection('restaurants').doc(restaurantId);
@@ -68,13 +68,16 @@ async function seedRestaurant({
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  await ensureAuthUser(adminUid, adminEmail, 'DevPass2026!', adminName);
+  const emulatorPassword =
+    process.env.BACKOFFICE_EMULATOR_PASSWORD ||
+    crypto.randomBytes(16).toString('hex');
+  await ensureAuthUser(adminUid, adminEmail, emulatorPassword, adminName);
 
   await restRef.collection('employees').doc(adminUid).set({
     id: adminUid,
+    restaurantId,
     name: adminName,
     active: true,
-    pin,
     canViewAdmin: true,
     canManageEmployees: true,
     canManageProducts: true,
@@ -239,7 +242,6 @@ async function main() {
     adminUid: 'alpha_admin_1',
     adminEmail: 'admin.alpha@tacopos-dev.local',
     adminName: 'Adolfo Chávez (Admin)',
-    pin: '1234',
     daysCount: 7,
   });
 
@@ -252,7 +254,6 @@ async function main() {
     adminUid: 'beta_admin_1',
     adminEmail: 'admin.beta@tacopos-dev.local',
     adminName: 'Sofía Martínez (Admin)',
-    pin: '5678',
     daysCount: 4,
   });
 
