@@ -1,0 +1,12 @@
+{
+  "totalRequests": 50,
+  "uniqueHosts": [
+    "127.0.0.1:5050",
+    "www.gstatic.com",
+    "fonts.gstatic.com",
+    "127.0.0.1:9199",
+    "127.0.0.1:8180"
+  ],
+  "forbiddenRequests": [],
+  "consoleErrors": []
+}
