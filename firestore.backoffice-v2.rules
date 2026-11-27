@@ -1,0 +1,92 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+
+    function authUserDoc(restaurantId) {
+      return get(/databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid));
+    }
+
+    function isAuthorizedInRestaurant(restaurantId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/restaurants/$(restaurantId)/authUsers/$(request.auth.uid)) &&
+        authUserDoc(restaurantId).data.active == true;
+    }
+
+    function isSuperAdmin(restaurantId) {
+      return isAuthorizedInRestaurant(restaurantId) &&
+        authUserDoc(restaurantId).data.isSuperAdmin == true;
+    }
+
+    function hasPermission(restaurantId, permission) {
+      return isAuthorizedInRestaurant(restaurantId) &&
+        (isSuperAdmin(restaurantId) ||
+          authUserDoc(restaurantId).data.permissions[permission] == true);
+    }
+
+    function canAccessBranch(restaurantId, branchId) {
+      return isAuthorizedInRestaurant(restaurantId) &&
+        (isSuperAdmin(restaurantId) ||
+          !('branchAccess' in authUserDoc(restaurantId).data) ||
+          authUserDoc(restaurantId).data.branchAccess.size() == 0 ||
+          branchId in authUserDoc(restaurantId).data.branchAccess);
+    }
+
+    match /restaurants/{restaurantId} {
+      allow read: if isAuthorizedInRestaurant(restaurantId);
+      allow write: if false;
+
+      match /authUsers/{uid} {
+        allow read: if isSignedIn() && request.auth.uid == uid;
+        allow write: if false;
+      }
+
+      match /branches/{branchId} {
+        allow read: if isAuthorizedInRestaurant(restaurantId) &&
+          canAccessBranch(restaurantId, branchId);
+        allow write: if isSuperAdmin(restaurantId);
+      }
+
+      match /orders/{orderId} {
+        allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow write: if false;
+
+        match /items/{itemId} {
+          allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
+            canAccessBranch(
+              restaurantId,
+              get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
+            );
+          allow write: if false;
+        }
+
+        match /payments/{paymentId} {
+          allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
+            canAccessBranch(
+              restaurantId,
+              get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
+            );
+          allow write: if false;
+        }
+      }
+
+      match /cashSessions/{sessionId} {
+        allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow write: if false;
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
