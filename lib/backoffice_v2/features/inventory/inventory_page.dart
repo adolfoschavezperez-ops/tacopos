@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/kitchen_stock_item.dart';
 import '../../../models/product.dart';
+import '../../../models/yield_profit_models.dart';
 import '../../../services/taco_pos_repository.dart' show ProductStockOutRow;
 import '../../auth/backoffice_session.dart';
 import '../../core/adapters/sales_adapter.dart';
@@ -310,14 +311,132 @@ class _InventoryPageState extends State<InventoryPage> {
     if (saved == true && mounted) _load();
   }
 
-  Future<void> _openYieldProfileDialog(YieldProfileSummary? existing) async {
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final rawCtrl = TextEditingController(text: existing?.rawUnit ?? 'kg');
-    final yieldCtrl = TextEditingController(
-      text: existing?.yieldUnit ?? 'porcion',
+  Future<void> _openYieldProfileDialog(
+    IngredientYieldProfile? existing,
+    List<KitchenStockItem> stockItems,
+  ) async {
+    var selectedStockId = existing?.stockItemId ??
+        (stockItems.isNotEmpty ? stockItems.first.id : '');
+    final pctCtrl = TextEditingController(
+      text: (existing?.cookingYieldPercent ?? 70.0).toStringAsFixed(1),
     );
-    final factorCtrl = TextEditingController(
-      text: (existing?.yieldFactor ?? 8.0).toString(),
+    final notesCtrl = TextEditingController(text: existing?.notes ?? '');
+    var needsValidation = existing?.needsInternalValidation ?? false;
+    var saving = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(
+            existing == null
+                ? 'Nuevo perfil de rendimiento'
+                : 'Editar rendimiento (${existing.stockItemName})',
+          ),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (existing == null && stockItems.isNotEmpty)
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedStockId,
+                    decoration: const InputDecoration(
+                      labelText: 'Insumo de cocina',
+                    ),
+                    items: stockItems
+                        .map(
+                          (s) => DropdownMenuItem(
+                            value: s.id,
+                            child: Text(s.name),
+                          ),
+                        )
+                        .toList(growable: false),
+                    onChanged: (v) {
+                      if (v != null) setDialogState(() => selectedStockId = v);
+                    },
+                  ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: pctCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Rendimiento de cocción (%)',
+                    helperText: 'Ej. 65% significa 650 g cocidos por cada 1,000 g crudos',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: notesCtrl,
+                  decoration: const InputDecoration(labelText: 'Notas'),
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: needsValidation,
+                  onChanged: (v) =>
+                      setDialogState(() => needsValidation = v ?? false),
+                  title: const Text('Requiere validación interna'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: saving || selectedStockId.isEmpty
+                  ? null
+                  : () async {
+                      final pct =
+                          double.tryParse(pctCtrl.text.trim()) ?? 0.0;
+                      if (pct <= 0 || pct > 100) return;
+                      setDialogState(() => saving = true);
+                      final stockName = existing?.stockItemName ??
+                          stockItems
+                              .firstWhere(
+                                (s) => s.id == selectedStockId,
+                                orElse: () => stockItems.first,
+                              )
+                              .name;
+                      final emp = widget.session.employee;
+                      await widget.repository.saveIngredientYieldProfile(
+                        restaurantId: widget.session.restaurantId,
+                        stockItemId: selectedStockId,
+                        stockItemName: stockName,
+                        cookingYieldPercent: pct,
+                        needsInternalValidation: needsValidation,
+                        notes: notesCtrl.text,
+                        employeeId: emp?.id ?? '',
+                        employeeName: emp?.name ?? 'Admin',
+                      );
+                      if (ctx.mounted) Navigator.of(ctx).pop(true);
+                    },
+              child: Text(saving ? 'Guardando...' : 'Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && mounted) _load();
+  }
+
+  Future<void> _openTheoreticalRecipeDialog(
+    TheoreticalProductRecipe? existing,
+    List<Product> allProducts,
+    List<KitchenStockItem> stockItems,
+  ) async {
+    if (allProducts.isEmpty || stockItems.isEmpty) return;
+    var selectedProductId = existing?.productId ?? allProducts.first.id;
+    final ingredients = existing != null
+        ? List<TheoreticalRecipeIngredient>.from(existing.ingredients)
+        : <TheoreticalRecipeIngredient>[];
+    var recipeStatus = existing?.recipeStatus ?? 'complete';
+    final missingNotesCtrl = TextEditingController(
+      text: existing?.missingIngredientNotes ?? '',
     );
     var saving = false;
 
@@ -326,48 +445,220 @@ class _InventoryPageState extends State<InventoryPage> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialogState) => AlertDialog(
           title: Text(
-            existing == null ? 'Nuevo perfil de rendimiento' : 'Editar perfil',
+            existing == null
+                ? 'Nueva receta teórica'
+                : 'Editar receta · ${existing.productName}',
           ),
           content: SizedBox(
-            width: 380,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameCtrl,
-                  decoration: const InputDecoration(labelText: 'Insumo / Base'),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: rawCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Unidad cruda',
-                        ),
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (existing == null)
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedProductId,
+                      decoration: const InputDecoration(labelText: 'Producto'),
+                      items: allProducts
+                          .map(
+                            (p) => DropdownMenuItem(
+                              value: p.id,
+                              child: Text(p.name),
+                            ),
+                          )
+                          .toList(growable: false),
+                      onChanged: (v) {
+                        if (v != null) {
+                          setDialogState(() => selectedProductId = v);
+                        }
+                      },
+                    ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Ingredientes teóricos',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      TextButton.icon(
+                        onPressed: () {
+                          final first = stockItems.first;
+                          setDialogState(() {
+                            ingredients.add(
+                              TheoreticalRecipeIngredient(
+                                stockItemId: first.id,
+                                stockItemName: first.name,
+                                quantity: 30,
+                                quantityType: 'grams',
+                                inputStage: 'cooked',
+                                unit: 'g',
+                                baseQuantity: 30,
+                              ),
+                            );
+                          });
+                        },
+                        icon: const Icon(Icons.add, size: 16),
+                        label: const Text('Agregar insumo'),
+                      ),
+                    ],
+                  ),
+                  for (var i = 0; i < ingredients.length; i++)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 3,
+                            child: DropdownButtonFormField<String>(
+                              initialValue: ingredients[i].stockItemId,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Insumo',
+                                isDense: true,
+                              ),
+                              items: stockItems
+                                  .map(
+                                    (s) => DropdownMenuItem(
+                                      value: s.id,
+                                      child: Text(
+                                        s.name,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  )
+                                  .toList(growable: false),
+                              onChanged: (v) {
+                                if (v == null) return;
+                                final s = stockItems.firstWhere(
+                                  (e) => e.id == v,
+                                );
+                                final cur = ingredients[i];
+                                setDialogState(() {
+                                  ingredients[i] = TheoreticalRecipeIngredient(
+                                    stockItemId: s.id,
+                                    stockItemName: s.name,
+                                    quantity: cur.quantity,
+                                    quantityType: cur.quantityType,
+                                    inputStage: cur.inputStage,
+                                    unit: cur.unit,
+                                    baseQuantity: cur.baseQuantity,
+                                  );
+                                });
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            flex: 2,
+                            child: TextFormField(
+                              initialValue:
+                                  ingredients[i].quantity.toString(),
+                              keyboardType:
+                                  const TextInputType.numberWithOptions(
+                                    decimal: true,
+                                  ),
+                              decoration: const InputDecoration(
+                                labelText: 'Cant.',
+                                isDense: true,
+                              ),
+                              onChanged: (v) {
+                                final qty = double.tryParse(v.trim()) ?? 0;
+                                final cur = ingredients[i];
+                                ingredients[i] = TheoreticalRecipeIngredient(
+                                  stockItemId: cur.stockItemId,
+                                  stockItemName: cur.stockItemName,
+                                  quantity: qty,
+                                  quantityType: cur.quantityType,
+                                  inputStage: cur.inputStage,
+                                  unit: cur.unit,
+                                  baseQuantity: qty,
+                                );
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            flex: 2,
+                            child: DropdownButtonFormField<String>(
+                              initialValue: ingredients[i].inputStage,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Etapa',
+                                isDense: true,
+                              ),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'raw',
+                                  child: Text('Crudo'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'cooked',
+                                  child: Text('Cocido'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'ready_to_serve',
+                                  child: Text('Listo'),
+                                ),
+                              ],
+                              onChanged: (v) {
+                                if (v == null) return;
+                                final cur = ingredients[i];
+                                setDialogState(() {
+                                  ingredients[i] = TheoreticalRecipeIngredient(
+                                    stockItemId: cur.stockItemId,
+                                    stockItemName: cur.stockItemName,
+                                    quantity: cur.quantity,
+                                    quantityType: cur.quantityType,
+                                    inputStage: v,
+                                    unit: cur.unit,
+                                    baseQuantity: cur.baseQuantity,
+                                  );
+                                });
+                              },
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 18),
+                            onPressed: () => setDialogState(
+                              () => ingredients.removeAt(i),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: TextField(
-                        controller: yieldCtrl,
-                        decoration: const InputDecoration(
-                          labelText: 'Unidad rendida',
-                        ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    initialValue: recipeStatus,
+                    decoration: const InputDecoration(
+                      labelText: 'Estado de receta',
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'complete',
+                        child: Text('Completa'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'incomplete',
+                        child: Text('Incompleta'),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setDialogState(() => recipeStatus = v);
+                    },
+                  ),
+                  if (recipeStatus == 'incomplete') ...[
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: missingNotesCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Notas de insumos faltantes',
                       ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: factorCtrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Factor de rendimiento',
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           actions: [
@@ -379,20 +670,25 @@ class _InventoryPageState extends State<InventoryPage> {
               onPressed: saving
                   ? null
                   : () async {
-                      if (nameCtrl.text.trim().isEmpty) return;
                       setDialogState(() => saving = true);
-                      await widget.repository.saveYieldProfile(
+                      final prod = allProducts.firstWhere(
+                        (p) => p.id == selectedProductId,
+                        orElse: () => allProducts.first,
+                      );
+                      final emp = widget.session.employee;
+                      await widget.repository.saveTheoreticalProductRecipe(
                         restaurantId: widget.session.restaurantId,
-                        profileId: existing?.id,
-                        name: nameCtrl.text,
-                        rawUnit: rawCtrl.text,
-                        yieldUnit: yieldCtrl.text,
-                        yieldFactor:
-                            double.tryParse(factorCtrl.text.trim()) ?? 1.0,
+                        productId: prod.id,
+                        productName: prod.name,
+                        ingredients: ingredients,
+                        recipeStatus: recipeStatus,
+                        missingIngredientNotes: missingNotesCtrl.text,
+                        employeeId: emp?.id ?? '',
+                        employeeName: emp?.name ?? 'Admin',
                       );
                       if (ctx.mounted) Navigator.of(ctx).pop(true);
                     },
-              child: Text(saving ? 'Guardando...' : 'Guardar'),
+              child: Text(saving ? 'Guardando...' : 'Guardar receta'),
             ),
           ],
         ),
@@ -534,13 +830,23 @@ class _InventoryPageState extends State<InventoryPage> {
                         ),
                         _InventoryTab.recipes => _RecipesView(
                           products: data.productsWithRecipes,
+                          theoreticalRecipes: data.theoreticalRecipes,
                           isMobile: isMobile,
+                          canManage:
+                              widget.session.permissions.canViewInventory,
+                          onCreateOrEditRecipe: (r) =>
+                              _openTheoreticalRecipeDialog(
+                            r,
+                            data.allProducts,
+                            data.stockItems,
+                          ),
                         ),
                         _InventoryTab.yields => _YieldProfilesView(
                           profiles: data.yieldProfiles,
                           canManage:
                               widget.session.permissions.canViewInventory,
-                          onCreateOrEdit: _openYieldProfileDialog,
+                          onCreateOrEdit: (p) =>
+                              _openYieldProfileDialog(p, data.stockItems),
                         ),
                         _InventoryTab.stockOuts => _StockOutsView(
                           rows: data.stockOuts,
@@ -1005,78 +1311,153 @@ class _StockItemsView extends StatelessWidget {
 }
 
 class _RecipesView extends StatelessWidget {
-  const _RecipesView({required this.products, required this.isMobile});
+  const _RecipesView({
+    required this.products,
+    required this.theoreticalRecipes,
+    required this.isMobile,
+    required this.canManage,
+    required this.onCreateOrEditRecipe,
+  });
 
   final List<Product> products;
+  final List<TheoreticalProductRecipe> theoreticalRecipes;
   final bool isMobile;
+  final bool canManage;
+  final ValueChanged<TheoreticalProductRecipe?> onCreateOrEditRecipe;
 
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
-    if (products.isEmpty) {
-      return const SaasEmptyState(
-        icon: Icons.restaurant_menu_outlined,
-        title: 'Sin recetas vinculadas',
-        message: 'Ningún producto tiene consumo de insumos configurado.',
-      );
-    }
-    return SaasCard(
-      title: 'Recetas y consumo por producto',
-      subtitle: '${products.length} producto(s) vinculados a cocina',
-      padding: EdgeInsets.zero,
-      child: ListView.separated(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: products.length,
-        separatorBuilder: (_, _) => Divider(height: 1, color: tokens.border),
-        itemBuilder: (context, index) {
-          final p = products[index];
-          final recipeSummary = p.recipeItems.isNotEmpty
-              ? p.recipeItems
-                    .map(
-                      (r) =>
-                          '${r.kitchenStockItemName}: ${r.consumptionFactor.toStringAsFixed(3)} ${r.kitchenStockUnit}',
-                    )
-                    .join(' · ')
-              : '${p.kitchenStockItemName ?? 'Insumo'}: ${(p.stockConsumptionQty ?? 0).toStringAsFixed(3)} ${p.kitchenStockUnit ?? ''}';
-          return Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: isMobile ? 14 : 18,
-              vertical: 12,
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        p.name,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13.5,
-                        ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SaasCard(
+          title: 'Recetas teóricas de rentabilidad',
+          subtitle:
+              '${theoreticalRecipes.length} receta(s) configuradas para cálculo de costo',
+          trailing: canManage
+              ? FilledButton.icon(
+                  onPressed: () => onCreateOrEditRecipe(null),
+                  icon: const Icon(Icons.add_rounded, size: 16),
+                  label: const Text('Nueva receta'),
+                )
+              : null,
+          padding: theoreticalRecipes.isEmpty
+              ? const EdgeInsets.all(20)
+              : EdgeInsets.zero,
+          child: theoreticalRecipes.isEmpty
+              ? const Text(
+                  'Aún no hay recetas teóricas registradas. Crea una para calcular rentabilidad.',
+                )
+              : ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: theoreticalRecipes.length,
+                  separatorBuilder: (_, _) =>
+                      Divider(height: 1, color: tokens.border),
+                  itemBuilder: (context, i) {
+                    final r = theoreticalRecipes[i];
+                    final summary = r.ingredients
+                        .map(
+                          (ing) =>
+                              '${ing.stockItemName}: ${ing.quantity} ${ing.unit} (${ing.inputStage})',
+                        )
+                        .join(' · ');
+                    return ListTile(
+                      onTap: canManage ? () => onCreateOrEditRecipe(r) : null,
+                      title: Text(
+                        r.productName,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        '${p.categoryName} · $recipeSummary',
+                      subtitle: Text(
+                        summary.isEmpty ? 'Sin ingredientes' : summary,
                         style: TextStyle(
                           fontSize: 12,
                           color: tokens.textSecondary,
                         ),
                       ),
+                      trailing: StatusPill(
+                        label: r.recipeStatus == 'complete'
+                            ? 'Completa'
+                            : 'Incompleta',
+                        tone: r.recipeStatus == 'complete'
+                            ? StatusTone.success
+                            : StatusTone.warning,
+                      ),
+                    );
+                  },
+                ),
+        ),
+        const SizedBox(height: 16),
+        if (products.isEmpty)
+          const SaasEmptyState(
+            icon: Icons.restaurant_menu_outlined,
+            title: 'Sin recetas de descuento en cocina',
+            message: 'Ningún producto tiene consumo directo de insumos configurado.',
+          )
+        else
+          SaasCard(
+            title: 'Consumo operativo en cocina',
+            subtitle: '${products.length} producto(s) vinculados a cocina',
+            padding: EdgeInsets.zero,
+            child: ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: products.length,
+              separatorBuilder: (_, _) =>
+                  Divider(height: 1, color: tokens.border),
+              itemBuilder: (context, index) {
+                final p = products[index];
+                final recipeSummary = p.recipeItems.isNotEmpty
+                    ? p.recipeItems
+                          .map(
+                            (r) =>
+                                '${r.kitchenStockItemName}: ${r.consumptionFactor.toStringAsFixed(3)} ${r.kitchenStockUnit}',
+                          )
+                          .join(' · ')
+                    : '${p.kitchenStockItemName ?? 'Insumo'}: ${(p.stockConsumptionQty ?? 0).toStringAsFixed(3)} ${p.kitchenStockUnit ?? ''}';
+                return Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isMobile ? 14 : 18,
+                    vertical: 12,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              p.name,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13.5,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${p.categoryName} · $recipeSummary',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: tokens.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      StatusPill(
+                        label: p.active ? 'Activo' : 'Inactivo',
+                        tone: p.active
+                            ? StatusTone.success
+                            : StatusTone.neutral,
+                      ),
                     ],
                   ),
-                ),
-                StatusPill(
-                  label: p.active ? 'Activo' : 'Inactivo',
-                  tone: p.active ? StatusTone.success : StatusTone.neutral,
-                ),
-              ],
+                );
+              },
             ),
-          );
-        },
-      ),
+          ),
+      ],
     );
   }
 }
@@ -1181,16 +1562,16 @@ class _YieldProfilesView extends StatelessWidget {
     required this.onCreateOrEdit,
   });
 
-  final List<YieldProfileSummary> profiles;
+  final List<IngredientYieldProfile> profiles;
   final bool canManage;
-  final ValueChanged<YieldProfileSummary?> onCreateOrEdit;
+  final ValueChanged<IngredientYieldProfile?> onCreateOrEdit;
 
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
     return SaasCard(
       title: 'Perfiles de rendimiento de cocina',
-      subtitle: 'Conversión de insumo crudo a porciones vendibles.',
+      subtitle: 'Conversión de insumo crudo a cocido (${profiles.length} perfil(es)).',
       trailing: canManage
           ? FilledButton.icon(
               onPressed: () => onCreateOrEdit(null),
@@ -1209,14 +1590,15 @@ class _YieldProfilesView extends StatelessWidget {
                   Divider(height: 1, color: tokens.border),
               itemBuilder: (context, i) {
                 final p = profiles[i];
+                final tacosPerKg = (1000 * p.cookingYieldRate) / 30;
                 return ListTile(
                   onTap: canManage ? () => onCreateOrEdit(p) : null,
                   title: Text(
-                    p.name,
+                    p.stockItemName,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   subtitle: Text(
-                    '1 ${p.rawUnit} → ${p.yieldFactor.toStringAsFixed(2)} ${p.yieldUnit}',
+                    'Rendimiento: ${p.cookingYieldPercent.toStringAsFixed(1)}% · Merma cocción: ${p.estimatedReductionPercent.toStringAsFixed(1)}% · ~${tacosPerKg.toStringAsFixed(1)} tacos (30 g)/kg',
                     style: TextStyle(fontSize: 12, color: tokens.textSecondary),
                   ),
                   trailing: canManage

@@ -3,36 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../../models/kitchen_session.dart';
 import '../../../models/kitchen_stock_item.dart';
 import '../../../models/product.dart';
+import '../../../models/yield_profit_models.dart';
 import '../../../services/taco_pos_repository.dart' show ProductStockOutRow;
-
-class YieldProfileSummary {
-  const YieldProfileSummary({
-    required this.id,
-    required this.name,
-    required this.rawUnit,
-    required this.yieldUnit,
-    required this.yieldFactor,
-  });
-
-  final String id;
-  final String name;
-  final String rawUnit;
-  final String yieldUnit;
-  final double yieldFactor;
-
-  factory YieldProfileSummary.fromDoc(
-    DocumentSnapshot<Map<String, dynamic>> doc,
-  ) {
-    final d = doc.data() ?? {};
-    return YieldProfileSummary(
-      id: doc.id,
-      name: d['name'] as String? ?? d['ingredientName'] as String? ?? doc.id,
-      rawUnit: d['rawUnit'] as String? ?? 'kg',
-      yieldUnit: d['yieldUnit'] as String? ?? 'porcion',
-      yieldFactor: (d['yieldFactor'] as num?)?.toDouble() ?? 1.0,
-    );
-  }
-}
 
 class InventoryDashboardData {
   const InventoryDashboardData({
@@ -44,6 +16,7 @@ class InventoryDashboardData {
     required this.allProducts,
     required this.stockOuts,
     required this.yieldProfiles,
+    required this.theoreticalRecipes,
     required this.readCount,
   });
 
@@ -54,7 +27,8 @@ class InventoryDashboardData {
   final List<Product> productsWithRecipes;
   final List<Product> allProducts;
   final List<ProductStockOutRow> stockOuts;
-  final List<YieldProfileSummary> yieldProfiles;
+  final List<IngredientYieldProfile> yieldProfiles;
+  final List<TheoreticalProductRecipe> theoreticalRecipes;
   final int readCount;
 
   int get activeStockOutsCount => stockOuts.where((s) => s.isActive).length;
@@ -113,12 +87,19 @@ class InventoryRepository {
         .collection('ingredientYieldProfiles')
         .limit(100);
 
+    final recipesQuery = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('productRecipes')
+        .limit(200);
+
     final results = await Future.wait([
       stockItemsQuery.get(),
       sessionsQuery.limit(60).get(),
       stockOutsQuery.limit(100).get(),
       productsQuery.get(),
       yieldProfilesQuery.get(),
+      recipesQuery.get(),
     ]);
 
     final stockItems = results[0].docs
@@ -137,7 +118,10 @@ class InventoryRepository {
         .where((p) => p.affectsKitchenStock || p.recipeItems.isNotEmpty)
         .toList(growable: false);
     final yieldProfiles = results[4].docs
-        .map(YieldProfileSummary.fromDoc)
+        .map(IngredientYieldProfile.fromDoc)
+        .toList(growable: false);
+    final theoreticalRecipes = results[5].docs
+        .map(TheoreticalProductRecipe.fromDoc)
         .toList(growable: false);
 
     KitchenSession? selectedSession;
@@ -174,6 +158,7 @@ class InventoryRepository {
         results[2].docs.length +
         results[3].docs.length +
         results[4].docs.length +
+        results[5].docs.length +
         itemsRead;
 
     return InventoryDashboardData(
@@ -185,6 +170,7 @@ class InventoryRepository {
       allProducts: allProducts,
       stockOuts: stockOuts,
       yieldProfiles: yieldProfiles,
+      theoreticalRecipes: theoreticalRecipes,
       readCount: totalReads,
     );
   }
@@ -281,27 +267,101 @@ class InventoryRepository {
         });
   }
 
-  Future<void> saveYieldProfile({
+  Future<void> toggleKitchenStockItem({
     required String restaurantId,
-    String? profileId,
-    required String name,
-    required String rawUnit,
-    required String yieldUnit,
-    required double yieldFactor,
+    required String itemId,
+    required bool active,
+  }) async {
+    await _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('kitchenStockItems')
+        .doc(itemId)
+        .update({
+          'active': active,
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+  }
+
+  /// Saves an [IngredientYieldProfile] using Backoffice 1.0's exact schema
+  /// (`stockItemId` as document ID, `cookingYieldPercent` 0.01-100).
+  Future<void> saveIngredientYieldProfile({
+    required String restaurantId,
+    required String stockItemId,
+    required String stockItemName,
+    required double cookingYieldPercent,
+    String rawBaseUnit = 'g',
+    String cookedBaseUnit = 'g',
+    bool isEstimated = true,
+    bool needsInternalValidation = false,
+    String notes = '',
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    final pct = cookingYieldPercent.clamp(0.01, 100.0);
+    final rate = pct / 100.0;
+    final reduction = 100.0 - pct;
+    final ref = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('ingredientYieldProfiles')
+        .doc(stockItemId.trim());
+    await ref.set({
+      'id': stockItemId.trim(),
+      'restaurantId': restaurantId,
+      'stockItemId': stockItemId.trim(),
+      'stockItemName': stockItemName.trim(),
+      'rawBaseUnit': rawBaseUnit.trim(),
+      'cookedBaseUnit': cookedBaseUnit.trim(),
+      'cookingYieldPercent': pct,
+      'cookingYieldRate': rate,
+      'estimatedReductionPercent': reduction,
+      'isEstimated': isEstimated,
+      'needsInternalValidation': needsInternalValidation,
+      'sourceLabel': 'Backoffice 2.0',
+      'notes': notes.trim(),
+      'active': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'updatedByEmployeeId': employeeId,
+      'updatedByEmployeeName': employeeName,
+    }, SetOptions(merge: true));
+  }
+
+  /// Saves a [TheoreticalProductRecipe] in `productRecipes/{productId}`
+  /// matching Backoffice 1.0's exact schema.
+  Future<void> saveTheoreticalProductRecipe({
+    required String restaurantId,
+    required String productId,
+    required String productName,
+    required List<TheoreticalRecipeIngredient> ingredients,
+    String recipeStatus = 'complete',
+    String missingIngredientNotes = '',
+    bool isEstimated = false,
+    bool needsInternalValidation = false,
+    String notes = '',
+    required String employeeId,
+    required String employeeName,
   }) async {
     final ref = _db
         .collection('restaurants')
         .doc(restaurantId)
-        .collection('ingredientYieldProfiles');
-    final isNew = profileId == null || profileId.trim().isEmpty;
-    final docRef = isNew ? ref.doc() : ref.doc(profileId.trim());
-    await docRef.set({
-      'id': docRef.id,
-      'name': name.trim(),
-      'rawUnit': rawUnit.trim(),
-      'yieldUnit': yieldUnit.trim(),
-      'yieldFactor': yieldFactor > 0 ? yieldFactor : 1.0,
+        .collection('productRecipes')
+        .doc(productId.trim());
+    await ref.set({
+      'productId': productId.trim(),
+      'productName': productName.trim(),
+      'ingredients': ingredients
+          .map((i) => i.toMap())
+          .toList(growable: false),
+      'active': true,
+      'isEstimated': isEstimated,
+      'needsInternalValidation': needsInternalValidation,
+      'notes': notes.trim(),
+      'recipeStatus': recipeStatus,
+      'missingIngredientNotes': missingIngredientNotes.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
+      'updatedByEmployeeId': employeeId,
+      'updatedByEmployeeName': employeeName,
     }, SetOptions(merge: true));
   }
 }

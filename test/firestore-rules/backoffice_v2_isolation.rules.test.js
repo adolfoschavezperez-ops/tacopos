@@ -571,6 +571,170 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
       }),
     );
   });
+
+  it('Phase 5.1 & 6 integration: simultaneous authorizations, closed-cash-only corrections, recipes, partners, and DEV budgets', async () => {
+    const mgrDb = testEnv
+      .authenticatedContext('alpha_centro_mgr', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    const cashOnlyDb = testEnv
+      .authenticatedContext('alpha_cash_only', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+
+    // 1. Concurrent authorization race on pending discount request: only 1 succeeds
+    const discRef1 = mgrDb.doc(
+      'restaurants/rest_alpha/discountAuthorizationRequests/da_centro_1',
+    );
+    const discRef2 = mgrDb.doc(
+      'restaurants/rest_alpha/discountAuthorizationRequests/da_centro_1',
+    );
+    const raceResults = await Promise.allSettled([
+      mgrDb.runTransaction(async (tx) => {
+        const snap = await tx.get(discRef1);
+        if (snap.data().status !== 'pending') throw new Error('already resolved');
+        tx.update(discRef1, { status: 'approved', authorizedByEmployeeId: 'mgr1' });
+      }),
+      mgrDb.runTransaction(async (tx) => {
+        const snap = await tx.get(discRef2);
+        if (snap.data().status !== 'pending') throw new Error('already resolved');
+        tx.update(discRef2, { status: 'rejected', authorizedByEmployeeId: 'mgr2' });
+      }),
+    ]);
+    const fulfilled = raceResults.filter((r) => r.status === 'fulfilled').length;
+    if (fulfilled !== 1) {
+      throw new Error(`Expected exactly 1 winner in concurrent authorization race, got ${fulfilled}`);
+    }
+
+    // 2. Payment cancellation & audit log creation
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx
+        .firestore()
+        .doc('restaurants/rest_alpha/orders/ord_alpha_centro/payments/pay_1')
+        .set({
+          orderId: 'ord_alpha_centro',
+          method: 'cash',
+          status: 'paid',
+          chargedAmount: 100,
+        });
+    });
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro/payments/pay_1').update({
+        status: 'cancelled',
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/activityLog/log_1').set({
+        type: 'payment_cancelled',
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+      }),
+    );
+
+    // 3. Purchase cancellation, partner contribution, & stock-out clearing
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_1').update({
+        status: 'cancelled',
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/partnerContributions/pc_centro_1').set({
+        id: 'pc_centro_1',
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        partnerId: 'part_1',
+        amount: 500,
+        status: 'active',
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/productStockOuts/so_centro_1').update({
+        status: 'cleared',
+      }),
+    );
+
+    // 4. Theoretical product recipe write (Backoffice 1.0 schema)
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/productRecipes/prod_1').set({
+        productId: 'prod_1',
+        productName: 'Taco Pastor',
+        recipeStatus: 'complete',
+        ingredients: [{ stockItemId: 'ksi_1', quantity: 30, unit: 'g', inputStage: 'cooked' }],
+      }),
+    );
+
+    // 5. Cash correction DENIED on open session, ALLOWED on closed session + historical expense
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await ctx.firestore().doc('restaurants/rest_alpha/cashSessions/cs_centro_closed').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        businessDate: '2026-11-25',
+        status: 'closed',
+      });
+    });
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashSessions/cs_centro_1').update({
+        netDifference: 10,
+        status: 'open',
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashSessions/cs_centro_closed').update({
+        netDifference: 0,
+        status: 'closed',
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashWithdrawalRequests/cw_hist_1').set({
+        id: 'cw_hist_1',
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        cashSessionId: 'cs_centro_closed',
+        isHistorical: true,
+        amount: 120,
+        status: 'approved',
+      }),
+    );
+    // Non-historical withdrawal creation from Backoffice MUST fail
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashWithdrawalRequests/cw_live_bad').set({
+        id: 'cw_live_bad',
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        isHistorical: false,
+        amount: 120,
+        status: 'approved',
+      }),
+    );
+
+    // 6. Additive DEV-only budgets/targets isolated by branch & role
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/backofficePurchaseTargets/suc_centro_cogs_vs_sales').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        category: 'cogs_vs_sales',
+        targetPer100Sales: 32,
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/backofficePurchaseTargets/suc_norte_cogs_vs_sales').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_norte',
+        category: 'cogs_vs_sales',
+        targetPer100Sales: 32,
+      }),
+    );
+    await assertFails(
+      dbDoc(cashOnlyDb, 'restaurants/rest_alpha/backofficeFinanceBudgets/suc_centro_expense_budget').set({
+        restaurantId: 'rest_alpha',
+        branchId: 'suc_centro',
+        budgetType: 'expense_budget',
+        amount: 15000,
+      }),
+    );
+  });
 });
 
 function dbDoc(db, p) {

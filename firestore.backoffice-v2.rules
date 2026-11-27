@@ -87,6 +87,17 @@ service cloud.firestore {
         hasPermission(restaurantId, 'canViewAdmin');
     }
 
+    function canUpdateSupplierPurchase(restaurantId) {
+      let u = authUserDoc(restaurantId).data;
+      return isAuthorizedInRestaurant(restaurantId) && (
+        u.isSuperAdmin == true ||
+        u.permissions.canViewAdmin == true ||
+        u.permissions.canRegisterPurchases == true ||
+        u.permissions.canPaySuppliers == true ||
+        u.permissions.canCancelSupplierPayments == true
+      );
+    }
+
     function canAuthorizeOps(restaurantId) {
       return hasPermission(restaurantId, 'canAuthorizeCashWithdrawals') ||
         hasPermission(restaurantId, 'canViewAdmin');
@@ -96,6 +107,22 @@ service cloud.firestore {
       return hasPermission(restaurantId, 'canManageKitchenStock') ||
         hasPermission(restaurantId, 'canOpenKitchen') ||
         hasPermission(restaurantId, 'canCloseKitchen') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canReadFinance(restaurantId) {
+      return canReadPurchases(restaurantId) ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canManagePartnersOps(restaurantId) {
+      return hasPermission(restaurantId, 'canManageSuppliers') ||
+        hasPermission(restaurantId, 'canViewPurchases') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canManageCashAdmin(restaurantId) {
+      return hasPermission(restaurantId, 'canManageCash') ||
         hasPermission(restaurantId, 'canViewAdmin');
     }
 
@@ -115,7 +142,7 @@ service cloud.firestore {
       }
 
       match /orders/{orderId} {
-        allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
+        allow read: if (hasPermission(restaurantId, 'canViewAdmin') || canReadFinance(restaurantId)) &&
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create, delete: if false;
         allow update: if (hasPermission(restaurantId, 'canCancelOrders') ||
@@ -124,7 +151,7 @@ service cloud.firestore {
           canAccessBranch(restaurantId, resource.data.branchId);
 
         match /items/{itemId} {
-          allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
+          allow read: if (hasPermission(restaurantId, 'canViewAdmin') || canReadFinance(restaurantId)) &&
             canAccessBranch(
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
@@ -139,7 +166,7 @@ service cloud.firestore {
         }
 
         match /payments/{paymentId} {
-          allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
+          allow read: if (hasPermission(restaurantId, 'canViewAdmin') || canReadFinance(restaurantId)) &&
             canAccessBranch(
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
@@ -155,18 +182,26 @@ service cloud.firestore {
       }
 
       match /cashSessions/{sessionId} {
-        allow read: if canReadCash(restaurantId) &&
+        allow read: if (canReadCash(restaurantId) || canReadFinance(restaurantId)) &&
           canAccessBranch(restaurantId, resource.data.branchId);
-        allow write: if false;
+        allow create, delete: if false;
+        allow update: if canManageCashAdmin(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          resource.data.status == 'closed' &&
+          request.resource.data.status == 'closed';
       }
 
       match /cashWithdrawalRequests/{requestId} {
-        allow read: if canReadCash(restaurantId) &&
+        allow read: if (canReadCash(restaurantId) || canReadFinance(restaurantId)) &&
           canAccessBranch(restaurantId, resource.data.branchId);
-        allow create, delete: if false;
+        allow create: if canManageCashAdmin(restaurantId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId) &&
+          request.resource.data.isHistorical == true &&
+          request.resource.data.restaurantId == restaurantId;
         allow update: if canAuthorizeOps(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId) &&
           resource.data.status == 'pending';
+        allow delete: if false;
       }
 
       match /discountAuthorizationRequests/{requestId} {
@@ -179,7 +214,7 @@ service cloud.firestore {
       }
 
       match /kitchenSessions/{sessionId} {
-        allow read: if canReadInventory(restaurantId) &&
+        allow read: if (canReadInventory(restaurantId) || canReadFinance(restaurantId)) &&
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create: if canManageKitchenOps(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId);
@@ -188,7 +223,7 @@ service cloud.firestore {
         allow delete: if false;
 
         match /items/{itemId} {
-          allow read: if canReadInventory(restaurantId) &&
+          allow read: if (canReadInventory(restaurantId) || canReadFinance(restaurantId)) &&
             canAccessBranch(
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(sessionId)).data.branchId
@@ -203,19 +238,25 @@ service cloud.firestore {
       }
 
       match /kitchenStockItems/{itemId} {
-        allow read: if canReadInventory(restaurantId);
+        allow read: if canReadInventory(restaurantId) || canReadFinance(restaurantId);
         allow create, update: if canManageKitchenOps(restaurantId);
         allow delete: if false;
       }
 
       match /ingredientYieldProfiles/{profileId} {
-        allow read: if canReadInventory(restaurantId);
+        allow read: if canReadInventory(restaurantId) || canReadFinance(restaurantId);
+        allow create, update: if canManageKitchenOps(restaurantId);
+        allow delete: if false;
+      }
+
+      match /productRecipes/{recipeId} {
+        allow read: if canReadInventory(restaurantId) || canReadFinance(restaurantId);
         allow create, update: if canManageKitchenOps(restaurantId);
         allow delete: if false;
       }
 
       match /theoreticalProductRecipes/{recipeId} {
-        allow read: if canReadInventory(restaurantId);
+        allow read: if canReadInventory(restaurantId) || canReadFinance(restaurantId);
         allow create, update: if canManageKitchenOps(restaurantId);
         allow delete: if false;
       }
@@ -258,11 +299,8 @@ service cloud.firestore {
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create: if canCreatePurchase(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId);
-        allow update: if (canCreatePurchase(restaurantId) ||
-            canPaySupplierBalance(restaurantId) ||
-            canCancelSupplierOps(restaurantId)) &&
-          canAccessBranch(restaurantId, resource.data.branchId) &&
-          canAccessBranch(restaurantId, request.resource.data.branchId);
+        allow update: if canUpdateSupplierPurchase(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
         allow delete: if false;
 
         match /items/{itemId} {
@@ -288,6 +326,68 @@ service cloud.firestore {
         allow update: if canCancelSupplierOps(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId) &&
           resource.data.status == 'active';
+        allow delete: if false;
+      }
+
+      match /partners/{partnerId} {
+        allow read: if canReadFinance(restaurantId);
+        allow create, update: if canManagePartnersOps(restaurantId);
+        allow delete: if false;
+      }
+
+      match /partnerContributions/{contributionId} {
+        allow read: if canReadFinance(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow create: if (canPaySupplierBalance(restaurantId) ||
+            canManagePartnersOps(restaurantId)) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId);
+        allow update: if canCancelSupplierOps(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          resource.data.status == 'active';
+        allow delete: if false;
+      }
+
+      match /expensePolicies/{policyId} {
+        allow read: if canReadFinance(restaurantId) || canReadAuthorizations(restaurantId);
+        allow create, update: if canAuthorizeOps(restaurantId);
+        allow delete: if false;
+      }
+
+      match /expensePolicyUsage/{usageId} {
+        allow read: if canReadFinance(restaurantId) || canReadAuthorizations(restaurantId);
+        allow write: if false;
+      }
+
+      match /settings/{settingId} {
+        allow read: if canReadFinance(restaurantId) || canReadAuthorizations(restaurantId);
+        allow create, update: if settingId == 'expensePolicies' && canAuthorizeOps(restaurantId);
+        allow delete: if false;
+      }
+
+      match /backofficePurchaseTargets/{docId} {
+        allow read: if (canReadFinance(restaurantId) || canReadPurchases(restaurantId)) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow create, update: if canManageSuppliersCatalog(restaurantId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId) &&
+          request.resource.data.restaurantId == restaurantId;
+        allow delete: if false;
+      }
+
+      match /backofficePurchaseBudgets/{docId} {
+        allow read: if (canReadFinance(restaurantId) || canReadPurchases(restaurantId)) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow create, update: if canManageSuppliersCatalog(restaurantId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId) &&
+          request.resource.data.restaurantId == restaurantId;
+        allow delete: if false;
+      }
+
+      match /backofficeFinanceBudgets/{docId} {
+        allow read: if canReadFinance(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow create, update: if canManageSuppliersCatalog(restaurantId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId) &&
+          request.resource.data.restaurantId == restaurantId;
         allow delete: if false;
       }
 

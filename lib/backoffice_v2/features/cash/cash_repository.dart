@@ -452,4 +452,171 @@ class CashRepository {
         .where((w) => w.cashSessionId == session.id)
         .toList(growable: false);
   }
+
+  /// Registers an approved historical expense on an already-closed cash session.
+  ///
+  /// Throws [StateError] if the session is still open or closing to prevent
+  /// concurrency collisions with the Android POS terminal.
+  Future<void> addHistoricalCashExpense({
+    required String restaurantId,
+    required String sessionId,
+    required double amount,
+    required String reason,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    final trimmedReason = reason.trim();
+    if (amount <= 0) {
+      throw ArgumentError('El monto del gasto debe ser mayor a cero.');
+    }
+    if (trimmedReason.length < 3) {
+      throw ArgumentError('Ingresa un motivo descriptivo (mínimo 3 caracteres).');
+    }
+
+    final restaurantRef = _db.collection('restaurants').doc(restaurantId);
+    final sessionRef = restaurantRef.collection('cashSessions').doc(sessionId);
+    final withdrawalRef = restaurantRef.collection('cashWithdrawalRequests').doc();
+    final logRef = restaurantRef.collection('activityLog').doc();
+
+    await _db.runTransaction((tx) async {
+      final sessionSnap = await tx.get(sessionRef);
+      if (!sessionSnap.exists) {
+        throw StateError('No se encontró la sesión de caja.');
+      }
+      final data = sessionSnap.data() ?? const <String, dynamic>{};
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+      if (status != 'closed') {
+        throw StateError(
+          'Solo se pueden agregar gastos históricos en cortes cerrados.',
+        );
+      }
+
+      final branchId = (data['branchId'] ?? '').toString();
+      final branchName = (data['branchName'] ?? '').toString();
+      final businessDate = (data['businessDate'] ?? '').toString();
+      final prevApproved =
+          ((data['approvedWithdrawalsTotal'] as num?) ?? 0).toDouble();
+      final prevExpectedCash =
+          ((data['expectedCashAmount'] as num?) ?? 0).toDouble();
+      final countedCash =
+          ((data['countedCashAmount'] as num?) ?? 0).toDouble();
+      final cardDiff = ((data['cardDifference'] as num?) ?? 0).toDouble();
+
+      final newApproved = prevApproved + amount;
+      final newExpectedCash = prevExpectedCash - amount;
+      final newCashDiff = countedCash - newExpectedCash;
+      final newNetDiff = newCashDiff + cardDiff;
+      final newShortage = newNetDiff < 0 ? -newNetDiff : 0.0;
+      final newOver = newNetDiff > 0 ? newNetDiff : 0.0;
+
+      tx.set(withdrawalRef, {
+        'id': withdrawalRef.id,
+        'restaurantId': restaurantId,
+        'branchId': branchId,
+        'branchName': branchName,
+        'cashSessionId': sessionId,
+        'businessDate': businessDate,
+        'amount': amount,
+        'reason': trimmedReason,
+        'status': 'approved',
+        'isHistorical': true,
+        'source': 'historical_backoffice',
+        'sourceName': 'Gasto histórico Backoffice',
+        'requestedByEmployeeId': employeeId,
+        'requestedByEmployeeName': employeeName,
+        'authorizedByEmployeeId': employeeId,
+        'authorizedByEmployeeName': employeeName,
+        'approvedByEmployeeId': employeeId,
+        'approvedByEmployeeName': employeeName,
+        'requestedAt': FieldValue.serverTimestamp(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'authorizedAt': FieldValue.serverTimestamp(),
+        'approvedAt': FieldValue.serverTimestamp(),
+      });
+
+      tx.update(sessionRef, {
+        'approvedWithdrawalsTotal': newApproved,
+        'expectedCashAmount': newExpectedCash,
+        'cashDifference': newCashDiff,
+        'netDifference': newNetDiff,
+        'shortageAmount': newShortage,
+        'overAmount': newOver,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      tx.set(logRef, {
+        'type': 'historical_cash_expense_added',
+        'restaurantId': restaurantId,
+        'branchId': branchId,
+        'cashSessionId': sessionId,
+        'withdrawalId': withdrawalRef.id,
+        'amount': amount,
+        'reason': trimmedReason,
+        'employeeId': employeeId,
+        'employeeName': employeeName,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  /// Recalculates and persists totals for an already-closed cash session.
+  ///
+  /// Refuses to mutate open/closing sessions to avoid race conditions with POS.
+  Future<void> recalculateClosedCashSession({
+    required String restaurantId,
+    required String sessionId,
+    required CashReconciliationSummary summary,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    final restaurantRef = _db.collection('restaurants').doc(restaurantId);
+    final sessionRef = restaurantRef.collection('cashSessions').doc(sessionId);
+    final logRef = restaurantRef.collection('activityLog').doc();
+
+    await _db.runTransaction((tx) async {
+      final sessionSnap = await tx.get(sessionRef);
+      if (!sessionSnap.exists) {
+        throw StateError('No se encontró la sesión de caja.');
+      }
+      final data = sessionSnap.data() ?? const <String, dynamic>{};
+      final status = (data['status'] ?? '').toString().trim().toLowerCase();
+      if (status != 'closed') {
+        throw StateError(
+          'Solo se pueden recalcular cortes de caja cerrados.',
+        );
+      }
+
+      final branchId = (data['branchId'] ?? '').toString();
+      tx.update(sessionRef, {
+        'expectedCashAmount': summary.expectedCashInDrawer,
+        'expectedCardChargedAmount': summary.cardCollected,
+        'expectedPlatformAmount': summary.platformCollected,
+        'approvedWithdrawalsTotal': summary.approvedWithdrawalsTotal,
+        'pendingWithdrawalsTotal': summary.pendingWithdrawalsTotal,
+        'cashDifference': summary.cashDifference,
+        'cardDifference': summary.cardDifference,
+        'netDifference': summary.netDifference,
+        'shortageAmount': summary.shortageAmount,
+        'overAmount': summary.overAmount,
+        'totalExpectedRealMoney': summary.totalExpectedRealMoney,
+        'totalCountedRealMoney': summary.totalCountedRealMoney,
+        'recalculatedAt': FieldValue.serverTimestamp(),
+        'recalculatedByEmployeeId': employeeId,
+        'recalculatedByEmployeeName': employeeName,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      tx.set(logRef, {
+        'type': 'historical_cash_correction',
+        'restaurantId': restaurantId,
+        'branchId': branchId,
+        'cashSessionId': sessionId,
+        'expectedCashAmount': summary.expectedCashInDrawer,
+        'netDifference': summary.netDifference,
+        'employeeId': employeeId,
+        'employeeName': employeeName,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
 }

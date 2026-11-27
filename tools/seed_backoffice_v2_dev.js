@@ -1003,6 +1003,164 @@ async function main() {
     );
   }
 
+  const phase6YieldProfiles = [
+    {
+      id: 'ksi_pastor',
+      restaurantId,
+      stockItemId: 'ksi_pastor',
+      stockItemName: 'Carne al Pastor',
+      rawBaseUnit: 'g',
+      cookedBaseUnit: 'g',
+      cookingYieldPercent: 68.0,
+      cookingYieldRate: 0.68,
+      estimatedReductionPercent: 32.0,
+      isEstimated: true,
+      needsInternalValidation: false,
+      sourceLabel: 'Seed DEV',
+      active: true,
+    },
+    {
+      id: 'ksi_bistec',
+      restaurantId,
+      stockItemId: 'ksi_bistec',
+      stockItemName: 'Bistec de Res',
+      rawBaseUnit: 'g',
+      cookedBaseUnit: 'g',
+      cookingYieldPercent: 72.0,
+      cookingYieldRate: 0.72,
+      estimatedReductionPercent: 28.0,
+      isEstimated: true,
+      needsInternalValidation: false,
+      sourceLabel: 'Seed DEV',
+      active: true,
+    },
+    {
+      id: 'ksi_suadero',
+      restaurantId,
+      stockItemId: 'ksi_suadero',
+      stockItemName: 'Suadero',
+      rawBaseUnit: 'g',
+      cookedBaseUnit: 'g',
+      cookingYieldPercent: 65.0,
+      cookingYieldRate: 0.65,
+      estimatedReductionPercent: 35.0,
+      isEstimated: true,
+      needsInternalValidation: false,
+      sourceLabel: 'Seed DEV',
+      active: true,
+    },
+  ];
+  for (const yp of phase6YieldProfiles) {
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/ingredientYieldProfiles/${yp.id}`, yp),
+    );
+  }
+
+  const productRecipes = [
+    {
+      productId: 'prod_taco_pastor',
+      productName: 'Taco al Pastor',
+      recipeStatus: 'complete',
+      active: true,
+      ingredients: [
+        {
+          stockItemId: 'ksi_pastor',
+          stockItemName: 'Carne al Pastor',
+          quantity: 35,
+          quantityType: 'grams',
+          inputStage: 'cooked',
+          unit: 'g',
+          baseQuantity: 35,
+        },
+      ],
+    },
+    {
+      productId: 'prod_taco_bistec',
+      productName: 'Taco de Bistec',
+      recipeStatus: 'complete',
+      active: true,
+      ingredients: [
+        {
+          stockItemId: 'ksi_bistec',
+          stockItemName: 'Bistec de Res',
+          quantity: 40,
+          quantityType: 'grams',
+          inputStage: 'cooked',
+          unit: 'g',
+          baseQuantity: 40,
+        },
+      ],
+    },
+  ];
+  for (const rec of productRecipes) {
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/productRecipes/${rec.productId}`, rec),
+    );
+  }
+
+  const partners = [
+    {
+      id: 'partner_1',
+      restaurantId,
+      name: 'Alejandro Padrino',
+      ownershipPercent: 60.0,
+      phone: '5511223344',
+      active: true,
+    },
+    {
+      id: 'partner_2',
+      restaurantId,
+      name: 'Sofía Socia',
+      ownershipPercent: 40.0,
+      phone: '5599887766',
+      active: true,
+    },
+  ];
+  for (const pt of partners) {
+    writes.push(makeWrite(`restaurants/${restaurantId}/partners/${pt.id}`, pt));
+  }
+
+  writes.push(
+    makeWrite(`restaurants/${restaurantId}/partnerContributions/pc_dev_1`, {
+      id: 'pc_dev_1',
+      restaurantId,
+      branchId: branches[0].id,
+      partnerId: 'partner_1',
+      partnerName: 'Alejandro Padrino',
+      date: formatDate(now),
+      amount: 3500,
+      method: 'transfer',
+      reference: 'SPEI-SOCIO-01',
+      notes: 'Capital de trabajo semanal',
+      status: 'active',
+    }),
+  );
+
+  writes.push(
+    makeWrite(`restaurants/${restaurantId}/settings/expensePolicies`, {
+      expensePoliciesEnabled: true,
+      expensePolicyMode: 'shadow',
+      manualApprovalCutoffEnabled: false,
+      manualApprovalCutoffTime: '22:00',
+      defaultReceiptRequired: true,
+    }),
+  );
+  writes.push(
+    makeWrite(`restaurants/${restaurantId}/expensePolicies/pol_hielo`, {
+      id: 'pol_hielo',
+      restaurantId,
+      branchId: branches[0].id,
+      name: 'Compra rápida de hielo y cilantro',
+      code: 'HIELO-DIA',
+      active: true,
+      autoApproveEnabled: true,
+      maxAmountPerTransaction: 250,
+      maxAmountPerPeriod: 1000,
+      maxUsesPerPeriod: 5,
+      frequencyType: 'weekly',
+    }),
+  );
+
   writes.push(
     makeWrite('restaurants/rest_beta', {
       name: 'Tacos El Norte • Tenant Aislado',

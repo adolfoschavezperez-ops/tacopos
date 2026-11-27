@@ -72,6 +72,7 @@ const List<_NavGroup> _navGroups = [
       section: BackofficeSection.finance,
       icon: Icons.account_balance_outlined,
       activeIcon: Icons.account_balance_rounded,
+      available: true,
     ),
     _NavItem(
       section: BackofficeSection.reports,

@@ -14,6 +14,8 @@ import '../features/cash/cash_page.dart';
 import '../features/cash/cash_repository.dart';
 import '../features/dashboard/dashboard_page.dart';
 import '../features/dashboard/dashboard_repository.dart';
+import '../features/finance/finance_page.dart';
+import '../features/finance/finance_repository.dart';
 import '../features/inventory/inventory_page.dart';
 import '../features/inventory/inventory_repository.dart';
 import '../features/placeholders/module_stub_page.dart';
@@ -46,6 +48,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
   late final AuthorizationsRepository _authorizationsRepository;
   late final InventoryRepository _inventoryRepository;
   late final PurchasesRepository _purchasesRepository;
+  late final FinanceRepository _financeRepository;
   late final BackofficeRouterDelegate _routerDelegate;
   final BackofficeRouteParser _routeParser = const BackofficeRouteParser();
   StreamSubscription<User?>? _authSub;
@@ -65,6 +68,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     _authorizationsRepository = AuthorizationsRepository();
     _inventoryRepository = InventoryRepository();
     _purchasesRepository = PurchasesRepository();
+    _financeRepository = FinanceRepository();
     _routerDelegate = BackofficeRouterDelegate(
       session: _session,
       loginBuilder: (context) => BackofficeLoginPage(
@@ -199,15 +203,10 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
         session: _session,
         repository: _inventoryRepository,
       ),
-      BackofficeSection.finance => const ModuleStubPage(
-        section: BackofficeSection.finance,
-        targetPhase: 'Fase 4',
-        description:
-            'Dashboard financiero consolidado, flujo de efectivo y comparativo semanal.',
-        plannedCapabilities: [
-          'Comparativo multi-sucursal bajo demanda.',
-          'Aportaciones de socios y conciliación de ingresos vs egresos.',
-        ],
+      BackofficeSection.finance => FinancePage(
+        session: _session,
+        repository: _financeRepository,
+        onOpenSaleDetail: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
       BackofficeSection.reports => const ModuleStubPage(
         section: BackofficeSection.reports,

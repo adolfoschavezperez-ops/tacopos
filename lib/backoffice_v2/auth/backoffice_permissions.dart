@@ -87,7 +87,36 @@ class BackofficePermissions {
           employee!.canViewAdmin);
 
   bool get canViewFinance =>
-      isAuthenticated && (isSuperAdmin || employee!.canViewAdmin);
+      isAuthenticated &&
+      (isSuperAdmin ||
+          employee!.canViewAdmin ||
+          employee!.canViewPurchases ||
+          employee!.canPaySuppliers ||
+          employee!.canViewAccountsPayable ||
+          employee!.canViewPurchaseReports);
+
+  bool get canManageExpensePolicies =>
+      isAuthenticated &&
+      (isSuperAdmin ||
+          employee!.canAuthorizeCashWithdrawals ||
+          employee!.canViewAdmin);
+
+  bool get canManagePartners =>
+      isAuthenticated &&
+      (isSuperAdmin ||
+          employee!.canManageSuppliers ||
+          employee!.canViewPurchases ||
+          employee!.canViewAdmin);
+
+  bool get canManageFinanceBudgets =>
+      isAuthenticated &&
+      (isSuperAdmin ||
+          employee!.canManageSuppliers ||
+          employee!.canViewAdmin);
+
+  bool get canCreateHistoricalCashExpense =>
+      isAuthenticated &&
+      (isSuperAdmin || employee!.canManageCash || employee!.canViewAdmin);
 
   bool get canViewReports =>
       isAuthenticated &&

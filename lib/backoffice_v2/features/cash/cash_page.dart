@@ -268,6 +268,35 @@ class _CashPageState extends State<CashPage> {
                           isOpenHighlight:
                               data.openSession?.id == detail.session.id,
                         ),
+                        if (!detail.session.isOpen &&
+                            widget.session.permissions
+                                .canCreateHistoricalCashExpense) ...[
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 8,
+                            children: [
+                              OutlinedButton.icon(
+                                onPressed: () =>
+                                    _openHistoricalExpenseDialog(detail),
+                                icon: const Icon(
+                                  Icons.add_circle_outline,
+                                  size: 16,
+                                ),
+                                label: const Text('Gasto histórico'),
+                              ),
+                              OutlinedButton.icon(
+                                onPressed: () =>
+                                    _confirmRecalculateSession(detail),
+                                icon: const Icon(
+                                  Icons.calculate_outlined,
+                                  size: 16,
+                                ),
+                                label: const Text('Recalcular corte'),
+                              ),
+                            ],
+                          ),
+                        ],
                         const SizedBox(height: 14),
                         SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
@@ -362,6 +391,151 @@ class _CashPageState extends State<CashPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _openHistoricalExpenseDialog(CashSessionDetailData detail) async {
+    final amountCtrl = TextEditingController();
+    final reasonCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Agregar gasto histórico'),
+        content: Form(
+          key: formKey,
+          child: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Corte cerrado ${detail.session.businessDate} · ${detail.session.branchName}',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Monto (\$)',
+                    prefixText: '\$',
+                  ),
+                  validator: (v) {
+                    final parsed = double.tryParse((v ?? '').trim());
+                    if (parsed == null || parsed <= 0) {
+                      return 'Ingresa un monto válido mayor a cero';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: reasonCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Concepto / Motivo',
+                  ),
+                  maxLines: 2,
+                  validator: (v) {
+                    if ((v ?? '').trim().length < 3) {
+                      return 'Ingresa un motivo descriptivo';
+                    }
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState?.validate() ?? false) {
+                Navigator.of(ctx).pop(true);
+              }
+            },
+            child: const Text('Registrar gasto'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+    final amount = double.parse(amountCtrl.text.trim());
+    final reason = reasonCtrl.text.trim();
+    final emp = widget.session.employee;
+    try {
+      await widget.repository.addHistoricalCashExpense(
+        restaurantId: widget.session.restaurantId,
+        sessionId: detail.session.id,
+        amount: amount,
+        reason: reason,
+        employeeId: emp?.id ?? '',
+        employeeName: emp?.name ?? 'Admin',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Gasto histórico registrado en el corte.')),
+      );
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo registrar el gasto: $e')),
+      );
+    }
+  }
+
+  Future<void> _confirmRecalculateSession(CashSessionDetailData detail) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Recalcular corte histórico'),
+        content: Text(
+          'Se actualizarán los totales esperados y diferencias del corte cerrado '
+          '${detail.session.businessDate} (${detail.session.branchName}) con base '
+          'en los pagos y retiros actuales. Esta operación queda auditada.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Recalcular'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final emp = widget.session.employee;
+    try {
+      await widget.repository.recalculateClosedCashSession(
+        restaurantId: widget.session.restaurantId,
+        sessionId: detail.session.id,
+        summary: detail.summary,
+        employeeId: emp?.id ?? '',
+        employeeName: emp?.name ?? 'Admin',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Corte histórico recalculado y auditado.')),
+      );
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No se pudo recalcular el corte: $e')),
+      );
+    }
   }
 
   Widget _buildHeader(BuildContext context, BackofficeTokens tokens) {
