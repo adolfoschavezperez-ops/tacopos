@@ -1,5 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../core/cache/backoffice_cache_scope.dart';
+
 import '../../../core/reports/cancellation_shortage_audit.dart';
 import '../../../core/reports/canonical_sales_summary.dart';
 import '../../../core/reports/discounts_by_day_report.dart';
@@ -55,10 +57,16 @@ class ReportTableResult {
 }
 
 class ReportsRepository {
-  ReportsRepository({FirebaseFirestore? firestore})
-    : _db = firestore ?? FirebaseFirestore.instance;
+  ReportsRepository({
+    FirebaseFirestore? firestore,
+    BackofficeCacheScope? cacheScope,
+  }) : _db = firestore ?? FirebaseFirestore.instance,
+       _cacheScope = cacheScope ?? BackofficeCacheScope() {
+    _cacheScope.registerInvalidator(invalidateCache);
+  }
 
   final FirebaseFirestore _db;
+  final BackofficeCacheScope _cacheScope;
   final Map<String, _CachedOrderBundle> _orderCache = {};
 
   void invalidateCache() => _orderCache.clear();
@@ -151,7 +159,13 @@ class ReportsRepository {
     required bool includeItems,
     bool forceRefresh = false,
   }) async {
-    final key = '$restaurantId|$startStr|$endStr|${branchId ?? 'all'}';
+    final requestEpoch = _cacheScope.epoch;
+    final key = _cacheScope.buildScopedKey('reports_orders', [
+      restaurantId,
+      startStr,
+      endStr,
+      branchId ?? 'all',
+    ]);
     final cached = _orderCache[key];
     if (!forceRefresh &&
         cached != null &&
@@ -236,7 +250,9 @@ class ReportsRepository {
       readCount: readCount,
       cachedAt: DateTime.now(),
     );
-    _orderCache[key] = bundle;
+    if (requestEpoch == _cacheScope.epoch) {
+      _orderCache[key] = bundle;
+    }
     return bundle;
   }
 

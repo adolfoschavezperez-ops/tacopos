@@ -11,6 +11,7 @@ import '../../../models/payment.dart';
 import '../../../models/purchase_models.dart';
 import '../../../models/yield_profit_models.dart';
 import '../../core/adapters/sales_adapter.dart';
+import '../../core/cache/backoffice_cache_scope.dart';
 import 'finance_analytics.dart';
 
 class FinanceDashboardBundle {
@@ -58,10 +59,16 @@ class FinanceDashboardBundle {
 }
 
 class FinanceRepository {
-  FinanceRepository({FirebaseFirestore? firestore})
-    : _db = firestore ?? FirebaseFirestore.instance;
+  FinanceRepository({
+    FirebaseFirestore? firestore,
+    BackofficeCacheScope? cacheScope,
+  }) : _db = firestore ?? FirebaseFirestore.instance,
+       _cacheScope = cacheScope ?? BackofficeCacheScope() {
+    _cacheScope.registerInvalidator(invalidateCache);
+  }
 
   final FirebaseFirestore _db;
+  final BackofficeCacheScope _cacheScope;
   final Map<String, _CachedFinanceBundle> _bundleCache = {};
 
   void invalidateCache() => _bundleCache.clear();
@@ -106,8 +113,14 @@ class FinanceRepository {
   }) async {
     final startStr = BackofficeSalesAdapter.formatBusinessDate(startDate);
     final endStr = BackofficeSalesAdapter.formatBusinessDate(endDate);
-    final cacheKey =
-        '$restaurantId|$startStr|$endStr|${branchId ?? 'all'}|$cacheUserScope';
+    final requestEpoch = _cacheScope.epoch;
+    final cacheKey = _cacheScope.buildScopedKey('finance', [
+      restaurantId,
+      startStr,
+      endStr,
+      branchId ?? 'all',
+      cacheUserScope,
+    ]);
     final cached = _bundleCache[cacheKey];
     if (!forceRefresh &&
         cached != null &&
@@ -440,10 +453,12 @@ class FinanceRepository {
           ? 'El rango supera 3,000 órdenes; los totales mostrados son parciales. Acota el periodo para exactitud completa.'
           : null,
     );
-    _bundleCache[cacheKey] = _CachedFinanceBundle(
-      bundle: bundle,
-      cachedAt: DateTime.now(),
-    );
+    if (requestEpoch == _cacheScope.epoch) {
+      _bundleCache[cacheKey] = _CachedFinanceBundle(
+        bundle: bundle,
+        cachedAt: DateTime.now(),
+      );
+    }
     return bundle;
   }
 

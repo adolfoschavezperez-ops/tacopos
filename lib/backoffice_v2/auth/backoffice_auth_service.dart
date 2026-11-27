@@ -223,6 +223,24 @@ class BackofficeV2AuthService {
         await _auth.signOut();
         return false;
       }
+      // P1-8: If linked employee doc is readable without legacy PIN, verify active == true.
+      // Server-side Firestore Rules also enforce employees/{employeeId}.active == true.
+      if (record.employeeId.trim().isNotEmpty) {
+        try {
+          final empDoc = await _firestore
+              .collection('restaurants')
+              .doc(restaurantId)
+              .collection('employees')
+              .doc(record.employeeId.trim())
+              .get();
+          if (empDoc.exists && empDoc.data()?['active'] == false) {
+            await _auth.signOut();
+            return false;
+          }
+        } on FirebaseException catch (e) {
+          if (e.code != 'permission-denied') rethrow;
+        }
+      }
       return true;
     } catch (_) {
       await _auth.signOut();
@@ -285,12 +303,20 @@ class BackofficeV2AuthService {
     final branchAccess = rawBranchAccess is List
         ? rawBranchAccess.map((e) => e.toString()).toSet()
         : <String>{};
+    final allBranchesAccess = authDoc.data()?['allBranchesAccess'] == true;
 
-    final allowedBranches = record.isSuperAdmin || branchAccess.isEmpty
+    final allowedBranches = (record.isSuperAdmin || allBranchesAccess)
         ? allBranches
         : allBranches
               .where((b) => branchAccess.contains(b.id))
               .toList(growable: false);
+
+    if (!record.isSuperAdmin && !allBranchesAccess && allowedBranches.isEmpty) {
+      await _auth.signOut();
+      throw const BackofficeAuthException(
+        'Tu cuenta no tiene sucursales autorizadas en este restaurante.',
+      );
+    }
 
     final employee = record.toEmployee(
       restaurantId: restaurantId,

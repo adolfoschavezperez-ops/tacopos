@@ -120,12 +120,21 @@ class EmployeesDashboardData {
   final int readCount;
 }
 
+class EmployeesRestrictedException implements Exception {
+  const EmployeesRestrictedException(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// Secure repository for Employee & Permissions administration.
 ///
 /// Security guarantees:
 /// - Never displays or pre-fills existing plaintext PINs.
 /// - Never writes plaintext PINs from Backoffice 2.0.
-/// - Prevents self-privilege-escalation on `isSuperAdmin` / `canManageEmployees`.
+/// - Prevents self-privilege-escalation and granting permissions above actor's.
+/// - Preserves existing roles/privileges when editing only non-privilege fields.
 /// - Logs all administrative modifications in `activityLog`.
 class EmployeesRepository {
   EmployeesRepository({FirebaseFirestore? firestore})
@@ -137,21 +146,32 @@ class EmployeesRepository {
     required String restaurantId,
   }) async {
     final restRef = _db.collection('restaurants').doc(restaurantId);
-    final snaps = await Future.wait([
-      restRef.collection('employees').limit(200).get(),
-      restRef.collection('devices').limit(100).get(),
-    ]);
-    final employees = snaps[0].docs.map(Employee.fromDoc).toList()
-      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    final devices = snaps[1].docs
-        .map(DeviceSummaryRow.fromDoc)
-        .toList(growable: false);
+    try {
+      final snaps = await Future.wait([
+        restRef.collection('employees').limit(200).get(),
+        restRef.collection('devices').limit(100).get(),
+      ]);
+      final employees = snaps[0].docs.map(Employee.fromDoc).toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      final devices = snaps[1].docs
+          .map(DeviceSummaryRow.fromDoc)
+          .toList(growable: false);
 
-    return EmployeesDashboardData(
-      employees: employees,
-      devices: devices,
-      readCount: snaps[0].docs.length + snaps[1].docs.length,
-    );
+      return EmployeesDashboardData(
+        employees: employees,
+        devices: devices,
+        readCount: snaps[0].docs.length + snaps[1].docs.length,
+      );
+    } on FirebaseException catch (e) {
+      if (e.code == 'permission-denied') {
+        throw const EmployeesRestrictedException(
+          'Lectura del catálogo de empleados restringida temporalmente en DEV '
+          'por contención de seguridad (P0-4: documentos con PIN heredado). '
+          'Pendiente de proyección pública sin credenciales en coordinación con Android.',
+        );
+      }
+      rethrow;
+    }
   }
 
   Future<EmployeeProfileBundle> loadEmployeeProfile({
@@ -235,10 +255,12 @@ class EmployeesRepository {
 
   /// Creates or updates an employee's profile, branch access, and permissions.
   ///
-  /// NEVER writes or exposes plaintext PINs and blocks self-escalation.
+  /// NEVER writes or exposes plaintext PINs, enforces least privilege,
+  /// blocks self-escalation, and never overwrites roles when editing only name.
   Future<void> saveEmployee({
     required String restaurantId,
     required String? existingEmployeeId,
+    Employee? existingEmployee,
     required String name,
     required bool active,
     required bool isSuperAdmin,
@@ -247,52 +269,120 @@ class EmployeesRepository {
     required String actorEmployeeId,
     required String actorEmployeeName,
     required bool actorIsSuperAdmin,
+    Map<String, bool> actorPermissions = const {},
   }) async {
     final cleanName = name.trim();
     if (cleanName.isEmpty) {
       throw ArgumentError('El nombre del empleado es obligatorio.');
     }
+    final isNew = existingEmployeeId == null || existingEmployeeId.trim().isEmpty;
     final isSelfEdit =
-        existingEmployeeId != null && existingEmployeeId == actorEmployeeId;
-    if (isSelfEdit && (isSuperAdmin && !actorIsSuperAdmin)) {
-      throw StateError('No puedes escalar tus propios privilegios.');
+        !isNew && existingEmployeeId.trim() == actorEmployeeId.trim();
+
+    if (!isNew && !actorIsSuperAdmin && (existingEmployee?.isSuperAdmin ?? false)) {
+      throw StateError(
+        'Solo un Super Administrador puede modificar la cuenta de otro Super Administrador.',
+      );
+    }
+    if (!actorIsSuperAdmin && isSuperAdmin) {
+      throw StateError('No tienes autorización para asignar rol de Super Administrador.');
     }
 
     final restRef = _db.collection('restaurants').doc(restaurantId);
     final col = restRef.collection('employees');
-    final isNew = existingEmployeeId == null || existingEmployeeId.trim().isEmpty;
     final ref = isNew ? col.doc() : col.doc(existingEmployeeId.trim());
 
-    final branchAccessList = assignedBranches
-        .map(
-          (b) => {
-            'restaurantId': restaurantId,
-            'branchId': b.id,
-            'branchName': b.name,
-            'active': true,
-            'permissions': permissions,
-          },
-        )
-        .toList(growable: false);
-
     final payload = <String, dynamic>{
-      'id': ref.id,
-      'restaurantId': restaurantId,
       'name': cleanName,
-      'active': active,
-      'isSuperAdmin': actorIsSuperAdmin ? isSuperAdmin : false,
-      ...permissions,
-      'restaurantAccess': [restaurantId],
-      'branchAccess': branchAccessList,
-      if (assignedBranches.isNotEmpty) ...{
-        'defaultRestaurantId': restaurantId,
-        'defaultBranchId': assignedBranches.first.id,
-      },
       'updatedAt': FieldValue.serverTimestamp(),
       'updatedByEmployeeId': actorEmployeeId,
       'updatedByEmployeeName': actorEmployeeName,
-      if (isNew) 'createdAt': FieldValue.serverTimestamp(),
     };
+
+    if (isSelfEdit) {
+      // Self-edit: strictly update display name only; never overwrite roles, permissions, active, or branches.
+    } else if (isNew) {
+      if (!actorIsSuperAdmin) {
+        for (final entry in permissions.entries) {
+          if (entry.value && actorPermissions[entry.key] != true) {
+            throw StateError(
+              'No puedes asignar el permiso ${entry.key} porque no lo posees.',
+            );
+          }
+        }
+      }
+      final branchAccessList = assignedBranches
+          .map(
+            (b) => {
+              'restaurantId': restaurantId,
+              'branchId': b.id,
+              'branchName': b.name,
+              'active': true,
+              'permissions': permissions,
+            },
+          )
+          .toList(growable: false);
+      payload.addAll({
+        'id': ref.id,
+        'restaurantId': restaurantId,
+        'active': active,
+        'isSuperAdmin': actorIsSuperAdmin ? isSuperAdmin : false,
+        ...permissions,
+        'restaurantAccess': [restaurantId],
+        'branchAccess': branchAccessList,
+        if (assignedBranches.isNotEmpty) ...{
+          'defaultRestaurantId': restaurantId,
+          'defaultBranchId': assignedBranches.first.id,
+        },
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      // Updating another existing employee: only include changed privilege/branch fields
+      final prevPerms = existingEmployee?.currentPermissionsMap ?? const <String, bool>{};
+      final changedPerms = <String, bool>{};
+      for (final entry in permissions.entries) {
+        if (existingEmployee == null || prevPerms[entry.key] != entry.value) {
+          if (!actorIsSuperAdmin && actorPermissions[entry.key] != true) {
+            throw StateError(
+              'No puedes modificar el permiso ${entry.key} porque excede tus privilegios.',
+            );
+          }
+          changedPerms[entry.key] = entry.value;
+        }
+      }
+      if (existingEmployee == null || existingEmployee.active != active) {
+        payload['active'] = active;
+      }
+      if (actorIsSuperAdmin &&
+          (existingEmployee == null ||
+              existingEmployee.isSuperAdmin != isSuperAdmin)) {
+        payload['isSuperAdmin'] = isSuperAdmin;
+      }
+      payload.addAll(changedPerms);
+
+      final prevBranchIds =
+          existingEmployee?.branchAccess.map((b) => b.branchId).toSet() ?? const <String>{};
+      final nextBranchIds = assignedBranches.map((b) => b.id).toSet();
+      if (existingEmployee == null ||
+          prevBranchIds.length != nextBranchIds.length ||
+          !prevBranchIds.containsAll(nextBranchIds)) {
+        payload['branchAccess'] = assignedBranches
+            .map(
+              (b) => {
+                'restaurantId': restaurantId,
+                'branchId': b.id,
+                'branchName': b.name,
+                'active': true,
+                'permissions': permissions,
+              },
+            )
+            .toList(growable: false);
+        if (assignedBranches.isNotEmpty) {
+          payload['defaultRestaurantId'] = restaurantId;
+          payload['defaultBranchId'] = assignedBranches.first.id;
+        }
+      }
+    }
 
     final batch = _db.batch();
     batch.set(ref, payload, SetOptions(merge: true));

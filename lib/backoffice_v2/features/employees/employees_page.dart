@@ -178,13 +178,14 @@ class _EmployeesPageState extends State<EmployeesPage> {
 
   Future<void> _openEmployeeDialog(Employee? existing) async {
     final actor = widget.session.employee;
+    final actorPerms = actor?.currentPermissionsMap ?? const <String, bool>{};
     final isSelfEdit = existing != null && existing.id == actor?.id;
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     var active = existing?.active ?? true;
     var isSuperAdmin = existing?.isSuperAdmin ?? false;
     final perms = _employeePermMap(existing);
     final allBranches = widget.session.branches;
-    final selectedBranchIds = existing != null && existing.branchAccess.isNotEmpty
+    final selectedBranchIds = existing != null
         ? existing.branchAccess.map((b) => b.branchId).toSet()
         : allBranches.map((b) => b.id).toSet();
     var saving = false;
@@ -254,15 +255,17 @@ class _EmployeesPageState extends State<EmployeesPage> {
                           (b) => FilterChip(
                             label: Text(b.name),
                             selected: selectedBranchIds.contains(b.id),
-                            onSelected: (v) {
-                              setS(() {
-                                if (v) {
-                                  selectedBranchIds.add(b.id);
-                                } else {
-                                  selectedBranchIds.remove(b.id);
-                                }
-                              });
-                            },
+                            onSelected: isSelfEdit
+                                ? null
+                                : (v) {
+                                    setS(() {
+                                      if (v) {
+                                        selectedBranchIds.add(b.id);
+                                      } else {
+                                        selectedBranchIds.remove(b.id);
+                                      }
+                                    });
+                                  },
                           ),
                         )
                         .toList(growable: false),
@@ -289,9 +292,9 @@ class _EmployeesPageState extends State<EmployeesPage> {
                         ),
                         value: perms[item.key] ?? false,
                         onChanged:
-                            (isSelfEdit &&
-                                (item.key == 'canManageEmployees' ||
-                                    item.key == 'canViewAdmin'))
+                            (isSelfEdit ||
+                                (!widget.session.isSuperAdmin &&
+                                    actorPerms[item.key] != true))
                             ? null
                             : (v) => setS(() => perms[item.key] = v),
                       ),
@@ -317,6 +320,7 @@ class _EmployeesPageState extends State<EmployeesPage> {
                       await widget.repository.saveEmployee(
                         restaurantId: widget.session.restaurantId,
                         existingEmployeeId: existing?.id,
+                        existingEmployee: existing,
                         name: nameCtrl.text,
                         active: active,
                         isSuperAdmin: isSuperAdmin,
@@ -325,6 +329,7 @@ class _EmployeesPageState extends State<EmployeesPage> {
                         actorEmployeeId: actor?.id ?? '',
                         actorEmployeeName: actor?.name ?? 'Admin',
                         actorIsSuperAdmin: widget.session.isSuperAdmin,
+                        actorPermissions: actorPerms,
                       );
                       if (ctx.mounted) Navigator.of(ctx).pop(true);
                     },

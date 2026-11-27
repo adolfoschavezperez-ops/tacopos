@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../auth/backoffice_auth_service.dart';
 import '../auth/backoffice_session.dart';
 import '../auth/login_page.dart';
+import '../core/cache/backoffice_cache_scope.dart';
 import '../core/design/backoffice_theme.dart';
 import '../core/env/backoffice_env.dart';
 import '../features/audit/audit_page.dart';
@@ -48,6 +49,7 @@ class BackofficeV2App extends StatefulWidget {
 class _BackofficeV2AppState extends State<BackofficeV2App>
     with WidgetsBindingObserver {
   late final BackofficeSession _session;
+  late final BackofficeCacheScope _cacheScope;
   late final BackofficeV2AuthService _authService;
   late final DashboardRepository _dashboardRepository;
   late final SalesRepository _salesRepository;
@@ -72,15 +74,17 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _session = BackofficeSession(config: widget.config);
+    _cacheScope = BackofficeCacheScope();
+    _session.addListener(_syncCacheScope);
     _authService = BackofficeV2AuthService(config: widget.config);
-    _dashboardRepository = DashboardRepository();
+    _dashboardRepository = DashboardRepository(cacheScope: _cacheScope);
     _salesRepository = SalesRepository();
     _cashRepository = CashRepository();
     _authorizationsRepository = AuthorizationsRepository();
     _inventoryRepository = InventoryRepository();
     _purchasesRepository = PurchasesRepository();
-    _financeRepository = FinanceRepository();
-    _reportsRepository = ReportsRepository();
+    _financeRepository = FinanceRepository(cacheScope: _cacheScope);
+    _reportsRepository = ReportsRepository(cacheScope: _cacheScope);
     _auditRepository = AuditRepository();
     _employeesRepository = EmployeesRepository();
     _settingsRepository = SettingsRepository();
@@ -96,8 +100,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
         onNavigate: onNavigate,
         onSignOut: () async {
           _explicitSignOut = true;
-          _financeRepository.invalidateCache();
-          _reportsRepository.invalidateCache();
+          _cacheScope.resetSession();
           await _authService.signOut();
           _session.signOut();
         },
@@ -111,9 +114,27 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
             ? null
             : 'Tu sesión expiró o fue revocada. Inicia sesión nuevamente.';
         _explicitSignOut = false;
+        _cacheScope.resetSession();
         _session.signOut(notice: notice);
       }
     });
+  }
+
+  void _syncCacheScope() {
+    if (!_session.isAuthenticated) {
+      _cacheScope.resetSession();
+      return;
+    }
+    final emp = _session.employee;
+    final permFp = emp == null
+        ? ''
+        : '${_session.isSuperAdmin}|${emp.currentPermissionsMap.entries.where((e) => e.value).map((e) => e.key).join(",")}';
+    _cacheScope.updateContext(
+      userId: emp?.id ?? '',
+      restaurantId: _session.restaurantId,
+      branchId: _session.selectedBranchId ?? 'all',
+      permissionsFingerprint: permFp,
+    );
   }
 
   @override
@@ -133,6 +154,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     if (stillActive == null || !mounted || stillActive || !_session.isAuthenticated) {
       return;
     }
+    _cacheScope.resetSession();
     _session.signOut(
       notice: 'Tu sesión expiró o fue revocada. Inicia sesión nuevamente.',
     );
@@ -158,6 +180,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _session.removeListener(_syncCacheScope);
     _authSub?.cancel();
     _routerDelegate.dispose();
     _session.dispose();

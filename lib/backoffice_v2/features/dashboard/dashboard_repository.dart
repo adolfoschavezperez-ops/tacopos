@@ -7,6 +7,7 @@ import '../../../models/order.dart';
 import '../../../models/order_item.dart';
 import '../../../models/payment.dart';
 import '../../core/adapters/sales_adapter.dart';
+import '../../core/cache/backoffice_cache_scope.dart';
 
 class DailyRevenuePoint {
   const DailyRevenuePoint({
@@ -138,10 +139,16 @@ class _CachedEntry {
 
 /// Bounded, on-demand repository for the Executive Dashboard with 60s TTL cache.
 class DashboardRepository {
-  DashboardRepository({FirebaseFirestore? firestore})
-    : _db = firestore ?? FirebaseFirestore.instance;
+  DashboardRepository({
+    FirebaseFirestore? firestore,
+    BackofficeCacheScope? cacheScope,
+  }) : _db = firestore ?? FirebaseFirestore.instance,
+       _cacheScope = cacheScope ?? BackofficeCacheScope() {
+    _cacheScope.registerInvalidator(invalidateCache);
+  }
 
   final FirebaseFirestore _db;
+  final BackofficeCacheScope _cacheScope;
   final Map<String, _CachedEntry> _cache = {};
 
   static const int maxOrdersPerQuery = 600;
@@ -157,8 +164,13 @@ class DashboardRepository {
     String? branchId,
     bool forceRefresh = false,
   }) async {
-    final cacheKey =
-        '$restaurantId|${branchId ?? 'all'}|$startBusinessDate|$endBusinessDate';
+    final requestEpoch = _cacheScope.epoch;
+    final cacheKey = _cacheScope.buildScopedKey('dashboard', [
+      restaurantId,
+      branchId ?? 'all',
+      startBusinessDate,
+      endBusinessDate,
+    ]);
     if (!forceRefresh) {
       final cached = _cache[cacheKey];
       if (cached != null &&
@@ -345,7 +357,9 @@ class DashboardRepository {
       ),
     );
 
-    _cache[cacheKey] = _CachedEntry(data: data, cachedAt: DateTime.now());
+    if (requestEpoch == _cacheScope.epoch) {
+      _cache[cacheKey] = _CachedEntry(data: data, cachedAt: DateTime.now());
+    }
     return data;
   }
 
