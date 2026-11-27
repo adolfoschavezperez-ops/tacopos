@@ -564,7 +564,7 @@ class PurchasesRepository {
         'amount': amount,
         'method': method,
         'fundingSource': method,
-        'fundingSourceName': method == 'cash' ? 'Efectivo' : 'Transferencia',
+        'fundingSourceName': _paymentMethodLabel(method),
         'reference': reference.trim(),
         'notes': notes.trim(),
         'status': 'active',
@@ -578,6 +578,344 @@ class PurchasesRepository {
         'balance': nextBalance <= 0.01 ? 0.0 : nextBalance,
         'status': nextStatus,
         'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  static String _paymentMethodLabel(String method) {
+    return switch (method.trim().toLowerCase()) {
+      'cash' => 'Efectivo',
+      'partner_contribution' => 'Aportación de socios',
+      _ => 'Transferencia',
+    };
+  }
+
+  Future<void> savePurchaseItem({
+    required String restaurantId,
+    String? itemId,
+    required String name,
+    required String category,
+    required String unit,
+    required bool active,
+    String? defaultSupplierId,
+    String? defaultSupplierName,
+    String notes = '',
+  }) async {
+    final ref = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('purchaseItems');
+    final isNew = itemId == null || itemId.trim().isEmpty;
+    final docRef = isNew ? ref.doc() : ref.doc(itemId.trim());
+    await docRef.set({
+      'id': docRef.id,
+      'name': name.trim(),
+      'category': category.trim().isEmpty ? 'General' : category.trim(),
+      'unit': unit.trim().isEmpty ? 'kg' : unit.trim(),
+      'active': active,
+      'defaultSupplierId': defaultSupplierId,
+      'defaultSupplierName': defaultSupplierName,
+      'notes': notes.trim(),
+      if (isNew) 'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
+
+  Future<void> createMultiLinePurchase({
+    required String restaurantId,
+    required String restaurantName,
+    required String branchId,
+    required String branchName,
+    required Supplier supplier,
+    required String folio,
+    required String documentType,
+    required DateTime purchaseDate,
+    DateTime? dueDate,
+    required List<({PurchaseItem item, double quantity, double lineTotal})> lines,
+    required bool markPaidImmediately,
+    required String paymentMethod,
+    required String notes,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    if (lines.isEmpty) {
+      throw ArgumentError('Agrega al menos una partida.');
+    }
+    final purchasesRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('supplierPurchases');
+    final docRef = purchasesRef.doc();
+    final businessDate = BackofficeSalesAdapter.formatBusinessDate(purchaseDate);
+
+    final cleanTotal = double.parse(
+      lines.fold<double>(0.0, (acc, l) => acc + l.lineTotal).toStringAsFixed(2),
+    );
+    final paidTotal = markPaidImmediately ? cleanTotal : 0.0;
+    final balance = markPaidImmediately ? 0.0 : cleanTotal;
+    final status = markPaidImmediately ? 'paid' : 'pending';
+
+    final batch = _db.batch();
+    batch.set(docRef, {
+      'id': docRef.id,
+      'restaurantId': restaurantId,
+      'restaurantName': restaurantName,
+      'branchId': branchId,
+      'branchName': branchName,
+      'supplierId': supplier.id,
+      'supplierName': supplier.commercialName,
+      'purchaseDate': Timestamp.fromDate(purchaseDate),
+      'businessDate': businessDate,
+      'dueDate': dueDate != null ? Timestamp.fromDate(dueDate) : null,
+      'paymentWeekdaySnapshot': supplier.paymentWeekday,
+      'paymentWeekdayNameSnapshot': supplier.paymentWeekdayName,
+      'folio': folio.trim(),
+      'documentType': documentType,
+      'status': status,
+      'subtotal': cleanTotal,
+      'total': cleanTotal,
+      'paidTotal': paidTotal,
+      'balance': balance,
+      'notes': notes.trim(),
+      'createdByEmployeeId': employeeId,
+      'createdByEmployeeName': employeeName,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      final lineTotal = double.parse(line.lineTotal.toStringAsFixed(2));
+      final lineTotalCents = (lineTotal * 100).round();
+      final unitCost = line.quantity > 0 ? lineTotal / line.quantity : 0.0;
+      final lineId = 'line_${i + 1}';
+      batch.set(docRef.collection('items').doc(lineId), {
+        'id': lineId,
+        'purchaseItemId': line.item.id,
+        'purchaseItemName': line.item.name,
+        'kitchenStockItemId': line.item.kitchenStockItemId,
+        'kitchenStockItemName': line.item.kitchenStockItemName,
+        'affectsKitchenStock': line.item.affectsKitchenStock,
+        'quantity': line.quantity,
+        'unit': line.item.unit,
+        'unitCost': unitCost,
+        'unitCostCalculated': unitCost,
+        'total': lineTotal,
+        'lineTotal': lineTotal,
+        'lineTotalCents': lineTotalCents,
+        'calculationMode': 'line_total',
+        'status': 'active',
+        'notes': notes.trim(),
+      });
+    }
+
+    if (markPaidImmediately && cleanTotal > 0) {
+      final paymentRef = _db
+          .collection('restaurants')
+          .doc(restaurantId)
+          .collection('supplierPayments')
+          .doc();
+      batch.set(paymentRef, {
+        'id': paymentRef.id,
+        'restaurantId': restaurantId,
+        'restaurantName': restaurantName,
+        'branchId': branchId,
+        'branchName': branchName,
+        'supplierId': supplier.id,
+        'supplierName': supplier.commercialName,
+        'purchaseId': docRef.id,
+        'purchaseFolio': folio.trim(),
+        'paymentDate': Timestamp.fromDate(purchaseDate),
+        'businessDate': businessDate,
+        'amount': cleanTotal,
+        'method': paymentMethod,
+        'fundingSource': paymentMethod,
+        'fundingSourceName': _paymentMethodLabel(paymentMethod),
+        'reference': '',
+        'notes': 'Pago al registrar compra',
+        'status': 'active',
+        'createdAt': FieldValue.serverTimestamp(),
+        'createdByEmployeeId': employeeId,
+        'createdByEmployeeName': employeeName,
+      });
+    }
+
+    await batch.commit();
+  }
+
+  /// Cancels a supplier purchase only if it has no active payments,
+  /// preserving TacoPosRepository.cancelSupplierPurchase parity + audit log.
+  Future<void> cancelSupplierPurchase({
+    required String restaurantId,
+    required SupplierPurchase purchase,
+    required String reason,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de cancelación.');
+    }
+
+    final purchaseRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('supplierPurchases')
+        .doc(purchase.id);
+    final paymentsSnap = await _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('supplierPayments')
+        .where('purchaseId', isEqualTo: purchase.id)
+        .get();
+    final hasActivePayments = paymentsSnap.docs
+        .map(SupplierPayment.fromDoc)
+        .any((p) => p.isActive);
+    if (hasActivePayments) {
+      throw StateError(
+        'No puedes cancelar esta compra porque tiene pagos activos. Cancela primero los pagos.',
+      );
+    }
+
+    final logRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('activityLog')
+        .doc();
+    final now = FieldValue.serverTimestamp();
+    final batch = _db.batch();
+    batch.update(purchaseRef, {
+      'status': 'cancelled',
+      'balance': 0.0,
+      'cancelledAt': now,
+      'cancelledByEmployeeId': employeeId,
+      'cancelledByEmployeeName': employeeName,
+      'cancelReason': cleanReason,
+      'updatedAt': now,
+    });
+    batch.set(logRef, {
+      'id': logRef.id,
+      'restaurantId': restaurantId,
+      'branchId': purchase.branchId,
+      'branchName': purchase.branchName,
+      'type': 'supplier_purchase_cancelled',
+      'actionType': 'supplier_purchase_cancelled',
+      'purchaseId': purchase.id,
+      'purchaseFolio': purchase.folio,
+      'amount': purchase.total,
+      'cancelReason': cleanReason,
+      'employeeId': employeeId,
+      'employeeName': employeeName,
+      'message':
+          'Canceló compra ${purchase.folio} de ${purchase.supplierName} (\$${purchase.total.toStringAsFixed(2)})',
+      'timestamp': now,
+      'createdAt': now,
+    });
+    await batch.commit();
+  }
+
+  /// Atomically cancels a supplier payment and recalculates purchase paidTotal/balance/status.
+  Future<void> cancelSupplierPayment({
+    required String restaurantId,
+    required SupplierPayment payment,
+    required String reason,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    final cleanReason = reason.trim();
+    if (cleanReason.isEmpty) {
+      throw ArgumentError('Captura el motivo de cancelación.');
+    }
+
+    final paymentRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('supplierPayments')
+        .doc(payment.id);
+    final purchaseRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('supplierPurchases')
+        .doc(payment.purchaseId);
+    final relatedPaymentsSnap = await _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('supplierPayments')
+        .where('purchaseId', isEqualTo: payment.purchaseId)
+        .get();
+    final logRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('activityLog')
+        .doc();
+
+    await _db.runTransaction((tx) async {
+      final paySnap = await tx.get(paymentRef);
+      final purSnap = await tx.get(purchaseRef);
+      if (!paySnap.exists) throw StateError('El pago ya no existe.');
+      if (!purSnap.exists) throw StateError('La compra ya no existe.');
+
+      final currentPay = SupplierPayment.fromDoc(paySnap);
+      if (currentPay.isCancelled) {
+        throw StateError('Este pago ya fue cancelado.');
+      }
+
+      var activePaidTotal = 0.0;
+      for (final pDoc in relatedPaymentsSnap.docs) {
+        if (pDoc.id == payment.id) continue;
+        final fresh = await tx.get(pDoc.reference);
+        if (fresh.exists) {
+          final p = SupplierPayment.fromDoc(fresh);
+          if (p.isActive) activePaidTotal += p.amount;
+        }
+      }
+
+      final purchase = SupplierPurchase.fromDoc(purSnap);
+      final nextBalance = (purchase.total - activePaidTotal).clamp(
+        0.0,
+        double.infinity,
+      );
+      final nextStatus = purchase.isCancelled
+          ? 'cancelled'
+          : activePaidTotal <= 0.01
+          ? 'pending'
+          : nextBalance <= 0.01
+          ? 'paid'
+          : 'partial';
+
+      final now = FieldValue.serverTimestamp();
+      tx.update(paymentRef, {
+        'status': 'cancelled',
+        'cancelledAt': now,
+        'cancelledByEmployeeId': employeeId,
+        'cancelledByEmployeeName': employeeName,
+        'cancelReason': cleanReason,
+        'updatedAt': now,
+      });
+      tx.update(purchaseRef, {
+        'paidTotal': activePaidTotal,
+        'balance': nextBalance <= 0.01 ? 0.0 : nextBalance,
+        'status': nextStatus,
+        'updatedAt': now,
+      });
+      tx.set(logRef, {
+        'id': logRef.id,
+        'restaurantId': restaurantId,
+        'branchId': purchase.branchId,
+        'branchName': purchase.branchName,
+        'type': 'supplier_payment_cancelled',
+        'actionType': 'supplier_payment_cancelled',
+        'paymentId': payment.id,
+        'purchaseId': purchase.id,
+        'purchaseFolio': purchase.folio,
+        'amount': payment.amount,
+        'cancelReason': cleanReason,
+        'employeeId': employeeId,
+        'employeeName': employeeName,
+        'message':
+            'Canceló pago de \$${payment.amount.toStringAsFixed(2)} en compra ${purchase.folio}',
+        'timestamp': now,
+        'createdAt': now,
       });
     });
   }

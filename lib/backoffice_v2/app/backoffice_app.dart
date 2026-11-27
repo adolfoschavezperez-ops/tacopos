@@ -185,6 +185,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
       BackofficeSection.cash => CashPage(
         session: _session,
         repository: _cashRepository,
+        onOpenSaleDetail: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
       BackofficeSection.authorizations => AuthorizationsPage(
         session: _session,

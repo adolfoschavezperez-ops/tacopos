@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/orders/backoffice_sales_cancellation.dart';
+import '../../../models/order.dart';
 import '../../../models/order_item.dart';
 import '../../../models/payment.dart';
 import '../../auth/backoffice_session.dart';
@@ -32,11 +34,122 @@ class SaleDetailPage extends StatefulWidget {
 
 class _SaleDetailPageState extends State<SaleDetailPage> {
   late Future<SaleDetailData?> _future;
+  final BackofficeCancellationGuard _cancelGuard = BackofficeCancellationGuard();
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  Future<String?> _promptCancellationReason({
+    required String title,
+    required String subtitle,
+  }) async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(subtitle),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: ctrl,
+                  maxLines: 2,
+                  decoration: const InputDecoration(
+                    labelText: 'Motivo de cancelación (obligatorio)',
+                    hintText: 'Ej. Error de captura / solicitud del cliente',
+                  ),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Volver'),
+            ),
+            FilledButton(
+              onPressed: isValidCancellationReason(ctrl.text)
+                  ? () => Navigator.of(ctx).pop(ctrl.text.trim())
+                  : null,
+              child: const Text('Confirmar cancelación'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _handleCancelOrder(PosOrder order) async {
+    if (!_cancelGuard.tryStart()) return;
+    try {
+      final reason = await _promptCancellationReason(
+        title: 'Cancelar orden ${BackofficeSalesAdapter.resolveFolioLabel(order)}',
+        subtitle:
+            'Esta acción marcará la orden y sus partidas como canceladas y quedará registrada en auditoría.',
+      );
+      if (reason == null) return;
+      await widget.repository.cancelCustomerOrder(
+        restaurantId: widget.session.restaurantId,
+        orderId: order.id,
+        reason: reason,
+        employeeId: widget.session.employee?.id ?? '',
+        employeeName: widget.session.employee?.name ?? '',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Orden cancelada correctamente.')),
+      );
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Bad state: ', ''))),
+      );
+    } finally {
+      _cancelGuard.release();
+    }
+  }
+
+  Future<void> _handleCancelPayment(PosOrder order, Payment payment) async {
+    if (!_cancelGuard.tryStart()) return;
+    try {
+      final reason = await _promptCancellationReason(
+        title: 'Cancelar pago',
+        subtitle:
+            'Se cancelará el pago de ${BackofficeSalesAdapter.formatMoney(payment.chargedAmount)} y se recalculará el saldo de la orden.',
+      );
+      if (reason == null) return;
+      await widget.repository.cancelCustomerPayment(
+        restaurantId: widget.session.restaurantId,
+        orderId: order.id,
+        paymentId: payment.id,
+        reason: reason,
+        employeeId: widget.session.employee?.id ?? '',
+        employeeName: widget.session.employee?.name ?? '',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pago cancelado y totales actualizados.')),
+      );
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Bad state: ', ''))),
+      );
+    } finally {
+      _cancelGuard.release();
+    }
   }
 
   @override
@@ -235,6 +348,29 @@ class _SaleDetailPageState extends State<SaleDetailPage> {
                             ],
                           ),
                           const SizedBox(width: 16),
+                          if (widget.session.permissions.canCancelOrders &&
+                              !isTerminalCancellationStatus(order.status)) ...[
+                            OutlinedButton.icon(
+                              onPressed: () => _handleCancelOrder(order),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: const Color(0xFFFCA5A5),
+                                backgroundColor: const Color(
+                                  0xFFEF4444,
+                                ).withValues(alpha: 0.14),
+                                side: BorderSide(
+                                  color: const Color(
+                                    0xFFEF4444,
+                                  ).withValues(alpha: 0.35),
+                                ),
+                              ),
+                              icon: const Icon(
+                                Icons.cancel_outlined,
+                                size: 15,
+                              ),
+                              label: const Text('Cancelar orden'),
+                            ),
+                            const SizedBox(width: 8),
+                          ],
                           OutlinedButton.icon(
                             onPressed: widget.onBack,
                             style: OutlinedButton.styleFrom(
@@ -351,7 +487,24 @@ class _SaleDetailPageState extends State<SaleDetailPage> {
                                 )
                               : Column(
                                   children: data.payments
-                                      .map((p) => _PaymentCardRow(payment: p))
+                                      .map(
+                                        (p) => _PaymentCardRow(
+                                          payment: p,
+                                          onCancel:
+                                              widget
+                                                      .session
+                                                      .permissions
+                                                      .canCancelPayments &&
+                                                  !isTerminalCancellationStatus(
+                                                    p.status,
+                                                  )
+                                              ? () => _handleCancelPayment(
+                                                  order,
+                                                  p,
+                                                )
+                                              : null,
+                                        ),
+                                      )
                                       .toList(),
                                 ),
                         ),
@@ -589,9 +742,10 @@ class _SummaryLine extends StatelessWidget {
 }
 
 class _PaymentCardRow extends StatelessWidget {
-  const _PaymentCardRow({required this.payment});
+  const _PaymentCardRow({required this.payment, this.onCancel});
 
   final Payment payment;
+  final VoidCallback? onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -667,6 +821,18 @@ class _PaymentCardRow extends StatelessWidget {
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
+          if (onCancel != null) ...[
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: 'Cancelar pago',
+              onPressed: onCancel,
+              icon: Icon(
+                Icons.cancel_outlined,
+                size: 18,
+                color: tokens.danger,
+              ),
+            ),
+          ],
         ],
       ),
     );

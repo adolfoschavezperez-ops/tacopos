@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../../../core/orders/backoffice_sales_cancellation.dart';
 import '../../../core/reports/canonical_sales_summary.dart';
 import '../../../models/order.dart';
 import '../../../models/order_item.dart';
@@ -289,5 +290,243 @@ class SalesRepository {
       payments: payments,
       canonicalSummary: summary,
     );
+  }
+
+  /// Atomically cancels a customer payment and recalculates order totals,
+  /// preserving Android/1.0 cancellation contracts and writing an audit log.
+  Future<void> cancelCustomerPayment({
+    required String restaurantId,
+    required String orderId,
+    required String paymentId,
+    required String reason,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    final cleanReason = reason.trim();
+    if (!isValidCancellationReason(cleanReason)) {
+      throw ArgumentError('Captura el motivo de cancelación.');
+    }
+
+    final orderRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('orders')
+        .doc(orderId);
+    final paymentRef = orderRef.collection('payments').doc(paymentId);
+    final paymentsSnap = await orderRef.collection('payments').get();
+    final itemsSnap = await orderRef.collection('items').get();
+    final activityRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('activityLog')
+        .doc();
+
+    await _db.runTransaction((tx) async {
+      final orderDoc = await tx.get(orderRef);
+      final paymentDoc = await tx.get(paymentRef);
+      if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+      if (!paymentDoc.exists) throw StateError('El pago ya no existe.');
+
+      final freshPayments = <Payment>[];
+      for (final pDoc in paymentsSnap.docs) {
+        final fresh = await tx.get(pDoc.reference);
+        if (fresh.exists) freshPayments.add(Payment.fromDoc(fresh));
+      }
+      final freshItems = <OrderItem>[];
+      for (final iDoc in itemsSnap.docs) {
+        final fresh = await tx.get(iDoc.reference);
+        if (fresh.exists) freshItems.add(OrderItem.fromDoc(fresh));
+      }
+
+      final order = PosOrder.fromDoc(orderDoc);
+      final payment = Payment.fromDoc(paymentDoc);
+      if (isTerminalCancellationStatus(payment.status) ||
+          payment.cancelledAt != null) {
+        throw StateError('Este pago ya fue cancelado.');
+      }
+
+      final remainingActiveAmounts = freshPayments
+          .where(
+            (p) =>
+                p.id != paymentId &&
+                isBackofficeActivePayment(
+                  status: p.status,
+                  hasCancelledAt: p.cancelledAt != null,
+                  appliedAmount: p.appliedAmount ?? p.baseAmount,
+                ),
+          )
+          .map((p) => p.appliedAmount ?? p.baseAmount);
+
+      final netTotal = order.netTotal ?? order.total;
+      final totals = deriveCustomerPaymentCancellationTotals(
+        orderNetTotal: netTotal,
+        activePaymentAmounts: remainingActiveAmounts,
+      );
+
+      final hasActiveItems = freshItems.any(
+        (item) => !isTerminalCancellationStatus(item.status),
+      );
+      final nextStatus = isTerminalCancellationStatus(order.status)
+          ? order.status
+          : totals.paymentStatus == 'paid'
+          ? 'paid'
+          : hasActiveItems
+          ? 'open'
+          : 'pending';
+
+      final now = FieldValue.serverTimestamp();
+      tx.update(paymentRef, {
+        'status': 'cancelled',
+        'cancelledAt': now,
+        'cancelledByEmployeeId': employeeId,
+        'cancelledByEmployeeName': employeeName,
+        'cancelReason': cleanReason,
+        'updatedAt': now,
+      });
+
+      tx.update(orderRef, {
+        'paidTotal': totals.paidTotal,
+        'pendingTotal': totals.pendingTotal,
+        'paymentStatus': totals.paymentStatus,
+        'status': nextStatus,
+        'updatedAt': now,
+      });
+
+      tx.set(activityRef, {
+        'id': activityRef.id,
+        'restaurantId': restaurantId,
+        'branchId': order.branchId,
+        'branchName': order.branchName,
+        'type': 'payment_cancelled',
+        'actionType': 'payment_cancelled',
+        'orderId': orderId,
+        'paymentId': paymentId,
+        'amount': payment.chargedAmount,
+        'cancelReason': cleanReason,
+        'employeeId': employeeId,
+        'employeeName': employeeName,
+        'message':
+            'Pago cancelado en orden ${BackofficeSalesAdapter.resolveFolioLabel(order)} (\$${payment.chargedAmount.toStringAsFixed(2)})',
+        'timestamp': now,
+        'createdAt': now,
+      });
+    });
+  }
+
+  /// Atomically cancels an order that has no remaining active payments.
+  Future<void> cancelCustomerOrder({
+    required String restaurantId,
+    required String orderId,
+    required String reason,
+    required String employeeId,
+    required String employeeName,
+  }) async {
+    final cleanReason = reason.trim();
+    if (!isValidCancellationReason(cleanReason)) {
+      throw ArgumentError('Captura el motivo de cancelación.');
+    }
+
+    final orderRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('orders')
+        .doc(orderId);
+    final paymentsSnap = await orderRef.collection('payments').get();
+    final itemsSnap = await orderRef.collection('items').get();
+    final activityRef = _db
+        .collection('restaurants')
+        .doc(restaurantId)
+        .collection('activityLog')
+        .doc();
+
+    await _db.runTransaction((tx) async {
+      final orderDoc = await tx.get(orderRef);
+      if (!orderDoc.exists) throw StateError('La orden ya no existe.');
+
+      final freshPayments = <Payment>[];
+      for (final pDoc in paymentsSnap.docs) {
+        final fresh = await tx.get(pDoc.reference);
+        if (fresh.exists) freshPayments.add(Payment.fromDoc(fresh));
+      }
+      final freshItems = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final iDoc in itemsSnap.docs) {
+        final fresh = await tx.get(iDoc.reference);
+        if (fresh.exists) freshItems.add(fresh);
+      }
+
+      final order = PosOrder.fromDoc(orderDoc);
+      if (isTerminalCancellationStatus(order.status) ||
+          order.cancelledAt != null ||
+          order.canceledAt != null) {
+        throw StateError('Esta orden ya fue cancelada.');
+      }
+
+      final activePaymentsTotal = freshPayments
+          .where(
+            (p) => isBackofficeActivePayment(
+              status: p.status,
+              hasCancelledAt: p.cancelledAt != null,
+              appliedAmount: p.appliedAmount ?? p.baseAmount,
+            ),
+          )
+          .fold<double>(
+            0.0,
+            (acc, p) => acc + (p.appliedAmount ?? p.baseAmount),
+          );
+
+      if (!canCancelBackofficeSale(activePaymentsTotal)) {
+        throw StateError(
+          'No puedes cancelar esta venta porque tiene pagos activos por \$${activePaymentsTotal.toStringAsFixed(2)}. Cancela primero los pagos.',
+        );
+      }
+
+      final now = FieldValue.serverTimestamp();
+      tx.update(orderRef, {
+        'status': 'cancelled',
+        'kitchenStatus': 'cancelled',
+        'paymentStatus': 'cancelled',
+        'cancelStatus': 'accepted',
+        'cancelledAt': now,
+        'cancelledByEmployeeId': employeeId,
+        'cancelledByEmployeeName': employeeName,
+        'cancelReason': cleanReason,
+        'pendingTotal': 0.0,
+        'paidTotal': 0.0,
+        'updatedAt': now,
+      });
+
+      for (final itemDoc in freshItems) {
+        final item = OrderItem.fromDoc(itemDoc);
+        if (!isTerminalCancellationStatus(item.status)) {
+          tx.update(itemDoc.reference, {
+            'status': 'cancelled',
+            'kitchenStatus': 'cancelled',
+            'paymentStatus': 'cancelled',
+            'cancelledAt': now,
+            'cancelledByEmployeeId': employeeId,
+            'cancelledByEmployeeName': employeeName,
+            'cancelReason': cleanReason,
+          });
+        }
+      }
+
+      tx.set(activityRef, {
+        'id': activityRef.id,
+        'restaurantId': restaurantId,
+        'branchId': order.branchId,
+        'branchName': order.branchName,
+        'type': 'order_cancelled',
+        'actionType': 'order_cancelled',
+        'orderId': orderId,
+        'amount': order.total,
+        'cancelReason': cleanReason,
+        'employeeId': employeeId,
+        'employeeName': employeeName,
+        'message':
+            'Orden ${BackofficeSalesAdapter.resolveFolioLabel(order)} cancelada (\$${order.total.toStringAsFixed(2)})',
+        'timestamp': now,
+        'createdAt': now,
+      });
+    });
   }
 }

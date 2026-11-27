@@ -18,8 +18,11 @@ enum _PurchasesTab {
   history('Historial'),
   bySupplier('Por proveedor'),
   byItem('Por insumo'),
+  items('Insumos'),
   suppliers('Proveedores'),
   payables('Cuentas por pagar'),
+  statement('Estado de cuenta'),
+  kardex('Kardex'),
   efficiency('Eficiencia');
 
   const _PurchasesTab(this.label);
@@ -348,6 +351,15 @@ class _PurchasesPageState extends State<PurchasesPage> {
           ),
         ),
         actions: [
+          if (widget.session.permissions.canCancelSupplierPayments &&
+              !detail.purchase.isCancelled)
+            TextButton(
+              onPressed: () async {
+                Navigator.of(ctx).pop();
+                await _promptCancelPurchase(detail.purchase);
+              },
+              child: const Text('Cancelar compra'),
+            ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('Cerrar'),
@@ -373,7 +385,10 @@ class _PurchasesPageState extends State<PurchasesPage> {
     );
     final qtyCtrl = TextEditingController(text: '10');
     final totalCtrl = TextEditingController(text: '1000');
+    final lineDiscCtrl = TextEditingController(text: '0');
+    final genDiscCtrl = TextEditingController(text: '0');
     final notesCtrl = TextEditingController();
+    final lines = <({PurchaseItem item, double quantity, double lineTotal})>[];
     var paidNow = false;
     var docType = 'note';
     var submitting = false;
@@ -454,17 +469,80 @@ class _PurchasesPageState extends State<PurchasesPage> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 8),
                       Expanded(
                         child: TextField(
                           controller: totalCtrl,
                           keyboardType: TextInputType.number,
                           decoration: const InputDecoration(
-                            labelText: 'Importe total',
+                            labelText: 'Importe bruto',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 78,
+                        child: TextField(
+                          controller: lineDiscCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Desc %',
                           ),
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        final q = double.tryParse(qtyCtrl.text.trim()) ?? 0;
+                        final t = double.tryParse(totalCtrl.text.trim()) ?? 0;
+                        final dPct =
+                            (double.tryParse(lineDiscCtrl.text.trim()) ?? 0)
+                                .clamp(0.0, 99.0);
+                        if (q <= 0 || t <= 0) return;
+                        final netLine = t * (1.0 - dPct / 100.0);
+                        setDialogState(() {
+                          lines.add((
+                            item: selectedItem,
+                            quantity: q,
+                            lineTotal: netLine,
+                          ));
+                        });
+                      },
+                      icon: const Icon(Icons.add_rounded, size: 16),
+                      label: const Text('Agregar partida'),
+                    ),
+                  ),
+                  if (lines.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    ...lines.asMap().entries.map(
+                      (e) => Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '• ${e.value.item.name}: ${e.value.quantity.toStringAsFixed(2)} ${e.value.item.unit} = ${BackofficeSalesAdapter.formatMoney(e.value.lineTotal)}',
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, size: 16),
+                            onPressed: () =>
+                                setDialogState(() => lines.removeAt(e.key)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: genDiscCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Descuento general % (opcional)',
+                    ),
                   ),
                   const SizedBox(height: 10),
                   TextField(
@@ -493,18 +571,43 @@ class _PurchasesPageState extends State<PurchasesPage> {
               onPressed: submitting
                   ? null
                   : () async {
-                      final qty = double.tryParse(qtyCtrl.text.trim()) ?? 0;
-                      final tot = double.tryParse(totalCtrl.text.trim()) ?? 0;
-                      if (qty <= 0 || tot <= 0 || folioCtrl.text.trim().isEmpty) {
-                        return;
+                      if (folioCtrl.text.trim().isEmpty) return;
+                      final effectiveLines = List.of(lines);
+                      if (effectiveLines.isEmpty) {
+                        final qty = double.tryParse(qtyCtrl.text.trim()) ?? 0;
+                        final tot = double.tryParse(totalCtrl.text.trim()) ?? 0;
+                        final dPct =
+                            (double.tryParse(lineDiscCtrl.text.trim()) ?? 0)
+                                .clamp(0.0, 99.0);
+                        if (qty <= 0 || tot <= 0) return;
+                        effectiveLines.add((
+                          item: selectedItem,
+                          quantity: qty,
+                          lineTotal: tot * (1.0 - dPct / 100.0),
+                        ));
                       }
+                      final genPct =
+                          (double.tryParse(genDiscCtrl.text.trim()) ?? 0).clamp(
+                            0.0,
+                            99.0,
+                          );
+                      final discountedLines = effectiveLines
+                          .map(
+                            (l) => (
+                              item: l.item,
+                              quantity: l.quantity,
+                              lineTotal: l.lineTotal * (1.0 - genPct / 100.0),
+                            ),
+                          )
+                          .toList(growable: false);
+
                       setDialogState(() => submitting = true);
                       final br = widget.session.branches.firstWhere(
                         (b) => b.id == widget.session.selectedBranchId,
                         orElse: () => widget.session.branches.first,
                       );
                       final now = DateTime.now();
-                      await widget.repository.createPurchase(
+                      await widget.repository.createMultiLinePurchase(
                         restaurantId: widget.session.restaurantId,
                         restaurantName: widget.session.restaurantName,
                         branchId: br.id,
@@ -518,9 +621,7 @@ class _PurchasesPageState extends State<PurchasesPage> {
                                 Duration(days: selectedSupplier.creditDays),
                               )
                             : now,
-                        item: selectedItem,
-                        quantity: qty,
-                        lineTotal: tot,
+                        lines: discountedLines,
                         markPaidImmediately: paidNow,
                         paymentMethod: 'transfer',
                         notes: notesCtrl.text,
@@ -661,6 +762,10 @@ class _PurchasesPageState extends State<PurchasesPage> {
                       child: Text('Transferencia'),
                     ),
                     DropdownMenuItem(value: 'cash', child: Text('Efectivo')),
+                    DropdownMenuItem(
+                      value: 'partner_contribution',
+                      child: Text('Aportación de socios'),
+                    ),
                   ],
                   onChanged: (v) {
                     if (v != null) setDialogState(() => method = v);
@@ -711,6 +816,207 @@ class _PurchasesPageState extends State<PurchasesPage> {
       ),
     );
     if (saved == true && mounted) _resetAndLoad();
+  }
+
+  Future<String?> _promptReasonDialog(String title) async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: TextField(
+            controller: ctrl,
+            maxLines: 2,
+            decoration: const InputDecoration(
+              labelText: 'Motivo de cancelación (obligatorio)',
+            ),
+            onChanged: (_) => setDialogState(() {}),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Volver'),
+            ),
+            FilledButton(
+              onPressed: ctrl.text.trim().isNotEmpty
+                  ? () => Navigator.of(ctx).pop(ctrl.text.trim())
+                  : null,
+              child: const Text('Confirmar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _promptCancelPurchase(SupplierPurchase purchase) async {
+    final reason = await _promptReasonDialog(
+      'Cancelar compra ${purchase.folio}',
+    );
+    if (reason == null) return;
+    try {
+      await widget.repository.cancelSupplierPurchase(
+        restaurantId: widget.session.restaurantId,
+        purchase: purchase,
+        reason: reason,
+        employeeId: widget.session.employee?.id ?? '',
+        employeeName: widget.session.employee?.name ?? '',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Compra cancelada correctamente.')),
+      );
+      _resetAndLoad();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Bad state: ', ''))),
+      );
+    }
+  }
+
+  Future<void> _promptCancelPayment(SupplierPayment payment) async {
+    final reason = await _promptReasonDialog(
+      'Cancelar pago de ${payment.purchaseFolio}',
+    );
+    if (reason == null) return;
+    try {
+      await widget.repository.cancelSupplierPayment(
+        restaurantId: widget.session.restaurantId,
+        payment: payment,
+        reason: reason,
+        employeeId: widget.session.employee?.id ?? '',
+        employeeName: widget.session.employee?.name ?? '',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Pago cancelado y saldo recalculado.')),
+      );
+      _resetAndLoad();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Bad state: ', ''))),
+      );
+    }
+  }
+
+  Future<void> _openPurchaseItemDialog(
+    PurchaseItem? existing,
+    List<Supplier> suppliers,
+  ) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final catCtrl = TextEditingController(text: existing?.category ?? 'Carnes');
+    final unitCtrl = TextEditingController(text: existing?.unit ?? 'kg');
+    var active = existing?.active ?? true;
+    var saving = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(
+            existing == null ? 'Nuevo insumo de compra' : 'Editar insumo',
+          ),
+          content: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Nombre'),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: catCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Categoría',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextField(
+                        controller: unitCtrl,
+                        decoration: const InputDecoration(labelText: 'Unidad'),
+                      ),
+                    ),
+                  ],
+                ),
+                SwitchListTile(
+                  value: active,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Insumo activo'),
+                  onChanged: (v) => setDialogState(() => active = v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      if (nameCtrl.text.trim().isEmpty) return;
+                      setDialogState(() => saving = true);
+                      await widget.repository.savePurchaseItem(
+                        restaurantId: widget.session.restaurantId,
+                        itemId: existing?.id,
+                        name: nameCtrl.text,
+                        category: catCtrl.text,
+                        unit: unitCtrl.text,
+                        active: active,
+                      );
+                      if (ctx.mounted) Navigator.of(ctx).pop(true);
+                    },
+              child: Text(saving ? 'Guardando...' : 'Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && mounted) _resetAndLoad();
+  }
+
+  Future<void> _exportStatementCsv(SupplierStatementSummary s) async {
+    final buf = StringBuffer()
+      ..writeln('Fecha,Folio,Tipo,Descripcion,Cargo,Abono,SaldoAcumulado');
+    for (final r in s.rows) {
+      buf.writeln(
+        '${BackofficeSalesAdapter.formatBusinessDate(r.date)},"${r.folio}",${r.type},"${r.notes.replaceAll('"', '""')}",${r.charge.toStringAsFixed(2)},${r.credit.toStringAsFixed(2)},${r.balance.toStringAsFixed(2)}',
+      );
+    }
+    final msg = await exportCsvFile(
+      fileName: 'estado_cuenta_${s.supplierId}.csv',
+      content: buf.toString(),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  Future<void> _exportKardexCsv(List<PurchaseKardexEntry> entries) async {
+    final buf = StringBuffer()
+      ..writeln('Fecha,Folio,Proveedor,Insumo,Unidad,Cantidad,CostoUnitario,Total');
+    for (final e in entries) {
+      buf.writeln(
+        '${e.dateLabel},"${e.folio}","${e.supplierName.replaceAll('"', '""')}","${e.itemName.replaceAll('"', '""')}","${e.unit}",${e.quantity.toStringAsFixed(2)},${e.unitCost.toStringAsFixed(2)},${e.lineTotal.toStringAsFixed(2)}',
+      );
+    }
+    final msg = await exportCsvFile(
+      fileName: 'kardex_compras.csv',
+      content: buf.toString(),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
@@ -872,6 +1178,12 @@ class _PurchasesPageState extends State<PurchasesPage> {
                       isMobile: isMobile,
                       onExport: () => _exportItemsCsv(data.metrics.itemReports),
                     ),
+                    _PurchasesTab.items => PurchaseItemsCatalogTab(
+                      items: data.catalogItems,
+                      canManage: widget.session.permissions.canManageSuppliers,
+                      onCreateOrEdit: (item) =>
+                          _openPurchaseItemDialog(item, data.suppliers),
+                    ),
                     _PurchasesTab.suppliers => SuppliersCatalogTab(
                       suppliers: data.suppliers,
                       balances: balancesBySup,
@@ -884,10 +1196,28 @@ class _PurchasesPageState extends State<PurchasesPage> {
                       payments: data.payments,
                       branchNames: branchNames,
                       canPay: widget.session.permissions.canPaySuppliers,
+                      canCancelPayment:
+                          widget.session.permissions.canCancelSupplierPayments,
                       isMobile: isMobile,
                       onPayPurchase: _openPayPurchaseDialog,
+                      onCancelPayment: _promptCancelPayment,
                       onSelectPurchase: _openPurchaseDetail,
                       onExport: () => _exportPayablesCsv(data.accountsPayable),
+                    ),
+                    _PurchasesTab.statement => SupplierStatementTab(
+                      suppliers: data.suppliers,
+                      purchases: data.currentPurchases,
+                      payments: data.payments,
+                      isMobile: isMobile,
+                      onExport: _exportStatementCsv,
+                    ),
+                    _PurchasesTab.kardex => PurchaseKardexTab(
+                      entries: PurchasesAnalytics.buildKardex(
+                        purchases: data.currentPurchases,
+                        itemsByPurchase: data.currentItemsByPurchase,
+                      ),
+                      branchNames: branchNames,
+                      onExport: _exportKardexCsv,
                     ),
                     _PurchasesTab.efficiency => EfficiencyAndBudgetsTab(
                       data: data,

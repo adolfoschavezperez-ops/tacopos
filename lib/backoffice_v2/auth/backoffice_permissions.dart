@@ -66,6 +66,12 @@ class BackofficePermissions {
       isAuthenticated &&
       (isSuperAdmin || employee!.canPaySuppliers || employee!.canViewAdmin);
 
+  bool get canCancelSupplierPayments =>
+      isAuthenticated &&
+      (isSuperAdmin ||
+          employee!.canCancelSupplierPayments ||
+          employee!.canViewAdmin);
+
   bool get canViewAccountsPayable =>
       isAuthenticated &&
       (isSuperAdmin ||

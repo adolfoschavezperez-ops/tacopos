@@ -502,6 +502,75 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
       dbDoc(betaDb, 'restaurants/rest_alpha/supplierPurchases/sp_centro_1').get(),
     );
   });
+
+  it('enforces server-side write security for Phase 5.1 cancellations, authorizations, kitchen CRUD, and supplier payment cancellations', async () => {
+    const mgrDb = testEnv
+      .authenticatedContext('alpha_centro_mgr', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    const cashOnlyDb = testEnv
+      .authenticatedContext('alpha_cash_only', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+
+    // Manager can authorize pending withdrawal once; second update fails because status != pending
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashWithdrawalRequests/cw_centro_1').update({
+        status: 'approved',
+        approvedByEmployeeId: 'alpha_centro_mgr',
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashWithdrawalRequests/cw_centro_1').update({
+        status: 'rejected',
+      }),
+    );
+
+    // Cross-branch authorization denied
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashWithdrawalRequests/cw_norte_1').update({
+        status: 'approved',
+      }),
+    );
+
+    // Manager can cancel order in own branch; cashOnly cannot
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').update({
+        status: 'cancelled',
+      }),
+    );
+    await assertFails(
+      dbDoc(cashOnlyDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').update({
+        status: 'cancelled',
+      }),
+    );
+
+    // Manager can update kitchen stock; cashOnly cannot
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/kitchenStockItems/ksi_1').update({
+        active: false,
+      }),
+    );
+    await assertFails(
+      dbDoc(cashOnlyDb, 'restaurants/rest_alpha/kitchenStockItems/ksi_1').update({
+        active: false,
+      }),
+    );
+
+    // Manager can cancel active supplier payment once
+    await assertSucceeds(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPayments/spay_centro_1').update({
+        status: 'cancelled',
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/supplierPayments/spay_centro_1').update({
+        status: 'active',
+      }),
+    );
+  });
 });
 
 function dbDoc(db, p) {

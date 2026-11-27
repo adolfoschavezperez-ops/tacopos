@@ -13,7 +13,7 @@ import '../../widgets/skeleton_loader.dart';
 import '../../widgets/status_pill.dart';
 import 'inventory_repository.dart';
 
-enum _InventoryTab { kitchen, stock, recipes, stockOuts }
+enum _InventoryTab { kitchen, stock, recipes, yields, stockOuts }
 
 class InventoryPage extends StatefulWidget {
   const InventoryPage({
@@ -121,6 +121,301 @@ class _InventoryPageState extends State<InventoryPage> {
     });
   }
 
+  Future<void> _openStockItemDialog(KitchenStockItem? existing) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final catCtrl = TextEditingController(text: existing?.category ?? 'Carnes');
+    final unitCtrl = TextEditingController(text: existing?.unit ?? 'kg');
+    final optCtrl = TextEditingController(
+      text: (existing?.optimalConsumptionPerSaleQty ?? 0).toString(),
+    );
+    final supCtrl = TextEditingController(
+      text: existing?.defaultSupplierName ?? '',
+    );
+    var active = existing?.active ?? true;
+    var saving = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(
+            existing == null ? 'Nuevo insumo de cocina' : 'Editar insumo',
+          ),
+          content: SizedBox(
+            width: 390,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(labelText: 'Nombre'),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: catCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Categoría',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: TextField(
+                          controller: unitCtrl,
+                          decoration: const InputDecoration(
+                            labelText: 'Unidad',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: optCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Consumo óptimo por venta',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: supCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Proveedor habitual',
+                    ),
+                  ),
+                  SwitchListTile(
+                    value: active,
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Insumo activo'),
+                    onChanged: (v) => setDialogState(() => active = v),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      if (nameCtrl.text.trim().isEmpty) return;
+                      setDialogState(() => saving = true);
+                      await widget.repository.saveKitchenStockItem(
+                        restaurantId: widget.session.restaurantId,
+                        itemId: existing?.id,
+                        name: nameCtrl.text,
+                        category: catCtrl.text,
+                        unit: unitCtrl.text,
+                        active: active,
+                        optimalConsumptionPerSaleQty:
+                            double.tryParse(optCtrl.text.trim()) ?? 0,
+                        defaultSupplierName: supCtrl.text,
+                      );
+                      if (ctx.mounted) Navigator.of(ctx).pop(true);
+                    },
+              child: Text(saving ? 'Guardando...' : 'Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && mounted) _load();
+  }
+
+  Future<void> _openAdditionalEntryDialog(
+    InventoryDashboardData data,
+  ) async {
+    final session = data.selectedSession;
+    if (session == null || !session.isOpen || data.sessionItems.isEmpty) return;
+    var selectedItem = data.sessionItems.first;
+    final qtyCtrl = TextEditingController(text: '2');
+    var saving = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Entrada adicional de cocina'),
+          content: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: selectedItem.id,
+                  decoration: const InputDecoration(labelText: 'Insumo'),
+                  items: data.sessionItems
+                      .map(
+                        (i) => DropdownMenuItem(
+                          value: i.id,
+                          child: Text('${i.name} (${i.unit})'),
+                        ),
+                      )
+                      .toList(growable: false),
+                  onChanged: (id) {
+                    if (id == null) return;
+                    setDialogState(() {
+                      selectedItem = data.sessionItems.firstWhere(
+                        (i) => i.id == id,
+                      );
+                    });
+                  },
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: qtyCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: 'Cantidad adicional (${selectedItem.unit})',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final qty = double.tryParse(qtyCtrl.text.trim()) ?? 0;
+                      if (qty <= 0) return;
+                      setDialogState(() => saving = true);
+                      await widget.repository.registerAdditionalEntry(
+                        restaurantId: widget.session.restaurantId,
+                        sessionId: session.id,
+                        itemId: selectedItem.id,
+                        addedQty: qty,
+                      );
+                      if (ctx.mounted) Navigator.of(ctx).pop(true);
+                    },
+              child: Text(saving ? 'Aplicando...' : 'Registrar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && mounted) _load();
+  }
+
+  Future<void> _openYieldProfileDialog(YieldProfileSummary? existing) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final rawCtrl = TextEditingController(text: existing?.rawUnit ?? 'kg');
+    final yieldCtrl = TextEditingController(
+      text: existing?.yieldUnit ?? 'porcion',
+    );
+    final factorCtrl = TextEditingController(
+      text: (existing?.yieldFactor ?? 8.0).toString(),
+    );
+    var saving = false;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(
+            existing == null ? 'Nuevo perfil de rendimiento' : 'Editar perfil',
+          ),
+          content: SizedBox(
+            width: 380,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Insumo / Base'),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: rawCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Unidad cruda',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: TextField(
+                        controller: yieldCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Unidad rendida',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: factorCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Factor de rendimiento',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: saving ? null : () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: saving
+                  ? null
+                  : () async {
+                      if (nameCtrl.text.trim().isEmpty) return;
+                      setDialogState(() => saving = true);
+                      await widget.repository.saveYieldProfile(
+                        restaurantId: widget.session.restaurantId,
+                        profileId: existing?.id,
+                        name: nameCtrl.text,
+                        rawUnit: rawCtrl.text,
+                        yieldUnit: yieldCtrl.text,
+                        yieldFactor:
+                            double.tryParse(factorCtrl.text.trim()) ?? 1.0,
+                      );
+                      if (ctx.mounted) Navigator.of(ctx).pop(true);
+                    },
+              child: Text(saving ? 'Guardando...' : 'Guardar'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (saved == true && mounted) _load();
+  }
+
+  Future<void> _clearStockOut(ProductStockOutRow row) async {
+    await widget.repository.clearProductStockOut(
+      restaurantId: widget.session.restaurantId,
+      stockOutId: row.id,
+      reason: 'Restablecido desde Backoffice 2.0',
+      employeeId: widget.session.employee?.id ?? '',
+      employeeName: widget.session.employee?.name ?? '',
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${row.productName} liberado.')),
+    );
+    _load();
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
@@ -176,6 +471,10 @@ class _InventoryPageState extends State<InventoryPage> {
                       label: Text('Recetas'),
                     ),
                     ButtonSegment(
+                      value: _InventoryTab.yields,
+                      label: Text('Rendimientos'),
+                    ),
+                    ButtonSegment(
                       value: _InventoryTab.stockOuts,
                       label: Text('Agotados'),
                     ),
@@ -218,6 +517,9 @@ class _InventoryPageState extends State<InventoryPage> {
                           data: data,
                           branchNames: branchNames,
                           isMobile: isMobile,
+                          canManage:
+                              widget.session.permissions.canViewInventory,
+                          onAddEntry: () => _openAdditionalEntryDialog(data),
                           onSelectSession: (id) {
                             _selectedSessionId = id;
                             _load();
@@ -226,15 +528,27 @@ class _InventoryPageState extends State<InventoryPage> {
                         _InventoryTab.stock => _StockItemsView(
                           items: data.stockItems,
                           isMobile: isMobile,
+                          canManage:
+                              widget.session.permissions.canViewInventory,
+                          onCreateOrEdit: _openStockItemDialog,
                         ),
                         _InventoryTab.recipes => _RecipesView(
                           products: data.productsWithRecipes,
                           isMobile: isMobile,
                         ),
+                        _InventoryTab.yields => _YieldProfilesView(
+                          profiles: data.yieldProfiles,
+                          canManage:
+                              widget.session.permissions.canViewInventory,
+                          onCreateOrEdit: _openYieldProfileDialog,
+                        ),
                         _InventoryTab.stockOuts => _StockOutsView(
                           rows: data.stockOuts,
                           branchNames: branchNames,
                           isMobile: isMobile,
+                          canManage:
+                              widget.session.permissions.canViewInventory,
+                          onClearStockOut: _clearStockOut,
                         ),
                       },
                     ],
@@ -356,12 +670,16 @@ class _KitchenSessionsView extends StatelessWidget {
     required this.data,
     required this.branchNames,
     required this.isMobile,
+    required this.canManage,
+    required this.onAddEntry,
     required this.onSelectSession,
   });
 
   final InventoryDashboardData data;
   final Map<String, String> branchNames;
   final bool isMobile;
+  final bool canManage;
+  final VoidCallback onAddEntry;
   final ValueChanged<String> onSelectSession;
 
   @override
@@ -419,6 +737,15 @@ class _KitchenSessionsView extends StatelessWidget {
                 'Control de insumos — ${data.selectedSession!.businessDate}',
             subtitle:
                 'Sobrante previo, entradas, sobrante final, merma, usado, vendido y diferencia.',
+            trailing: canManage &&
+                    data.selectedSession!.isOpen &&
+                    data.sessionItems.isNotEmpty
+                ? OutlinedButton.icon(
+                    onPressed: onAddEntry,
+                    icon: const Icon(Icons.add_rounded, size: 16),
+                    label: const Text('Entrada adicional'),
+                  )
+                : null,
             padding: data.sessionItems.isEmpty
                 ? const EdgeInsets.all(20)
                 : EdgeInsets.zero,
@@ -557,24 +884,50 @@ class _KitchenSessionsView extends StatelessWidget {
 }
 
 class _StockItemsView extends StatelessWidget {
-  const _StockItemsView({required this.items, required this.isMobile});
+  const _StockItemsView({
+    required this.items,
+    required this.isMobile,
+    required this.canManage,
+    required this.onCreateOrEdit,
+  });
 
   final List<KitchenStockItem> items;
   final bool isMobile;
+  final bool canManage;
+  final ValueChanged<KitchenStockItem?> onCreateOrEdit;
 
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
     if (items.isEmpty) {
-      return const SaasEmptyState(
-        icon: Icons.inventory_2_outlined,
-        title: 'Sin insumos registrados',
-        message: 'Aún no hay catálogo de insumos de cocina configurado.',
+      return Column(
+        children: [
+          const SaasEmptyState(
+            icon: Icons.inventory_2_outlined,
+            title: 'Sin insumos registrados',
+            message: 'Aún no hay catálogo de insumos de cocina configurado.',
+          ),
+          if (canManage) ...[
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: () => onCreateOrEdit(null),
+              icon: const Icon(Icons.add_rounded, size: 16),
+              label: const Text('Nuevo insumo'),
+            ),
+          ],
+        ],
       );
     }
     return SaasCard(
       title: 'Catálogo de insumos de cocina',
       subtitle: '${items.length} insumo(s) configurado(s)',
+      trailing: canManage
+          ? FilledButton.icon(
+              onPressed: () => onCreateOrEdit(null),
+              icon: const Icon(Icons.add_rounded, size: 16),
+              label: const Text('Nuevo insumo'),
+            )
+          : null,
       padding: EdgeInsets.zero,
       child: isMobile
           ? ListView.separated(
@@ -585,6 +938,7 @@ class _StockItemsView extends StatelessWidget {
               itemBuilder: (context, index) {
                 final item = items[index];
                 return ListTile(
+                  onTap: canManage ? () => onCreateOrEdit(item) : null,
                   title: Text(
                     item.name,
                     style: const TextStyle(fontWeight: FontWeight.w600),
@@ -603,6 +957,7 @@ class _StockItemsView extends StatelessWidget {
           : SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: DataTable(
+                showCheckboxColumn: false,
                 columns: const [
                   DataColumn(label: Text('Insumo')),
                   DataColumn(label: Text('Categoría')),
@@ -613,6 +968,7 @@ class _StockItemsView extends StatelessWidget {
                 ],
                 rows: items.map((item) {
                   return DataRow(
+                    onSelectChanged: canManage ? (_) => onCreateOrEdit(item) : null,
                     cells: [
                       DataCell(Text(item.name)),
                       DataCell(Text(item.category)),
@@ -730,11 +1086,15 @@ class _StockOutsView extends StatelessWidget {
     required this.rows,
     required this.branchNames,
     required this.isMobile,
+    required this.canManage,
+    required this.onClearStockOut,
   });
 
   final List<ProductStockOutRow> rows;
   final Map<String, String> branchNames;
   final bool isMobile;
+  final bool canManage;
+  final ValueChanged<ProductStockOutRow> onClearStockOut;
 
   @override
   Widget build(BuildContext context) {
@@ -798,11 +1158,73 @@ class _StockOutsView extends StatelessWidget {
                   label: r.isActive ? 'Agotado' : 'Restablecido',
                   tone: r.isActive ? StatusTone.danger : StatusTone.success,
                 ),
+                if (canManage && r.isActive) ...[
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: () => onClearStockOut(r),
+                    child: const Text('Liberar'),
+                  ),
+                ],
               ],
             ),
           );
         },
       ),
+    );
+  }
+}
+
+class _YieldProfilesView extends StatelessWidget {
+  const _YieldProfilesView({
+    required this.profiles,
+    required this.canManage,
+    required this.onCreateOrEdit,
+  });
+
+  final List<YieldProfileSummary> profiles;
+  final bool canManage;
+  final ValueChanged<YieldProfileSummary?> onCreateOrEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    return SaasCard(
+      title: 'Perfiles de rendimiento de cocina',
+      subtitle: 'Conversión de insumo crudo a porciones vendibles.',
+      trailing: canManage
+          ? FilledButton.icon(
+              onPressed: () => onCreateOrEdit(null),
+              icon: const Icon(Icons.add_rounded, size: 16),
+              label: const Text('Nuevo perfil'),
+            )
+          : null,
+      padding: profiles.isEmpty ? const EdgeInsets.all(20) : EdgeInsets.zero,
+      child: profiles.isEmpty
+          ? const Text('No hay perfiles de rendimiento configurados.')
+          : ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: profiles.length,
+              separatorBuilder: (_, _) =>
+                  Divider(height: 1, color: tokens.border),
+              itemBuilder: (context, i) {
+                final p = profiles[i];
+                return ListTile(
+                  onTap: canManage ? () => onCreateOrEdit(p) : null,
+                  title: Text(
+                    p.name,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    '1 ${p.rawUnit} → ${p.yieldFactor.toStringAsFixed(2)} ${p.yieldUnit}',
+                    style: TextStyle(fontSize: 12, color: tokens.textSecondary),
+                  ),
+                  trailing: canManage
+                      ? const Icon(Icons.edit_outlined, size: 18)
+                      : null,
+                );
+              },
+            ),
     );
   }
 }

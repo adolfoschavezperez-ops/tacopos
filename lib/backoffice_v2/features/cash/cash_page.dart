@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../../models/cash_session.dart';
 import '../../../models/cash_withdrawal_request.dart';
+import '../../../models/order.dart';
+import '../../../models/payment.dart';
 import '../../../utils/csv_exporter.dart';
 import '../../auth/backoffice_session.dart';
 import '../../core/adapters/sales_adapter.dart';
@@ -13,15 +15,29 @@ import '../../widgets/skeleton_loader.dart';
 import '../../widgets/status_pill.dart';
 import 'cash_repository.dart';
 
+enum _CashAuditTab {
+  overview('Resumen y cortes'),
+  orders('Por orden'),
+  payments('Por pago'),
+  drawer('Fondo y arrastre'),
+  terminal('Terminal'),
+  findings('Hallazgos');
+
+  const _CashAuditTab(this.label);
+  final String label;
+}
+
 class CashPage extends StatefulWidget {
   const CashPage({
     super.key,
     required this.session,
     required this.repository,
+    this.onOpenSaleDetail,
   });
 
   final BackofficeSession session;
   final CashRepository repository;
+  final ValueChanged<String>? onOpenSaleDetail;
 
   @override
   State<CashPage> createState() => _CashPageState();
@@ -31,6 +47,7 @@ class _CashPageState extends State<CashPage> {
   DatePreset _preset = DatePreset.last7Days;
   late DateTime _startDate;
   late DateTime _endDate;
+  _CashAuditTab _auditTab = _CashAuditTab.overview;
   final TextEditingController _employeeController = TextEditingController();
   Future<CashDashboardData>? _future;
   String? _lastBranchId;
@@ -251,36 +268,91 @@ class _CashPageState extends State<CashPage> {
                           isOpenHighlight:
                               data.openSession?.id == detail.session.id,
                         ),
-                        const SizedBox(height: 16),
-                        _CashKpiGrid(
-                          summary: detail.summary,
-                          isMobile: isMobile,
+                        const SizedBox(height: 14),
+                        SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Wrap(
+                            spacing: 8,
+                            children: _CashAuditTab.values
+                                .map(
+                                  (t) => ChoiceChip(
+                                    label: Text(t.label),
+                                    selected: _auditTab == t,
+                                    onSelected: (_) =>
+                                        setState(() => _auditTab = t),
+                                  ),
+                                )
+                                .toList(growable: false),
+                          ),
                         ),
                         const SizedBox(height: 16),
-                        _NonMonetaryCard(summary: detail.summary),
-                        const SizedBox(height: 16),
+                        if (_auditTab == _CashAuditTab.overview) ...[
+                          _CashKpiGrid(
+                            summary: detail.summary,
+                            isMobile: isMobile,
+                          ),
+                          const SizedBox(height: 16),
+                          _NonMonetaryCard(summary: detail.summary),
+                          const SizedBox(height: 16),
+                        ] else if (_auditTab == _CashAuditTab.orders) ...[
+                          _CashOrdersAuditView(
+                            orders: detail.orders,
+                            isMobile: isMobile,
+                            onOpenOrder: widget.onOpenSaleDetail,
+                          ),
+                          const SizedBox(height: 16),
+                        ] else if (_auditTab == _CashAuditTab.payments) ...[
+                          _CashPaymentsAuditView(
+                            payments: detail.payments,
+                            isMobile: isMobile,
+                            onOpenOrder: widget.onOpenSaleDetail,
+                          ),
+                          const SizedBox(height: 16),
+                        ] else if (_auditTab == _CashAuditTab.drawer) ...[
+                          _CashDrawerAuditView(
+                            session: detail.session,
+                            summary: detail.summary,
+                          ),
+                          const SizedBox(height: 16),
+                        ] else if (_auditTab == _CashAuditTab.terminal) ...[
+                          _CashTerminalAuditView(
+                            session: detail.session,
+                            summary: detail.summary,
+                            payments: detail.payments,
+                          ),
+                          const SizedBox(height: 16),
+                        ] else if (_auditTab == _CashAuditTab.findings) ...[
+                          _CashFindingsAuditView(
+                            detail: detail,
+                            onOpenOrder: widget.onOpenSaleDetail,
+                          ),
+                          const SizedBox(height: 16),
+                        ],
                       ],
-                      _CashSessionsSection(
-                        sessions: data.sessions,
-                        selectedId: detail?.session.id,
-                        branchNames: branchNames,
-                        isMobile: isMobile,
-                        canExport: widget.session.permissions.canExportData,
-                        exporting: _exporting,
-                        onExport: () => _exportCsv(data.sessions, branchNames),
-                        onSelect: (session) {
-                          setState(() {
-                            _selectedSessionId = session.id;
-                            _load();
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 16),
-                      _WithdrawalsSection(
-                        withdrawals: detail?.withdrawals ?? data.withdrawals,
-                        branchNames: branchNames,
-                        isMobile: isMobile,
-                      ),
+                      if (_auditTab == _CashAuditTab.overview) ...[
+                        _CashSessionsSection(
+                          sessions: data.sessions,
+                          selectedId: detail?.session.id,
+                          branchNames: branchNames,
+                          isMobile: isMobile,
+                          canExport: widget.session.permissions.canExportData,
+                          exporting: _exporting,
+                          onExport: () =>
+                              _exportCsv(data.sessions, branchNames),
+                          onSelect: (session) {
+                            setState(() {
+                              _selectedSessionId = session.id;
+                              _load();
+                            });
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        _WithdrawalsSection(
+                          withdrawals: detail?.withdrawals ?? data.withdrawals,
+                          branchNames: branchNames,
+                          isMobile: isMobile,
+                        ),
+                      ],
                     ],
                   );
                 },
@@ -993,6 +1065,391 @@ class _WithdrawalsSection extends StatelessWidget {
                 );
               },
             ),
+    );
+  }
+}
+
+class _CashOrdersAuditView extends StatelessWidget {
+  const _CashOrdersAuditView({
+    required this.orders,
+    required this.isMobile,
+    this.onOpenOrder,
+  });
+
+  final List<PosOrder> orders;
+  final bool isMobile;
+  final ValueChanged<String>? onOpenOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    return SaasCard(
+      title: 'Órdenes del turno (${orders.length})',
+      subtitle: 'Toca cualquier orden para abrir su detalle completo.',
+      padding: orders.isEmpty ? const EdgeInsets.all(20) : EdgeInsets.zero,
+      child: orders.isEmpty
+          ? const Text('Sin órdenes asociadas a este corte.')
+          : ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: orders.length,
+              separatorBuilder: (_, _) =>
+                  Divider(height: 1, color: tokens.border),
+              itemBuilder: (context, i) {
+                final o = orders[i];
+                final folio = BackofficeSalesAdapter.resolveFolioLabel(o);
+                return ListTile(
+                  onTap: onOpenOrder != null ? () => onOpenOrder!(o.id) : null,
+                  title: Text(
+                    '$folio · ${BackofficeSalesAdapter.orderChannelDisplay(o)}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Estado: ${BackofficeSalesAdapter.orderStatusLabel(o.status)} · Descuento: ${BackofficeSalesAdapter.formatMoney(o.explicitDiscount)}',
+                    style: TextStyle(fontSize: 12, color: tokens.textSecondary),
+                  ),
+                  trailing: Text(
+                    BackofficeSalesAdapter.formatMoney(o.total),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _CashPaymentsAuditView extends StatelessWidget {
+  const _CashPaymentsAuditView({
+    required this.payments,
+    required this.isMobile,
+    this.onOpenOrder,
+  });
+
+  final List<Payment> payments;
+  final bool isMobile;
+  final ValueChanged<String>? onOpenOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    return SaasCard(
+      title: 'Pagos del turno (${payments.length})',
+      subtitle: 'Desglose por método, propina, comisión y operador.',
+      padding: payments.isEmpty ? const EdgeInsets.all(20) : EdgeInsets.zero,
+      child: payments.isEmpty
+          ? const Text('Sin pagos registrados en este corte.')
+          : ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: payments.length,
+              separatorBuilder: (_, _) =>
+                  Divider(height: 1, color: tokens.border),
+              itemBuilder: (context, i) {
+                final p = payments[i];
+                final cancelled = p.status.trim().toLowerCase() == 'cancelled';
+                return ListTile(
+                  onTap: onOpenOrder != null
+                      ? () => onOpenOrder!(p.orderId)
+                      : null,
+                  title: Text(
+                    '${BackofficeSalesAdapter.paymentMethodLabel(p.method)} · ${p.createdByEmployeeName ?? p.employeeName ?? 'Operador'}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Propina: ${BackofficeSalesAdapter.formatMoney(p.tipAmount)} · Comisión: ${BackofficeSalesAdapter.formatMoney(p.cardFeeAbsorbedAmount)}',
+                    style: TextStyle(fontSize: 12, color: tokens.textSecondary),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (cancelled)
+                        const Padding(
+                          padding: EdgeInsets.only(right: 8),
+                          child: StatusPill(
+                            label: 'Cancelado',
+                            tone: StatusTone.danger,
+                          ),
+                        ),
+                      Text(
+                        BackofficeSalesAdapter.formatMoney(p.chargedAmount),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _CashDrawerAuditView extends StatelessWidget {
+  const _CashDrawerAuditView({
+    required this.session,
+    required this.summary,
+  });
+
+  final CashSession session;
+  final CashReconciliationSummary summary;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    return SaasCard(
+      title: 'Fondo y arrastre de efectivo',
+      subtitle: 'Cálculo paso a paso del efectivo esperado en cajón.',
+      child: Column(
+        children: [
+          _AuditRow('(+) Fondo inicial', summary.openingCashAmount, tokens),
+          _AuditRow('(+) Efectivo cobrado en ventas', summary.cashCollected, tokens),
+          _AuditRow(
+            '(-) Retiros y gastos aprobados',
+            -summary.approvedWithdrawalsTotal,
+            tokens,
+          ),
+          Divider(color: tokens.border),
+          _AuditRow(
+            '(=) Efectivo esperado en caja',
+            summary.expectedCashInDrawer,
+            tokens,
+            bold: true,
+          ),
+          _AuditRow(
+            'Efectivo contado al cierre',
+            summary.countedCashAmount,
+            tokens,
+          ),
+          _AuditRow(
+            'Diferencia de efectivo',
+            summary.cashDifference,
+            tokens,
+            bold: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashTerminalAuditView extends StatelessWidget {
+  const _CashTerminalAuditView({
+    required this.session,
+    required this.summary,
+    required this.payments,
+  });
+
+  final CashSession session;
+  final CashReconciliationSummary summary;
+  final List<Payment> payments;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    final cardCount = payments
+        .where(
+          (p) =>
+              p.status != 'cancelled' &&
+              p.method.trim().toLowerCase() == 'card',
+        )
+        .length;
+    return SaasCard(
+      title: 'Auditoría de terminal bancaria',
+      subtitle: '$cardCount cobro(s) con tarjeta registrados en el turno.',
+      child: Column(
+        children: [
+          _AuditRow(
+            'Base tarjeta esperada',
+            session.expectedCardBaseAmount > 0
+                ? session.expectedCardBaseAmount
+                : summary.cardCollected,
+            tokens,
+          ),
+          _AuditRow(
+            'Recargo / comisión trasladada',
+            session.expectedCardSurchargeAmount,
+            tokens,
+          ),
+          _AuditRow(
+            'Total esperado con tarjeta',
+            summary.cardCollected,
+            tokens,
+            bold: true,
+          ),
+          _AuditRow(
+            'Comisión bancaria absorbida',
+            session.expectedCardFeeAbsorbedAmount,
+            tokens,
+          ),
+          _AuditRow(
+            'Reportado por terminal',
+            session.terminalReportedAmount,
+            tokens,
+          ),
+          Divider(color: tokens.border),
+          _AuditRow(
+            'Diferencia en terminal',
+            summary.cardDifference,
+            tokens,
+            bold: true,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CashFindingsAuditView extends StatelessWidget {
+  const _CashFindingsAuditView({
+    required this.detail,
+    this.onOpenOrder,
+  });
+
+  final CashSessionDetailData detail;
+  final ValueChanged<String>? onOpenOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    final findings = <({String title, String detailText, StatusTone tone})>[];
+
+    if (detail.summary.shortageAmount > 0.01) {
+      findings.add((
+        title:
+            'Faltante en corte (${BackofficeSalesAdapter.formatMoney(detail.summary.shortageAmount)})',
+        detailText:
+            'Diferencia entre dinero esperado y contado. Revisa retiros y órdenes canceladas.',
+        tone: StatusTone.danger,
+      ));
+    }
+    if (detail.summary.overAmount > 0.01) {
+      findings.add((
+        title:
+            'Sobrante en corte (${BackofficeSalesAdapter.formatMoney(detail.summary.overAmount)})',
+        detailText: 'El efectivo o terminal reportada supera lo esperado.',
+        tone: StatusTone.warning,
+      ));
+    }
+    if (detail.summary.pendingWithdrawalsTotal > 0.01) {
+      findings.add((
+        title:
+            'Retiros pendientes de autorización (${BackofficeSalesAdapter.formatMoney(detail.summary.pendingWithdrawalsTotal)})',
+        detailText:
+            'Existen retiros sin aprobar ni rechazar que pueden afectar el arqueo.',
+        tone: StatusTone.warning,
+      ));
+    }
+    if (detail.summary.cancelledOrdersCount > 0) {
+      findings.add((
+        title:
+            '${detail.summary.cancelledOrdersCount} orden(es) cancelada(s) en el turno',
+        detailText:
+            'Importe cancelado: ${BackofficeSalesAdapter.formatMoney(detail.summary.cancelledAmount)}.',
+        tone: StatusTone.info,
+      ));
+    }
+
+    final cancelledOrders = detail.orders
+        .where((o) => o.status.trim().toLowerCase() == 'cancelled')
+        .toList(growable: false);
+
+    return SaasCard(
+      title: 'Hallazgos y conciliación del turno',
+      subtitle: findings.isEmpty
+          ? 'No se detectaron anomalías en este corte.'
+          : '${findings.length} hallazgo(s) detectado(s)',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (findings.isEmpty)
+            Text(
+              'El corte cuadra sin faltantes, sobrantes ni retiros pendientes.',
+              style: TextStyle(color: tokens.textSecondary),
+            )
+          else
+            ...findings.map(
+              (f) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  children: [
+                    StatusPill(label: f.title, tone: f.tone),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        f.detailText,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: tokens.textSecondary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (cancelledOrders.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: cancelledOrders
+                  .map(
+                    (o) => ActionChip(
+                      label: Text(
+                        'Ver ${BackofficeSalesAdapter.resolveFolioLabel(o)}',
+                      ),
+                      onPressed: onOpenOrder != null
+                          ? () => onOpenOrder!(o.id)
+                          : null,
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _AuditRow extends StatelessWidget {
+  const _AuditRow(this.label, this.amount, this.tokens, {this.bold = false});
+
+  final String label;
+  final double amount;
+  final BackofficeTokens tokens;
+  final bool bold;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontWeight: bold ? FontWeight.w700 : FontWeight.w500,
+                color: bold ? tokens.textPrimary : tokens.textSecondary,
+              ),
+            ),
+          ),
+          Text(
+            BackofficeSalesAdapter.formatMoney(amount),
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.w700 : FontWeight.w600,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

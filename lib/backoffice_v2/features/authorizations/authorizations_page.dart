@@ -117,6 +117,116 @@ class _AuthorizationsPageState extends State<AuthorizationsPage> {
     });
   }
 
+  Future<String?> _promptNotes({
+    required String title,
+    required bool requiredReason,
+  }) async {
+    final ctrl = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 380,
+            child: TextField(
+              controller: ctrl,
+              maxLines: 2,
+              decoration: InputDecoration(
+                labelText: requiredReason
+                    ? 'Motivo del rechazo (obligatorio)'
+                    : 'Notas de autorización (opcional)',
+              ),
+              onChanged: (_) => setDialogState(() {}),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Cancelar'),
+            ),
+            FilledButton(
+              onPressed: (!requiredReason || ctrl.text.trim().isNotEmpty)
+                  ? () => Navigator.of(ctx).pop(ctrl.text.trim())
+                  : null,
+              child: const Text('Confirmar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _resolveWithdrawal(
+    CashWithdrawalRequest w, {
+    required bool approved,
+  }) async {
+    final notes = await _promptNotes(
+      title: approved ? 'Autorizar retiro' : 'Rechazar retiro',
+      requiredReason: !approved,
+    );
+    if (notes == null) return;
+    try {
+      await widget.repository.resolveCashWithdrawal(
+        restaurantId: widget.session.restaurantId,
+        requestId: w.id,
+        approved: approved,
+        notesOrReason: notes,
+        employeeId: widget.session.employee?.id ?? '',
+        employeeName: widget.session.employee?.name ?? '',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            approved ? 'Retiro autorizado.' : 'Retiro rechazado.',
+          ),
+        ),
+      );
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Bad state: ', ''))),
+      );
+    }
+  }
+
+  Future<void> _resolveDiscount(
+    DiscountAuthorizationRequest d, {
+    required bool approved,
+  }) async {
+    final notes = await _promptNotes(
+      title: approved ? 'Autorizar descuento' : 'Rechazar descuento',
+      requiredReason: !approved,
+    );
+    if (notes == null) return;
+    try {
+      await widget.repository.resolveDiscountAuthorization(
+        restaurantId: widget.session.restaurantId,
+        requestId: d.id,
+        approved: approved,
+        rejectReason: notes,
+        employeeId: widget.session.employee?.id ?? '',
+        employeeName: widget.session.employee?.name ?? '',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            approved ? 'Descuento autorizado.' : 'Descuento rechazado.',
+          ),
+        ),
+      );
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Bad state: ', ''))),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
@@ -246,6 +356,10 @@ class _AuthorizationsPageState extends State<AuthorizationsPage> {
                           items: data.withdrawals,
                           branchNames: branchNames,
                           isMobile: isMobile,
+                          canAuthorize:
+                              widget.session.permissions.canViewAuthorizations,
+                          onResolve: (w, approved) =>
+                              _resolveWithdrawal(w, approved: approved),
                         ),
                         const SizedBox(height: 16),
                       ],
@@ -254,6 +368,10 @@ class _AuthorizationsPageState extends State<AuthorizationsPage> {
                           items: data.discounts,
                           branchNames: branchNames,
                           isMobile: isMobile,
+                          canAuthorize:
+                              widget.session.permissions.canViewAuthorizations,
+                          onResolve: (d, approved) =>
+                              _resolveDiscount(d, approved: approved),
                         ),
                     ],
                   );
@@ -387,11 +505,15 @@ class _WithdrawalsTableCard extends StatelessWidget {
     required this.items,
     required this.branchNames,
     required this.isMobile,
+    required this.canAuthorize,
+    required this.onResolve,
   });
 
   final List<CashWithdrawalRequest> items;
   final Map<String, String> branchNames;
   final bool isMobile;
+  final bool canAuthorize;
+  final void Function(CashWithdrawalRequest, bool) onResolve;
 
   @override
   Widget build(BuildContext context) {
@@ -463,6 +585,26 @@ class _WithdrawalsTableCard extends StatelessWidget {
                           fontSize: 15,
                         ),
                       ),
+                      if (canAuthorize && w.isPending) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => onResolve(w, false),
+                                child: const Text('Rechazar'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: () => onResolve(w, true),
+                                child: const Text('Autorizar'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 );
@@ -479,6 +621,7 @@ class _WithdrawalsTableCard extends StatelessWidget {
                   DataColumn(label: Text('Responsable')),
                   DataColumn(label: Text('Estado')),
                   DataColumn(label: Text('Monto'), numeric: true),
+                  DataColumn(label: Text('Acciones')),
                 ],
                 rows: items.map((w) {
                   final resolver = w.isApproved
@@ -502,6 +645,23 @@ class _WithdrawalsTableCard extends StatelessWidget {
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
                       ),
+                      DataCell(
+                        canAuthorize && w.isPending
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextButton(
+                                    onPressed: () => onResolve(w, false),
+                                    child: const Text('Rechazar'),
+                                  ),
+                                  FilledButton.tonal(
+                                    onPressed: () => onResolve(w, true),
+                                    child: const Text('Autorizar'),
+                                  ),
+                                ],
+                              )
+                            : const Text('—'),
+                      ),
                     ],
                   );
                 }).toList(),
@@ -516,11 +676,15 @@ class _DiscountsTableCard extends StatelessWidget {
     required this.items,
     required this.branchNames,
     required this.isMobile,
+    required this.canAuthorize,
+    required this.onResolve,
   });
 
   final List<DiscountAuthorizationRequest> items;
   final Map<String, String> branchNames;
   final bool isMobile;
+  final bool canAuthorize;
+  final void Function(DiscountAuthorizationRequest, bool) onResolve;
 
   @override
   Widget build(BuildContext context) {
@@ -610,6 +774,26 @@ class _DiscountsTableCard extends StatelessWidget {
                           ),
                         ],
                       ),
+                      if (canAuthorize && d.isPending) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => onResolve(d, false),
+                                child: const Text('Rechazar'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: () => onResolve(d, true),
+                                child: const Text('Autorizar'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 );
@@ -628,6 +812,7 @@ class _DiscountsTableCard extends StatelessWidget {
                   DataColumn(label: Text('Resuelve')),
                   DataColumn(label: Text('Estado')),
                   DataColumn(label: Text('Importe'), numeric: true),
+                  DataColumn(label: Text('Acciones')),
                 ],
                 rows: items.map((d) {
                   final resolver = d.isApproved
@@ -664,6 +849,23 @@ class _DiscountsTableCard extends StatelessWidget {
                           ),
                           style: const TextStyle(fontWeight: FontWeight.w700),
                         ),
+                      ),
+                      DataCell(
+                        canAuthorize && d.isPending
+                            ? Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  TextButton(
+                                    onPressed: () => onResolve(d, false),
+                                    child: const Text('Rechazar'),
+                                  ),
+                                  FilledButton.tonal(
+                                    onPressed: () => onResolve(d, true),
+                                    child: const Text('Autorizar'),
+                                  ),
+                                ],
+                              )
+                            : const Text('—'),
                       ),
                     ],
                   );

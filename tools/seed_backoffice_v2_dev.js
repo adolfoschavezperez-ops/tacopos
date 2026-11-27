@@ -973,6 +973,36 @@ async function main() {
     }
   }
 
+  // Phase 5.1: Yield Profiles
+  const yieldProfiles = [
+    {
+      id: 'yp_pastor',
+      name: 'Carne al Pastor',
+      rawUnit: 'kg',
+      yieldUnit: 'orden',
+      yieldFactor: 6.5,
+    },
+    {
+      id: 'yp_suadero',
+      name: 'Suadero Cocido',
+      rawUnit: 'kg',
+      yieldUnit: 'orden',
+      yieldFactor: 6.0,
+    },
+    {
+      id: 'yp_tripa',
+      name: 'Tripa Limpia',
+      rawUnit: 'kg',
+      yieldUnit: 'orden',
+      yieldFactor: 5.5,
+    },
+  ];
+  for (const yp of yieldProfiles) {
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/ingredientYieldProfiles/${yp.id}`, yp),
+    );
+  }
+
   writes.push(
     makeWrite('restaurants/rest_beta', {
       name: 'Tacos El Norte • Tenant Aislado',

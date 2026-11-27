@@ -82,6 +82,23 @@ service cloud.firestore {
         hasPermission(restaurantId, 'canViewAdmin');
     }
 
+    function canCancelSupplierOps(restaurantId) {
+      return hasPermission(restaurantId, 'canCancelSupplierPayments') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canAuthorizeOps(restaurantId) {
+      return hasPermission(restaurantId, 'canAuthorizeCashWithdrawals') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
+    function canManageKitchenOps(restaurantId) {
+      return hasPermission(restaurantId, 'canManageKitchenStock') ||
+        hasPermission(restaurantId, 'canOpenKitchen') ||
+        hasPermission(restaurantId, 'canCloseKitchen') ||
+        hasPermission(restaurantId, 'canViewAdmin');
+    }
+
     match /restaurants/{restaurantId} {
       allow read: if isAuthorizedInRestaurant(restaurantId);
       allow write: if false;
@@ -100,7 +117,11 @@ service cloud.firestore {
       match /orders/{orderId} {
         allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
           canAccessBranch(restaurantId, resource.data.branchId);
-        allow write: if false;
+        allow create, delete: if false;
+        allow update: if (hasPermission(restaurantId, 'canCancelOrders') ||
+            hasPermission(restaurantId, 'canCancelPayments') ||
+            hasPermission(restaurantId, 'canViewAdmin')) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
 
         match /items/{itemId} {
           allow read: if hasPermission(restaurantId, 'canViewAdmin') &&
@@ -108,7 +129,13 @@ service cloud.firestore {
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
             );
-          allow write: if false;
+          allow create, delete: if false;
+          allow update: if (hasPermission(restaurantId, 'canCancelOrders') ||
+              hasPermission(restaurantId, 'canViewAdmin')) &&
+            canAccessBranch(
+              restaurantId,
+              get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
+            );
         }
 
         match /payments/{paymentId} {
@@ -117,7 +144,13 @@ service cloud.firestore {
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
             );
-          allow write: if false;
+          allow create, delete: if false;
+          allow update: if (hasPermission(restaurantId, 'canCancelPayments') ||
+              hasPermission(restaurantId, 'canViewAdmin')) &&
+            canAccessBranch(
+              restaurantId,
+              get(/databases/$(database)/documents/restaurants/$(restaurantId)/orders/$(orderId)).data.branchId
+            );
         }
       }
 
@@ -130,19 +163,29 @@ service cloud.firestore {
       match /cashWithdrawalRequests/{requestId} {
         allow read: if canReadCash(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
-        allow write: if false;
+        allow create, delete: if false;
+        allow update: if canAuthorizeOps(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          resource.data.status == 'pending';
       }
 
       match /discountAuthorizationRequests/{requestId} {
         allow read: if canReadAuthorizations(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
-        allow write: if false;
+        allow create, delete: if false;
+        allow update: if canAuthorizeOps(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          resource.data.status == 'pending';
       }
 
       match /kitchenSessions/{sessionId} {
         allow read: if canReadInventory(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
-        allow write: if false;
+        allow create: if canManageKitchenOps(restaurantId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId);
+        allow update: if canManageKitchenOps(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow delete: if false;
 
         match /items/{itemId} {
           allow read: if canReadInventory(restaurantId) &&
@@ -150,19 +193,47 @@ service cloud.firestore {
               restaurantId,
               get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(sessionId)).data.branchId
             );
-          allow write: if false;
+          allow create, update: if canManageKitchenOps(restaurantId) &&
+            canAccessBranch(
+              restaurantId,
+              get(/databases/$(database)/documents/restaurants/$(restaurantId)/kitchenSessions/$(sessionId)).data.branchId
+            );
+          allow delete: if false;
         }
       }
 
       match /kitchenStockItems/{itemId} {
         allow read: if canReadInventory(restaurantId);
-        allow write: if false;
+        allow create, update: if canManageKitchenOps(restaurantId);
+        allow delete: if false;
+      }
+
+      match /ingredientYieldProfiles/{profileId} {
+        allow read: if canReadInventory(restaurantId);
+        allow create, update: if canManageKitchenOps(restaurantId);
+        allow delete: if false;
+      }
+
+      match /theoreticalProductRecipes/{recipeId} {
+        allow read: if canReadInventory(restaurantId);
+        allow create, update: if canManageKitchenOps(restaurantId);
+        allow delete: if false;
       }
 
       match /productStockOuts/{stockOutId} {
         allow read: if canReadInventory(restaurantId) &&
           canAccessBranch(restaurantId, resource.data.branchId);
-        allow write: if false;
+        allow create: if canManageKitchenOps(restaurantId) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId);
+        allow update: if canManageKitchenOps(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow delete: if false;
+      }
+
+      match /activityLog/{logId} {
+        allow read: if isAuthorizedInRestaurant(restaurantId);
+        allow create: if isAuthorizedInRestaurant(restaurantId);
+        allow update, delete: if false;
       }
 
       match /products/{productId} {
@@ -187,7 +258,9 @@ service cloud.firestore {
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create: if canCreatePurchase(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId);
-        allow update: if (canCreatePurchase(restaurantId) || canPaySupplierBalance(restaurantId)) &&
+        allow update: if (canCreatePurchase(restaurantId) ||
+            canPaySupplierBalance(restaurantId) ||
+            canCancelSupplierOps(restaurantId)) &&
           canAccessBranch(restaurantId, resource.data.branchId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId);
         allow delete: if false;
@@ -212,7 +285,10 @@ service cloud.firestore {
           canAccessBranch(restaurantId, resource.data.branchId);
         allow create: if canPaySupplierBalance(restaurantId) &&
           canAccessBranch(restaurantId, request.resource.data.branchId);
-        allow update, delete: if false;
+        allow update: if canCancelSupplierOps(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId) &&
+          resource.data.status == 'active';
+        allow delete: if false;
       }
 
       match /{document=**} {

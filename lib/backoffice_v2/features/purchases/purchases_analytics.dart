@@ -252,6 +252,48 @@ class PurchasesDashboardMetrics {
   final List<PriceIncreaseAlert> priceAlerts;
 }
 
+class PurchaseKardexEntry {
+  const PurchaseKardexEntry({
+    required this.dateLabel,
+    required this.folio,
+    required this.supplierName,
+    required this.itemName,
+    required this.unit,
+    required this.quantity,
+    required this.unitCost,
+    required this.lineTotal,
+    required this.branchId,
+  });
+
+  final String dateLabel;
+  final String folio;
+  final String supplierName;
+  final String itemName;
+  final String unit;
+  final double quantity;
+  final double unitCost;
+  final double lineTotal;
+  final String branchId;
+}
+
+class SupplierStatementSummary {
+  const SupplierStatementSummary({
+    required this.supplierId,
+    required this.openingBalance,
+    required this.totalCharges,
+    required this.totalPayments,
+    required this.closingBalance,
+    required this.rows,
+  });
+
+  final String supplierId;
+  final double openingBalance;
+  final double totalCharges;
+  final double totalPayments;
+  final double closingBalance;
+  final List<SupplierStatementRow> rows;
+}
+
 class PurchasesAnalytics {
   const PurchasesAnalytics._();
 
@@ -774,6 +816,123 @@ class PurchasesAnalytics {
       avgUnitCost: itemReport.weightedAvgCost,
       isExceeded: diff > 0.0001,
     );
+  }
+
+  static SupplierStatementSummary buildSupplierStatement({
+    required String supplierId,
+    required List<SupplierPurchase> purchases,
+    required List<SupplierPayment> payments,
+    double openingBalance = 0.0,
+  }) {
+    final events = <SupplierStatementRow>[];
+    var totalCharges = 0.0;
+    var totalPayments = 0.0;
+
+    for (final p in purchases.where(
+      (e) => e.supplierId == supplierId && !e.isCancelled,
+    )) {
+      totalCharges += p.total;
+      events.add(
+        SupplierStatementRow(
+          date: p.purchaseDate,
+          type: 'charge',
+          folio: p.folio,
+          charge: p.total,
+          credit: 0.0,
+          balance: 0.0,
+          method: p.documentType,
+          notes: 'Compra (${p.documentType})',
+          purchaseId: p.id,
+        ),
+      );
+    }
+
+    for (final pay in payments.where(
+      (e) => e.supplierId == supplierId && e.isActive,
+    )) {
+      totalPayments += pay.amount;
+      events.add(
+        SupplierStatementRow(
+          date: pay.paymentDate,
+          type: 'payment',
+          folio: pay.purchaseFolio,
+          charge: 0.0,
+          credit: pay.amount,
+          balance: 0.0,
+          method: pay.method,
+          notes:
+              'Pago (${pay.fundingSourceName})${pay.reference.isNotEmpty ? ' · Ref ${pay.reference}' : ''}',
+          purchaseId: pay.purchaseId,
+          paymentId: pay.id,
+          fundingSourceName: pay.fundingSourceName,
+          reference: pay.reference,
+        ),
+      );
+    }
+
+    events.sort((a, b) => a.date.compareTo(b.date));
+    var running = openingBalance;
+    final rows = <SupplierStatementRow>[];
+    for (final e in events) {
+      running = running + e.charge - e.credit;
+      rows.add(
+        SupplierStatementRow(
+          date: e.date,
+          type: e.type,
+          folio: e.folio,
+          charge: e.charge,
+          credit: e.credit,
+          balance: running,
+          method: e.method,
+          notes: e.notes,
+          purchaseId: e.purchaseId,
+          paymentId: e.paymentId,
+          fundingSourceName: e.fundingSourceName,
+          reference: e.reference,
+        ),
+      );
+    }
+
+    return SupplierStatementSummary(
+      supplierId: supplierId,
+      openingBalance: openingBalance,
+      totalCharges: totalCharges,
+      totalPayments: totalPayments,
+      closingBalance: running,
+      rows: rows,
+    );
+  }
+
+  static List<PurchaseKardexEntry> buildKardex({
+    required List<SupplierPurchase> purchases,
+    required Map<String, List<SupplierPurchaseItem>> itemsByPurchase,
+  }) {
+    final sorted = purchases.where((p) => !p.isCancelled).toList()
+      ..sort((a, b) => b.purchaseDate.compareTo(a.purchaseDate));
+
+    final entries = <PurchaseKardexEntry>[];
+    for (final p in sorted) {
+      final dateLabel = _resolvePurchaseBusinessDate(p);
+      for (final line in (itemsByPurchase[p.id] ?? const [])) {
+        if (!line.isActive) continue;
+        entries.add(
+          PurchaseKardexEntry(
+            dateLabel: dateLabel,
+            folio: p.folio,
+            supplierName: p.supplierName,
+            itemName: line.purchaseItemName,
+            unit: line.unit,
+            quantity: line.quantity,
+            unitCost: line.unitCostCalculated > 0
+                ? line.unitCostCalculated
+                : line.unitCost,
+            lineTotal: line.lineTotal,
+            branchId: p.branchId,
+          ),
+        );
+      }
+    }
+    return entries;
   }
 
   static String _resolvePurchaseBusinessDate(SupplierPurchase p) {

@@ -992,8 +992,10 @@ class AccountsPayableTab extends StatelessWidget {
     required this.payments,
     required this.branchNames,
     required this.canPay,
+    required this.canCancelPayment,
     required this.isMobile,
     required this.onPayPurchase,
+    required this.onCancelPayment,
     required this.onSelectPurchase,
     required this.onExport,
   });
@@ -1002,8 +1004,10 @@ class AccountsPayableTab extends StatelessWidget {
   final List<SupplierPayment> payments;
   final Map<String, String> branchNames;
   final bool canPay;
+  final bool canCancelPayment;
   final bool isMobile;
   final ValueChanged<SupplierPurchase> onPayPurchase;
+  final ValueChanged<SupplierPayment> onCancelPayment;
   final ValueChanged<SupplierPurchase> onSelectPurchase;
   final VoidCallback onExport;
 
@@ -1176,14 +1180,34 @@ class AccountsPayableTab extends StatelessWidget {
                           color: tokens.textSecondary,
                         ),
                       ),
-                      trailing: Text(
-                        BackofficeSalesAdapter.formatMoney(pay.amount),
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: pay.isCancelled
-                              ? tokens.danger
-                              : tokens.success,
-                        ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            BackofficeSalesAdapter.formatMoney(pay.amount),
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: pay.isCancelled
+                                  ? tokens.danger
+                                  : tokens.success,
+                              decoration: pay.isCancelled
+                                  ? TextDecoration.lineThrough
+                                  : null,
+                            ),
+                          ),
+                          if (canCancelPayment && pay.isActive) ...[
+                            const SizedBox(width: 6),
+                            IconButton(
+                              tooltip: 'Cancelar pago',
+                              onPressed: () => onCancelPayment(pay),
+                              icon: Icon(
+                                Icons.cancel_outlined,
+                                size: 18,
+                                color: tokens.danger,
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
                     );
                   },
@@ -1497,4 +1521,333 @@ String documentTypeLabel(String type) {
     'remission' => 'Remisión',
     _ => 'Nota',
   };
+}
+
+class PurchaseItemsCatalogTab extends StatelessWidget {
+  const PurchaseItemsCatalogTab({
+    super.key,
+    required this.items,
+    required this.canManage,
+    required this.onCreateOrEdit,
+  });
+
+  final List<PurchaseItem> items;
+  final bool canManage;
+  final ValueChanged<PurchaseItem?> onCreateOrEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    return SaasCard(
+      title: 'Catálogo de insumos de compra',
+      subtitle: '${items.length} insumo(s) registrado(s)',
+      trailing: canManage
+          ? FilledButton.icon(
+              onPressed: () => onCreateOrEdit(null),
+              icon: const Icon(Icons.add_rounded, size: 16),
+              label: const Text('Nuevo insumo'),
+            )
+          : null,
+      padding: items.isEmpty ? const EdgeInsets.all(20) : EdgeInsets.zero,
+      child: items.isEmpty
+          ? const Text('No hay insumos de compra registrados.')
+          : ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: items.length,
+              separatorBuilder: (_, _) =>
+                  Divider(height: 1, color: tokens.border),
+              itemBuilder: (context, i) {
+                final item = items[i];
+                return ListTile(
+                  onTap: canManage ? () => onCreateOrEdit(item) : null,
+                  title: Text(
+                    '${item.name} (${item.unit})',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    '${item.category}${item.defaultSupplierName != null && item.defaultSupplierName!.isNotEmpty ? ' · Proveedor: ${item.defaultSupplierName}' : ''}',
+                    style: TextStyle(fontSize: 12, color: tokens.textSecondary),
+                  ),
+                  trailing: StatusPill(
+                    label: item.active ? 'Activo' : 'Inactivo',
+                    tone: item.active ? StatusTone.success : StatusTone.neutral,
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+
+class SupplierStatementTab extends StatefulWidget {
+  const SupplierStatementTab({
+    super.key,
+    required this.suppliers,
+    required this.purchases,
+    required this.payments,
+    required this.isMobile,
+    required this.onExport,
+  });
+
+  final List<Supplier> suppliers;
+  final List<SupplierPurchase> purchases;
+  final List<SupplierPayment> payments;
+  final bool isMobile;
+  final ValueChanged<SupplierStatementSummary> onExport;
+
+  @override
+  State<SupplierStatementTab> createState() => _SupplierStatementTabState();
+}
+
+class _SupplierStatementTabState extends State<SupplierStatementTab> {
+  String? _selectedSupplierId;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    if (widget.suppliers.isEmpty) {
+      return const SaasEmptyState(
+        icon: Icons.account_balance_wallet_outlined,
+        title: 'Sin proveedores',
+        message: 'Registra al menos un proveedor para consultar su estado de cuenta.',
+      );
+    }
+    _selectedSupplierId ??= widget.suppliers.first.id;
+    final statement = PurchasesAnalytics.buildSupplierStatement(
+      supplierId: _selectedSupplierId!,
+      purchases: widget.purchases,
+      payments: widget.payments,
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SaasCard(
+          title: 'Estado de cuenta por proveedor',
+          subtitle: 'Movimientos cronológicos de cargos, abonos y saldo acumulado.',
+          trailing: OutlinedButton.icon(
+            onPressed: () => widget.onExport(statement),
+            icon: const Icon(Icons.download_outlined, size: 16),
+            label: const Text('Exportar CSV'),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              DropdownButton<String>(
+                value: _selectedSupplierId,
+                items: widget.suppliers
+                    .map(
+                      (s) => DropdownMenuItem(
+                        value: s.id,
+                        child: Text(s.commercialName),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: (v) {
+                  if (v != null) setState(() => _selectedSupplierId = v);
+                },
+              ),
+              const SizedBox(height: 14),
+              _KpiWrap(
+                isMobile: widget.isMobile,
+                items: [
+                  (
+                    'Saldo inicial',
+                    BackofficeSalesAdapter.formatMoney(statement.openingBalance),
+                    'Inicio del periodo',
+                    tokens.textSecondary,
+                  ),
+                  (
+                    'Total cargos',
+                    BackofficeSalesAdapter.formatMoney(statement.totalCharges),
+                    'Compras activas',
+                    tokens.brandAccent,
+                  ),
+                  (
+                    'Total abonos',
+                    BackofficeSalesAdapter.formatMoney(statement.totalPayments),
+                    'Pagos aplicados',
+                    tokens.success,
+                  ),
+                  (
+                    'Saldo final',
+                    BackofficeSalesAdapter.formatMoney(statement.closingBalance),
+                    'Por pagar al cierre',
+                    statement.closingBalance > 0.01
+                        ? tokens.warning
+                        : tokens.success,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        SaasCard(
+          title: 'Movimientos cronológicos (${statement.rows.length})',
+          padding: statement.rows.isEmpty
+              ? const EdgeInsets.all(20)
+              : EdgeInsets.zero,
+          child: statement.rows.isEmpty
+              ? const Text('Sin movimientos en el periodo seleccionado.')
+              : ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: statement.rows.length,
+                  separatorBuilder: (_, _) =>
+                      Divider(height: 1, color: tokens.border),
+                  itemBuilder: (context, i) {
+                    final row = statement.rows[i];
+                    final isCharge = row.type == 'charge';
+                    return ListTile(
+                      title: Text(
+                        '${row.folio} · ${row.notes}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                      subtitle: Text(
+                        BackofficeSalesAdapter.formatDateTime(row.date),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: tokens.textSecondary,
+                        ),
+                      ),
+                      trailing: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            isCharge
+                                ? '+${BackofficeSalesAdapter.formatMoney(row.charge)}'
+                                : '-${BackofficeSalesAdapter.formatMoney(row.credit)}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: isCharge
+                                  ? tokens.brandAccent
+                                  : tokens.success,
+                            ),
+                          ),
+                          Text(
+                            'Saldo: ${BackofficeSalesAdapter.formatMoney(row.balance)}',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: tokens.textSecondary,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+class PurchaseKardexTab extends StatefulWidget {
+  const PurchaseKardexTab({
+    super.key,
+    required this.entries,
+    required this.branchNames,
+    required this.onExport,
+  });
+
+  final List<PurchaseKardexEntry> entries;
+  final Map<String, String> branchNames;
+  final ValueChanged<List<PurchaseKardexEntry>> onExport;
+
+  @override
+  State<PurchaseKardexTab> createState() => _PurchaseKardexTabState();
+}
+
+class _PurchaseKardexTabState extends State<PurchaseKardexTab> {
+  String _selectedItem = 'Todos';
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    final items = [
+      'Todos',
+      ...{for (final e in widget.entries) e.itemName},
+    ];
+    if (!items.contains(_selectedItem)) _selectedItem = 'Todos';
+
+    final filtered = _selectedItem == 'Todos'
+        ? widget.entries
+        : widget.entries
+              .where((e) => e.itemName == _selectedItem)
+              .toList(growable: false);
+
+    return SaasCard(
+      title: 'Kardex cronológico de compras',
+      subtitle: '${filtered.length} entrada(s) registrada(s)',
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          DropdownButton<String>(
+            value: _selectedItem,
+            items: items
+                .map((i) => DropdownMenuItem(value: i, child: Text(i)))
+                .toList(growable: false),
+            onChanged: (v) {
+              if (v != null) setState(() => _selectedItem = v);
+            },
+          ),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(
+            onPressed: () => widget.onExport(filtered),
+            icon: const Icon(Icons.download_outlined, size: 16),
+            label: const Text('Exportar CSV'),
+          ),
+        ],
+      ),
+      padding: filtered.isEmpty ? const EdgeInsets.all(20) : EdgeInsets.zero,
+      child: filtered.isEmpty
+          ? const Text('Sin movimientos de kardex en el periodo.')
+          : ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: filtered.length,
+              separatorBuilder: (_, _) =>
+                  Divider(height: 1, color: tokens.border),
+              itemBuilder: (context, i) {
+                final e = filtered[i];
+                return ListTile(
+                  title: Text(
+                    '${e.itemName} · ${e.quantity.toStringAsFixed(2)} ${e.unit}',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13.5,
+                    ),
+                  ),
+                  subtitle: Text(
+                    '${e.dateLabel} · ${e.folio} · ${e.supplierName} · ${widget.branchNames[e.branchId] ?? e.branchId}',
+                    style: TextStyle(fontSize: 12, color: tokens.textSecondary),
+                  ),
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        BackofficeSalesAdapter.formatMoney(e.lineTotal),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      Text(
+                        '${BackofficeSalesAdapter.formatMoney(e.unitCost)}/${e.unit}',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: tokens.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+    );
+  }
 }
