@@ -90,6 +90,9 @@ class EnvironmentGuard {
   static const String compileTimePreviewApiUrl = String.fromEnvironment(
     'PREVIEW_API_URL',
   );
+  static const bool compileTimeUseEmulators = bool.fromEnvironment(
+    'USE_EMULATORS',
+  );
 
   static BackofficeConfig resolveFromEnvironment() {
     return resolveAndValidate(
@@ -98,6 +101,7 @@ class EnvironmentGuard {
       emulatorHost: compileTimeEmulatorHost,
       defaultRestaurantId: compileTimeRestaurantId,
       previewApiUrl: compileTimePreviewApiUrl,
+      useEmulatorsInPreview: compileTimeUseEmulators,
     );
   }
 
@@ -107,6 +111,7 @@ class EnvironmentGuard {
     String emulatorHost = '127.0.0.1',
     String defaultRestaurantId = 'rest_alpha',
     String previewApiUrl = '',
+    bool useEmulatorsInPreview = false,
     FirebaseOptions? customOptions,
   }) {
     final normalizedEnv = rawEnv.trim().toLowerCase();
@@ -140,12 +145,21 @@ class EnvironmentGuard {
         );
     }
 
+    final effectiveUseEmulators =
+        env == BackofficeEnv.local ||
+        (env == BackofficeEnv.preview &&
+            useEmulatorsInPreview &&
+            overrideProjectId.trim().startsWith('demo-'));
+
     final FirebaseOptions options =
         customOptions ??
         switch (env) {
           BackofficeEnv.local => BackofficeDevFirebaseOptions.localEmulator,
-          BackofficeEnv.dev || BackofficeEnv.preview =>
-            BackofficeDevFirebaseOptions.web,
+          BackofficeEnv.dev => BackofficeDevFirebaseOptions.web,
+          BackofficeEnv.preview =>
+            effectiveUseEmulators
+                ? BackofficeDevFirebaseOptions.localEmulator
+                : BackofficeDevFirebaseOptions.web,
           BackofficeEnv.prod => throw const EnvironmentGuardException(
             'PROD_BLOCKED',
             'PROD bloqueado.',
@@ -236,7 +250,11 @@ class EnvironmentGuard {
     return BackofficeConfig(
       env: env,
       firebaseOptions: options,
-      useEmulators: env == BackofficeEnv.local,
+      useEmulators:
+          env == BackofficeEnv.local ||
+          (env == BackofficeEnv.preview &&
+              useEmulatorsInPreview &&
+              effectiveProjectId.startsWith('demo-')),
       emulatorHost: emulatorHost.trim(),
       authEmulatorPort: 9199,
       firestoreEmulatorPort: 8180,

@@ -1211,6 +1211,12 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
     await assertSucceeds(
       dbDoc(allBranchDb, 'restaurants/rest_alpha/orders/ord_alpha_norte').get(),
     );
+
+    // --- Preview allowlist (`previewUsers`) MUST be inaccessible from clients ---
+    await assertFails(dbDoc(superDb, 'previewUsers/alpha_super').get());
+    await assertFails(
+      dbDoc(superDb, 'previewUsers/alpha_super').set({ active: true }),
+    );
   });
 });
 

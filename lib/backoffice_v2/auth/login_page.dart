@@ -145,6 +145,7 @@ class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
                           const Spacer(),
                           _DiscreetEnvBadge(
                             isLocal: widget.session.config.isLocal,
+                            isPreview: widget.session.config.isPreview,
                             isDark: isDark,
                           ),
                           const SizedBox(width: 8),
@@ -573,14 +574,21 @@ class _ErrorBanner extends StatelessWidget {
 }
 
 class _DiscreetEnvBadge extends StatelessWidget {
-  const _DiscreetEnvBadge({required this.isLocal, required this.isDark});
+  const _DiscreetEnvBadge({
+    required this.isLocal,
+    required this.isPreview,
+    required this.isDark,
+  });
 
   final bool isLocal;
+  final bool isPreview;
   final bool isDark;
 
   @override
   Widget build(BuildContext context) {
-    final label = isLocal ? 'LOCAL' : 'DEV';
+    final label = isPreview
+        ? 'PREVIEW — Solo consulta'
+        : (isLocal ? 'LOCAL' : 'DEV');
     final fg = isDark ? const Color(0xFFFBBF24) : const Color(0xFFB45309);
     final bg = isDark
         ? const Color(0xFFF59E0B).withValues(alpha: 0.12)

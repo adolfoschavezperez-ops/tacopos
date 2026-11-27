@@ -28,6 +28,14 @@ class _NavItem {
   final bool available;
 }
 
+const Set<BackofficeSection> _previewEnabledSections = {
+  BackofficeSection.dashboard,
+  BackofficeSection.sales,
+  BackofficeSection.cash,
+  BackofficeSection.purchases,
+  BackofficeSection.finance,
+};
+
 const List<_NavGroup> _navGroups = [
   _NavGroup('GENERAL', [
     _NavItem(
@@ -375,17 +383,25 @@ class _DarkGraphiteSidebar extends StatelessWidget {
                       const SizedBox(height: 8),
                     ...group.items.map((item) {
                       final selected = currentSection == item.section;
-                      final muted = !item.available && !selected;
+                      final effectiveAvailable =
+                          item.available &&
+                          (!session.isPreview ||
+                              _previewEnabledSections.contains(item.section));
+                      final muted = !effectiveAvailable && !selected;
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 2),
                         child: Tooltip(
                           message: collapsed
                               ? item.section.label
-                              : (item.available
+                              : (effectiveAvailable
                                     ? ''
-                                    : 'Disponible próximamente'),
+                                    : (session.isPreview
+                                          ? 'No habilitado en esta etapa de Preview'
+                                          : 'Disponible próximamente')),
                           child: InkWell(
-                            onTap: () => onSelectSection(item.section),
+                            onTap: effectiveAvailable
+                                ? () => onSelectSection(item.section)
+                                : null,
                             borderRadius: BorderRadius.circular(
                               BackofficeSpacing.radiusMd,
                             ),
@@ -944,8 +960,13 @@ class _MobileMoreSheet extends StatelessWidget {
                       ),
                       ...group.items.map((item) {
                         final selected = currentSection == item.section;
+                        final effectiveAvailable =
+                            item.available &&
+                            (!session.isPreview ||
+                                _previewEnabledSections.contains(item.section));
                         return ListTile(
                           dense: true,
+                          enabled: effectiveAvailable,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(10),
                           ),
@@ -958,7 +979,7 @@ class _MobileMoreSheet extends StatelessWidget {
                             color: selected
                                 ? const Color(0xFFF97316)
                                 : Colors.white.withValues(
-                                    alpha: item.available ? 0.78 : 0.38,
+                                    alpha: effectiveAvailable ? 0.78 : 0.30,
                                   ),
                           ),
                           title: Text(
@@ -971,11 +992,20 @@ class _MobileMoreSheet extends StatelessWidget {
                               color: selected
                                   ? const Color(0xFFFAFAF9)
                                   : Colors.white.withValues(
-                                      alpha: item.available ? 0.85 : 0.45,
+                                      alpha: effectiveAvailable ? 0.85 : 0.35,
                                     ),
                             ),
                           ),
-                          onTap: () => onSelectSection(item.section),
+                          trailing: !effectiveAvailable && session.isPreview
+                              ? Icon(
+                                  Icons.lock_outline_rounded,
+                                  size: 15,
+                                  color: Colors.white.withValues(alpha: 0.30),
+                                )
+                              : null,
+                          onTap: effectiveAvailable
+                              ? () => onSelectSection(item.section)
+                              : null,
                         );
                       }),
                     ],

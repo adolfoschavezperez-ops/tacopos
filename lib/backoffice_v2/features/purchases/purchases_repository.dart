@@ -12,11 +12,13 @@ class PurchasesCursorPage {
     required this.purchases,
     required this.lastDocument,
     required this.hasNext,
+    this.previewCursor,
   });
 
   final List<SupplierPurchase> purchases;
   final DocumentSnapshot<Map<String, dynamic>>? lastDocument;
   final bool hasNext;
+  final Map<String, dynamic>? previewCursor;
 }
 
 class PurchaseDetailData {
@@ -396,8 +398,33 @@ class PurchasesRepository {
     String? statusFilter,
     String? supplierId,
     DocumentSnapshot<Map<String, dynamic>>? startAfter,
+    Map<String, dynamic>? previewStartAfter,
     int pageSize = 20,
   }) async {
+    final preview = _previewClient;
+    if (preview != null) {
+      final page = await preview.queryPage(
+        restaurantId: restaurantId,
+        collection: 'supplierPurchases',
+        branchId: branchId,
+        startBusinessDate: startBusinessDate,
+        endBusinessDate: endBusinessDate,
+        statusFilter: statusFilter,
+        limit: pageSize,
+        cursor: previewStartAfter,
+      );
+      var list = page.docs.map(SupplierPurchase.fromDoc).toList(growable: false);
+      if (supplierId != null && supplierId.isNotEmpty) {
+        list = list.where((p) => p.supplierId == supplierId).toList(growable: false);
+      }
+      return PurchasesCursorPage(
+        purchases: list,
+        lastDocument: page.docs.isEmpty ? null : page.docs.last,
+        hasNext: page.hasMore,
+        previewCursor: page.nextCursor,
+      );
+    }
+
     var query = _buildPurchasesQuery(
       restaurantId: restaurantId,
       startBusinessDate: startBusinessDate,
@@ -432,6 +459,34 @@ class PurchasesRepository {
     void Function(int loadedCount)? onProgress,
     bool Function()? isCancelled,
   }) async {
+    final preview = _previewClient;
+    if (preview != null) {
+      final all = <SupplierPurchase>[];
+      Map<String, dynamic>? cursor;
+      while (true) {
+        if (isCancelled?.call() == true) break;
+        final page = await preview.queryPage(
+          restaurantId: restaurantId,
+          collection: 'supplierPurchases',
+          branchId: branchId,
+          startBusinessDate: startBusinessDate,
+          endBusinessDate: endBusinessDate,
+          statusFilter: statusFilter,
+          limit: pageSize,
+          cursor: cursor,
+        );
+        var items = page.docs.map(SupplierPurchase.fromDoc);
+        if (supplierId != null && supplierId.isNotEmpty) {
+          items = items.where((p) => p.supplierId == supplierId);
+        }
+        all.addAll(items);
+        onProgress?.call(all.length);
+        if (!page.hasMore || page.nextCursor == null) break;
+        cursor = page.nextCursor;
+      }
+      return all;
+    }
+
     final baseQuery = _buildPurchasesQuery(
       restaurantId: restaurantId,
       startBusinessDate: startBusinessDate,

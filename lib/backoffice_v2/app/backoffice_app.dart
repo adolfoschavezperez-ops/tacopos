@@ -212,10 +212,32 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     super.dispose();
   }
 
+  static const Set<BackofficeSection> _previewSupportedSections = {
+    BackofficeSection.dashboard,
+    BackofficeSection.sales,
+    BackofficeSection.cash,
+    BackofficeSection.purchases,
+    BackofficeSection.finance,
+  };
+
   Widget _buildSection(
     BackofficeRoute route,
     ValueChanged<BackofficeRoute> onNavigate,
   ) {
+    if (widget.config.isPreview &&
+        !_previewSupportedSections.contains(route.section)) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: SaasEmptyState(
+          icon: Icons.visibility_off_outlined,
+          title: 'Módulo no habilitado en Preview',
+          message:
+              'Esta primera entrega de Preview habilita exclusivamente Dashboard, Ventas, Caja, Compras, Proveedores, Cuentas por Pagar y Finanzas. '
+              'Este módulo permanece bloqueado para evitar mostrar datos sintéticos.',
+        ),
+      );
+    }
+
     if (!_session.permissions.canViewSection(route.section)) {
       return const Padding(
         padding: EdgeInsets.all(24),

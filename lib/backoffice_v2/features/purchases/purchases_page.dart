@@ -54,6 +54,7 @@ class _PurchasesPageState extends State<PurchasesPage> {
   Future<PurchasesDashboardData>? _dashboardFuture;
   Future<PurchasesCursorPage>? _pageFuture;
   final List<DocumentSnapshot<Map<String, dynamic>>?> _cursorStack = [null];
+  final List<Map<String, dynamic>?> _previewCursorStack = [null];
   int _pageIndex = 0;
 
   String? _lastBranchId;
@@ -134,6 +135,9 @@ class _PurchasesPageState extends State<PurchasesPage> {
     _cursorStack
       ..clear()
       ..add(null);
+    _previewCursorStack
+      ..clear()
+      ..add(null);
     _pageIndex = 0;
     _loadAll();
   }
@@ -170,6 +174,7 @@ class _PurchasesPageState extends State<PurchasesPage> {
       branchId: widget.session.selectedBranchId,
       statusFilter: _statusFilter,
       startAfter: _cursorStack[_pageIndex],
+      previewStartAfter: _previewCursorStack[_pageIndex],
       pageSize: 20,
     );
   }
@@ -1139,6 +1144,9 @@ class _PurchasesPageState extends State<PurchasesPage> {
                             _cursorStack
                               ..clear()
                               ..add(null);
+                            _previewCursorStack
+                              ..clear()
+                              ..add(null);
                             _pageIndex = 0;
                             setState(_loadPage);
                           },
@@ -1155,9 +1163,13 @@ class _PurchasesPageState extends State<PurchasesPage> {
                           },
                           onNextPage: () {
                             final last = page?.lastDocument;
-                            if (last == null) return;
+                            final previewNext = page?.previewCursor;
+                            if (last == null && previewNext == null) return;
                             if (_cursorStack.length <= _pageIndex + 1) {
                               _cursorStack.add(last);
+                            }
+                            if (_previewCursorStack.length <= _pageIndex + 1) {
+                              _previewCursorStack.add(previewNext);
                             }
                             _pageIndex += 1;
                             setState(_loadPage);
