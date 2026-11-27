@@ -1844,7 +1844,7 @@ class _AlertStrip extends StatelessWidget {
                   future: repository.getOperationalOpenOrdersSummary(
                     businessDate: cashSession?.businessDate,
                     cashSessionId: cashSession?.id,
-                    reconcileTables: true,
+                    inspectOperationalState: true,
                   ),
                   builder: (context, blockersSnapshot) {
                     if (!blockersSnapshot.hasData &&

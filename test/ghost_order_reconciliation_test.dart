@@ -71,7 +71,7 @@ void main() {
       );
     });
 
-    test('D empty order without payments is a ghost', () {
+    test('D empty order without payments is a ghost candidate', () {
       final evaluation = evaluateGhostOrder(
         _order(total: 0, pendingTotal: 0),
         const [],

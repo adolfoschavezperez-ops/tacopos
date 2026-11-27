@@ -92,7 +92,7 @@ void main() {
     expect(blocker, isNull);
   });
 
-  test('orden vacia no bloquea el cierre', () {
+  test('orden vacia no bloquea fuera de una validacion operativa', () {
     final blocker = evaluateOperationalOrderBlocker(
       order: order(total: 0, pendingTotal: 0),
       items: const [],
@@ -102,6 +102,22 @@ void main() {
 
     expect(blocker, isNull);
   });
+
+  test(
+    'orden fantasma se presenta como hallazgo durante validacion operativa',
+    () {
+      final blocker = evaluateOperationalOrderBlocker(
+        order: order(total: 0, pendingTotal: 0),
+        items: const [],
+        payments: const [],
+        belongsToBranchAndDate: true,
+        includeGhostAsReviewBlocker: true,
+      );
+
+      expect(blocker, isNotNull);
+      expect(blocker!.reason, 'orden ambigua; requiere revision');
+    },
+  );
 
   test('orden real abierta bloquea con folio y motivo', () {
     final blocker = evaluateOperationalOrderBlocker(

@@ -52,6 +52,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     _reconciliation = _repository.reconcileGhostOrdersAndTableLinks(
       branchId: AppSession.instance.currentBranchId,
       triggeredBy: 'admin_dashboard',
+      applyAutomaticRepairs: false,
     );
     _orders = _watchOrdersAfterReconciliation();
   }

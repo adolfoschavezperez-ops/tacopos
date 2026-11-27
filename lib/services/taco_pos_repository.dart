@@ -4777,6 +4777,7 @@ class TacoPosRepository {
       branchId: branchId,
       businessDate: businessDate,
       triggeredBy: 'live_operations_viewer',
+      applyAutomaticRepairs: false,
     );
     await for (final _ in _watchOrdersForOperationalDate(
       businessDate,
@@ -8293,6 +8294,7 @@ class TacoPosRepository {
     required String branchId,
     String? businessDate,
     String triggeredBy = 'operational_reconciliation',
+    bool applyAutomaticRepairs = true,
   }) async {
     if (restaurantId.trim() != AppConstants.restaurantId) {
       throw ArgumentError('El restaurante no corresponde a esta sesion.');
@@ -8329,12 +8331,16 @@ class TacoPosRepository {
         paymentsByOrder[order.id] ?? const [],
       ),
     );
-    final repairs = await runInBatches<PosOrder, _GhostOrderRepair?>(
-      ghostCandidates,
-      batchSize: 10,
-      action: (order) =>
-          _autoCancelGhostOrderIfNeeded(order.id, triggeredBy: triggeredBy),
-    );
+    final repairs = applyAutomaticRepairs
+        ? await runInBatches<PosOrder, _GhostOrderRepair?>(
+            ghostCandidates,
+            batchSize: 10,
+            action: (order) => _autoCancelGhostOrderIfNeeded(
+              order.id,
+              triggeredBy: triggeredBy,
+            ),
+          )
+        : const <_GhostOrderRepair?>[];
     final cancelledOrderIds = repairs
         .whereType<_GhostOrderRepair>()
         .map((repair) => repair.orderId)
@@ -8371,6 +8377,7 @@ class TacoPosRepository {
       businessDate: effectiveBusinessDate,
       blockers: blockers,
       triggeredBy: triggeredBy,
+      applyAutomaticRepairs: applyAutomaticRepairs,
     );
     if (cancelledOrderIds.isNotEmpty || cleanup.released > 0) {
       invalidateReportDataCache(
@@ -8628,7 +8635,7 @@ class TacoPosRepository {
     final operationalSummary = await getOperationalOpenOrdersSummary(
       businessDate: session.businessDate,
       cashSessionId: session.id,
-      reconcileTables: true,
+      inspectOperationalState: true,
     );
     onStageChanged?.call(CashCloseProgressStage.validatingKitchen);
     var pendingKitchenItemCount = 0;
@@ -8679,18 +8686,19 @@ class TacoPosRepository {
   Future<OperationalOpenOrdersSummary> getOperationalOpenOrdersSummary({
     String? businessDate,
     String? cashSessionId,
-    bool reconcileTables = false,
+    bool inspectOperationalState = false,
     bool forceRefresh = false,
   }) async {
     final branchId = AppSession.instance.currentBranchId;
     final effectiveBusinessDate = businessDate?.trim().isNotEmpty == true
         ? businessDate!.trim()
         : (await getOpenCashSession())?.businessDate ?? _currentBusinessDate();
-    final reconciliation = reconcileTables
+    final reconciliation = inspectOperationalState
         ? await reconcileGhostOrdersAndTableLinks(
             branchId: branchId,
             businessDate: effectiveBusinessDate,
             triggeredBy: 'operational_summary',
+            applyAutomaticRepairs: false,
           )
         : null;
     final reportData = await getReportDataBundle(
@@ -8769,6 +8777,7 @@ class TacoPosRepository {
         items: items,
         payments: payments,
         belongsToBranchAndDate: belongsToScope,
+        includeGhostAsReviewBlocker: true,
       );
       if (blocker == null) {
         final reason = operationalDiscardReason(
@@ -10539,6 +10548,7 @@ class TacoPosRepository {
     required String businessDate,
     required List<OperationalOrderBlocker> blockers,
     String triggeredBy = 'operational_reconciliation',
+    bool applyAutomaticRepairs = true,
   }) async {
     final activeOrderIds = blockers.map((row) => row.order.id).toSet();
     final tablesSnapshot = await _tablesRef.get();
@@ -10550,6 +10560,10 @@ class TacoPosRepository {
     }
     if (staleTables.isEmpty) {
       return const _TableLinkCleanupResult(stale: 0, released: 0);
+    }
+
+    if (!applyAutomaticRepairs) {
+      return _TableLinkCleanupResult(stale: staleTables.length, released: 0);
     }
 
     final releases = await runInBatches<PosTable, bool>(
