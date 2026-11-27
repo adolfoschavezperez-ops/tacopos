@@ -86,6 +86,7 @@ const List<_NavGroup> _navGroups = [
       section: BackofficeSection.employees,
       icon: Icons.badge_outlined,
       activeIcon: Icons.badge_rounded,
+      available: true,
     ),
     _NavItem(
       section: BackofficeSection.audit,
@@ -97,6 +98,7 @@ const List<_NavGroup> _navGroups = [
       section: BackofficeSection.settings,
       icon: Icons.tune_outlined,
       activeIcon: Icons.tune_rounded,
+      available: true,
     ),
   ]),
 ];

@@ -32,6 +32,8 @@ class FinanceDashboardBundle {
     required this.salesTargetAmount,
     required this.expenseBudgetAmount,
     required this.readCount,
+    this.isPartial = false,
+    this.partialNote,
   });
 
   final FinancePeriodSummary summary;
@@ -51,6 +53,8 @@ class FinanceDashboardBundle {
   final double? salesTargetAmount;
   final double? expenseBudgetAmount;
   final int readCount;
+  final bool isPartial;
+  final String? partialNote;
 }
 
 class FinanceRepository {
@@ -62,16 +66,48 @@ class FinanceRepository {
 
   void invalidateCache() => _bundleCache.clear();
 
+  /// Fetches all matching documents using Firestore cursors (`startAfterDocument`)
+  /// up to [maxDocs], explicitly flagging truncation instead of silently dropping data.
+  Future<({List<QueryDocumentSnapshot<Map<String, dynamic>>> docs, bool hitLimit})>
+  _fetchAllWithCursor(
+    Query<Map<String, dynamic>> baseQuery, {
+    int pageSize = 400,
+    int maxDocs = 3000,
+  }) async {
+    final collected = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    QueryDocumentSnapshot<Map<String, dynamic>>? lastDoc;
+    var hitLimit = false;
+
+    while (collected.length < maxDocs) {
+      var q = baseQuery.limit(pageSize);
+      if (lastDoc != null) {
+        q = q.startAfterDocument(lastDoc);
+      }
+      final snap = await q.get();
+      if (snap.docs.isEmpty) break;
+      collected.addAll(snap.docs);
+      lastDoc = snap.docs.last;
+      if (snap.docs.length < pageSize) break;
+      if (collected.length >= maxDocs) {
+        hitLimit = true;
+        break;
+      }
+    }
+    return (docs: collected, hitLimit: hitLimit);
+  }
+
   Future<FinanceDashboardBundle> loadFinanceDashboard({
     required String restaurantId,
     required DateTime startDate,
     required DateTime endDate,
     String? branchId,
+    String cacheUserScope = '',
     bool forceRefresh = false,
   }) async {
     final startStr = BackofficeSalesAdapter.formatBusinessDate(startDate);
     final endStr = BackofficeSalesAdapter.formatBusinessDate(endDate);
-    final cacheKey = '$restaurantId|$startStr|$endStr|${branchId ?? 'all'}';
+    final cacheKey =
+        '$restaurantId|$startStr|$endStr|${branchId ?? 'all'}|$cacheUserScope';
     final cached = _bundleCache[cacheKey];
     if (!forceRefresh &&
         cached != null &&
@@ -103,17 +139,23 @@ class FinanceRepository {
           .limit(limit);
     }
 
+    final ordersCursorFuture = _fetchAllWithCursor(
+      boundedByDate('orders', from: startStr, to: endStr),
+    );
+    final prevOrdersCursorFuture = _fetchAllWithCursor(
+      boundedByDate('orders', from: prevStartStr, to: prevEndStr),
+    );
+
     final results = await Future.wait([
-      boundedByDate('orders', from: startStr, to: endStr, limit: 400).get(),
-      boundedByDate('orders', from: prevStartStr, to: prevEndStr, limit: 400)
-          .get(),
-      boundedByDate('cashSessions', from: startStr, to: endStr, limit: 100)
+      ordersCursorFuture,
+      prevOrdersCursorFuture,
+      boundedByDate('cashSessions', from: startStr, to: endStr, limit: 200)
           .get(),
       boundedByDate(
         'cashSessions',
         from: prevStartStr,
         to: prevEndStr,
-        limit: 100,
+        limit: 200,
       ).get(),
       boundedByDate(
         'cashWithdrawalRequests',
@@ -166,8 +208,22 @@ class FinanceRepository {
       restRef.collection('backofficeFinanceBudgets').limit(50).get(),
     ]);
 
-    var readCount = 0;
-    for (final r in results) {
+    final ordersCursor =
+        results[0]
+            as ({
+              List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+              bool hitLimit,
+            });
+    final prevOrdersCursor =
+        results[1]
+            as ({
+              List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+              bool hitLimit,
+            });
+
+    var readCount = ordersCursor.docs.length + prevOrdersCursor.docs.length;
+    for (var idx = 2; idx < results.length; idx++) {
+      final r = results[idx];
       if (r is QuerySnapshot) {
         readCount += r.docs.length;
       } else {
@@ -178,11 +234,11 @@ class FinanceRepository {
     bool matchesBranch(String docBranch) =>
         branchId == null || branchId.isEmpty || docBranch == branchId;
 
-    final orders = (results[0] as QuerySnapshot<Map<String, dynamic>>).docs
+    final orders = ordersCursor.docs
         .map(PosOrder.fromDoc)
         .where((o) => matchesBranch(o.branchId))
         .toList(growable: false);
-    final prevOrders = (results[1] as QuerySnapshot<Map<String, dynamic>>).docs
+    final prevOrders = prevOrdersCursor.docs
         .map(PosOrder.fromDoc)
         .where((o) => matchesBranch(o.branchId))
         .toList(growable: false);
@@ -285,13 +341,12 @@ class FinanceRepository {
     }
 
     // Load order items, payments, purchase items, & kitchen items in parallel
+    // without silent take(400)/take(200) truncation.
     final activeOrders = orders
         .where((o) => !isCanonicalCancelledOrder(o))
-        .take(400)
         .toList(growable: false);
     final activePurchases = purchases
         .where((p) => p.status.trim().toLowerCase() != 'cancelled')
-        .take(200)
         .toList(growable: false);
 
     final subResults = await Future.wait([
@@ -361,6 +416,7 @@ class FinanceRepository {
       distributableBase: summary.operatingCashFlow,
     );
 
+    final hitLimit = ordersCursor.hitLimit || prevOrdersCursor.hitLimit;
     final bundle = FinanceDashboardBundle(
       summary: summary,
       previousSummary: previousSummary,
@@ -379,6 +435,10 @@ class FinanceRepository {
       salesTargetAmount: salesTargetAmount,
       expenseBudgetAmount: expenseBudgetAmount,
       readCount: readCount,
+      isPartial: hitLimit,
+      partialNote: hitLimit
+          ? 'El rango supera 3,000 órdenes; los totales mostrados son parciales. Acota el periodo para exactitud completa.'
+          : null,
     );
     _bundleCache[cacheKey] = _CachedFinanceBundle(
       bundle: bundle,

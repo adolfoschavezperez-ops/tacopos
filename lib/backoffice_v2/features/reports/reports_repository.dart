@@ -161,16 +161,32 @@ class ReportsRepository {
       return cached;
     }
 
-    const orderLimit = 600;
-    final ordersSnap = await restRef
+    const orderLimit = 3000;
+    const pageSize = 500;
+    final allDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    QueryDocumentSnapshot<Map<String, dynamic>>? lastDoc;
+    var hitLimit = false;
+    final baseQuery = restRef
         .collection('orders')
         .where('businessDate', isGreaterThanOrEqualTo: startStr)
         .where('businessDate', isLessThanOrEqualTo: endStr)
-        .orderBy('businessDate', descending: true)
-        .limit(orderLimit)
-        .get();
+        .orderBy('businessDate', descending: true);
 
-    final orders = ordersSnap.docs
+    while (allDocs.length < orderLimit) {
+      var q = baseQuery.limit(pageSize);
+      if (lastDoc != null) q = q.startAfterDocument(lastDoc);
+      final snap = await q.get();
+      if (snap.docs.isEmpty) break;
+      allDocs.addAll(snap.docs);
+      lastDoc = snap.docs.last;
+      if (snap.docs.length < pageSize) break;
+      if (allDocs.length >= orderLimit) {
+        hitLimit = true;
+        break;
+      }
+    }
+
+    final orders = allDocs
         .map(PosOrder.fromDoc)
         .where(
           (o) => branchId == null || branchId.isEmpty || o.branchId == branchId,
@@ -179,7 +195,7 @@ class ReportsRepository {
 
     final itemsByOrder = <String, List<OrderItem>>{};
     final paymentsByOrder = <String, List<Payment>>{};
-    var readCount = ordersSnap.docs.length;
+    var readCount = allDocs.length;
 
     for (var i = 0; i < orders.length; i += 50) {
       final chunk = orders.sublist(i, (i + 50).clamp(0, orders.length));
@@ -216,7 +232,7 @@ class ReportsRepository {
       itemsByOrder: itemsByOrder,
       paymentsByOrder: paymentsByOrder,
       hasItems: includeItems,
-      hitLimit: ordersSnap.docs.length >= orderLimit,
+      hitLimit: hitLimit,
       readCount: readCount,
       cachedAt: DateTime.now(),
     );
@@ -251,7 +267,7 @@ class ReportsRepository {
     );
 
     final partialWarn = bundle.hitLimit
-        ? 'Se alcanzó el límite operativo de 600 órdenes en el rango. Acota las fechas para obtener el universo completo.'
+        ? 'El periodo supera 3,000 órdenes; se muestran resultados parciales. Acota las fechas para obtener el universo completo.'
         : null;
 
     final orders = bundle.orders;

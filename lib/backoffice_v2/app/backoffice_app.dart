@@ -16,11 +16,12 @@ import '../features/cash/cash_page.dart';
 import '../features/cash/cash_repository.dart';
 import '../features/dashboard/dashboard_page.dart';
 import '../features/dashboard/dashboard_repository.dart';
+import '../features/employees/employees_page.dart';
+import '../features/employees/employees_repository.dart';
 import '../features/finance/finance_page.dart';
 import '../features/finance/finance_repository.dart';
 import '../features/inventory/inventory_page.dart';
 import '../features/inventory/inventory_repository.dart';
-import '../features/placeholders/module_stub_page.dart';
 import '../features/purchases/purchases_page.dart';
 import '../features/purchases/purchases_repository.dart';
 import '../features/reports/reports_page.dart';
@@ -28,6 +29,8 @@ import '../features/reports/reports_repository.dart';
 import '../features/sales/sale_detail_page.dart';
 import '../features/sales/sales_list_page.dart';
 import '../features/sales/sales_repository.dart';
+import '../features/settings/settings_page.dart';
+import '../features/settings/settings_repository.dart';
 import '../navigation/app_shell.dart';
 import '../navigation/backoffice_route.dart';
 import '../navigation/backoffice_router.dart';
@@ -55,6 +58,8 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
   late final FinanceRepository _financeRepository;
   late final ReportsRepository _reportsRepository;
   late final AuditRepository _auditRepository;
+  late final EmployeesRepository _employeesRepository;
+  late final SettingsRepository _settingsRepository;
   late final BackofficeRouterDelegate _routerDelegate;
   final BackofficeRouteParser _routeParser = const BackofficeRouteParser();
   StreamSubscription<User?>? _authSub;
@@ -77,6 +82,8 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     _financeRepository = FinanceRepository();
     _reportsRepository = ReportsRepository();
     _auditRepository = AuditRepository();
+    _employeesRepository = EmployeesRepository();
+    _settingsRepository = SettingsRepository();
     _routerDelegate = BackofficeRouterDelegate(
       session: _session,
       loginBuilder: (context) => BackofficeLoginPage(
@@ -89,6 +96,8 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
         onNavigate: onNavigate,
         onSignOut: () async {
           _explicitSignOut = true;
+          _financeRepository.invalidateCache();
+          _reportsRepository.invalidateCache();
           await _authService.signOut();
           _session.signOut();
         },
@@ -221,27 +230,19 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
         repository: _reportsRepository,
         onOpenSaleDetail: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
-      BackofficeSection.employees => const ModuleStubPage(
-        section: BackofficeSection.employees,
-        targetPhase: 'Fase 5',
-        description: 'Catálogo de empleados, roles y permisos por sucursal.',
-        plannedCapabilities: [
-          'Administración de accesos multi-sucursal y authUsers.',
-        ],
+      BackofficeSection.employees => EmployeesPage(
+        session: _session,
+        repository: _employeesRepository,
+        onOpenSaleDetail: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
       BackofficeSection.audit => AuditPage(
         session: _session,
         repository: _auditRepository,
         onOpenSaleDetail: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
-      BackofficeSection.settings => const ModuleStubPage(
-        section: BackofficeSection.settings,
-        targetPhase: 'Fase 5',
-        description:
-            'Catálogos de productos, categorías, mesas, plataformas y políticas.',
-        plannedCapabilities: [
-          'Configuración multi-tenant y preferencias de sucursal.',
-        ],
+      BackofficeSection.settings => SettingsPage(
+        session: _session,
+        repository: _settingsRepository,
       ),
     };
   }

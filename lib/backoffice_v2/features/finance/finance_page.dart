@@ -78,12 +78,17 @@ class _FinancePageState extends State<FinancePage> {
   }
 
   void _load() {
+    final emp = widget.session.employee;
+    final perms = widget.session.permissions;
+    final scope =
+        '${emp?.id ?? 'anon'}:${perms.canViewFinance}:${perms.canManageExpensePolicies}:${perms.canManagePartners}:${widget.session.isSuperAdmin}';
     setState(() {
       _future = widget.repository.loadFinanceDashboard(
         restaurantId: widget.session.restaurantId,
         startDate: _startDate,
         endDate: _endDate,
         branchId: widget.session.selectedBranchId,
+        cacheUserScope: scope,
       );
     });
   }

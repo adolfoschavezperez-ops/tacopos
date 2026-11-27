@@ -138,7 +138,9 @@ service cloud.firestore {
       match /branches/{branchId} {
         allow read: if isAuthorizedInRestaurant(restaurantId) &&
           canAccessBranch(restaurantId, branchId);
-        allow write: if isSuperAdmin(restaurantId);
+        allow create, update: if isSuperAdmin(restaurantId) ||
+          hasPermission(restaurantId, 'canViewAdmin');
+        allow delete: if false;
       }
 
       match /orders/{orderId} {
@@ -279,6 +281,58 @@ service cloud.firestore {
 
       match /products/{productId} {
         allow read: if isAuthorizedInRestaurant(restaurantId);
+        allow create, update: if hasPermission(restaurantId, 'canManageProducts') ||
+          hasPermission(restaurantId, 'canViewAdmin');
+        allow delete: if false;
+      }
+
+      match /productCategories/{categoryId} {
+        allow read: if isAuthorizedInRestaurant(restaurantId);
+        allow create, update: if hasPermission(restaurantId, 'canManageProducts') ||
+          hasPermission(restaurantId, 'canViewAdmin');
+        allow delete: if false;
+      }
+
+      match /tables/{tableId} {
+        allow read: if isAuthorizedInRestaurant(restaurantId) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow create: if (hasPermission(restaurantId, 'canManageTables') ||
+            hasPermission(restaurantId, 'canViewAdmin')) &&
+          canAccessBranch(restaurantId, request.resource.data.branchId);
+        allow update: if (hasPermission(restaurantId, 'canManageTables') ||
+            hasPermission(restaurantId, 'canViewAdmin')) &&
+          canAccessBranch(restaurantId, resource.data.branchId);
+        allow delete: if false;
+      }
+
+      match /orderPlatforms/{platformId} {
+        allow read: if isAuthorizedInRestaurant(restaurantId);
+        allow create, update: if hasPermission(restaurantId, 'canManagePlatforms') ||
+          hasPermission(restaurantId, 'canViewAdmin');
+        allow delete: if false;
+      }
+
+      match /employees/{employeeId} {
+        allow read: if hasPermission(restaurantId, 'canManageEmployees') ||
+          hasPermission(restaurantId, 'canViewAdmin');
+        allow create: if hasPermission(restaurantId, 'canManageEmployees') ||
+          isSuperAdmin(restaurantId);
+        allow update: if (hasPermission(restaurantId, 'canManageEmployees') ||
+            isSuperAdmin(restaurantId)) &&
+          (resource.data.id != authUserDoc(restaurantId).data.employeeId ||
+            (request.resource.data.isSuperAdmin == resource.data.isSuperAdmin &&
+              request.resource.data.canManageEmployees == resource.data.canManageEmployees));
+        allow delete: if false;
+      }
+
+      match /devices/{deviceId} {
+        allow read: if hasPermission(restaurantId, 'canViewAdmin');
+        allow write: if false;
+      }
+
+      match /discountUsage/{usageId} {
+        allow read: if canReadFinance(restaurantId) ||
+          hasPermission(restaurantId, 'canViewAdmin');
         allow write: if false;
       }
 
@@ -359,8 +413,12 @@ service cloud.firestore {
       }
 
       match /settings/{settingId} {
-        allow read: if canReadFinance(restaurantId) || canReadAuthorizations(restaurantId);
-        allow create, update: if settingId == 'expensePolicies' && canAuthorizeOps(restaurantId);
+        allow read: if canReadFinance(restaurantId) ||
+          canReadAuthorizations(restaurantId) ||
+          hasPermission(restaurantId, 'canViewAdmin');
+        allow create, update: if (settingId == 'expensePolicies' && canAuthorizeOps(restaurantId)) ||
+          (settingId == 'discounts' && hasPermission(restaurantId, 'canViewAdmin')) ||
+          (settingId == 'appUpdates' && isSuperAdmin(restaurantId));
         allow delete: if false;
       }
 

@@ -735,6 +735,127 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
       }),
     );
   });
+
+  it('Phase 8 security: prevents employee self-escalation, restricts appUpdates to superAdmin, and isolates catalogs', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const adminDb = ctx.firestore();
+      await adminDb.doc('restaurants/rest_alpha/authUsers/alpha_emp_mgr').set({
+        active: true,
+        isSuperAdmin: false,
+        employeeId: 'emp_self',
+        branchAccess: ['suc_centro'],
+        permissions: {
+          canViewAdmin: true,
+          canManageEmployees: true,
+          canManageProducts: true,
+          canManageTables: true,
+          canManagePlatforms: true,
+        },
+      });
+      await adminDb.doc('restaurants/rest_alpha/authUsers/alpha_super').set({
+        active: true,
+        isSuperAdmin: true,
+        employeeId: 'emp_super',
+        permissions: { canViewAdmin: true },
+      });
+      await adminDb.doc('restaurants/rest_alpha/employees/emp_self').set({
+        id: 'emp_self',
+        name: 'Manager Self',
+        active: true,
+        isSuperAdmin: false,
+        canManageEmployees: true,
+      });
+      await adminDb.doc('restaurants/rest_alpha/employees/emp_other').set({
+        id: 'emp_other',
+        name: 'Other Employee',
+        active: true,
+        isSuperAdmin: false,
+        canManageEmployees: false,
+      });
+    });
+
+    const empMgrDb = testEnv
+      .authenticatedContext('alpha_emp_mgr', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    const superDb = testEnv
+      .authenticatedContext('alpha_super', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+    const cashOnlyDb = testEnv
+      .authenticatedContext('alpha_cash_only', {
+        firebase: { sign_in_provider: 'custom' },
+      })
+      .firestore();
+
+    // Self-escalation to isSuperAdmin MUST fail
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_self').update({
+        isSuperAdmin: true,
+      }),
+    );
+    // Updating another employee succeeds for canManageEmployees, fails for cashOnlyDb
+    await assertSucceeds(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/employees/emp_other').update({
+        canManageProducts: true,
+      }),
+    );
+    await assertFails(
+      dbDoc(cashOnlyDb, 'restaurants/rest_alpha/employees/emp_other').update({
+        canManageProducts: true,
+      }),
+    );
+
+    // Products, categories, tables, platforms
+    await assertSucceeds(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/products/prod_new').set({
+        id: 'prod_new',
+        name: 'Taco Nuevo',
+        price: 35,
+        active: true,
+      }),
+    );
+    await assertFails(
+      dbDoc(cashOnlyDb, 'restaurants/rest_alpha/products/prod_new').set({
+        id: 'prod_new',
+        name: 'Bad',
+        price: 1,
+        active: true,
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/tables/tbl_1').set({
+        id: 'tbl_1',
+        name: 'Mesa 1',
+        branchId: 'suc_centro',
+        active: true,
+      }),
+    );
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/tables/tbl_norte').set({
+        id: 'tbl_norte',
+        name: 'Mesa Norte',
+        branchId: 'suc_norte',
+        active: true,
+      }),
+    );
+
+    // appUpdates strictly restricted to isSuperAdmin
+    await assertFails(
+      dbDoc(empMgrDb, 'restaurants/rest_alpha/settings/appUpdates').set({
+        active: true,
+        minimumSupportedVersionCode: 99,
+      }),
+    );
+    await assertSucceeds(
+      dbDoc(superDb, 'restaurants/rest_alpha/settings/appUpdates').set({
+        active: true,
+        minimumSupportedVersionCode: 99,
+      }),
+    );
+  });
 });
 
 function dbDoc(db, p) {
