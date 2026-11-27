@@ -5,6 +5,45 @@ import 'package:tacopos/services/taco_pos_repository.dart';
 
 void main() {
   group('buildRepositoryPaymentPersistencePreview', () {
+    test('existing folio with 193 paid and 88 extras persists only 88', () {
+      final preview = buildRepositoryPaymentPersistencePreview(
+        order: _order(net: 281, pending: 88),
+        paymentData: _paymentData(method: 'cash', amount: 88),
+        previousActivePayments: [
+          _payment(amount: 193, type: 'full_table', id: 'payment-193'),
+        ],
+        freshPendingAmount: 88,
+        newPaymentId: 'attempt-extra-88',
+      );
+
+      expect(preview.paymentData['amount'], 88);
+      expect(preview.totals.monetaryPaid, 281);
+      expect(preview.totals.paidTotal, 281);
+      expect(preview.totals.pendingTotal, 0);
+      expect(preview.totals.paymentStatus, 'paid');
+    });
+
+    test('payment persisted then response lost retries without duplicate', () {
+      final retryPayment = _payment(
+        amount: 88,
+        type: 'full_table',
+        id: 'attempt-extra-88',
+      );
+      final preview = buildRepositoryPaymentPersistencePreview(
+        order: _order(net: 281, pending: 88),
+        paymentData: _paymentData(method: 'cash', amount: 88),
+        previousActivePayments: [
+          _payment(amount: 193, type: 'full_table', id: 'payment-193'),
+          retryPayment,
+        ],
+        freshPendingAmount: 88,
+        newPaymentId: retryPayment.id,
+      );
+
+      expect(preview.totals.monetaryPaid, 281);
+      expect(preview.totals.pendingTotal, 0);
+    });
+
     test('full_table cash after partial persists only remaining balance', () {
       final preview = buildRepositoryPaymentPersistencePreview(
         order: _order(net: 290, pending: 188),
@@ -51,6 +90,38 @@ void main() {
       expect(preview.totals.pendingTotal, 0);
     });
   });
+
+  group('decidePaymentFinalization', () {
+    test('folio with pending balance reuses folio and continues payment', () {
+      final decision = decidePaymentFinalization(
+        pendingTotal: 88,
+        existingFolio: '0012',
+      );
+
+      expect(decision.alreadyPaid, isFalse);
+      expect(decision.reuseExistingFolio, isTrue);
+    });
+
+    test('folio with zero pending is idempotently already paid', () {
+      final decision = decidePaymentFinalization(
+        pendingTotal: 0,
+        existingFolio: '0012',
+      );
+
+      expect(decision.alreadyPaid, isTrue);
+      expect(decision.reuseExistingFolio, isFalse);
+    });
+
+    test('normal unpaid order allocates its first folio', () {
+      final decision = decidePaymentFinalization(
+        pendingTotal: 193,
+        existingFolio: null,
+      );
+
+      expect(decision.alreadyPaid, isFalse);
+      expect(decision.reuseExistingFolio, isFalse);
+    });
+  });
 }
 
 PosOrder _order({required double net, required double pending}) {
@@ -75,9 +146,9 @@ PosOrder _order({required double net, required double pending}) {
   );
 }
 
-Payment _payment({required double amount, required String type}) {
+Payment _payment({required double amount, required String type, String? id}) {
   return Payment(
-    id: '$type-$amount',
+    id: id ?? '$type-$amount',
     orderId: 'order',
     tableId: 'table-4',
     tableName: 'Mesa 4',

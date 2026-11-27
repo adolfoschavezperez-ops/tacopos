@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/orders/checkout_submission_guard.dart';
 import '../../core/orders/employee_benefit_checkout.dart';
 import '../../core/orders/global_discount_checkout.dart';
+import '../../core/payments/payment_attempt_coordinator.dart';
 import '../../core/sales/daily_sale_folio.dart';
 import '../../core/theme/brand_colors.dart';
 import '../../core/theme/status_styles.dart';
@@ -35,6 +36,7 @@ class PaymentScreen extends StatefulWidget {
 
 class _PaymentScreenState extends State<PaymentScreen> {
   late final _repository = widget.repository ?? TacoPosRepository();
+  final _paymentAttempts = PaymentAttemptCoordinator();
   late Stream<PosOrder?> _orderStream;
   late Stream<List<OrderItem>> _itemsStream;
   late Stream<List<Payment>> _paymentsStream;
@@ -92,6 +94,16 @@ class _PaymentScreenState extends State<PaymentScreen> {
     return mounted && widget.orderId == orderId;
   }
 
+  Future<PaymentResult> _runPersistentAttempt(
+    String key,
+    Future<PaymentResult> Function(String attemptId) action,
+  ) async {
+    final attemptId = _paymentAttempts.acquire(key);
+    final result = await action(attemptId);
+    _paymentAttempts.complete(key, attemptId);
+    return result;
+  }
+
   Future<bool> _payFullTable(
     PosOrder order, {
     required String method,
@@ -132,13 +144,17 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     return _runPayment(
       operationOrderId: operationOrderId,
-      () => _repository.payFullTable(
-        orderId: operationOrderId,
-        method: method,
-        employeeId: employee?.id,
-        employeeName: employee?.name,
-        cashDetails: resolvedCashDetails,
-        discount: discount,
+      () => _runPersistentAttempt(
+        '$operationOrderId|full_table',
+        (attemptId) => _repository.payFullTable(
+          orderId: operationOrderId,
+          method: method,
+          paymentAttemptId: attemptId,
+          employeeId: employee?.id,
+          employeeName: employee?.name,
+          cashDetails: resolvedCashDetails,
+          discount: discount,
+        ),
       ),
     );
   }
@@ -185,14 +201,18 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     return _runPayment(
       operationOrderId: operationOrderId,
-      () => _repository.payPeople(
-        orderId: operationOrderId,
-        personNumbers: personNumbers,
-        method: method,
-        employeeId: employee?.id,
-        employeeName: employee?.name,
-        cashDetails: resolvedCashDetails,
-        discount: discount,
+      () => _runPersistentAttempt(
+        '$operationOrderId|person|${(personNumbers.toList()..sort()).join(',')}',
+        (attemptId) => _repository.payPeople(
+          orderId: operationOrderId,
+          personNumbers: personNumbers,
+          method: method,
+          paymentAttemptId: attemptId,
+          employeeId: employee?.id,
+          employeeName: employee?.name,
+          cashDetails: resolvedCashDetails,
+          discount: discount,
+        ),
       ),
     );
   }
@@ -238,12 +258,16 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     return _runPayment(
       operationOrderId: operationOrderId,
-      () => _repository.payPartialAmount(
-        orderId: operationOrderId,
-        baseAmount: amount,
-        method: method,
-        cashDetails: resolvedCashDetails,
-        discount: discount,
+      () => _runPersistentAttempt(
+        '$operationOrderId|partial|${(amount * 100).round()}',
+        (attemptId) => _repository.payPartialAmount(
+          orderId: operationOrderId,
+          baseAmount: amount,
+          method: method,
+          paymentAttemptId: attemptId,
+          cashDetails: resolvedCashDetails,
+          discount: discount,
+        ),
       ),
     );
   }
@@ -260,7 +284,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
 
     await _runPayment(
       operationOrderId: operationOrderId,
-      () => _repository.payPlatformOrder(orderId: operationOrderId),
+      () => _runPersistentAttempt(
+        '$operationOrderId|platform',
+        (attemptId) => _repository.payPlatformOrder(
+          orderId: operationOrderId,
+          paymentAttemptId: attemptId,
+        ),
+      ),
     );
   }
 

@@ -23,9 +23,14 @@ void main() {
         source: Source.server,
       );
       expect(db.reads.map((read) => read.$1), [
-        '$_orderPath/items',
         _orderPath,
+        '$_orderPath/items',
         '$_orderPath/payments',
+        _orderPath,
+        '$_orderPath/items/item-100',
+        '$_orderPath/items/item-30',
+        '$_orderPath/items/item-40',
+        '$_orderPath/items/item-20',
         _orderPath,
       ]);
       expect(db.reads.every((read) => read.$2 == Source.server), isTrue);
@@ -124,6 +129,15 @@ class _Firestore implements FirebaseFirestore {
   }
 
   @override
+  Future<T> runTransaction<T>(
+    TransactionHandler<T> transactionHandler, {
+    Duration timeout = const Duration(seconds: 30),
+    int maxAttempts = 5,
+  }) {
+    return transactionHandler(_Transaction(this));
+  }
+
+  @override
   CollectionReference<Map<String, dynamic>> collection(String collectionPath) =>
       _Collection(this, collectionPath);
   @override
@@ -217,6 +231,50 @@ class _Document implements DocumentReference<Map<String, dynamic>> {
     _Snapshot(id, {'total': 170}, const _Metadata(false, true)),
     _Snapshot(id, {'total': 190}, const _Metadata(false, false)),
   ]);
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+// The repository's recalculation transaction only needs get/update here.
+class _Transaction implements Transaction {
+  _Transaction(this.db);
+  final _Firestore db;
+  @override
+  Future<DocumentSnapshot<T>> get<T>(DocumentReference<T> documentRef) async {
+    db.read(documentRef.path, const GetOptions(source: Source.server));
+    if (documentRef.path.endsWith('/orders/order')) {
+      return _Snapshot(
+            'order',
+            Map<String, dynamic>.of(db.orderData),
+            const _Metadata(false, false),
+          )
+          as DocumentSnapshot<T>;
+    }
+    final id = documentRef.id;
+    final amount = int.tryParse(id.replaceFirst('item-', '')) ?? 0;
+    return _Snapshot(id, {
+          'total': amount,
+          'unitPrice': amount,
+          'qty': 1,
+          'sendToKitchen': false,
+          'kitchenStatus': 'not_required',
+          'paymentStatus': 'pending',
+        }, const _Metadata(false, false))
+        as DocumentSnapshot<T>;
+  }
+
+  @override
+  Transaction update(DocumentReference documentRef, Map<Object, Object?> data) {
+    if (documentRef.path.endsWith('/orders/order')) {
+      for (final entry in data.entries) {
+        if (entry.value is! FieldValue) {
+          db.orderData[entry.key as String] = entry.value;
+        }
+      }
+    }
+    return this;
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

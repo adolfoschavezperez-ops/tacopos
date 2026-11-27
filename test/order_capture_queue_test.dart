@@ -4,30 +4,49 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tacopos/core/orders/order_capture_queue.dart';
 import 'package:tacopos/models/order_item.dart';
 
+OrderItem _queueItem(
+  int qty, {
+  String kitchenStatus = 'pending',
+  String paymentStatus = 'pending',
+}) => OrderItem(
+  id: 'item',
+  personNumber: 1,
+  personName: 'Persona 1',
+  productId: 'product',
+  productName: 'Producto',
+  category: 'tacos',
+  qty: qty,
+  unitPrice: 10,
+  total: qty * 10,
+  notes: '',
+  sendToKitchen: true,
+  kitchenStatus: kitchenStatus,
+  paymentStatus: paymentStatus,
+);
+
 void main() {
-  OrderItem item(int qty) => OrderItem(
-    id: 'item',
-    personNumber: 1,
-    personName: 'Persona 1',
-    productId: 'product',
-    productName: 'Producto',
-    category: 'tacos',
-    qty: qty,
-    unitPrice: 10,
-    total: qty * 10,
-    notes: '',
-    sendToKitchen: true,
-    kitchenStatus: 'pending',
-    paymentStatus: 'pending',
+  test(
+    'remote terminal state is not hidden by a matching optimistic quantity',
+    () {
+      final state = OrderCaptureState();
+      final optimistic = _queueItem(1);
+      state.apply(optimistic);
+      state.reconcile([
+        _queueItem(1, paymentStatus: 'paid', kitchenStatus: 'sent'),
+      ]);
+
+      expect(state.effectiveItems.single.paymentStatus, 'paid');
+      expect(state.effectiveItems.single.kitchenStatus, 'sent');
+    },
   );
 
   test('keeps optimistic quantity while an old snapshot arrives', () {
     final state = OrderCaptureState();
-    state.reconcile([item(1)]);
-    state.apply(item(4));
-    state.reconcile([item(2)]);
+    state.reconcile([_queueItem(1)]);
+    state.apply(_queueItem(4));
+    state.reconcile([_queueItem(2)]);
     expect(state.effectiveItems.single.qty, 4);
-    state.reconcile([item(4)]);
+    state.reconcile([_queueItem(4)]);
     expect(state.effectiveItems.single.qty, 4);
   });
 

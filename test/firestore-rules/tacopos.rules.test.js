@@ -12,6 +12,7 @@ const {
   doc,
   getDoc,
   getDocs,
+  increment,
   query,
   runTransaction,
   serverTimestamp,
@@ -82,6 +83,17 @@ function kitchenSequenceData(overrides = {}) {
     lastSequence: 1,
     updatedAt: new Date('2026-07-31T11:00:00.000Z'),
     ...overrides,
+  };
+}
+
+function twoPartyBarrier() {
+  let arrivals = 0;
+  let release;
+  const released = new Promise((resolve) => { release = resolve; });
+  return async () => {
+    arrivals += 1;
+    if (arrivals === 2) release();
+    await released;
   };
 }
 
@@ -377,6 +389,403 @@ describe('TacoPOS Firestore production guard rails', () => {
         },
       ),
     );
+  });
+
+  it('cliente antiguo no puede mutar articulos ni reabrir una orden terminal', async () => {
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/terminal-order`;
+    const itemPath = `${orderPath}/items/item-1`;
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      status: 'paid',
+      paymentStatus: 'paid',
+      kitchenStatus: 'ready',
+      total: 100,
+      grossSubtotal: 100,
+      netTotal: 100,
+      paidTotal: 100,
+      pendingTotal: 0,
+      paidAt: new Date(),
+    });
+    await seed(itemPath, {
+      restaurantId: RESTAURANT_ID,
+      branchId: BRANCH_ID,
+      status: 'active',
+      paymentStatus: 'paid',
+      qty: 1,
+      total: 100,
+    });
+    const db = authedDb('old-apk-client');
+    await assertFails(setDoc(doc(db, `${orderPath}/items/late-item`), {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID, status: 'active', qty: 1, total: 25,
+    }));
+    await assertFails(updateDoc(doc(db, itemPath), { qty: 2, total: 200 }));
+    await assertFails(deleteDoc(doc(db, itemPath)));
+    await assertFails(updateDoc(doc(db, orderPath), {
+      status: 'ready', paymentStatus: 'partial', total: 125, pendingTotal: 25,
+    }));
+  });
+
+  it('permite cerrar orden y marcar articulos pagados en una misma transaccion', async () => {
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/atomic-close`;
+    const db = authedDb('checkout');
+    const orderRefPath = doc(db, orderPath);
+    const itemRef = doc(db, `${orderPath}/items/item-1`);
+    const tableRef = doc(db, `restaurants/${RESTAURANT_ID}/tables/table-1`);
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'ready', paymentStatus: 'pending', total: 100,
+      grossSubtotal: 100, netTotal: 100, paidTotal: 0, pendingTotal: 100,
+    });
+    await seed(`${orderPath}/items/item-1`, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'active', paymentStatus: 'pending', qty: 1, total: 100,
+    });
+    await seed(`restaurants/${RESTAURANT_ID}/tables/table-1`, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'occupied', currentOrderId: 'atomic-close',
+    });
+    await assertSucceeds(runTransaction(db, async (tx) => {
+      await tx.get(orderRefPath);
+      await tx.get(itemRef);
+      await tx.get(tableRef);
+      tx.update(itemRef, { paymentStatus: 'paid', paidAt: serverTimestamp() });
+      tx.update(orderRefPath, {
+        status: 'paid', paymentStatus: 'paid', paidTotal: 100,
+        pendingTotal: 0, paidAt: serverTimestamp(),
+      });
+      tx.update(tableRef, { status: 'available', currentOrderId: null });
+    }));
+  });
+
+  it('no permite que una operacion de una orden antigua ocupe o libere la mesa de otra orden', async () => {
+    const oldOrderPath = `restaurants/${RESTAURANT_ID}/orders/old-order`;
+    const currentOrderPath = `restaurants/${RESTAURANT_ID}/orders/current-order`;
+    const tablePath = `restaurants/${RESTAURANT_ID}/tables/table-2`;
+    await seed(oldOrderPath, { restaurantId: RESTAURANT_ID, branchId: BRANCH_ID, status: 'open', paymentStatus: 'pending' });
+    await seed(currentOrderPath, { restaurantId: RESTAURANT_ID, branchId: BRANCH_ID, status: 'open', paymentStatus: 'pending' });
+    await seed(tablePath, { restaurantId: RESTAURANT_ID, branchId: BRANCH_ID, status: 'occupied', currentOrderId: 'current-order' });
+    const db = authedDb('stale-table-client');
+    await assertFails(updateDoc(doc(db, tablePath), {
+      status: 'available', currentOrderId: null,
+    }));
+    await assertFails(updateDoc(doc(db, tablePath), {
+      status: 'occupied', currentOrderId: 'old-order',
+    }));
+  });
+
+  it('permite pagos parciales en una orden que sigue editable y conserva agregados', async () => {
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/partial-order`;
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'ready', paymentStatus: 'pending', total: 450,
+      grossSubtotal: 450, netTotal: 450, paidTotal: 0, pendingTotal: 450,
+    });
+    const db = authedDb('cashier-partial');
+    await assertSucceeds(setDoc(doc(db, `${orderPath}/payments/p1`), {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID, orderId: 'partial-order',
+      method: 'cash', status: 'active', type: 'partial', baseAmount: 100,
+    }));
+    await assertSucceeds(updateDoc(doc(db, orderPath), {
+      paymentStatus: 'partial', paidTotal: 100, pendingTotal: 350,
+    }));
+  });
+
+  it('preserva cancelacion administrativa auditada de pago y reapertura de articulos', async () => {
+    await seedAdmin('admin-cancel');
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/admin-cancel-order`;
+    const itemPath = `${orderPath}/items/item-1`;
+    const paymentPath = `${orderPath}/payments/payment-1`;
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'paid', paymentStatus: 'paid', total: 100,
+      grossSubtotal: 100, netTotal: 100, paidTotal: 100, pendingTotal: 0,
+      paidAt: new Date(),
+    });
+    await seed(itemPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'active', paymentStatus: 'paid', paymentId: 'payment-1', qty: 1, total: 100,
+    });
+    await seed(paymentPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'active', baseAmount: 100,
+    });
+    const db = adminDb('admin-cancel');
+    const orderRef = doc(db, orderPath);
+    const itemRef = doc(db, itemPath);
+    const paymentRef = doc(db, paymentPath);
+    await assertSucceeds(runTransaction(db, async (tx) => {
+      await tx.get(orderRef);
+      await tx.get(itemRef);
+      await tx.get(paymentRef);
+      tx.update(paymentRef, { status: 'cancelled' });
+      tx.update(itemRef, { paymentStatus: 'pending' });
+      tx.update(orderRef, {
+        status: 'ready', paymentStatus: 'pending',
+        paidTotal: 0, pendingTotal: 100, paidAt: null,
+      });
+      tx.set(doc(db, `restaurants/${RESTAURANT_ID}/activityLog/admin-cancel-audit`), {
+        restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+        type: 'customer_payment_cancelled', orderId: 'admin-cancel-order',
+      });
+    }));
+  });
+
+  it('dos clientes concurrentes aplican abonos sin perder pagos ni sobrescribir agregados', async () => {
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/concurrent-partials`;
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'ready', paymentStatus: 'pending', total: 450,
+      grossSubtotal: 450, netTotal: 450, paidTotal: 0, pendingTotal: 450,
+      captureRevision: 0,
+    });
+    const dbA = authedDb('cashier-a');
+    const dbB = authedDb('cashier-b');
+    const barrier = twoPartyBarrier();
+    const runPartial = (db, paymentId, amount) => {
+      let firstAttempt = true;
+      const orderRef = doc(db, orderPath);
+      const paymentRef = doc(db, `${orderPath}/payments/${paymentId}`);
+      return runTransaction(db, async (tx) => {
+        const order = await tx.get(orderRef);
+        const payment = await tx.get(paymentRef);
+        if (payment.exists()) return;
+        if (firstAttempt) { firstAttempt = false; await barrier(); }
+        const currentPaid = order.data().paidTotal;
+        tx.set(paymentRef, {
+          restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+          status: 'active', type: 'partial', baseAmount: amount,
+        });
+        tx.update(orderRef, {
+          paidTotal: currentPaid + amount,
+          pendingTotal: order.data().total - currentPaid - amount,
+          paymentStatus: 'partial',
+          captureRevision: increment(1),
+        });
+      });
+    };
+    await Promise.all([
+      runPartial(dbA, 'payment-100', 100),
+      runPartial(dbB, 'payment-150', 150),
+    ]);
+    const db = authedDb('verify-partials');
+    const [order, payments] = await Promise.all([
+      getDoc(doc(db, orderPath)),
+      getDocs(collection(db, `${orderPath}/payments`)),
+    ]);
+    assert.strictEqual(payments.size, 2);
+    assert.strictEqual(order.data().paidTotal, 250);
+    assert.strictEqual(order.data().pendingTotal, 200);
+  });
+
+  it('captura concurrente con cobro completo se serializa por la revision compartida', async () => {
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/capture-vs-checkout`;
+    const itemPath = `${orderPath}/items/item-1`;
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'ready', paymentStatus: 'pending', total: 100,
+      grossSubtotal: 100, netTotal: 100, paidTotal: 0, pendingTotal: 100,
+      captureRevision: 0,
+    });
+    await seed(itemPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'active', paymentStatus: 'pending', qty: 1, total: 100,
+    });
+    const dbA = authedDb('capture-client');
+    const dbB = authedDb('checkout-client');
+    const orderA = doc(dbA, orderPath);
+    const itemA = doc(dbA, itemPath);
+    const orderB = doc(dbB, orderPath);
+    const itemB = doc(dbB, itemPath);
+    const barrier = twoPartyBarrier();
+    let captureFirst = true;
+    let checkoutFirst = true;
+    const capture = runTransaction(dbA, async (tx) => {
+      const order = await tx.get(orderA);
+      if (captureFirst) { captureFirst = false; await barrier(); }
+      if (['paid', 'cancelled'].includes(order.data().paymentStatus)) {
+        throw new Error('terminal order');
+      }
+      const newItemRef = doc(dbA, `${orderPath}/items/late-item`);
+      tx.set(newItemRef, {
+        restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+        status: 'active', paymentStatus: 'pending', qty: 1, total: 25,
+      });
+      tx.update(orderA, { captureRevision: increment(1) });
+    });
+    const checkout = runTransaction(dbB, async (tx) => {
+      const order = await tx.get(orderB);
+      const item = await tx.get(itemB);
+      if (checkoutFirst) { checkoutFirst = false; await barrier(); }
+      if (order.data().captureRevision !== 0 || order.data().pendingTotal !== 100) {
+        throw new Error('stale checkout snapshot');
+      }
+      tx.update(itemB, { paymentStatus: 'paid' });
+      tx.update(orderB, {
+        status: 'paid', paymentStatus: 'paid', paidTotal: 100,
+        pendingTotal: 0, captureRevision: increment(1),
+      });
+    });
+    const outcomes = await Promise.allSettled([capture, checkout]);
+    assert.strictEqual(outcomes.filter((entry) => entry.status === 'fulfilled').length, 1);
+    const verifyDb = authedDb('verify-race');
+    const order = await getDoc(doc(verifyDb, orderPath));
+    const lateItem = await getDoc(doc(verifyDb, `${orderPath}/items/late-item`));
+    if (order.data().status === 'paid') {
+      assert.strictEqual(lateItem.exists(), false);
+    } else {
+      assert.strictEqual(order.data().status, 'ready');
+      assert.strictEqual(lateItem.exists(), true);
+    }
+  });
+
+  it('envio contra cancelacion concurrentes dejan una sola transicion valida', async () => {
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/send-vs-cancel`;
+    const itemPath = `${orderPath}/items/item-1`;
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'open', paymentStatus: 'pending', total: 100,
+      paidTotal: 0, pendingTotal: 100, captureRevision: 0,
+    });
+    await seed(itemPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'active', paymentStatus: 'pending', kitchenStatus: 'pending',
+      sendToKitchen: true, qty: 1, total: 100,
+    });
+    const dbSend = authedDb('kitchen-send-client');
+    const dbCancel = authedDb('cancel-client');
+    const sendOrder = doc(dbSend, orderPath);
+    const sendItem = doc(dbSend, itemPath);
+    const cancelOrder = doc(dbCancel, orderPath);
+    const cancelItem = doc(dbCancel, itemPath);
+    const barrier = twoPartyBarrier();
+    let sendFirst = true;
+    let cancelFirst = true;
+    const send = runTransaction(dbSend, async (tx) => {
+      const order = await tx.get(sendOrder);
+      const item = await tx.get(sendItem);
+      if (sendFirst) { sendFirst = false; await barrier(); }
+      if (item.data().status !== 'active' || order.data().status === 'cancelled') {
+        throw new Error('not sendable');
+      }
+      tx.update(sendItem, { kitchenStatus: 'sent', kitchenBatchId: 'batch-1' });
+      tx.update(sendOrder, { status: 'sent', captureRevision: increment(1) });
+    });
+    const cancel = runTransaction(dbCancel, async (tx) => {
+      const order = await tx.get(cancelOrder);
+      const item = await tx.get(cancelItem);
+      if (cancelFirst) { cancelFirst = false; await barrier(); }
+      if (item.data().kitchenStatus === 'sent' || order.data().status === 'sent') {
+        throw new Error('already sent');
+      }
+      tx.update(cancelItem, { status: 'cancelled', kitchenStatus: 'cancelled', paymentStatus: 'cancelled' });
+      tx.update(cancelOrder, { status: 'cancelled', paymentStatus: 'cancelled', captureRevision: increment(1) });
+    });
+    await Promise.allSettled([send, cancel]);
+    const verifyDb = authedDb('verify-send-cancel');
+    const [order, item] = await Promise.all([
+      getDoc(doc(verifyDb, orderPath)), getDoc(doc(verifyDb, itemPath)),
+    ]);
+    assert.ok(['sent', 'cancelled'].includes(order.data().status));
+    assert.strictEqual(item.data().kitchenStatus, order.data().status === 'sent' ? 'sent' : 'cancelled');
+  });
+
+  it('recálculo concurrente con cobro no reabre ni aplica agregados obsoletos', async () => {
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/recalc-vs-checkout`;
+    const itemPath = `${orderPath}/items/item-1`;
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'ready', paymentStatus: 'pending', total: 100,
+      grossSubtotal: 100, netTotal: 100, paidTotal: 0, pendingTotal: 100,
+      captureRevision: 0,
+    });
+    await seed(itemPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'active', paymentStatus: 'pending', qty: 1, unitPrice: 100, total: 100,
+    });
+    const dbRecalc = authedDb('recalc-client');
+    const dbClose = authedDb('checkout-race-client');
+    const orderRecalc = doc(dbRecalc, orderPath);
+    const itemRecalc = doc(dbRecalc, itemPath);
+    const orderClose = doc(dbClose, orderPath);
+    const itemClose = doc(dbClose, itemPath);
+    const barrier = twoPartyBarrier();
+    let recalcFirst = true;
+    let closeFirst = true;
+    const recalc = runTransaction(dbRecalc, async (tx) => {
+      const order = await tx.get(orderRecalc);
+      const item = await tx.get(itemRecalc);
+      if (recalcFirst) { recalcFirst = false; await barrier(); }
+      if (order.data().status === 'paid') return;
+      if (order.data().captureRevision !== 0) throw new Error('stale recalc');
+      const gross = item.data().qty * item.data().unitPrice;
+      tx.update(orderRecalc, {
+        total: gross, grossSubtotal: gross, netTotal: gross,
+        pendingTotal: gross - order.data().paidTotal,
+        captureRevision: increment(1),
+      });
+    });
+    const close = runTransaction(dbClose, async (tx) => {
+      const order = await tx.get(orderClose);
+      const item = await tx.get(itemClose);
+      if (closeFirst) { closeFirst = false; await barrier(); }
+      if (order.data().status === 'paid') return;
+      if (order.data().captureRevision !== 0 || order.data().pendingTotal !== 100) {
+        throw new Error('stale checkout');
+      }
+      tx.update(itemClose, { paymentStatus: 'paid' });
+      tx.update(orderClose, {
+        status: 'paid', paymentStatus: 'paid', paidTotal: 100,
+        pendingTotal: 0, captureRevision: increment(1),
+      });
+    });
+    await Promise.allSettled([recalc, close]);
+    const verifyDb = authedDb('verify-recalc-close');
+    const order = await getDoc(doc(verifyDb, orderPath));
+    assert.ok(['ready', 'paid'].includes(order.data().status));
+    if (order.data().status === 'paid') {
+      assert.strictEqual(order.data().pendingTotal, 0);
+      assert.strictEqual(order.data().paidTotal, 100);
+    }
+  });
+
+  it('cancelar último producto deja borrador abierto para agregar y enviar nuevos productos', async () => {
+    const orderPath = `restaurants/${RESTAURANT_ID}/orders/empty-draft-flow`;
+    await seed(orderPath, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'open', paymentStatus: 'pending', total: 25,
+      paidTotal: 0, pendingTotal: 25, captureRevision: 1,
+    });
+    await seed(`${orderPath}/items/first`, {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'active', paymentStatus: 'pending', kitchenStatus: 'pending', qty: 1, total: 25,
+    });
+    const db = authedDb('waiter-flow');
+    await assertSucceeds(updateDoc(doc(db, `${orderPath}/items/first`), {
+      status: 'cancelled', paymentStatus: 'cancelled', kitchenStatus: 'cancelled',
+      cancelStatus: 'accepted',
+    }));
+    await assertSucceeds(updateDoc(doc(db, orderPath), {
+      status: 'open', paymentStatus: 'pending', total: 0,
+      grossSubtotal: 0, netTotal: 0, paidTotal: 0, pendingTotal: 0,
+    }));
+    await assertSucceeds(setDoc(doc(db, `${orderPath}/items/replacement`), {
+      restaurantId: RESTAURANT_ID, branchId: BRANCH_ID,
+      status: 'active', paymentStatus: 'pending', kitchenStatus: 'pending',
+      sendToKitchen: true, qty: 2, total: 50,
+    }));
+    await assertSucceeds(runTransaction(db, async (tx) => {
+      const orderRef = doc(db, orderPath);
+      const itemRef = doc(db, `${orderPath}/items/replacement`);
+      await tx.get(orderRef);
+      await tx.get(itemRef);
+      tx.update(itemRef, { kitchenStatus: 'sent', kitchenBatchId: 'batch-replacement' });
+      tx.update(orderRef, { status: 'sent', total: 50, pendingTotal: 50 });
+    }));
+    const finalItem = await getDoc(doc(db, `${orderPath}/items/replacement`));
+    const cancelledItem = await getDoc(doc(db, `${orderPath}/items/first`));
+    assert.strictEqual(finalItem.data().kitchenStatus, 'sent');
+    assert.strictEqual(cancelledItem.data().status, 'cancelled');
   });
 
   it('permite leer pagos mediante collectionGroup para calcular cierre', async () => {
