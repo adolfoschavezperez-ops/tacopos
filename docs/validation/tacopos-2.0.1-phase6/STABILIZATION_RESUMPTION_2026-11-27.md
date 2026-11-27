@@ -24,7 +24,7 @@ de evidencia temporal a los commits; los untracked preexistentes se conservaron.
   Kitchen bundles, captura y errores de envío, diagnósticos y sesiones: PASS,
   104 pruebas.
 - Firestore Rules Emulator: PASS, 139/139; proyecto demo y endpoints locales.
-  SHA leído de `demo-tacopos-2-0-1`: 
+  SHA leído de `demo-tacopos-2-0-1`:
   `732201CF7C3C8B553EC0E60749F251E3E1AFDAE210847F48A16637C60524DF2F`, igual a
   `firestore.rules.production-candidate`.
 - Functions: PASS, 117/117, Node `v22.21.0`; Firestore y Auth configurados en
