@@ -287,3 +287,7 @@ El detalle de la revisión de proyecto/Rules, restauración Android, artefactos 
 ### Addendum Fase 6.3 (26 de noviembre de 2026)
 
 Se completó el consumo independiente de empleado de $100 desde Android +32/debug bajo las Rules candidatas exactas, y se ejecutaron ventanas Android de rendimiento de 30 minutos para baseline y candidato con 2,001 órdenes ficticias. El baseline reprocesó 60,030 documentos de snapshot en 30 eventos; la optimización reduce reconversiones cliente por `docChanges`, pero conserva el query histórico y no demuestra menor lectura facturable o tráfico. La compatibilidad operativa cruzada +31/+32 y la conciliación financiera combinada aún bloquean el cierre. Ver [PHASE_6_3_ADDENDUM.md](PHASE_6_3_ADDENDUM.md) y sus evidencias en `evidence/`.
+
+### Addendum Fase 6.4 (26 de noviembre de 2026)
+
+La validacion cruzada UI +31 → +32 y el envio/surtido de +32 bajo las Rules candidatas se documentan en [PHASE_6_4_ADDENDUM.md](PHASE_6_4_ADDENDUM.md). La Fase 6 permanece ABIERTA / NO-GO: la vuelta +32 → +31, la conciliacion combinada, la idempotencia ante respuesta perdida y las conversiones runtime directas del candidato siguen sin evidencia.

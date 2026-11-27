@@ -1,0 +1,60 @@
+{
+  "dateLocal": "2026-11-26",
+  "environment": {
+    "firebaseProject": "demo-tacopos-2-0-1",
+    "firestoreEmulator": "127.0.0.1:8183",
+    "authEmulator": "127.0.0.1:9198",
+    "rulesSource": "firestore.rules.production-candidate",
+    "rulesSha256": "732201CF7C3C8B553EC0E60749F251E3E1AFDAE210847F48A16637C60524DF2F"
+  },
+  "clients": [
+    {
+      "label": "historical +31 reconstructed debug APK",
+      "sourceCommit": "6b638e154921eb223134dee5fa5f35b0fee57f08",
+      "artifactIsOriginalGooglePlayBinary": false,
+      "uiActions": ["login", "create Mesa 1 order", "capture one synthetic taco", "send to Kitchen"]
+    },
+    {
+      "label": "historical +32 reconstructed debug APK",
+      "sourceCommit": "1c660da74c54cd87495b26c2698d3808a0bb638d",
+      "artifactIsOriginalGooglePlayBinary": false,
+      "uiActions": ["login", "observe +31 order", "open Kitchen", "mark +31 item ready", "create Mesa 2 order", "capture and send one synthetic taco", "open and mark +32 item ready"]
+    }
+  ],
+  "syntheticOrders": [
+    {
+      "id": "b5j0Mrdibo0mWO6NuF57",
+      "createdBy": "+31 UI",
+      "observedByAndProcessedBy": "+32 UI",
+      "tableId": "phase63-table-1",
+      "itemCount": 1,
+      "itemQty": 1,
+      "itemProductId": "phase64-test-taco-30",
+      "total": 30,
+      "orderStatusAfterKitchenAction": "ready",
+      "kitchenStatusAfterKitchenAction": "ready",
+      "itemKitchenStatus": "ready",
+      "kitchenBatchId": "0BZwehtyP5IFuIscSGST",
+      "duplicateItemsObserved": false
+    },
+    {
+      "id": "q94L0G6lVNQ4ViVeQPbk",
+      "createdByAndSentBy": "+32 UI",
+      "tableId": "phase63-table-2",
+      "itemCount": 1,
+      "itemQty": 1,
+      "itemProductId": "phase64-test-taco-30",
+      "total": 30,
+      "orderStatusAfterKitchenAction": "ready",
+      "kitchenStatusAfterKitchenAction": "ready",
+      "itemKitchenStatus": "ready",
+      "kitchenBatchId": "H7OaHfesimJjuOVcF94Y",
+      "duplicateItemsObserved": false
+    }
+  ],
+  "limitations": [
+    "+32 to +31 UI observation was not completed because the +31 AVD repeatedly became unresponsive; no second AVD was run concurrently.",
+    "No payment, authorized cancellation, legacy order, concurrent write, or candidate 2.0.1 UI scenario was exercised in this run.",
+    "The test product is a synthetic catalog fixture in the isolated demo project. Business order documents were created through the real app UI; server state was inspected read-only using Admin SDK connected only to the Firestore Emulator."
+  ]
+}
