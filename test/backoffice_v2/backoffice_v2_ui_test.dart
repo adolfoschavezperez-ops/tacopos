@@ -107,7 +107,7 @@ void main() {
       ),
     );
 
-    expect(find.text('LOCAL • EMULADOR'), findsOneWidget);
+    expect(find.text('LOCAL'), findsOneWidget);
     expect(find.text('Todas las sucursales'), findsOneWidget);
     expect(find.text('Taquería Alpha'), findsOneWidget);
     expect(session.isDarkMode, isFalse);

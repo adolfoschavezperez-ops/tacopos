@@ -11,36 +11,37 @@ class EnvironmentIndicatorPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
+    final label = config.isLocal ? 'LOCAL' : 'DEV';
     final Color accent = config.isLocal ? tokens.info : tokens.warning;
     final Color bg = config.isLocal ? tokens.infoSoft : tokens.warningSoft;
 
     return Tooltip(
       message: config.isLocal
-          ? 'Conectado exclusivamente a Firebase Emulator Suite (${config.emulatorHost})'
-          : 'Ambiente de desarrollo aislado: ${config.projectId}',
+          ? 'Ambiente de pruebas local'
+          : 'Ambiente de desarrollo',
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
         decoration: BoxDecoration(
           color: bg,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: accent.withValues(alpha: 0.35)),
+          border: Border.all(color: accent.withValues(alpha: 0.28)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 6,
-              height: 6,
+              width: 5.5,
+              height: 5.5,
               decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 5),
             Text(
-              config.badgeLabel,
+              label,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 10.5,
                 fontWeight: FontWeight.w600,
                 color: accent,
-                letterSpacing: 0.2,
+                letterSpacing: 0.4,
               ),
             ),
           ],

@@ -28,6 +28,8 @@ class BackofficeTheme {
       colorScheme: colorScheme,
       scaffoldBackgroundColor: tokens.canvas,
       dividerColor: tokens.border,
+      fontFamily: 'Inter',
+      fontFamilyFallback: const ['Segoe UI', 'Roboto', 'sans-serif'],
       extensions: [tokens],
     );
 

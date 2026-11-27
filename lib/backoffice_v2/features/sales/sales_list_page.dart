@@ -8,6 +8,8 @@ import '../../core/design/design_tokens.dart';
 import '../../widgets/data_table_pro.dart';
 import '../../widgets/empty_error_state.dart';
 import '../../widgets/filter_bar.dart';
+import '../../widgets/kpi_spark_card.dart';
+import '../../widgets/saas_card.dart';
 import '../../widgets/skeleton_loader.dart';
 import '../../widgets/status_pill.dart';
 import 'sales_repository.dart';
@@ -156,34 +158,38 @@ class _SalesListPageState extends State<SalesListPage> {
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
+    final width = MediaQuery.sizeOf(context).width;
+    final isMobile = width < 720;
     final branchNames = {
       for (final b in widget.session.branches) b.id: b.name,
     };
 
     return ListView(
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(isMobile ? 14 : 22),
       children: [
-        Row(
+        Wrap(
+          spacing: 12,
+          runSpacing: 10,
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Ventas',
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Consulta paginada por cursores en Firestore • ${widget.session.selectedBranchLabel}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Historial de ventas',
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${widget.session.restaurantName} • ${widget.session.selectedBranchLabel}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
             ),
             OutlinedButton.icon(
               onPressed: _resetAndLoad,
-              icon: const Icon(Icons.refresh, size: 15),
+              icon: const Icon(Icons.refresh_rounded, size: 15),
               label: const Text('Actualizar'),
             ),
           ],
@@ -196,11 +202,11 @@ class _SalesListPageState extends State<SalesListPage> {
           onPresetSelected: _applyPreset,
           onPickCustomRange: _pickCustomRange,
           searchController: _searchController,
-          searchHint: 'Filtrar página por folio, mesa o plataforma...',
+          searchHint: 'Buscar en la página visible (folio, mesa o canal)...',
           onSearchSubmitted: (_) => setState(() {}),
           trailingActions: [
             SizedBox(
-              width: 150,
+              width: 156,
               child: DropdownButtonFormField<String?>(
                 initialValue: _statusFilter,
                 isDense: true,
@@ -238,7 +244,7 @@ class _SalesListPageState extends State<SalesListPage> {
             if (snapshot.hasError) {
               return SaasErrorState(
                 title: 'Error al consultar ventas',
-                message: snapshot.error.toString(),
+                message: 'No se pudieron cargar las operaciones. Intenta de nuevo.',
                 onRetry: _resetAndLoad,
               );
             }
@@ -248,7 +254,7 @@ class _SalesListPageState extends State<SalesListPage> {
                 icon: Icons.receipt_long_outlined,
                 title: 'Sin ventas en este rango',
                 message:
-                    'Ajusta el filtro de fechas, sucursal o estado para consultar órdenes.',
+                    'Ajusta las fechas, sucursal o estado para consultar operaciones.',
               );
             }
 
@@ -261,96 +267,325 @@ class _SalesListPageState extends State<SalesListPage> {
                             .contains(query) ||
                         o.tableName.toLowerCase().contains(query) ||
                         (o.platformName ?? '').toLowerCase().contains(query) ||
-                        o.id.toLowerCase().contains(query);
+                        BackofficeSalesAdapter.orderChannelDisplay(o)
+                            .toLowerCase()
+                            .contains(query);
                   }).toList();
 
-            return DataTablePro<PosOrder>(
-              items: filtered,
-              onRowTap: (o) => widget.onSelectSale(o.id),
-              hasPrevious: _pageIndex > 0,
-              hasNext: page.hasNext,
-              onPrevious: _goPrevious,
-              onNext: () => _goNext(page.lastDocument),
-              pageLabel: 'Página ${_pageIndex + 1}',
-              footerSummary:
-                  '${filtered.length} orden(es) en esta página (límite servidor: 20)',
-              columns: [
-                SaasColumn(
-                  label: 'Folio',
-                  flex: 2,
-                  cellBuilder: (o) => Text(
-                    BackofficeSalesAdapter.resolveFolioLabel(o),
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: tokens.textPrimary,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-                  ),
-                ),
-                SaasColumn(
-                  label: 'Sucursal',
-                  flex: 2,
-                  cellBuilder: (o) => Text(
-                    branchNames[o.branchId] ?? o.branchId,
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ),
-                SaasColumn(
-                  label: 'Canal / Mesa',
-                  flex: 2,
-                  cellBuilder: (o) => Text(
-                    o.tableName.isNotEmpty
-                        ? o.tableName
-                        : ((o.platformName ?? '').isNotEmpty
-                              ? o.platformName!
-                              : o.orderType),
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ),
-                SaasColumn(
-                  label: 'Fecha operativa',
-                  flex: 2,
-                  cellBuilder: (o) => Text(
-                    BackofficeSalesAdapter.resolveOrderBusinessDate(o),
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ),
-                SaasColumn(
-                  label: 'Estado',
-                  flex: 1,
-                  cellBuilder: (o) => switch (o.status) {
-                    'paid' => const StatusPill(
-                      label: 'Pagada',
-                      tone: StatusTone.success,
-                    ),
-                    'cancelled' => const StatusPill(
-                      label: 'Cancelada',
-                      tone: StatusTone.danger,
-                    ),
-                    _ => const StatusPill(
-                      label: 'Abierta',
-                      tone: StatusTone.warning,
-                    ),
+            final paidOrders = filtered
+                .where((o) => o.status == 'paid')
+                .toList(growable: false);
+            final totalSold = paidOrders.fold<double>(
+              0,
+              (acc, o) => acc + o.total,
+            );
+            final avgTicket = paidOrders.isEmpty
+                ? 0.0
+                : totalSold / paidOrders.length;
+            final cancelledCount = filtered
+                .where((o) => o.status == 'cancelled')
+                .length;
+            final discountSum = filtered.fold<double>(
+              0,
+              (acc, o) => acc + o.explicitDiscount,
+            );
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Summary strip for the visible query page
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final cols = constraints.maxWidth >= 960
+                        ? 4
+                        : constraints.maxWidth >= 560
+                        ? 2
+                        : 1;
+                    return GridView.count(
+                      crossAxisCount: cols,
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                      childAspectRatio: cols == 1 ? 3.2 : 2.35,
+                      children: [
+                        KpiSparkCard(
+                          label: 'Total en página',
+                          value: BackofficeSalesAdapter.formatMoney(totalSold),
+                          subtitle: 'Operaciones pagadas visibles',
+                          icon: Icons.payments_outlined,
+                          accentColor: tokens.brandAccent,
+                        ),
+                        KpiSparkCard(
+                          label: 'Operaciones',
+                          value: '${filtered.length}',
+                          subtitle: '${paidOrders.length} pagadas',
+                          icon: Icons.receipt_long_outlined,
+                          accentColor: tokens.info,
+                        ),
+                        KpiSparkCard(
+                          label: 'Ticket promedio',
+                          value: BackofficeSalesAdapter.formatMoney(avgTicket),
+                          subtitle: 'Promedio por cuenta pagada',
+                          icon: Icons.trending_up_rounded,
+                          accentColor: tokens.success,
+                        ),
+                        KpiSparkCard(
+                          label: 'Cancelaciones y desc.',
+                          value: BackofficeSalesAdapter.formatMoney(
+                            discountSum,
+                          ),
+                          subtitle: '$cancelledCount cancelada(s) en página',
+                          icon: Icons.local_offer_outlined,
+                          accentColor: tokens.warning,
+                        ),
+                      ],
+                    );
                   },
                 ),
-                SaasColumn(
-                  label: 'Total',
-                  flex: 1,
-                  alignRight: true,
-                  cellBuilder: (o) => Text(
-                    BackofficeSalesAdapter.formatMoney(o.total),
-                    style: TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: tokens.textPrimary,
-                      fontFeatures: const [FontFeature.tabularFigures()],
+                const SizedBox(height: 16),
+                if (isMobile) ...[
+                  ...filtered.map(
+                    (o) => _MobileSaleCard(
+                      order: o,
+                      branchName: branchNames[o.branchId] ?? o.branchId,
+                      onTap: () => widget.onSelectSale(o.id),
                     ),
                   ),
-                ),
+                  const SizedBox(height: 8),
+                  _MobilePaginationBar(
+                    pageLabel: 'Página ${_pageIndex + 1}',
+                    hasPrevious: _pageIndex > 0,
+                    hasNext: page.hasNext,
+                    onPrevious: _goPrevious,
+                    onNext: () => _goNext(page.lastDocument),
+                  ),
+                ] else
+                  DataTablePro<PosOrder>(
+                    items: filtered,
+                    onRowTap: (o) => widget.onSelectSale(o.id),
+                    hasPrevious: _pageIndex > 0,
+                    hasNext: page.hasNext,
+                    onPrevious: _goPrevious,
+                    onNext: () => _goNext(page.lastDocument),
+                    pageLabel: 'Página ${_pageIndex + 1}',
+                    footerSummary:
+                        '${filtered.length} operación(es) en esta página • Búsqueda aplicada a la página visible',
+                    columns: [
+                      SaasColumn(
+                        label: 'Folio',
+                        flex: 2,
+                        cellBuilder: (o) => Text(
+                          BackofficeSalesAdapter.resolveFolioLabel(o),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: tokens.textPrimary,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                      SaasColumn(
+                        label: 'Sucursal',
+                        flex: 2,
+                        cellBuilder: (o) => Text(
+                          branchNames[o.branchId] ?? o.branchId,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                      SaasColumn(
+                        label: 'Canal / Mesa',
+                        flex: 2,
+                        cellBuilder: (o) => Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              o.orderType == 'takeout'
+                                  ? Icons.delivery_dining_outlined
+                                  : Icons.restaurant_outlined,
+                              size: 14,
+                              color: tokens.textMuted,
+                            ),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                BackofficeSalesAdapter.orderChannelDisplay(o),
+                                style: Theme.of(context).textTheme.bodyMedium,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      SaasColumn(
+                        label: 'Fecha',
+                        flex: 2,
+                        cellBuilder: (o) => Text(
+                          BackofficeSalesAdapter.resolveOrderBusinessDate(o),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ),
+                      SaasColumn(
+                        label: 'Estado',
+                        flex: 1,
+                        cellBuilder: (o) => switch (o.status) {
+                          'paid' => const StatusPill(
+                            label: 'Pagada',
+                            tone: StatusTone.success,
+                          ),
+                          'cancelled' => const StatusPill(
+                            label: 'Cancelada',
+                            tone: StatusTone.danger,
+                          ),
+                          _ => const StatusPill(
+                            label: 'Abierta',
+                            tone: StatusTone.warning,
+                          ),
+                        },
+                      ),
+                      SaasColumn(
+                        label: 'Total',
+                        flex: 1,
+                        alignRight: true,
+                        cellBuilder: (o) => Text(
+                          BackofficeSalesAdapter.formatMoney(o.total),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: tokens.textPrimary,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             );
           },
         ),
       ],
+    );
+  }
+}
+
+class _MobileSaleCard extends StatelessWidget {
+  const _MobileSaleCard({
+    required this.order,
+    required this.branchName,
+    required this.onTap,
+  });
+
+  final PosOrder order;
+  final String branchName;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: SaasCard(
+        onTap: onTap,
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Text(
+                  BackofficeSalesAdapter.resolveFolioLabel(order),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: tokens.textPrimary,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                switch (order.status) {
+                  'paid' => const StatusPill(
+                    label: 'Pagada',
+                    tone: StatusTone.success,
+                  ),
+                  'cancelled' => const StatusPill(
+                    label: 'Cancelada',
+                    tone: StatusTone.danger,
+                  ),
+                  _ => const StatusPill(
+                    label: 'Abierta',
+                    tone: StatusTone.warning,
+                  ),
+                },
+                const Spacer(),
+                Text(
+                  BackofficeSalesAdapter.formatMoney(order.total),
+                  style: TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w700,
+                    color: tokens.textPrimary,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '$branchName • ${BackofficeSalesAdapter.orderChannelDisplay(order)} • ${BackofficeSalesAdapter.resolveOrderBusinessDate(order)}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MobilePaginationBar extends StatelessWidget {
+  const _MobilePaginationBar({
+    required this.pageLabel,
+    required this.hasPrevious,
+    required this.hasNext,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final String pageLabel;
+  final bool hasPrevious;
+  final bool hasNext;
+  final VoidCallback onPrevious;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = BackofficeTokens.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: tokens.surface,
+        borderRadius: BorderRadius.circular(BackofficeSpacing.radiusMd),
+        border: Border.all(color: tokens.border),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          OutlinedButton.icon(
+            onPressed: hasPrevious ? onPrevious : null,
+            icon: const Icon(Icons.chevron_left_rounded, size: 16),
+            label: const Text('Anterior'),
+          ),
+          Text(
+            pageLabel,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: tokens.textSecondary,
+            ),
+          ),
+          OutlinedButton.icon(
+            onPressed: hasNext ? onNext : null,
+            icon: const Icon(Icons.chevron_right_rounded, size: 16),
+            label: const Text('Siguiente'),
+          ),
+        ],
+      ),
     );
   }
 }
