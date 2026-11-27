@@ -12,6 +12,7 @@ import '../../../models/purchase_models.dart';
 import '../../../models/yield_profit_models.dart';
 import '../../core/adapters/sales_adapter.dart';
 import '../../core/cache/backoffice_cache_scope.dart';
+import '../../core/read_only_guard.dart';
 import 'finance_analytics.dart';
 
 class FinanceDashboardBundle {
@@ -62,6 +63,7 @@ class FinanceRepository {
   FinanceRepository({
     FirebaseFirestore? firestore,
     BackofficeCacheScope? cacheScope,
+    this.isReadOnly = false,
   }) : _db = firestore ?? FirebaseFirestore.instance,
        _cacheScope = cacheScope ?? BackofficeCacheScope() {
     _cacheScope.registerInvalidator(invalidateCache);
@@ -69,6 +71,7 @@ class FinanceRepository {
 
   final FirebaseFirestore _db;
   final BackofficeCacheScope _cacheScope;
+  final bool isReadOnly;
   final Map<String, _CachedFinanceBundle> _bundleCache = {};
 
   void invalidateCache() => _bundleCache.clear();
@@ -595,6 +598,10 @@ class FinanceRepository {
     String notes = '',
     bool active = true,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Guardar socio',
+    );
     final col = _db.collection('restaurants').doc(restaurantId).collection('partners');
     final ref = partnerId != null && partnerId.isNotEmpty
         ? col.doc(partnerId)
@@ -626,6 +633,10 @@ class FinanceRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Registrar aportación de socio',
+    );
     if (amount <= 0) throw ArgumentError('El monto debe ser mayor a cero.');
     final restRef = _db.collection('restaurants').doc(restaurantId);
     final ref = restRef.collection('partnerContributions').doc();
@@ -668,6 +679,10 @@ class FinanceRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Guardar configuración de políticas de gastos',
+    );
     final restRef = _db.collection('restaurants').doc(restaurantId);
     final ref = restRef.collection('settings').doc('expensePolicies');
     await ref.set({
@@ -688,6 +703,10 @@ class FinanceRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Guardar política de gastos',
+    );
     final col = _db
         .collection('restaurants')
         .doc(restaurantId)
@@ -715,6 +734,10 @@ class FinanceRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Guardar meta de eficiencia',
+    );
     final docId = '${branchId}_$categoryKey';
     await _db
         .collection('restaurants')
@@ -742,6 +765,10 @@ class FinanceRepository {
     required String employeeId,
     required String employeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Guardar presupuesto financiero',
+    );
     final docId = '${branchId}_$budgetType';
     await _db
         .collection('restaurants')

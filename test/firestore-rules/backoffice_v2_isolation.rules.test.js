@@ -1056,6 +1056,29 @@ describe('Backoffice 2.0 Multi-Tenant & Multi-Branch Isolation Rules', () => {
         cancelledByEmployeeId: 'alpha_centro_mgr',
       }),
     );
+    // Inconsistent financial writes even with allowlisted fields MUST fail (9.1.1 Section 11)
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').update({
+        paidTotal: 999,
+        pendingTotal: 0,
+        paymentStatus: 'paid',
+        status: 'paid',
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/orders/ord_alpha_centro').update({
+        paidTotal: 100,
+        pendingTotal: 220,
+        paymentStatus: 'paid',
+        status: 'open',
+      }),
+    );
+    await assertFails(
+      dbDoc(mgrDb, 'restaurants/rest_alpha/cashSessions/cs_closed_p0').update({
+        shortageAmount: 50,
+        overAmount: 25,
+      }),
+    );
 
     // --- P0-1: activityLog reserved markers & spoofing ---
     await assertFails(

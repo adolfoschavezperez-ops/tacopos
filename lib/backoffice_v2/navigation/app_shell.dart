@@ -226,6 +226,42 @@ class _BackofficeAppShellState extends State<BackofficeAppShell> {
                         : null,
                     onSignOut: widget.onSignOut,
                   ),
+                  if (widget.session.isPreview)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: tokens.infoSoft,
+                        border: Border(
+                          bottom: BorderSide(
+                            color: tokens.info.withValues(alpha: 0.28),
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.visibility_outlined,
+                            size: 16,
+                            color: tokens.info,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'PREVIEW — Datos reales · Solo consulta (las acciones de escritura están deshabilitadas)',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: tokens.info,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   Expanded(
                     child: AnimatedSwitcher(
                       duration: const Duration(milliseconds: 160),

@@ -22,6 +22,8 @@ class BackofficeSession extends ChangeNotifier {
 
   Employee? get employee => _employee;
   bool get isSuperAdmin => _isSuperAdmin;
+  bool get isPreview => config.isPreview;
+  bool get isReadOnly => config.isReadOnly;
   bool get isAuthenticated => _employee != null;
   BackofficePermissions get permissions =>
       BackofficePermissions(employee: _employee, isSuperAdmin: _isSuperAdmin);

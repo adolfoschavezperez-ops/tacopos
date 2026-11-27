@@ -11,14 +11,22 @@ class EnvironmentIndicatorPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
-    final label = config.isLocal ? 'LOCAL' : 'DEV';
-    final Color accent = config.isLocal ? tokens.info : tokens.warning;
-    final Color bg = config.isLocal ? tokens.infoSoft : tokens.warningSoft;
+    final label = config.isPreview
+        ? 'PREVIEW — Datos reales · Solo consulta'
+        : (config.isLocal ? 'LOCAL' : 'DEV');
+    final Color accent = config.isPreview
+        ? tokens.info
+        : (config.isLocal ? tokens.info : tokens.warning);
+    final Color bg = config.isPreview
+        ? tokens.infoSoft
+        : (config.isLocal ? tokens.infoSoft : tokens.warningSoft);
 
     return Tooltip(
-      message: config.isLocal
-          ? 'Ambiente de pruebas local'
-          : 'Ambiente de desarrollo',
+      message: config.isPreview
+          ? 'Modo Preview de solo lectura conectado a datos reales (sin escrituras)'
+          : (config.isLocal
+              ? 'Ambiente de pruebas local'
+              : 'Ambiente de desarrollo'),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
         decoration: BoxDecoration(

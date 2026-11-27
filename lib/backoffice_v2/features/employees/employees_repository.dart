@@ -5,6 +5,7 @@ import '../../../models/branch.dart';
 import '../../../models/employee.dart';
 import '../../../models/order.dart';
 import '../../core/adapters/sales_adapter.dart';
+import '../../core/read_only_guard.dart';
 
 class DeviceSummaryRow {
   const DeviceSummaryRow({
@@ -137,10 +138,13 @@ class EmployeesRestrictedException implements Exception {
 /// - Preserves existing roles/privileges when editing only non-privilege fields.
 /// - Logs all administrative modifications in `activityLog`.
 class EmployeesRepository {
-  EmployeesRepository({FirebaseFirestore? firestore})
-    : _db = firestore ?? FirebaseFirestore.instance;
+  EmployeesRepository({
+    FirebaseFirestore? firestore,
+    this.isReadOnly = false,
+  }) : _db = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseFirestore _db;
+  final bool isReadOnly;
 
   Future<EmployeesDashboardData> loadEmployees({
     required String restaurantId,
@@ -271,6 +275,10 @@ class EmployeesRepository {
     required bool actorIsSuperAdmin,
     Map<String, bool> actorPermissions = const {},
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Guardar empleado',
+    );
     final cleanName = name.trim();
     if (cleanName.isEmpty) {
       throw ArgumentError('El nombre del empleado es obligatorio.');
@@ -405,6 +413,10 @@ class EmployeesRepository {
     required String actorEmployeeId,
     required String actorEmployeeName,
   }) async {
+    BackofficeReadOnlyGuard.assertWritable(
+      isReadOnly: isReadOnly,
+      action: 'Cambiar estado de empleado',
+    );
     if (employee.id == actorEmployeeId) {
       throw StateError('No puedes desactivar tu propia cuenta.');
     }

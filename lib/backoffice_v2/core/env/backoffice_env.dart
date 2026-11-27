@@ -2,7 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 
 import 'firebase_options_dev.dart';
 
-enum BackofficeEnv { local, dev, prod }
+enum BackofficeEnv { local, dev, preview, prod }
 
 class EnvironmentGuardException implements Exception {
   const EnvironmentGuardException(this.code, this.message);
@@ -25,6 +25,7 @@ class BackofficeConfig {
     required this.functionsEmulatorPort,
     required this.functionsRegion,
     required this.defaultRestaurantId,
+    this.previewApiUrl = '',
   });
 
   final BackofficeEnv env;
@@ -36,17 +37,21 @@ class BackofficeConfig {
   final int functionsEmulatorPort;
   final String functionsRegion;
   final String defaultRestaurantId;
+  final String previewApiUrl;
 
   String get projectId => firebaseOptions.projectId;
 
   String get badgeLabel => switch (env) {
     BackofficeEnv.local => 'LOCAL • EMULADOR',
     BackofficeEnv.dev => 'DEV • $projectId',
+    BackofficeEnv.preview => 'PREVIEW — Datos reales · Solo consulta',
     BackofficeEnv.prod => 'PROD',
   };
 
   bool get isLocal => env == BackofficeEnv.local;
   bool get isDev => env == BackofficeEnv.dev;
+  bool get isPreview => env == BackofficeEnv.preview;
+  bool get isReadOnly => env == BackofficeEnv.preview;
 }
 
 class EnvironmentGuard {
@@ -82,6 +87,9 @@ class EnvironmentGuard {
     'DEFAULT_RESTAURANT_ID',
     defaultValue: 'rest_alpha',
   );
+  static const String compileTimePreviewApiUrl = String.fromEnvironment(
+    'PREVIEW_API_URL',
+  );
 
   static BackofficeConfig resolveFromEnvironment() {
     return resolveAndValidate(
@@ -89,6 +97,7 @@ class EnvironmentGuard {
       overrideProjectId: compileTimeProjectId,
       emulatorHost: compileTimeEmulatorHost,
       defaultRestaurantId: compileTimeRestaurantId,
+      previewApiUrl: compileTimePreviewApiUrl,
     );
   }
 
@@ -97,6 +106,7 @@ class EnvironmentGuard {
     String overrideProjectId = '',
     String emulatorHost = '127.0.0.1',
     String defaultRestaurantId = 'rest_alpha',
+    String previewApiUrl = '',
     FirebaseOptions? customOptions,
   }) {
     final normalizedEnv = rawEnv.trim().toLowerCase();
@@ -115,6 +125,9 @@ class EnvironmentGuard {
       case 'dev':
         env = BackofficeEnv.dev;
         break;
+      case 'preview':
+        env = BackofficeEnv.preview;
+        break;
       case 'prod':
         throw const EnvironmentGuardException(
           'PROD_BLOCKED',
@@ -123,7 +136,7 @@ class EnvironmentGuard {
       default:
         throw EnvironmentGuardException(
           'UNKNOWN_ENV',
-          'Configuración de ambiente desconocida: "$rawEnv". Valores permitidos: local, dev.',
+          'Configuración de ambiente desconocida: "$rawEnv". Valores permitidos: local, dev, preview.',
         );
     }
 
@@ -131,7 +144,8 @@ class EnvironmentGuard {
         customOptions ??
         switch (env) {
           BackofficeEnv.local => BackofficeDevFirebaseOptions.localEmulator,
-          BackofficeEnv.dev => BackofficeDevFirebaseOptions.web,
+          BackofficeEnv.dev || BackofficeEnv.preview =>
+            BackofficeDevFirebaseOptions.web,
           BackofficeEnv.prod => throw const EnvironmentGuardException(
             'PROD_BLOCKED',
             'PROD bloqueado.',
@@ -198,6 +212,27 @@ class EnvironmentGuard {
       }
     }
 
+    if (env == BackofficeEnv.preview) {
+      final cleanPreviewUrl = previewApiUrl.trim();
+      final uri = Uri.tryParse(cleanPreviewUrl);
+      final isLocalLoopback = uri != null &&
+          (uri.host == '127.0.0.1' || uri.host == 'localhost') &&
+          (uri.scheme == 'http' || uri.scheme == 'https');
+      final isHttps = uri != null && uri.scheme == 'https' && uri.host.isNotEmpty;
+      if (cleanPreviewUrl.isEmpty || (!isHttps && !isLocalLoopback)) {
+        throw const EnvironmentGuardException(
+          'INVALID_PREVIEW_API_URL',
+          'El ambiente PREVIEW requiere PREVIEW_API_URL válida con HTTPS (o loopback en pruebas locales).',
+        );
+      }
+      if (cleanPreviewUrl.toLowerCase().contains('github.io')) {
+        throw const EnvironmentGuardException(
+          'FORBIDDEN_PREVIEW_ENDPOINT',
+          'PREVIEW_API_URL no puede apuntar a github.io.',
+        );
+      }
+    }
+
     return BackofficeConfig(
       env: env,
       firebaseOptions: options,
@@ -210,6 +245,7 @@ class EnvironmentGuard {
       defaultRestaurantId: defaultRestaurantId.trim().isEmpty
           ? 'rest_alpha'
           : defaultRestaurantId.trim(),
+      previewApiUrl: previewApiUrl.trim(),
     );
   }
 }

@@ -266,7 +266,12 @@ service cloud.firestore {
                 'paidTotal', 'pendingTotal', 'paymentStatus', 'status', 'updatedAt'
               ]) &&
               request.resource.data.paymentStatus in ['pending', 'partial', 'paid'] &&
-              request.resource.data.status != 'cancelled'
+              request.resource.data.status != 'cancelled' &&
+              request.resource.data.paidTotal + request.resource.data.pendingTotal <= resource.data.total + 0.01 &&
+              (request.resource.data.paymentStatus != 'pending' || request.resource.data.paidTotal == 0) &&
+              (request.resource.data.paymentStatus != 'paid' || request.resource.data.pendingTotal == 0) &&
+              (request.resource.data.paymentStatus != 'partial' ||
+                (request.resource.data.paidTotal > 0 && request.resource.data.pendingTotal > 0))
             ) ||
             // Full order cancellation flow (canCancelOrders or canViewAdmin)
             (
@@ -365,7 +370,9 @@ service cloud.firestore {
           (!('shortageAmount' in request.resource.data) ||
             isNonNegNumber(request.resource.data.shortageAmount)) &&
           (!('overAmount' in request.resource.data) ||
-            isNonNegNumber(request.resource.data.overAmount));
+            isNonNegNumber(request.resource.data.overAmount)) &&
+          (request.resource.data.get('shortageAmount', 0) == 0 ||
+            request.resource.data.get('overAmount', 0) == 0);
       }
 
       // P0-1: Historical cash withdrawals & pending withdrawal authorization
@@ -669,7 +676,12 @@ service cloud.firestore {
               request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                 'paidTotal', 'balance', 'status', 'updatedAt'
               ]) &&
-              request.resource.data.status in ['paid', 'partial', 'pending']
+              request.resource.data.status in ['paid', 'partial', 'pending'] &&
+              request.resource.data.paidTotal + request.resource.data.balance <= resource.data.total + 0.01 &&
+              (request.resource.data.status != 'paid' || request.resource.data.balance == 0) &&
+              (request.resource.data.status != 'pending' || request.resource.data.paidTotal == 0) &&
+              (request.resource.data.status != 'partial' ||
+                (request.resource.data.paidTotal > 0 && request.resource.data.balance > 0))
             ) ||
             // Purchase cancellation (canCancelSupplierPayments or canViewAdmin)
             (

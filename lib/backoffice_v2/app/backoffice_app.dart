@@ -83,10 +83,15 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     _authorizationsRepository = AuthorizationsRepository();
     _inventoryRepository = InventoryRepository();
     _purchasesRepository = PurchasesRepository();
-    _financeRepository = FinanceRepository(cacheScope: _cacheScope);
+    _financeRepository = FinanceRepository(
+      cacheScope: _cacheScope,
+      isReadOnly: widget.config.isReadOnly,
+    );
     _reportsRepository = ReportsRepository(cacheScope: _cacheScope);
     _auditRepository = AuditRepository();
-    _employeesRepository = EmployeesRepository();
+    _employeesRepository = EmployeesRepository(
+      isReadOnly: widget.config.isReadOnly,
+    );
     _settingsRepository = SettingsRepository();
     _routerDelegate = BackofficeRouterDelegate(
       session: _session,
