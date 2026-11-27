@@ -148,7 +148,7 @@ class BackofficeV2AuthService {
     if (cleanRestaurant.isEmpty) {
       throw const BackofficeAuthException('Ingresa el ID del restaurante.');
     }
-    await _auth.setPersistence(Persistence.NONE);
+    await _auth.setPersistence(Persistence.LOCAL);
     try {
       await _auth.signInWithEmailAndPassword(
         email: email.trim(),
@@ -159,6 +159,20 @@ class BackofficeV2AuthService {
       throw BackofficeAuthException(
         e.message ?? 'No se pudo autenticar con Firebase Auth.',
       );
+    }
+  }
+
+  Future<BackofficeAuthResult?> restoreSessionIfSignedIn({
+    required String restaurantId,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null || user.isAnonymous) {
+      return null;
+    }
+    try {
+      return await _loadAuthorizedSession(restaurantId: restaurantId);
+    } catch (_) {
+      return null;
     }
   }
 

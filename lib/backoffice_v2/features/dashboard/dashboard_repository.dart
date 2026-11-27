@@ -63,7 +63,7 @@ class DashboardRepository {
 
   final FirebaseFirestore _db;
 
-  static const int maxOrdersPerQuery = 300;
+  static const int maxOrdersPerQuery = 600;
 
   Future<ExecutiveDashboardData> loadDashboard({
     required String restaurantId,

@@ -1,0 +1,466 @@
+/**
+ * Synthetic 90-day demo seeder for `tacopos-backoffice-dev` ONLY.
+ *
+ * Uses `gcloud auth print-access-token` with Firestore & IdentityToolkit REST APIs.
+ * Safety guards:
+ * - Refuses to run unless TARGET_PROJECT === 'tacopos-backoffice-dev'.
+ * - Never writes passwords to disk, Git, or logs (only prints generated eval
+ *   credentials once to stdout).
+ */
+
+const crypto = require('node:crypto');
+const { execSync } = require('node:child_process');
+
+const TARGET_PROJECT = 'tacopos-backoffice-dev';
+const FORBIDDEN_PROJECTS = new Set(['tacopos-renovadev', 'tacopos-control']);
+
+if (process.env.GCLOUD_PROJECT && process.env.GCLOUD_PROJECT !== TARGET_PROJECT) {
+  throw new Error(`Refusing to run against project ${process.env.GCLOUD_PROJECT}`);
+}
+if (FORBIDDEN_PROJECTS.has(TARGET_PROJECT)) {
+  throw new Error(`Forbidden project ${TARGET_PROJECT}`);
+}
+
+const ACCESS_TOKEN = execSync('gcloud auth print-access-token', {
+  encoding: 'utf8',
+}).trim();
+
+const HEADERS = {
+  Authorization: `Bearer ${ACCESS_TOKEN}`,
+  'x-goog-user-project': TARGET_PROJECT,
+  'Content-Type': 'application/json',
+};
+
+function toFsValue(val) {
+  if (val === null || val === undefined) return { nullValue: null };
+  if (typeof val === 'boolean') return { booleanValue: val };
+  if (typeof val === 'number') {
+    return Number.isInteger(val)
+      ? { integerValue: String(val) }
+      : { doubleValue: val };
+  }
+  if (typeof val === 'string') return { stringValue: val };
+  if (val instanceof Date) return { timestampValue: val.toISOString() };
+  if (Array.isArray(val)) {
+    return { arrayValue: { values: val.map(toFsValue) } };
+  }
+  if (typeof val === 'object') {
+    const fields = {};
+    for (const [k, v] of Object.entries(val)) {
+      if (v !== undefined) fields[k] = toFsValue(v);
+    }
+    return { mapValue: { fields } };
+  }
+  return { stringValue: String(val) };
+}
+
+function makeWrite(docPath, data) {
+  const fields = {};
+  for (const [k, v] of Object.entries(data)) {
+    if (v !== undefined) fields[k] = toFsValue(v);
+  }
+  return {
+    update: {
+      name: `projects/${TARGET_PROJECT}/databases/(default)/documents/${docPath}`,
+      fields,
+    },
+  };
+}
+
+async function commitWrites(writes) {
+  const url = `https://firestore.googleapis.com/v1/projects/${TARGET_PROJECT}/databases/(default)/documents:commit`;
+  const chunkSize = 400;
+  for (let i = 0; i < writes.length; i += chunkSize) {
+    const chunk = writes.slice(i, i + chunkSize);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify({ writes: chunk }),
+    });
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`Firestore commit failed (${res.status}): ${txt}`);
+    }
+  }
+}
+
+async function ensureEvalUser(email, displayName) {
+  const password = `${crypto.randomBytes(9).toString('base64url')}!7Aa`;
+  const lookupRes = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/projects/${TARGET_PROJECT}/accounts:lookup`,
+    {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify({ email: [email] }),
+    },
+  );
+  const lookupJson = await lookupRes.json();
+  const existing = lookupJson.users && lookupJson.users[0];
+
+  if (existing && existing.localId) {
+    const updRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/projects/${TARGET_PROJECT}/accounts:update`,
+      {
+        method: 'POST',
+        headers: HEADERS,
+        body: JSON.stringify({
+          localId: existing.localId,
+          password,
+          displayName,
+          emailVerified: true,
+        }),
+      },
+    );
+    if (!updRes.ok) {
+      throw new Error(`Failed updating eval user: ${await updRes.text()}`);
+    }
+    return { uid: existing.localId, email, password };
+  }
+
+  const createRes = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/projects/${TARGET_PROJECT}/accounts`,
+    {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify({
+        email,
+        password,
+        displayName,
+        emailVerified: true,
+      }),
+    },
+  );
+  const createJson = await createRes.json();
+  if (!createRes.ok || !createJson.localId) {
+    throw new Error(`Failed creating eval user: ${JSON.stringify(createJson)}`);
+  }
+  return { uid: createJson.localId, email, password };
+}
+
+function formatDate(d) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+async function main() {
+  const evalEmail = 'evaluador@tacopos-backoffice-dev.local';
+  const evalUser = await ensureEvalUser(
+    evalEmail,
+    'Evaluador RenovaDev (Admin)',
+  );
+
+  const restaurantId = 'rest_alpha';
+  const restaurantName = 'Taquería Los Padrinos • Demo DEV';
+  const writes = [];
+
+  writes.push(
+    makeWrite(`restaurants/${restaurantId}`, {
+      name: restaurantName,
+      active: true,
+      synthetic: true,
+      currency: 'MXN',
+      timezone: 'America/Mexico_City',
+      updatedAt: new Date(),
+    }),
+  );
+
+  const branches = [
+    { id: 'suc_centro', name: 'Sucursal Centro', weight: 1 },
+    { id: 'suc_norte', name: 'Sucursal Norte', weight: 2 },
+  ];
+
+  for (let i = 0; i < branches.length; i++) {
+    const br = branches[i];
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/branches/${br.id}`, {
+        id: br.id,
+        restaurantId,
+        restaurantName,
+        name: br.name,
+        normalizedName: br.id,
+        active: true,
+        sortOrder: i + 1,
+        timezone: 'America/Mexico_City',
+      }),
+    );
+  }
+
+  writes.push(
+    makeWrite(`restaurants/${restaurantId}/authUsers/${evalUser.uid}`, {
+      employeeId: evalUser.uid,
+      displayName: 'Evaluador RenovaDev (Admin)',
+      active: true,
+      isSuperAdmin: true,
+      branchAccess: branches.map((x) => x.id),
+      permissions: {
+        canViewAdmin: true,
+        canManageEmployees: true,
+        canManageProducts: true,
+        canAuthorizeCashWithdrawals: true,
+      },
+    }),
+  );
+
+  const categories = [
+    { id: 'cat_tacos', name: 'Tacos', sortOrder: 1 },
+    { id: 'cat_esp', name: 'Especialidades', sortOrder: 2 },
+    { id: 'cat_beb', name: 'Bebidas', sortOrder: 3 },
+    { id: 'cat_pos', name: 'Postres', sortOrder: 4 },
+  ];
+  for (const cat of categories) {
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/productCategories/${cat.id}`, {
+        ...cat,
+        active: true,
+        restaurantId,
+      }),
+    );
+  }
+
+  const products = [
+    { id: 'p_pastor', name: 'Orden Tacos al Pastor (5 pzas)', category: 'Tacos', price: 135 },
+    { id: 'p_suadero', name: 'Orden Tacos de Suadero (5 pzas)', category: 'Tacos', price: 140 },
+    { id: 'p_gringa', name: 'Gringa de Pastor', category: 'Especialidades', price: 115 },
+    { id: 'p_volcan', name: 'Volcán de Arrachera', category: 'Especialidades', price: 85 },
+    { id: 'p_horchata', name: 'Agua de Horchata 1L', category: 'Bebidas', price: 60 },
+    { id: 'p_jamaica', name: 'Agua de Jamaica 1L', category: 'Bebidas', price: 55 },
+    { id: 'p_flan', name: 'Flan Napolitano', category: 'Postres', price: 65 },
+  ];
+  for (const prod of products) {
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/products/${prod.id}`, {
+        ...prod,
+        active: true,
+        restaurantId,
+      }),
+    );
+  }
+
+  const employees = [
+    { id: 'emp_carlos', name: 'Carlos Mendoza (Mesero)', role: 'waiter' },
+    { id: 'emp_laura', name: 'Laura Gómez (Cajera)', role: 'cashier' },
+    { id: 'emp_miguel', name: 'Miguel Ángel (Cocina)', role: 'kitchen' },
+    { id: evalUser.uid, name: 'Evaluador RenovaDev (Admin)', role: 'admin' },
+  ];
+  for (const emp of employees) {
+    writes.push(
+      makeWrite(`restaurants/${restaurantId}/employees/${emp.id}`, {
+        id: emp.id,
+        name: emp.name,
+        active: true,
+        canViewAdmin: emp.role === 'admin',
+      }),
+    );
+  }
+
+  const now = new Date();
+  let folioSeq = 1;
+  for (let dayOffset = 0; dayOffset < 90; dayOffset++) {
+    const dateObj = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() - dayOffset,
+    );
+    const businessDate = formatDate(dateObj);
+
+    for (const br of branches) {
+      const cashSessionId = `cs_${br.id}_${businessDate}`;
+      writes.push(
+        makeWrite(`restaurants/${restaurantId}/cashSessions/${cashSessionId}`, {
+          id: cashSessionId,
+          restaurantId,
+          restaurantName,
+          branchId: br.id,
+          branchName: br.name,
+          businessDate,
+          status: dayOffset === 0 ? 'open' : 'closed',
+          openingFloat: 1500,
+          expectedCash: 2500 + ((dayOffset * 173) % 1400),
+          countedCash: 2500 + ((dayOffset * 173) % 1400),
+        }),
+      );
+
+      const countToday =
+        dayOffset < 7 ? 3 : (dayOffset + br.weight) % 2 === 0 ? 3 : 2;
+      for (let k = 0; k < countToday; k++) {
+        const ordId = `ord_${br.id}_${businessDate}_${k + 1}`;
+        const hour = 13 + ((k * 3 + dayOffset) % 10);
+        const minute = (k * 17 + dayOffset * 5) % 60;
+        const createdAt = new Date(
+          dateObj.getFullYear(),
+          dateObj.getMonth(),
+          dateObj.getDate(),
+          hour,
+          minute,
+        );
+
+        const prodA = products[(dayOffset + k) % products.length];
+        const prodB = products[(dayOffset + k + 2) % products.length];
+        const qtyA = 1 + ((dayOffset + k) % 3);
+        const qtyB = 1 + (k % 2);
+        const gross = prodA.price * qtyA + prodB.price * qtyB;
+
+        const isCancelled = dayOffset % 19 === 4 && k === countToday - 1;
+        const isEmployeeMeal = !isCancelled && dayOffset % 11 === 3 && k === 0;
+        const hasDiscount =
+          !isCancelled && !isEmployeeMeal && dayOffset % 7 === 2 && k === 1;
+        const discountAmt = hasDiscount ? Math.round(gross * 0.1) : 0;
+        const netTotal = isCancelled ? 0 : gross - discountAmt;
+
+        const method = isEmployeeMeal
+          ? 'employee_consumption'
+          : k % 4 === 0
+          ? 'card'
+          : k % 4 === 1
+          ? 'cash'
+          : k % 4 === 2
+          ? 'platform_paid'
+          : 'cash';
+
+        const folio = `V-${String(folioSeq++).padStart(4, '0')}`;
+        const ordPath = `restaurants/${restaurantId}/orders/${ordId}`;
+
+        writes.push(
+          makeWrite(ordPath, {
+            id: ordId,
+            restaurantId,
+            restaurantName,
+            branchId: br.id,
+            branchName: br.name,
+            tableId:
+              method === 'platform_paid' ? 'takeout' : `mesa_${(k % 6) + 1}`,
+            tableName:
+              method === 'platform_paid' ? '' : `Mesa ${(k % 6) + 1}`,
+            orderType: method === 'platform_paid' ? 'takeout' : 'dine_in',
+            platformName: method === 'platform_paid' ? 'Uber Eats' : null,
+            status: isCancelled ? 'cancelled' : 'paid',
+            kitchenStatus: 'ready',
+            paymentStatus: isCancelled ? 'cancelled' : 'paid',
+            total: netTotal,
+            grossSubtotal: gross,
+            netTotal,
+            explicitDiscount: discountAmt,
+            discountApplied: hasDiscount,
+            discountName: hasDiscount
+              ? 'Promoción Cliente Frecuente 10%'
+              : null,
+            paidTotal: isCancelled ? 0 : netTotal,
+            pendingTotal: 0,
+            personNames: {
+              '1': isEmployeeMeal ? 'Consumo Interno' : `Cliente ${folio}`,
+            },
+            businessDate,
+            cashSessionId,
+            saleFolioFull: folio,
+            saleFolioDisplay: folio,
+            createdAt,
+            updatedAt: createdAt,
+            paidAt: isCancelled ? null : createdAt,
+          }),
+        );
+
+        writes.push(
+          makeWrite(`${ordPath}/items/item_1`, {
+            productId: prodA.id,
+            productName: prodA.name,
+            category: prodA.category,
+            qty: qtyA,
+            unitPrice: prodA.price,
+            total: prodA.price * qtyA,
+            personNumber: 1,
+            personName: `Cliente ${folio}`,
+            notes: '',
+            sendToKitchen: true,
+            kitchenStatus: 'ready',
+            paymentStatus: isCancelled ? 'cancelled' : 'paid',
+            status: isCancelled ? 'cancelled' : 'active',
+          }),
+        );
+
+        writes.push(
+          makeWrite(`${ordPath}/items/item_2`, {
+            productId: prodB.id,
+            productName: prodB.name,
+            category: prodB.category,
+            qty: qtyB,
+            unitPrice: prodB.price,
+            total: prodB.price * qtyB,
+            personNumber: 1,
+            personName: `Cliente ${folio}`,
+            notes: k === 0 ? 'Con cilantro y cebolla' : '',
+            sendToKitchen: true,
+            kitchenStatus: 'ready',
+            paymentStatus: isCancelled ? 'cancelled' : 'paid',
+            status: isCancelled ? 'cancelled' : 'active',
+          }),
+        );
+
+        if (!isCancelled) {
+          writes.push(
+            makeWrite(`${ordPath}/payments/pay_1`, {
+              orderId: ordId,
+              tableId:
+                method === 'platform_paid' ? 'takeout' : `mesa_${(k % 6) + 1}`,
+              tableName:
+                method === 'platform_paid' ? '' : `Mesa ${(k % 6) + 1}`,
+              type: method,
+              method,
+              baseAmount: netTotal,
+              surchargeRate: 0,
+              surchargeAmount: 0,
+              chargedAmount: netTotal,
+              appliedAmount: netTotal,
+              businessDate,
+              cashSessionId,
+              createdBy: employees[k % employees.length].id,
+              createdByEmployeeName: employees[k % employees.length].name,
+              status: 'active',
+              restaurantId,
+              branchId: br.id,
+              createdAt,
+            }),
+          );
+        }
+      }
+    }
+  }
+
+  writes.push(
+    makeWrite('restaurants/rest_beta', {
+      name: 'Tacos El Norte • Tenant Aislado',
+      active: true,
+      synthetic: true,
+    }),
+  );
+  writes.push(
+    makeWrite('restaurants/rest_beta/orders/ord_beta_isolated', {
+      id: 'ord_beta_isolated',
+      restaurantId: 'rest_beta',
+      branchId: 'suc_sur',
+      businessDate: formatDate(now),
+      status: 'paid',
+      total: 999,
+    }),
+  );
+
+  await commitWrites(writes);
+  console.log('SEED_DEV_OK');
+  console.log(
+    JSON.stringify({
+      projectId: TARGET_PROJECT,
+      restaurantId,
+      ordersSeeded: folioSeq - 1,
+      writesCommitted: writes.length,
+      evalEmail: evalUser.email,
+      evalPassword: evalUser.password,
+      evalUid: evalUser.uid,
+    }),
+  );
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

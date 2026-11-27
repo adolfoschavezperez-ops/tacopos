@@ -1,0 +1,15 @@
+{
+  "url": "https://tacopos-backoffice-dev.web.app",
+  "totalRequests": 345,
+  "uniqueHosts": [
+    "tacopos-backoffice-dev.web.app",
+    "www.gstatic.com",
+    "fonts.gstatic.com",
+    "identitytoolkit.googleapis.com",
+    "firestore.googleapis.com"
+  ],
+  "forbiddenRequests": [],
+  "consoleErrors": [],
+  "crossTenantRejected": false,
+  "persistedUrlAfterReload": "https://tacopos-backoffice-dev.web.app/#/dashboard"
+}

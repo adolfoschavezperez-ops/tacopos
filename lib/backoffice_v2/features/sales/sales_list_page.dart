@@ -79,6 +79,14 @@ class _SalesListPageState extends State<SalesListPage> {
           _startDate = today.subtract(const Duration(days: 6));
           _endDate = today;
           break;
+        case DatePreset.last30Days:
+          _startDate = today.subtract(const Duration(days: 29));
+          _endDate = today;
+          break;
+        case DatePreset.last90Days:
+          _startDate = today.subtract(const Duration(days: 89));
+          _endDate = today;
+          break;
         case DatePreset.monthToDate:
           _startDate = DateTime(today.year, today.month, 1);
           _endDate = today;

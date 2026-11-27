@@ -31,6 +31,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
   late final SalesRepository _salesRepository;
   late final BackofficeRouterDelegate _routerDelegate;
   final BackofficeRouteParser _routeParser = const BackofficeRouteParser();
+  bool _restoringSession = true;
 
   @override
   void initState() {
@@ -56,6 +57,23 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
         child: _buildSection(route, onNavigate),
       ),
     );
+    _restoreSession();
+  }
+
+  Future<void> _restoreSession() async {
+    final result = await _authService.restoreSessionIfSignedIn(
+      restaurantId: widget.config.defaultRestaurantId,
+    );
+    if (!mounted) return;
+    if (result != null) {
+      _session.signIn(
+        employee: result.employee,
+        restaurantId: result.restaurantId,
+        restaurantName: result.restaurantName,
+        branches: result.branches,
+      );
+    }
+    setState(() => _restoringSession = false);
   }
 
   @override
@@ -177,6 +195,24 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
     return AnimatedBuilder(
       animation: _session,
       builder: (context, _) {
+        if (_restoringSession) {
+          return MaterialApp(
+            title: 'TacoPOS Backoffice 2.0 (${widget.config.badgeLabel})',
+            debugShowCheckedModeBanner: false,
+            theme: BackofficeTheme.light(),
+            darkTheme: BackofficeTheme.dark(),
+            themeMode: _session.themeMode,
+            home: const Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2.2),
+                ),
+              ),
+            ),
+          );
+        }
         return MaterialApp.router(
           title: 'TacoPOS Backoffice 2.0 (${widget.config.badgeLabel})',
           debugShowCheckedModeBanner: false,

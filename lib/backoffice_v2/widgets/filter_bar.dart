@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/design/design_tokens.dart';
 
-enum DatePreset { today, last7Days, monthToDate, custom }
+enum DatePreset { today, last7Days, last30Days, last90Days, monthToDate, custom }
 
 class SaasFilterBar extends StatelessWidget {
   const SaasFilterBar({
@@ -88,6 +88,8 @@ class _PresetGroup extends StatelessWidget {
     final items = [
       (DatePreset.today, 'Hoy'),
       (DatePreset.last7Days, '7 días'),
+      (DatePreset.last30Days, '30 días'),
+      (DatePreset.last90Days, '90 días'),
       (DatePreset.monthToDate, 'Mes'),
     ];
 

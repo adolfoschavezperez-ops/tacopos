@@ -78,6 +78,14 @@ class _DashboardPageState extends State<DashboardPage> {
           _startDate = today.subtract(const Duration(days: 6));
           _endDate = today;
           break;
+        case DatePreset.last30Days:
+          _startDate = today.subtract(const Duration(days: 29));
+          _endDate = today;
+          break;
+        case DatePreset.last90Days:
+          _startDate = today.subtract(const Duration(days: 89));
+          _endDate = today;
+          break;
         case DatePreset.monthToDate:
           _startDate = DateTime(today.year, today.month, 1);
           _endDate = today;
@@ -138,7 +146,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${widget.session.restaurantName} • ${widget.session.selectedBranchLabel}',
+                    '${widget.session.restaurantName} • ${widget.session.selectedBranchLabel} • Datos ficticios DEV (MXN)',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -558,10 +566,32 @@ class _RevenueBarChart extends StatelessWidget {
 
   final List<DailyRevenuePoint> series;
 
+  List<DailyRevenuePoint> _bucketSeries(List<DailyRevenuePoint> raw) {
+    if (raw.length <= 14) return raw;
+    final bucketSize = (raw.length / 12).ceil();
+    final buckets = <DailyRevenuePoint>[];
+    for (var i = 0; i < raw.length; i += bucketSize) {
+      final slice = raw.sublist(i, math.min(i + bucketSize, raw.length));
+      final total = slice.fold<double>(0, (sum, e) => sum + e.netSales);
+      final count = slice.fold<int>(0, (sum, e) => sum + e.ordersCount);
+      final firstDate = slice.first.businessDate;
+      final label = firstDate.length >= 10 ? firstDate.substring(5) : firstDate;
+      buckets.add(
+        DailyRevenuePoint(
+          businessDate: slice.length > 1 ? '$label…' : firstDate,
+          netSales: total,
+          ordersCount: count,
+        ),
+      );
+    }
+    return buckets;
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = BackofficeTokens.of(context);
-    final maxVal = series.fold<double>(
+    final displaySeries = _bucketSeries(series);
+    final maxVal = displaySeries.fold<double>(
       1,
       (prev, e) => math.max(prev, e.netSales),
     );
@@ -571,7 +601,7 @@ class _RevenueBarChart extends StatelessWidget {
         Expanded(
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
-            children: series.map((point) {
+            children: displaySeries.map((point) {
               final factor = (point.netSales / maxVal).clamp(0.04, 1.0);
               final shortDate = point.businessDate.length >= 10
                   ? point.businessDate.substring(5)

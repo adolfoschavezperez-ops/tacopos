@@ -365,7 +365,7 @@ class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
                                 controller: _emailController,
                                 keyboardType: TextInputType.emailAddress,
                                 decoration: const InputDecoration(
-                                  hintText: 'admin@tacopos-dev.local',
+                                  hintText: 'correo@ejemplo.com',
                                   prefixIcon: Icon(
                                     Icons.email_outlined,
                                     size: 16,
