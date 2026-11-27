@@ -98,10 +98,19 @@ OperationalOrderBlocker? evaluateOperationalOrderBlocker({
   required List<OrderItem> items,
   required List<Payment> payments,
   required bool belongsToBranchAndDate,
+  bool includeGhostAsReviewBlocker = false,
 }) {
   if (!belongsToBranchAndDate || !isActiveOrderState(order)) return null;
   final evaluation = evaluateGhostOrder(order, items, payments);
-  if (evaluation.isGhost) return null;
+  if (evaluation.isGhost) {
+    if (!includeGhostAsReviewBlocker) return null;
+    return OperationalOrderBlocker(
+      order: order,
+      reason: 'orden ambigua; requiere revision',
+      activeItemCount: evaluation.activeItemsCount,
+      activePaymentCount: evaluation.activePaymentsCount,
+    );
+  }
   if (!isOperationalOrderActive(
     order: order,
     items: items,

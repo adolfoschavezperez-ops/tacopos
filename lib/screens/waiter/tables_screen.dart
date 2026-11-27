@@ -43,6 +43,7 @@ class _TablesScreenState extends State<TablesScreen> {
     _reconciliation = _repository.reconcileGhostOrdersAndTableLinks(
       branchId: AppSession.instance.currentBranchId,
       triggeredBy: 'waiter_tables',
+      applyAutomaticRepairs: true,
     );
     _tables = _watchTablesAfterReconciliation();
     _markViewingTables();
