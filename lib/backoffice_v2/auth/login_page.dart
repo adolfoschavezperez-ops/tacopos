@@ -38,6 +38,7 @@ class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
     _restaurantController = TextEditingController(
       text: widget.session.config.defaultRestaurantId,
     );
+    _error = widget.session.consumeNotice();
   }
 
   @override
@@ -69,6 +70,7 @@ class _BackofficeLoginPageState extends State<BackofficeLoginPage> {
       if (!mounted) return;
       widget.session.signIn(
         employee: result.employee,
+        isSuperAdmin: result.isSuperAdmin,
         restaurantId: result.restaurantId,
         restaurantName: result.restaurantName,
         branches: result.branches,

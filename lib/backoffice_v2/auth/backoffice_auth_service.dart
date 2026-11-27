@@ -23,12 +23,14 @@ class BackofficeAuthException implements Exception {
 class BackofficeAuthResult {
   const BackofficeAuthResult({
     required this.employee,
+    required this.isSuperAdmin,
     required this.restaurantId,
     required this.restaurantName,
     required this.branches,
   });
 
   final Employee employee;
+  final bool isSuperAdmin;
   final String restaurantId;
   final String restaurantName;
   final List<Branch> branches;
@@ -264,6 +266,7 @@ class BackofficeV2AuthService {
 
     return BackofficeAuthResult(
       employee: employee,
+      isSuperAdmin: record.isSuperAdmin,
       restaurantId: restaurantId,
       restaurantName: restaurantName,
       branches: allowedBranches,

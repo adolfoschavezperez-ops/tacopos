@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/branch.dart';
 import '../../models/employee.dart';
 import '../core/env/backoffice_env.dart';
+import 'backoffice_permissions.dart';
 
 class BackofficeSession extends ChangeNotifier {
   BackofficeSession({required this.config})
@@ -11,20 +12,26 @@ class BackofficeSession extends ChangeNotifier {
   final BackofficeConfig config;
 
   Employee? _employee;
+  bool _isSuperAdmin = false;
   String _restaurantId;
-  String _restaurantName = 'TacoPOS SaaS';
+  String _restaurantName = 'TacoPOS';
   List<Branch> _branches = const [];
   String? _selectedBranchId; // null => Todas las sucursales
   ThemeMode _themeMode = ThemeMode.light;
+  String? _sessionNotice;
 
   Employee? get employee => _employee;
+  bool get isSuperAdmin => _isSuperAdmin;
   bool get isAuthenticated => _employee != null;
+  BackofficePermissions get permissions =>
+      BackofficePermissions(employee: _employee, isSuperAdmin: _isSuperAdmin);
   String get restaurantId => _restaurantId;
   String get restaurantName => _restaurantName;
   List<Branch> get branches => _branches;
   String? get selectedBranchId => _selectedBranchId;
   ThemeMode get themeMode => _themeMode;
   bool get isDarkMode => _themeMode == ThemeMode.dark;
+  String? get sessionNotice => _sessionNotice;
 
   Branch? get selectedBranch {
     final id = _selectedBranchId;
@@ -50,18 +57,27 @@ class BackofficeSession extends ChangeNotifier {
     );
   }
 
+  String? consumeNotice() {
+    final notice = _sessionNotice;
+    _sessionNotice = null;
+    return notice;
+  }
+
   void signIn({
     required Employee employee,
+    bool isSuperAdmin = false,
     required String restaurantId,
     required String restaurantName,
     required List<Branch> branches,
     String? initialBranchId,
   }) {
     _employee = employee;
+    _isSuperAdmin = isSuperAdmin;
     _restaurantId = restaurantId;
     _restaurantName = restaurantName;
     _branches = List.unmodifiable(branches);
     _selectedBranchId = initialBranchId;
+    _sessionNotice = null;
     notifyListeners();
   }
 
@@ -71,10 +87,12 @@ class BackofficeSession extends ChangeNotifier {
     notifyListeners();
   }
 
-  void signOut() {
+  void signOut({String? notice}) {
     _employee = null;
+    _isSuperAdmin = false;
     _branches = const [];
     _selectedBranchId = null;
+    _sessionNotice = notice;
     notifyListeners();
   }
 }

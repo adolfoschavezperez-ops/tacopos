@@ -49,8 +49,60 @@ class SalesRepository {
     String? branchId,
     String? statusFilter,
     DocumentSnapshot<Map<String, dynamic>>? startAfter,
-    int pageSize = 25,
+    int pageSize = 20,
   }) async {
+    final query = _buildOrdersQuery(
+      restaurantId: restaurantId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      branchId: branchId,
+      statusFilter: statusFilter,
+    );
+
+    final effectiveQuery = startAfter != null
+        ? query.startAfterDocument(startAfter)
+        : query;
+
+    final snapshot = await effectiveQuery.limit(pageSize + 1).get();
+    final hasNext = snapshot.docs.length > pageSize;
+    final pageDocs = hasNext
+        ? snapshot.docs.take(pageSize).toList(growable: false)
+        : snapshot.docs;
+
+    return SalesCursorPage(
+      orders: pageDocs.map(PosOrder.fromDoc).toList(growable: false),
+      lastDocument: pageDocs.isEmpty ? null : pageDocs.last,
+      hasNext: hasNext,
+    );
+  }
+
+  /// Bounded full-range fetch for full-set search and complete CSV export.
+  Future<List<PosOrder>> fetchOrdersInRange({
+    required String restaurantId,
+    required String startBusinessDate,
+    required String endBusinessDate,
+    String? branchId,
+    String? statusFilter,
+    int limit = 600,
+  }) async {
+    final query = _buildOrdersQuery(
+      restaurantId: restaurantId,
+      startBusinessDate: startBusinessDate,
+      endBusinessDate: endBusinessDate,
+      branchId: branchId,
+      statusFilter: statusFilter,
+    );
+    final snapshot = await query.limit(limit).get();
+    return snapshot.docs.map(PosOrder.fromDoc).toList(growable: false);
+  }
+
+  Query<Map<String, dynamic>> _buildOrdersQuery({
+    required String restaurantId,
+    required String startBusinessDate,
+    required String endBusinessDate,
+    String? branchId,
+    String? statusFilter,
+  }) {
     Query<Map<String, dynamic>> query = _db
         .collection('restaurants')
         .doc(restaurantId)
@@ -63,26 +115,10 @@ class SalesRepository {
     if (branchId != null && branchId.isNotEmpty) {
       query = query.where('branchId', isEqualTo: branchId);
     }
-
     if (statusFilter != null && statusFilter.isNotEmpty) {
       query = query.where('status', isEqualTo: statusFilter);
     }
-
-    if (startAfter != null) {
-      query = query.startAfterDocument(startAfter);
-    }
-
-    final snapshot = await query.limit(pageSize + 1).get();
-    final hasNext = snapshot.docs.length > pageSize;
-    final pageDocs = hasNext
-        ? snapshot.docs.take(pageSize).toList(growable: false)
-        : snapshot.docs;
-
-    return SalesCursorPage(
-      orders: pageDocs.map(PosOrder.fromDoc).toList(growable: false),
-      lastDocument: pageDocs.isEmpty ? null : pageDocs.last,
-      hasNext: hasNext,
-    );
+    return query;
   }
 
   Future<SaleDetailData?> loadSaleDetail({

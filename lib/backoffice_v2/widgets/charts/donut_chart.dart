@@ -22,10 +22,12 @@ class PaymentDonutChart extends StatelessWidget {
     super.key,
     required this.slices,
     required this.totalAmount,
+    this.centerLabel = 'Ingreso monetario',
   });
 
   final List<DonutSlice> slices;
   final double totalAmount;
+  final String centerLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -53,7 +55,7 @@ class PaymentDonutChart extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Total cobrado',
+                    centerLabel,
                     style: TextStyle(fontSize: 10.5, color: tokens.textMuted),
                   ),
                   const SizedBox(height: 2),

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/reports/canonical_sales_summary.dart';
 import '../../../models/order.dart';
+import '../../../utils/csv_exporter.dart';
 import '../../auth/backoffice_session.dart';
 import '../../core/adapters/sales_adapter.dart';
 import '../../core/design/design_tokens.dart';
@@ -116,7 +117,7 @@ class _DashboardPageState extends State<DashboardPage> {
     _load();
   }
 
-  void _load() {
+  void _load({bool forceRefresh = false}) {
     setState(() {
       _future = widget.repository.loadDashboard(
         restaurantId: widget.session.restaurantId,
@@ -124,8 +125,42 @@ class _DashboardPageState extends State<DashboardPage> {
         endBusinessDate: BackofficeSalesAdapter.formatBusinessDate(_endDate),
         branches: widget.session.branches,
         branchId: widget.session.selectedBranchId,
+        forceRefresh: forceRefresh,
       );
     });
+  }
+
+  Future<void> _exportDashboardCsv(ExecutiveDashboardData data) async {
+    final s = data.summary;
+    final start = BackofficeSalesAdapter.formatBusinessDate(_startDate);
+    final end = BackofficeSalesAdapter.formatBusinessDate(_endDate);
+    final buf = StringBuffer()
+      ..writeln('Seccion,Concepto,Cantidad,Monto')
+      ..writeln('Resumen,Ventas brutas,${s.paidOrdersCount},${s.grossSales.toStringAsFixed(2)}')
+      ..writeln('Resumen,Descuentos,,${s.discountTotal.toStringAsFixed(2)}')
+      ..writeln('Resumen,Consumo interno beneficios,,${s.employeeFreeMealTotal.toStringAsFixed(2)}')
+      ..writeln('Resumen,Ventas netas,${s.paidOrdersCount},${s.netSales.toStringAsFixed(2)}')
+      ..writeln('Cobros monetarios,Efectivo,,${s.cashCollected.toStringAsFixed(2)}')
+      ..writeln('Cobros monetarios,Tarjeta,,${s.cardCollected.toStringAsFixed(2)}')
+      ..writeln('Cobros monetarios,Plataformas,,${s.platformCollected.toStringAsFixed(2)}')
+      ..writeln('Cobros monetarios,Total ingreso monetario,,${s.monetaryCollected.toStringAsFixed(2)}')
+      ..writeln('No monetario,Consumo interno cobrado,,${s.employeeConsumption.toStringAsFixed(2)}')
+      ..writeln('Adicionales,Propinas,,${data.totalTips.toStringAsFixed(2)}')
+      ..writeln('Adicionales,Comisiones tarjeta absorbidas,,${data.totalCardFeesAbsorbed.toStringAsFixed(2)}');
+
+    for (final p in s.productRows) {
+      buf.writeln('Producto,"${p.productName.replaceAll('"', '""')}",${p.qty},${p.netSales.toStringAsFixed(2)}');
+    }
+    for (final emp in data.employeeBreakdown) {
+      buf.writeln('Empleado,"${emp.employeeName.replaceAll('"', '""')}",${emp.operationsCount},${emp.collectedAmount.toStringAsFixed(2)}');
+    }
+
+    final msg = await exportCsvFile(
+      fileName: 'resumen_${start}_a_$end.csv',
+      content: buf.toString(),
+    );
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   String? _formatDelta(double? pct) {
@@ -189,7 +224,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
                 const SizedBox(width: 8),
                 OutlinedButton.icon(
-                  onPressed: _load,
+                  onPressed: () => _load(forceRefresh: true),
                   icon: const Icon(Icons.refresh_rounded, size: 15),
                   label: const Text('Actualizar'),
                 ),
@@ -389,30 +424,78 @@ class _DashboardPageState extends State<DashboardPage> {
                       child: RevenueAreaChart(series: data.dailySeries),
                     );
                     final donutCard = SaasCard(
-                      title: 'Métodos de cobro',
-                      subtitle: 'Distribución del periodo',
-                      child: PaymentDonutChart(
-                        totalAmount: summary.totalCollected,
-                        slices: [
-                          DonutSlice(
-                            label: 'Efectivo',
-                            amount: summary.cashCollected,
-                            color: tokens.success,
+                      title: 'Ingresos monetarios por método',
+                      subtitle: 'Dinero efectivamente cobrado (excluye consumo interno)',
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          PaymentDonutChart(
+                            totalAmount: summary.monetaryCollected,
+                            centerLabel: 'Ingreso monetario',
+                            slices: [
+                              DonutSlice(
+                                label: 'Efectivo',
+                                amount: summary.cashCollected,
+                                color: tokens.success,
+                              ),
+                              DonutSlice(
+                                label: 'Tarjeta',
+                                amount: summary.cardCollected,
+                                color: tokens.info,
+                              ),
+                              DonutSlice(
+                                label: 'Plataformas',
+                                amount: summary.platformCollected,
+                                color: tokens.brandAccent,
+                              ),
+                            ],
                           ),
-                          DonutSlice(
-                            label: 'Tarjeta',
-                            amount: summary.cardCollected,
-                            color: tokens.info,
+                          const Divider(height: 22),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Consumo interno (no monetario)',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ),
+                              Text(
+                                BackofficeSalesAdapter.formatMoney(
+                                  summary.employeeConsumption +
+                                      summary.employeeFreeMealTotal,
+                                ),
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: tokens.textPrimary,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                          DonutSlice(
-                            label: 'Plataformas',
-                            amount: summary.platformCollected,
-                            color: tokens.brandAccent,
-                          ),
-                          DonutSlice(
-                            label: 'Consumo interno',
-                            amount: summary.employeeConsumption,
-                            color: tokens.textMuted,
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Propinas • Comisiones absorbidas',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ),
+                              Text(
+                                '${BackofficeSalesAdapter.formatMoney(data.totalTips)} • ${BackofficeSalesAdapter.formatMoney(data.totalCardFeesAbsorbed)}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w500,
+                                  color: tokens.textSecondary,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures(),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ],
                       ),
@@ -477,11 +560,56 @@ class _DashboardPageState extends State<DashboardPage> {
                     );
 
                     final alertsCard = SaasCard(
-                      title: 'Alertas financieras',
-                      subtitle: 'Seguimiento operativo del periodo',
-                      child: _FinancialAlertsList(
-                        summary: summary,
-                        cancelledCount: data.cancelledOrdersCount,
+                      title: 'Ventas por empleado y alertas',
+                      subtitle: 'Top operadores y seguimiento',
+                      trailing: widget.session.permissions.canExportData
+                          ? OutlinedButton.icon(
+                              onPressed: () => _exportDashboardCsv(data),
+                              icon: const Icon(Icons.download_rounded, size: 14),
+                              label: const Text('CSV'),
+                            )
+                          : null,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (data.employeeBreakdown.isNotEmpty) ...[
+                            ...data.employeeBreakdown.take(3).map(
+                              (emp) => Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        emp.employeeName,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodyMedium,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${emp.operationsCount} ops • ${BackofficeSalesAdapter.formatMoney(emp.collectedAmount)}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: tokens.textPrimary,
+                                        fontFeatures: const [
+                                          FontFeature.tabularFigures(),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            const Divider(height: 18),
+                          ],
+                          _FinancialAlertsList(
+                            summary: summary,
+                            cancelledCount: data.cancelledOrdersCount,
+                          ),
+                        ],
                       ),
                     );
 

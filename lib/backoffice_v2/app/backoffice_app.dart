@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import '../auth/backoffice_auth_service.dart';
@@ -14,6 +17,7 @@ import '../features/sales/sales_repository.dart';
 import '../navigation/app_shell.dart';
 import '../navigation/backoffice_route.dart';
 import '../navigation/backoffice_router.dart';
+import '../widgets/empty_error_state.dart';
 
 class BackofficeV2App extends StatefulWidget {
   const BackofficeV2App({super.key, required this.config});
@@ -31,7 +35,9 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
   late final SalesRepository _salesRepository;
   late final BackofficeRouterDelegate _routerDelegate;
   final BackofficeRouteParser _routeParser = const BackofficeRouteParser();
+  StreamSubscription<User?>? _authSub;
   bool _restoringSession = true;
+  bool _explicitSignOut = false;
 
   @override
   void initState() {
@@ -51,6 +57,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
         currentRoute: route,
         onNavigate: onNavigate,
         onSignOut: () async {
+          _explicitSignOut = true;
           await _authService.signOut();
           _session.signOut();
         },
@@ -58,6 +65,15 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
       ),
     );
     _restoreSession();
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (!_restoringSession && user == null && _session.isAuthenticated) {
+        final notice = _explicitSignOut
+            ? null
+            : 'Tu sesión expiró. Inicia sesión nuevamente.';
+        _explicitSignOut = false;
+        _session.signOut(notice: notice);
+      }
+    });
   }
 
   Future<void> _restoreSession() async {
@@ -68,6 +84,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
     if (result != null) {
       _session.signIn(
         employee: result.employee,
+        isSuperAdmin: result.isSuperAdmin,
         restaurantId: result.restaurantId,
         restaurantName: result.restaurantName,
         branches: result.branches,
@@ -78,6 +95,7 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
 
   @override
   void dispose() {
+    _authSub?.cancel();
     _routerDelegate.dispose();
     _session.dispose();
     super.dispose();
@@ -87,6 +105,18 @@ class _BackofficeV2AppState extends State<BackofficeV2App> {
     BackofficeRoute route,
     ValueChanged<BackofficeRoute> onNavigate,
   ) {
+    if (!_session.permissions.canViewSection(route.section)) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: SaasEmptyState(
+          icon: Icons.lock_outline_rounded,
+          title: 'Sin permisos para esta sección',
+          message:
+              'Tu perfil actual no cuenta con autorización para consultar este módulo.',
+        ),
+      );
+    }
+
     if (route.saleId != null && route.saleId!.isNotEmpty) {
       return SaleDetailPage(
         session: _session,

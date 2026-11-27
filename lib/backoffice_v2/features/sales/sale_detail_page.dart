@@ -403,6 +403,34 @@ class _SaleDetailPageState extends State<SaleDetailPage> {
                                 ),
                                 bold: true,
                               ),
+                              if (data.payments.fold<double>(
+                                    0,
+                                    (s, p) => s + p.tipAmount,
+                                  ) >
+                                  0)
+                                _SummaryLine(
+                                  'Propinas',
+                                  BackofficeSalesAdapter.formatMoney(
+                                    data.payments.fold<double>(
+                                      0,
+                                      (s, p) => s + p.tipAmount,
+                                    ),
+                                  ),
+                                ),
+                              if (data.payments.fold<double>(
+                                    0,
+                                    (s, p) => s + p.cardFeeAbsorbedAmount,
+                                  ) >
+                                  0)
+                                _SummaryLine(
+                                  'Comisión tarjeta',
+                                  BackofficeSalesAdapter.formatMoney(
+                                    data.payments.fold<double>(
+                                      0,
+                                      (s, p) => s + p.cardFeeAbsorbedAmount,
+                                    ),
+                                  ),
+                                ),
                               if (order.discountApplied &&
                                   (order.discountName ?? '').isNotEmpty) ...[
                                 const SizedBox(height: 8),
