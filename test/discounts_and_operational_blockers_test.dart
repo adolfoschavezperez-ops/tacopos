@@ -103,6 +103,24 @@ void main() {
     expect(blocker, isNull);
   });
 
+  test(
+    'orden con todos los artículos cancelados queda como bloqueo ambiguo',
+    () {
+      final blocker = evaluateOperationalOrderBlocker(
+        order: order(total: 0, pendingTotal: 0),
+        items: [item(status: 'cancelled', cancelStatus: 'accepted')],
+        payments: const [],
+        belongsToBranchAndDate: true,
+        includeGhostAsReviewBlocker: true,
+      );
+
+      expect(blocker, isNotNull);
+      expect(blocker!.reason, 'orden ambigua; requiere revision');
+      expect(blocker.activeItemCount, 0);
+      expect(blocker.activePaymentCount, 0);
+    },
+  );
+
   test('orden real abierta bloquea con folio y motivo', () {
     final blocker = evaluateOperationalOrderBlocker(
       order: order(
@@ -213,7 +231,11 @@ PosOrder order({
   );
 }
 
-OrderItem item({String paymentStatus = 'pending'}) {
+OrderItem item({
+  String paymentStatus = 'pending',
+  String status = 'active',
+  String cancelStatus = 'none',
+}) {
   return OrderItem(
     id: 'item',
     personNumber: 1,
@@ -227,6 +249,8 @@ OrderItem item({String paymentStatus = 'pending'}) {
     notes: '',
     sendToKitchen: true,
     kitchenStatus: 'sent',
+    status: status,
+    cancelStatus: cancelStatus,
     paymentStatus: paymentStatus,
   );
 }

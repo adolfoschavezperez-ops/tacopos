@@ -14,6 +14,14 @@ class SubmissionErrorPresentation {
   final bool canRetry;
 
   factory SubmissionErrorPresentation.from(Object error) {
+    if (error is LocalOrderCaptureConfirmationPending) {
+      return const SubmissionErrorPresentation(
+        message:
+            'El servidor no confirmó si la comanda se envió. Tu captura sigue guardada; reintenta el envío sin volver a capturar.',
+        isConnectivityFailure: false,
+        canRetry: true,
+      );
+    }
     final cause = _unwrap(error);
     if (cause is! FirebaseFunctionsException) {
       return const SubmissionErrorPresentation(
@@ -25,6 +33,11 @@ class SubmissionErrorPresentation {
 
     final code = cause.code.toLowerCase();
     final original = cause.message?.trim();
+    final details = cause.details;
+    final detailsText = details is Map
+        ? '${details['reason'] ?? ''} ${details['message'] ?? ''}'
+        : details?.toString() ?? '';
+    final lowerError = '${original ?? ''} $detailsText'.toLowerCase();
     final hasOriginal = original != null && original.isNotEmpty;
     if (code == 'unavailable' || code == 'deadline-exceeded') {
       return SubmissionErrorPresentation(
@@ -36,18 +49,31 @@ class SubmissionErrorPresentation {
       );
     }
     if (code == 'unauthenticated') {
-      final lower = (original ?? '').toLowerCase();
       final appCheck =
-          lower.contains('app check') || lower.contains('appcheck');
+          lowerError.contains('app check') ||
+          lowerError.contains('appcheck') ||
+          lowerError.contains('app_check');
       return SubmissionErrorPresentation(
         message: appCheck
             ? 'No se pudo validar esta instalación. Tu pedido sigue guardado.'
             : 'Tu sesión requiere validación. Inicia sesión y reintenta.',
         isConnectivityFailure: false,
-        canRetry: false,
+        canRetry: appCheck,
       );
     }
     if (code == 'permission-denied') {
+      final appCheck =
+          lowerError.contains('app check') ||
+          lowerError.contains('appcheck') ||
+          lowerError.contains('app_check');
+      if (appCheck) {
+        return const SubmissionErrorPresentation(
+          message:
+              'No se pudo validar la seguridad de esta instalación. Tu pedido sigue guardado.',
+          isConnectivityFailure: false,
+          canRetry: true,
+        );
+      }
       return SubmissionErrorPresentation(
         message: hasOriginal
             ? original

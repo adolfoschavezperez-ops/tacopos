@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_functions/cloud_functions.dart';
 
 import '../core/orders/local_order_capture.dart';
@@ -8,6 +10,8 @@ const _useFirebaseEmulators = bool.fromEnvironment(
 );
 
 class LocalOrderCaptureSubmitter {
+  static Future<void> _appCheckRetryTail = Future<void>.value();
+
   LocalOrderCaptureSubmitter._(this._call, this._resolve);
 
   factory LocalOrderCaptureSubmitter.production({
@@ -69,10 +73,56 @@ class LocalOrderCaptureSubmitter {
   )
   _resolve;
 
-  Future<Map<String, dynamic>> submit(LocalOrderCaptureSubmission submission) =>
-      _call(submission);
+  Future<Map<String, dynamic>> submit(
+    LocalOrderCaptureSubmission submission, {
+    void Function()? onAppCheckRetry,
+  }) =>
+      _submitWithAppCheckRecovery(submission, onAppCheckRetry: onAppCheckRetry);
+
+  Future<Map<String, dynamic>> _submitWithAppCheckRecovery(
+    LocalOrderCaptureSubmission submission, {
+    void Function()? onAppCheckRetry,
+  }) async {
+    try {
+      return await _call(submission);
+    } on FirebaseFunctionsException catch (error) {
+      if (!_isExplicitAppCheckRejection(error)) rethrow;
+      // Serialize retries so simultaneous rejected requests don't fan out
+      // token recovery calls. Every order still gets one retry with its own
+      // frozen payload and idempotency key.
+      final previousRetry = _appCheckRetryTail;
+      final retrySlot = Completer<void>();
+      _appCheckRetryTail = retrySlot.future;
+      await previousRetry;
+      try {
+        onAppCheckRetry?.call();
+        // The callable SDK obtains a fresh limited-use App Check token.
+        return await _call(submission);
+      } finally {
+        retrySlot.complete();
+      }
+    }
+  }
+
+  static bool isExplicitAppCheckRejection(FirebaseFunctionsException error) =>
+      _isExplicitAppCheckRejection(error);
 
   Future<Map<String, dynamic>> resolve(
     LocalOrderCaptureSubmission submission,
   ) => _resolve(submission);
+}
+
+bool _isExplicitAppCheckRejection(FirebaseFunctionsException error) {
+  if (error.code != 'unauthenticated' && error.code != 'permission-denied') {
+    return false;
+  }
+  final details = error.details;
+  final detailText = details is Map
+      ? '${details['reason'] ?? ''} ${details['message'] ?? ''}'
+      : details?.toString() ?? '';
+  final text = '${error.message ?? ''} $detailText'.toLowerCase();
+  return text.contains('app check') ||
+      text.contains('appcheck') ||
+      text.contains('app_check') ||
+      text.contains('decoding app check token failed');
 }

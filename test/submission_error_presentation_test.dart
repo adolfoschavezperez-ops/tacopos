@@ -42,7 +42,7 @@ void main() {
     );
 
     expect(result.isConnectivityFailure, isFalse);
-    expect(result.canRetry, isFalse);
+    expect(result.canRetry, isTrue);
     expect(result.message, contains('validar esta instalación'));
   });
 
@@ -53,5 +53,19 @@ void main() {
     expect(result.canRetry, isTrue);
     expect(result.message, contains('No se pudo confirmar'));
     expect(result.message, isNot(contains('Conexión inestable')));
+  });
+
+  test('unknown server confirmation is not mislabeled as connectivity', () {
+    final result = SubmissionErrorPresentation.from(
+      LocalOrderCaptureConfirmationPending(
+        submissionCause: StateError('transport'),
+        resolutionCause: StateError('resolver'),
+      ),
+    );
+
+    expect(result.isConnectivityFailure, isFalse);
+    expect(result.canRetry, isTrue);
+    expect(result.message, contains('no confirmó si la comanda se envió'));
+    expect(result.message, contains('sin volver a capturar'));
   });
 }

@@ -1322,6 +1322,24 @@ String _cleanFunctionMessage(
   return message == null || message.isEmpty ? fallback : message;
 }
 
+String _captureErrorCategory(Object error) {
+  if (error is FirebaseFunctionsException) {
+    if (LocalOrderCaptureSubmitter.isExplicitAppCheckRejection(error)) {
+      return 'app_check_token_rejected';
+    }
+    return switch (error.code) {
+      'unavailable' || 'deadline-exceeded' => 'transport_unavailable',
+      'unauthenticated' => 'authentication_rejected',
+      'permission-denied' => 'permission_rejected',
+      'invalid-argument' || 'failed-precondition' => 'business_validation',
+      'resource-exhausted' => 'resource_exhausted',
+      _ => 'functions_${error.code}',
+    };
+  }
+  if (error is FirebaseException) return 'firebase_${error.code}';
+  return error.runtimeType.toString();
+}
+
 class TacoPosRepository {
   TacoPosRepository({
     FirebaseFirestore? firestore,
@@ -1810,7 +1828,10 @@ class TacoPosRepository {
   Stream<List<PosTable>> watchTables({bool activeOnly = true}) {
     return _diagnoseQueryStream('tables.tables', _tablesRef.snapshots(), (
       snapshot,
+      subscriptionId,
+      screenId,
     ) {
+      final processing = Stopwatch()..start();
       final tables = _filterCurrentBranch(
         snapshot.docs.map(PosTable.fromDoc),
         (table) => table.branchId,
@@ -1818,7 +1839,9 @@ class TacoPosRepository {
       final results = activeOnly
           ? tables.where((table) => table.active).toList()
           : tables;
-      OperationalDiagnosticsService.instance.record(
+      processing.stop();
+      final diagnostics = OperationalDiagnosticsService.instance;
+      diagnostics.record(
         'firestore',
         'tables_snapshot',
         fields: {
@@ -1827,6 +1850,13 @@ class TacoPosRepository {
           'fromCache': snapshot.metadata.isFromCache,
           'pendingWrites': snapshot.metadata.hasPendingWrites,
           'source': activeOnly ? 'tables.active' : 'tables.all',
+          if (kDebugMode) 'snapshotDocuments': snapshot.docs.length,
+          if (kDebugMode) 'changedDocuments': snapshot.docChanges.length,
+          if (kDebugMode) 'convertedDocuments': snapshot.docs.length,
+          if (kDebugMode) 'processingTimeMs': processing.elapsedMilliseconds,
+          if (kDebugMode) 'activeListeners': diagnostics.activeListeners,
+          if (kDebugMode) 'screenId': screenId,
+          if (kDebugMode) 'subscriptionId': subscriptionId,
         },
         branchId: AppSession.instance.currentBranchId,
       );
@@ -4785,7 +4815,12 @@ class TacoPosRepository {
     final accumulator = _OperationalOrderAccumulator(
       preserveCoherentOnProvisional: true,
     );
-    return _diagnoseQueryStream(source, _ordersRef.snapshots(), (snapshot) {
+    return _diagnoseQueryStream(source, _ordersRef.snapshots(), (
+      snapshot,
+      subscriptionId,
+      screenId,
+    ) {
+      final processing = Stopwatch()..start();
       final selectedBranchId = AppSession.instance.currentBranchId;
       final applied = accumulator.apply(snapshot, selectedBranchId);
       final orders =
@@ -4801,18 +4836,26 @@ class TacoPosRepository {
                   b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
               return bDate.compareTo(aDate);
             });
-      OperationalDiagnosticsService.instance.record(
+      processing.stop();
+      final diagnostics = OperationalDiagnosticsService.instance;
+      diagnostics.record(
         'firestore',
         event,
         fields: {
-          // `documents` is the SDK snapshot size (and therefore still reflects
-          // the full historical query); convertedDocuments counts model parses.
+          // documents remains the SDK snapshot size; the query is still the
+          // complete collection. Detailed counters are debug-build only.
           'documents': snapshot.docs.length,
           'convertedDocuments': applied.convertedDocuments,
           'results': orders.length,
           'fromCache': snapshot.metadata.isFromCache,
           'pendingWrites': snapshot.metadata.hasPendingWrites,
           'source': 'orders_collection',
+          if (kDebugMode) 'snapshotDocuments': snapshot.docs.length,
+          if (kDebugMode) 'changedDocuments': snapshot.docChanges.length,
+          if (kDebugMode) 'processingTimeMs': processing.elapsedMilliseconds,
+          if (kDebugMode) 'activeListeners': diagnostics.activeListeners,
+          if (kDebugMode) 'screenId': screenId,
+          if (kDebugMode) 'subscriptionId': subscriptionId,
         },
         branchId: selectedBranchId,
       );
@@ -4823,35 +4866,52 @@ class TacoPosRepository {
   Stream<Output> _diagnoseQueryStream<Input, Output>(
     String source,
     Stream<Input> upstream,
-    Output Function(Input value) convert,
+    Output Function(Input value, String subscriptionId, String screenId)
+    convert,
   ) {
     StreamSubscription<Input>? subscription;
     late StreamController<Output> controller;
     var listenerCounted = false;
+    var subscriptionId = '';
+    final screenId = source.split('.').first;
+    final diagnostics = OperationalDiagnosticsService.instance;
     void recordDetach() {
       if (!listenerCounted) return;
       listenerCounted = false;
-      OperationalDiagnosticsService.instance.listenerCancelled(source);
+      diagnostics.listenerCancelled(
+        source,
+        screenId: screenId,
+        subscriptionId: subscriptionId,
+      );
     }
 
     controller = StreamController<Output>(
       onListen: () {
         listenerCounted = true;
-        OperationalDiagnosticsService.instance.listenerAttached(source);
+        subscriptionId = diagnostics.newSubscriptionId(screenId);
+        diagnostics.listenerAttached(
+          source,
+          screenId: screenId,
+          subscriptionId: subscriptionId,
+        );
         subscription = upstream.listen(
           (value) {
             try {
-              controller.add(convert(value));
+              controller.add(convert(value, subscriptionId, screenId));
             } catch (error, stackTrace) {
               controller.addError(error, stackTrace);
             }
           },
           onError: (Object error, StackTrace stackTrace) {
-            OperationalDiagnosticsService.instance.record(
+            diagnostics.record(
               'firestore',
               'query_error',
               result: error is FirebaseException ? error.code : 'error',
-              fields: {'source': source},
+              fields: {
+                'source': source,
+                if (kDebugMode) 'screenId': screenId,
+                if (kDebugMode) 'subscriptionId': subscriptionId,
+              },
             );
             controller.addError(error, stackTrace);
           },
@@ -4922,6 +4982,7 @@ class TacoPosRepository {
       branchId: branchId,
       businessDate: businessDate,
       triggeredBy: 'live_operations_viewer',
+      applyAutomaticRepairs: false,
     );
     await for (final _ in _watchOrdersForOperationalDate(
       businessDate,
@@ -5053,6 +5114,7 @@ class TacoPosRepository {
     var ordersPending = false;
     var orderSnapshots = 0;
     var itemSnapshots = 0;
+    var ordersSubscriptionId = '';
     var attaches = 0;
     var cancels = 0;
     var rebuilds = 0;
@@ -5143,8 +5205,12 @@ class TacoPosRepository {
       state.watcher = _KitchenQueryWatcher(
         onAttach: () {
           attaches++;
-          OperationalDiagnosticsService.instance.listenerAttached(
+          final diagnostics = OperationalDiagnosticsService.instance;
+          state.subscriptionId = diagnostics.newSubscriptionId('kitchen');
+          diagnostics.listenerAttached(
             'kitchen.order_items',
+            screenId: 'kitchen',
+            subscriptionId: state.subscriptionId,
           );
           trace('attach');
         },
@@ -5152,6 +5218,8 @@ class TacoPosRepository {
           cancels++;
           OperationalDiagnosticsService.instance.listenerCancelled(
             'kitchen.order_items',
+            screenId: 'kitchen',
+            subscriptionId: state.subscriptionId,
           );
           trace('detach');
         },
@@ -5165,7 +5233,10 @@ class TacoPosRepository {
         onData: (snapshot) {
           if (!current()) return;
           itemSnapshots++;
-          OperationalDiagnosticsService.instance.record(
+          final processing = Stopwatch()..start();
+          var convertedDocuments = 0;
+          final diagnostics = OperationalDiagnosticsService.instance;
+          diagnostics.record(
             'firestore',
             'kitchen_items_snapshot',
             fields: {
@@ -5174,6 +5245,12 @@ class TacoPosRepository {
               'fromCache': snapshot.metadata.isFromCache,
               'pendingWrites': snapshot.metadata.hasPendingWrites,
               'source': 'kitchen.order_items',
+              if (kDebugMode) 'snapshotDocuments': snapshot.docs.length,
+              if (kDebugMode) 'changedDocuments': snapshot.docChanges.length,
+              if (kDebugMode) 'activeListeners': diagnostics.activeListeners,
+              if (kDebugMode) 'screenId': 'kitchen',
+              if (kDebugMode)
+                'subscriptionId': state.subscriptionId ?? 'unknown',
             },
             branchId: AppSession.instance.currentBranchId,
           );
@@ -5190,6 +5267,7 @@ class TacoPosRepository {
                 provisional ||
                 snapshot.docChanges.isNotEmpty) {
               final received = snapshot.docs.map(OrderItem.fromDoc).toList();
+              convertedDocuments = received.length;
               if (provisional) {
                 // An incomplete cache must not delete previously coherent items.
                 final merged = {
@@ -5213,6 +5291,24 @@ class TacoPosRepository {
           } catch (error) {
             state.parseError = error;
           }
+          processing.stop();
+          if (kDebugMode) {
+            diagnostics.record(
+              'firestore',
+              'kitchen_items_processed',
+              fields: {
+                'snapshotDocuments': snapshot.docs.length,
+                'changedDocuments': snapshot.docChanges.length,
+                'convertedDocuments': convertedDocuments,
+                'processingTimeMs': processing.elapsedMilliseconds,
+                'activeListeners': diagnostics.activeListeners,
+                'screenId': 'kitchen',
+                'subscriptionId': state.subscriptionId ?? 'unknown',
+                'source': 'kitchen.order_items',
+              },
+              branchId: AppSession.instance.currentBranchId,
+            );
+          }
           emit();
         },
       );
@@ -5223,15 +5319,28 @@ class TacoPosRepository {
     controller = StreamController<KitchenBundlesState>(
       onListen: () {
         ordersWatcher = _KitchenQueryWatcher(
-          onAttach: () => OperationalDiagnosticsService.instance
-              .listenerAttached('kitchen.orders'),
-          onDetach: () => OperationalDiagnosticsService.instance
-              .listenerCancelled('kitchen.orders'),
+          onAttach: () {
+            final diagnostics = OperationalDiagnosticsService.instance;
+            ordersSubscriptionId = diagnostics.newSubscriptionId('kitchen');
+            diagnostics.listenerAttached(
+              'kitchen.orders',
+              screenId: 'kitchen',
+              subscriptionId: ordersSubscriptionId,
+            );
+          },
+          onDetach: () =>
+              OperationalDiagnosticsService.instance.listenerCancelled(
+                'kitchen.orders',
+                screenId: 'kitchen',
+                subscriptionId: ordersSubscriptionId,
+              ),
           watch: () => _ordersRef.snapshots(includeMetadataChanges: true),
           onIssue: emit,
           onData: (snapshot) {
             if (cancelled) return;
             orderSnapshots++;
+            final processing = Stopwatch()..start();
+            var convertedDocuments = 0;
             final wasProvisional = ordersCache || ordersPending;
             ordersCache = snapshot.metadata.isFromCache;
             ordersPending = snapshot.metadata.hasPendingWrites;
@@ -5241,7 +5350,9 @@ class TacoPosRepository {
                 snapshot,
                 AppSession.instance.currentBranchId,
               );
-              OperationalDiagnosticsService.instance.record(
+              convertedDocuments = applied.convertedDocuments;
+              final diagnostics = OperationalDiagnosticsService.instance;
+              diagnostics.record(
                 'firestore',
                 'kitchen_orders_snapshot',
                 fields: {
@@ -5253,6 +5364,15 @@ class TacoPosRepository {
                   'fromCache': snapshot.metadata.isFromCache,
                   'pendingWrites': snapshot.metadata.hasPendingWrites,
                   'source': 'kitchen.orders',
+                  if (kDebugMode) 'snapshotDocuments': snapshot.docs.length,
+                  if (kDebugMode)
+                    'changedDocuments': snapshot.docChanges.length,
+                  if (kDebugMode)
+                    'processingTimeMs': processing.elapsedMilliseconds,
+                  if (kDebugMode)
+                    'activeListeners': diagnostics.activeListeners,
+                  if (kDebugMode) 'screenId': 'kitchen',
+                  if (kDebugMode) 'subscriptionId': ordersSubscriptionId,
                 },
                 branchId: AppSession.instance.currentBranchId,
               );
@@ -5279,6 +5399,25 @@ class TacoPosRepository {
               }
             } catch (error) {
               ordersWatcher.setParseError(error);
+            }
+            processing.stop();
+            if (kDebugMode) {
+              OperationalDiagnosticsService.instance.record(
+                'firestore',
+                'kitchen_orders_processed',
+                fields: {
+                  'snapshotDocuments': snapshot.docs.length,
+                  'changedDocuments': snapshot.docChanges.length,
+                  'convertedDocuments': convertedDocuments,
+                  'processingTimeMs': processing.elapsedMilliseconds,
+                  'activeListeners':
+                      OperationalDiagnosticsService.instance.activeListeners,
+                  'screenId': 'kitchen',
+                  'subscriptionId': ordersSubscriptionId,
+                  'source': 'kitchen.orders',
+                },
+                branchId: AppSession.instance.currentBranchId,
+              );
             }
             emit();
             trace(provisional ? 'orders_unconfirmed' : 'orders_confirmed');
@@ -8099,6 +8238,7 @@ class TacoPosRepository {
     required String branchId,
     String? businessDate,
     String triggeredBy = 'operational_reconciliation',
+    required bool applyAutomaticRepairs,
   }) async {
     if (restaurantId.trim() != AppConstants.restaurantId) {
       throw ArgumentError('El restaurante no corresponde a esta sesion.');
@@ -8135,12 +8275,16 @@ class TacoPosRepository {
         paymentsByOrder[order.id] ?? const [],
       ),
     );
-    final repairs = await runInBatches<PosOrder, _GhostOrderRepair?>(
-      ghostCandidates,
-      batchSize: 10,
-      action: (order) =>
-          _autoCancelGhostOrderIfNeeded(order.id, triggeredBy: triggeredBy),
-    );
+    final repairs = applyAutomaticRepairs
+        ? await runInBatches<PosOrder, _GhostOrderRepair?>(
+            ghostCandidates,
+            batchSize: 10,
+            action: (order) => _autoCancelGhostOrderIfNeeded(
+              order.id,
+              triggeredBy: triggeredBy,
+            ),
+          )
+        : const <_GhostOrderRepair?>[];
     final cancelledOrderIds = repairs
         .whereType<_GhostOrderRepair>()
         .map((repair) => repair.orderId)
@@ -8177,6 +8321,7 @@ class TacoPosRepository {
       businessDate: effectiveBusinessDate,
       blockers: blockers,
       triggeredBy: triggeredBy,
+      applyAutomaticRepairs: applyAutomaticRepairs,
     );
     if (cancelledOrderIds.isNotEmpty || cleanup.released > 0) {
       invalidateReportDataCache(
@@ -8248,7 +8393,34 @@ class TacoPosRepository {
         .map((doc) => _paymentFromOrderPaymentDoc(doc, order))
         .toList();
     final evaluation = evaluateGhostOrder(order, items, payments);
-    if (!evaluation.isGhost) return null;
+    if (!evaluation.isGhost) {
+      if (items.isEmpty && isActiveOrderState(order)) {
+        OperationalDiagnosticsService.instance.record(
+          'orders',
+          'ghost_candidate_retained_empty_shell',
+          result: 'retained',
+          fields: {
+            'orderId': order.id,
+            'operation': triggeredBy,
+            'errorCategory': 'no_server_items',
+          },
+          branchId: order.branchId,
+        );
+      }
+      return null;
+    }
+    OperationalDiagnosticsService.instance.record(
+      'orders',
+      'ghost_order_auto_cancel_candidate',
+      result: 'candidate',
+      fields: {
+        'orderId': order.id,
+        'operation': triggeredBy,
+        'errorCategory': 'all_server_items_terminal',
+        'documents': items.length,
+      },
+      branchId: order.branchId,
+    );
     final employee = AppSession.instance.employee;
     final cancellationItem = items
         .where((item) {
@@ -8486,6 +8658,7 @@ class TacoPosRepository {
     String? businessDate,
     String? cashSessionId,
     bool reconcileTables = false,
+    bool applyAutomaticRepairs = false,
     bool forceRefresh = false,
   }) async {
     final branchId = AppSession.instance.currentBranchId;
@@ -8497,6 +8670,7 @@ class TacoPosRepository {
             branchId: branchId,
             businessDate: effectiveBusinessDate,
             triggeredBy: 'operational_summary',
+            applyAutomaticRepairs: applyAutomaticRepairs,
           )
         : null;
     final reportData = await getReportDataBundle(
@@ -8575,6 +8749,7 @@ class TacoPosRepository {
         items: items,
         payments: payments,
         belongsToBranchAndDate: belongsToScope,
+        includeGhostAsReviewBlocker: true,
       );
       if (blocker == null) {
         final reason = operationalDiscardReason(
@@ -10345,6 +10520,7 @@ class TacoPosRepository {
     required String businessDate,
     required List<OperationalOrderBlocker> blockers,
     String triggeredBy = 'operational_reconciliation',
+    required bool applyAutomaticRepairs,
   }) async {
     final activeOrderIds = blockers.map((row) => row.order.id).toSet();
     final tablesSnapshot = await _tablesRef.get();
@@ -10356,6 +10532,9 @@ class TacoPosRepository {
     }
     if (staleTables.isEmpty) {
       return const _TableLinkCleanupResult(stale: 0, released: 0);
+    }
+    if (!applyAutomaticRepairs) {
+      return _TableLinkCleanupResult(stale: staleTables.length, released: 0);
     }
 
     final releases = await runInBatches<PosTable, bool>(
@@ -11626,6 +11805,12 @@ class TacoPosRepository {
         'results': submission.lines.length,
         'queueDepth': existing == null ? 0 : 1,
         'source': 'local_outbox',
+        'orderId': orderId.trim(),
+        'submissionId': submission.id,
+        'operation': 'submit_local_capture',
+        'authPresent': _auth.currentUser != null,
+        'appCheckState': 'not_checked',
+        'retryCount': 0,
       },
       employeeId: AppSession.instance.employee?.id,
       branchId: resolvedBranchId,
@@ -11634,9 +11819,73 @@ class TacoPosRepository {
       '[TacoPOS][LocalCapture.callableStart] orderId=${orderId.trim()} submissionId=${submission.id} payloadLines=${submission.lines.length} sendToKitchen=$sendToKitchen',
     );
     late Map<String, dynamic> response;
+    final transportTimer = Stopwatch()..start();
+    var appCheckRetryCount = 0;
     try {
-      response = await _localOrderCaptureSubmitter.submit(submission);
+      response = await _localOrderCaptureSubmitter.submit(
+        submission,
+        onAppCheckRetry: () {
+          appCheckRetryCount++;
+          OperationalDiagnosticsService.instance.record(
+            'capture',
+            'app_check_retry',
+            result: 'explicit_rejection',
+            fields: {
+              'orderId': orderId.trim(),
+              'submissionId': submission.id,
+              'operation': 'submit_local_capture',
+              'appCheckState': 'rejected',
+              'authPresent': _auth.currentUser != null,
+              'retryCount': appCheckRetryCount,
+              'errorCategory': 'app_check_token_rejected',
+            },
+            employeeId: AppSession.instance.employee?.id,
+            branchId: resolvedBranchId,
+          );
+        },
+      );
+      transportTimer.stop();
+      OperationalDiagnosticsService.instance.record(
+        'capture',
+        'submission_transport_confirmed',
+        duration: transportTimer.elapsed,
+        fields: {
+          'results': submission.lines.length,
+          'documents': response['readDocuments'] is num
+              ? (response['readDocuments'] as num).toInt()
+              : 0,
+          'serverElapsedMs': response['serverElapsedMs'] is num
+              ? (response['serverElapsedMs'] as num).toInt()
+              : 0,
+          'source': 'callable',
+        },
+        branchId: resolvedBranchId,
+      );
     } catch (submitError, submitStack) {
+      transportTimer.stop();
+      final appCheckRejected =
+          submitError is FirebaseFunctionsException &&
+          LocalOrderCaptureSubmitter.isExplicitAppCheckRejection(submitError);
+      OperationalDiagnosticsService.instance.record(
+        'capture',
+        'submission_transport_error',
+        result: submitError is FirebaseException
+            ? submitError.code
+            : submitError.runtimeType.toString(),
+        duration: transportTimer.elapsed,
+        fields: {
+          'results': submission.lines.length,
+          'source': 'callable',
+          'orderId': orderId.trim(),
+          'submissionId': submission.id,
+          'operation': 'submit_local_capture',
+          'authPresent': _auth.currentUser != null,
+          'appCheckState': appCheckRejected ? 'rejected' : 'unknown',
+          'retryCount': appCheckRetryCount,
+          'errorCategory': _captureErrorCategory(submitError),
+        },
+        branchId: resolvedBranchId,
+      );
       OperationalDiagnosticsService.instance.record(
         'capture',
         'submission_error',
@@ -11644,24 +11893,105 @@ class TacoPosRepository {
             ? submitError.code
             : submitError.runtimeType.toString(),
         duration: submitTimer.elapsed,
-        fields: {'results': submission.lines.length},
+        fields: {
+          'results': submission.lines.length,
+          'orderId': orderId.trim(),
+          'submissionId': submission.id,
+          'operation': 'submit_local_capture',
+          'authPresent': _auth.currentUser != null,
+          'appCheckState': appCheckRejected ? 'rejected' : 'unknown',
+          'retryCount': appCheckRetryCount,
+          'errorCategory': _captureErrorCategory(submitError),
+        },
         employeeId: AppSession.instance.employee?.id,
         branchId: resolvedBranchId,
       );
       developer.log(
-        '[TacoPOS][LocalCapture.callableFailed] orderId=${orderId.trim()} submissionId=${submission.id} error=$submitError',
+        '[TacoPOS][LocalCapture.callableFailed] orderId=${orderId.trim()} submissionId=${submission.id} category=${_captureErrorCategory(submitError)}',
       );
+      if (appCheckRejected) {
+        OperationalDiagnosticsService.instance.record(
+          'capture',
+          'app_check_recovery_failed',
+          result: submitError.code,
+          duration: transportTimer.elapsed,
+          fields: {
+            'orderId': orderId.trim(),
+            'submissionId': submission.id,
+            'operation': 'submit_local_capture',
+            'appCheckState': 'rejected',
+            'authPresent': _auth.currentUser != null,
+            'retryCount': appCheckRetryCount,
+            'errorCategory': 'app_check_token_rejected',
+          },
+          employeeId: AppSession.instance.employee?.id,
+          branchId: resolvedBranchId,
+        );
+        // App Check enforcement rejects the request before the callable
+        // handler runs. Keep the frozen outbox and surface the explicit
+        // rejection without spending another callable on a resolver that
+        // would be rejected by the same App Check condition.
+        Error.throwWithStackTrace(submitError, submitStack);
+      }
       // An error from the callable is not proof that its transaction did not
       // commit. Resolve against a server-side tombstone on the same marker
       // document before allowing the operator to edit or create a new ID.
       late Map<String, dynamic> resolution;
+      final resolutionTimer = Stopwatch()..start();
       try {
         resolution = await _localOrderCaptureSubmitter.resolve(submission);
-      } catch (_) {
+        resolutionTimer.stop();
+        OperationalDiagnosticsService.instance.record(
+          'capture',
+          'submission_resolution_confirmed',
+          duration: resolutionTimer.elapsed,
+          result: resolution['state'] is String
+              ? resolution['state'] as String
+              : 'unknown',
+          fields: {
+            'orderId': orderId.trim(),
+            'submissionId': submission.id,
+            'operation': 'resolve_local_capture',
+            'authPresent': _auth.currentUser != null,
+            'retryCount': appCheckRetryCount,
+          },
+          employeeId: AppSession.instance.employee?.id,
+          branchId: resolvedBranchId,
+        );
+      } catch (resolutionError) {
+        resolutionTimer.stop();
+        OperationalDiagnosticsService.instance.record(
+          'capture',
+          'submission_resolution_error',
+          result: resolutionError is FirebaseFunctionsException
+              ? resolutionError.code
+              : resolutionError.runtimeType.toString(),
+          duration: resolutionTimer.elapsed,
+          fields: {
+            'orderId': orderId.trim(),
+            'submissionId': submission.id,
+            'operation': 'resolve_local_capture',
+            'authPresent': _auth.currentUser != null,
+            'appCheckState':
+                resolutionError is FirebaseFunctionsException &&
+                    LocalOrderCaptureSubmitter.isExplicitAppCheckRejection(
+                      resolutionError,
+                    )
+                ? 'rejected'
+                : 'unknown',
+            'retryCount': appCheckRetryCount,
+            'errorCategory': _captureErrorCategory(resolutionError),
+          },
+          employeeId: AppSession.instance.employee?.id,
+          branchId: resolvedBranchId,
+        );
         developer.log(
           '[TacoPOS][LocalCapture.resolveFailed] orderId=${orderId.trim()} submissionId=${submission.id}',
         );
-        Error.throwWithStackTrace(submitError, submitStack);
+        throw LocalOrderCaptureConfirmationPending(
+          submissionCause: submitError,
+          resolutionCause: resolutionError,
+        );
       }
       developer.log(
         '[TacoPOS][LocalCapture.resolution] orderId=${orderId.trim()} submissionId=${submission.id} state=${resolution['state']}',
@@ -11672,7 +12002,10 @@ class TacoPosRepository {
         await store.releaseAuthoritativelyAborted(submission);
         throw LocalOrderCaptureSafelyAborted(submitError);
       } else {
-        Error.throwWithStackTrace(submitError, submitStack);
+        throw LocalOrderCaptureConfirmationPending(
+          submissionCause: submitError,
+          resolutionCause: StateError('server_resolution_unknown'),
+        );
       }
     }
     developer.log(
@@ -11694,12 +12027,39 @@ class TacoPosRepository {
     developer.log(
       '[TacoPOS][LocalCapture.reconcileStart] orderId=${orderId.trim()} submissionId=${submission.id}',
     );
+    final recalculationTimer = Stopwatch()..start();
     await recalculateOrderTotal(orderId.trim());
+    recalculationTimer.stop();
+    OperationalDiagnosticsService.instance.record(
+      'capture',
+      'submission_recalculation_confirmed',
+      duration: recalculationTimer.elapsed,
+      fields: {'source': 'authoritative_recalculation'},
+      branchId: resolvedBranchId,
+    );
+    final authoritativeReadTimer = Stopwatch()..start();
     await _ordersRef
         .doc(orderId.trim())
         .get(const GetOptions(source: Source.server));
+    authoritativeReadTimer.stop();
+    OperationalDiagnosticsService.instance.record(
+      'capture',
+      'submission_authoritative_read_confirmed',
+      duration: authoritativeReadTimer.elapsed,
+      fields: {'source': 'server_read'},
+      branchId: resolvedBranchId,
+    );
     reconciliationTimer.stop();
+    final outboxCompletionTimer = Stopwatch()..start();
     await store.complete(submission);
+    outboxCompletionTimer.stop();
+    OperationalDiagnosticsService.instance.record(
+      'capture',
+      'submission_outbox_completed',
+      duration: outboxCompletionTimer.elapsed,
+      fields: {'source': 'local_outbox'},
+      branchId: resolvedBranchId,
+    );
     submitTimer.stop();
     OperationalDiagnosticsService.instance.record(
       'capture',
@@ -17506,6 +17866,7 @@ class _KitchenItemsState {
   bool fromCache = true;
   bool pendingWrites = false;
   Object? parseError;
+  String? subscriptionId;
   _KitchenQueryWatcher? watcher;
 }
 

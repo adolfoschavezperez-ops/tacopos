@@ -16,6 +16,21 @@ class LocalOrderCaptureSafelyAborted implements Exception {
   String toString() => 'El envio se cancelo de forma segura: $cause';
 }
 
+/// The callable response was lost and the authoritative resolver also failed.
+/// The frozen outbox remains pending and must be retried with the same ID.
+class LocalOrderCaptureConfirmationPending implements Exception {
+  const LocalOrderCaptureConfirmationPending({
+    required this.submissionCause,
+    required this.resolutionCause,
+  });
+
+  final Object submissionCause;
+  final Object resolutionCause;
+
+  @override
+  String toString() => 'El estado del envio sigue pendiente de confirmacion.';
+}
+
 List<OrderItem> unacknowledgedLocalCaptureDrafts({
   required Iterable<OrderItem> confirmedItems,
   required Iterable<OrderItem> localItems,

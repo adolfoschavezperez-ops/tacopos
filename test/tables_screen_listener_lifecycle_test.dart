@@ -6,6 +6,7 @@ import 'package:firebase_core_platform_interface/test.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:tacopos/core/orders/local_order_capture.dart';
 import 'package:tacopos/models/branch.dart';
 import 'package:tacopos/models/employee.dart';
 import 'package:tacopos/models/order.dart';
@@ -53,6 +54,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(repository.orderStreamCalls, 1);
+    expect(repository.repairModes, [false]);
     // The nested orders builder attaches once the first nonempty table list arrives.
     repository.tablesFor('aviacion').add([_table('Mesa Uno')]);
     await tester.pumpAndSettle();
@@ -111,6 +113,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(repository.orderStreamCalls, 2);
+    expect(repository.repairModes, [false, false]);
     repository.tablesFor('aviacion').add([_table('Mesa Uno')]);
     await tester.pumpAndSettle();
     expect(repository.ordersFor('aviacion').attaches, 2);
@@ -322,6 +325,7 @@ class _TablesRepository implements TacoPosRepository {
   final _items = <String, _TrackedStream<List<OrderItem>>>{};
   int orderStreamCalls = 0;
   int itemStreamCalls = 0;
+  final repairModes = <bool>[];
 
   _TrackedStream<List<PosOrder>> ordersFor(String branch) =>
       _orders.putIfAbsent(branch, _TrackedStream<List<PosOrder>>.new);
@@ -350,19 +354,30 @@ class _TablesRepository implements TacoPosRepository {
   }
 
   @override
+  Future<List<LocalOrderCaptureRecoveryEntry>>
+  loadLocalOrderCaptureRecoveryEntries({
+    required String restaurantId,
+    required String branchId,
+  }) async => const [];
+
+  @override
   Future<GhostOrderReconciliationResult> reconcileGhostOrdersAndTableLinks({
     String restaurantId = '',
     required String branchId,
     String? businessDate,
     String triggeredBy = 'operational_reconciliation',
-  }) async => GhostOrderReconciliationResult(
-    businessDate: '2026-11-21',
-    branchId: branchId,
-    candidatesChecked: 0,
-    cancelledOrderIds: const [],
-    staleTableLinks: 0,
-    releasedTableLinks: 0,
-  );
+    required bool applyAutomaticRepairs,
+  }) async {
+    repairModes.add(applyAutomaticRepairs);
+    return GhostOrderReconciliationResult(
+      businessDate: '2026-11-21',
+      branchId: branchId,
+      candidatesChecked: 0,
+      cancelledOrderIds: const [],
+      staleTableLinks: 0,
+      releasedTableLinks: 0,
+    );
+  }
 
   Future<void> close() async {
     for (final stream in [

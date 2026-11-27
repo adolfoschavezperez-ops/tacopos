@@ -8,22 +8,25 @@ import 'package:tacopos/models/pos_table.dart';
 
 void main() {
   group('ghost order reconciliation decisions', () {
-    test('A last cancelled item cancels order and releases matching table', () {
-      final order = _order(total: 0, pendingTotal: 0);
-      final table = _table(currentOrderId: order.id);
-      final evaluation = evaluateGhostOrder(order, [
-        _item(status: 'cancelled', cancelStatus: 'accepted'),
-      ], const []);
+    test(
+      'A last cancelled item is only classified as a ghost repair candidate',
+      () {
+        final order = _order(total: 0, pendingTotal: 0);
+        final table = _table(currentOrderId: order.id);
+        final evaluation = evaluateGhostOrder(order, [
+          _item(status: 'cancelled', cancelStatus: 'accepted'),
+        ], const []);
 
-      expect(evaluation.isGhost, isTrue);
-      expect(evaluation.activeItemsCount, 0);
-      expect(evaluation.activePaymentsCount, 0);
-      expect(evaluation.cancelledItemsCount, 1);
-      expect(
-        shouldReleaseTableForGhostOrder(order: order, table: table),
-        isTrue,
-      );
-    });
+        expect(evaluation.isGhost, isTrue);
+        expect(evaluation.activeItemsCount, 0);
+        expect(evaluation.activePaymentsCount, 0);
+        expect(evaluation.cancelledItemsCount, 1);
+        expect(
+          shouldReleaseTableForGhostOrder(order: order, table: table),
+          isTrue,
+        );
+      },
+    );
 
     test('B one cancelled item and one active item keeps order and table', () {
       final order = _order(total: 100, pendingTotal: 100);
@@ -106,6 +109,17 @@ void main() {
       },
     );
 
+    test('an empty open order older than 104 seconds is still retained', () {
+      final order = _order(
+        total: 0,
+        pendingTotal: 0,
+        createdAt: DateTime.now().subtract(const Duration(minutes: 2)),
+      );
+
+      expect(evaluateGhostOrder(order, const [], const []).isGhost, isFalse);
+      expect(isActiveOrderState(order), isTrue);
+    });
+
     test('E paid order is never modified as a ghost', () {
       final evaluation = evaluateGhostOrder(
         _order(
@@ -133,7 +147,7 @@ void main() {
       );
     });
 
-    test('G ghost takeout is cancelled without releasing a table', () {
+    test('G ghost takeout candidate has no physical table to release', () {
       final order = _order(
         id: 'takeout',
         orderType: 'takeout',
@@ -187,6 +201,7 @@ PosOrder _order({
   double total = 0,
   double pendingTotal = 0,
   DateTime? paidAt,
+  DateTime? createdAt,
 }) {
   return PosOrder(
     id: id,
@@ -201,6 +216,7 @@ PosOrder _order({
     personNames: const {},
     orderType: orderType,
     paidAt: paidAt,
+    createdAt: createdAt,
     businessDate: '2026-07-26',
     branchId: 'aviacion',
     branchName: 'Aviacion',

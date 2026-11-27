@@ -1202,6 +1202,21 @@ void main() {
       feed.dispose();
       await _flush();
       expect(db.active, 0);
+      final rows = await OperationalDiagnosticsService.instance.readRecent(
+        limit: 100,
+      );
+      final feedEvents = rows
+          .where((row) => row['source'] == 'kitchen.feed')
+          .toList();
+      expect(feedEvents.where((row) => row['event'] == 'attach'), hasLength(2));
+      expect(feedEvents.where((row) => row['event'] == 'cancel'), hasLength(2));
+      expect(
+        feedEvents
+            .where((row) => row['event'] == 'attach')
+            .map((row) => row['subscriptionId'])
+            .toSet(),
+        hasLength(2),
+      );
     },
   );
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
 import '../../services/app_session.dart';
@@ -20,6 +21,7 @@ class KitchenBundlesFeed
 
   final Stream<KitchenBundlesState> Function() _watch;
   StreamSubscription<KitchenBundlesState>? _subscription;
+  String? _subscriptionId;
   KitchenBundlesState syncState = const KitchenBundlesState();
   Future<void> _cancellation = Future<void>.value();
   late String _scope;
@@ -33,11 +35,18 @@ class KitchenBundlesFeed
   void start() {
     if (_started || _disposed) return;
     _started = true;
-    OperationalDiagnosticsService.instance.listenerAttached('kitchen.feed');
     _listen(_generation);
   }
 
   void _listen(int generation) {
+    final diagnostics = OperationalDiagnosticsService.instance;
+    final subscriptionId = diagnostics.newSubscriptionId('kitchen');
+    _subscriptionId = subscriptionId;
+    diagnostics.listenerAttached(
+      'kitchen.feed',
+      screenId: 'kitchen',
+      subscriptionId: subscriptionId,
+    );
     try {
       _subscription = _watch().listen(
         (state) {
@@ -52,6 +61,14 @@ class KitchenBundlesFeed
         },
       );
     } catch (error) {
+      if (_subscriptionId == subscriptionId) {
+        _subscriptionId = null;
+        diagnostics.listenerCancelled(
+          'kitchen.feed',
+          screenId: 'kitchen',
+          subscriptionId: subscriptionId,
+        );
+      }
       if (!_disposed && generation == _generation) {
         _setState(
           syncState.withIssue(KitchenSyncIssue(error, recoverable: false)),
@@ -76,6 +93,12 @@ class KitchenBundlesFeed
         'fromCache': state.ordersFromCache,
         'pendingWrites': state.ordersPendingWrites,
         'queueDepth': state.loadingItemOrderIds.length,
+        if (kDebugMode)
+          'activeListeners':
+              OperationalDiagnosticsService.instance.activeListeners,
+        if (kDebugMode) 'screenId': 'kitchen',
+        if (kDebugMode && _subscriptionId != null)
+          'subscriptionId': _subscriptionId,
       },
       branchId: AppSession.instance.currentBranchId,
     );
@@ -105,8 +128,34 @@ class KitchenBundlesFeed
     );
     final generation = ++_generation;
     final previous = _subscription;
+    final previousId = _subscriptionId;
     _subscription = null;
-    _cancellation = _cancellation.then((_) => previous?.cancel());
+    _subscriptionId = null;
+    final cancellation = _cancellation.then((_) => previous?.cancel());
+    _cancellation = cancellation;
+    if (previousId != null) {
+      unawaited(
+        cancellation.then<void>(
+          (_) => OperationalDiagnosticsService.instance.listenerCancelled(
+            'kitchen.feed',
+            screenId: 'kitchen',
+            subscriptionId: previousId,
+          ),
+          onError: (Object error, StackTrace stackTrace) {
+            OperationalDiagnosticsService.instance.record(
+              'listener',
+              'cancel_error',
+              result: error.runtimeType.toString(),
+              fields: {
+                'source': 'kitchen.feed',
+                if (kDebugMode) 'screenId': 'kitchen',
+                if (kDebugMode) 'subscriptionId': previousId,
+              },
+            );
+          },
+        ),
+      );
+    }
     _setState(const KitchenBundlesState());
     unawaited(_restart(_cancellation, generation));
   }
@@ -123,9 +172,33 @@ class KitchenBundlesFeed
     _disposed = true;
     _generation++;
     AppSession.instance.removeListener(_onSessionChanged);
-    unawaited(_subscription?.cancel());
-    if (_started) {
-      OperationalDiagnosticsService.instance.listenerCancelled('kitchen.feed');
+    final previous = _subscription;
+    final previousId = _subscriptionId;
+    _subscription = null;
+    _subscriptionId = null;
+    final cancellation = previous?.cancel();
+    if (previousId != null && cancellation != null) {
+      unawaited(
+        cancellation.then<void>(
+          (_) => OperationalDiagnosticsService.instance.listenerCancelled(
+            'kitchen.feed',
+            screenId: 'kitchen',
+            subscriptionId: previousId,
+          ),
+          onError: (Object error, StackTrace stackTrace) {
+            OperationalDiagnosticsService.instance.record(
+              'listener',
+              'cancel_error',
+              result: error.runtimeType.toString(),
+              fields: {
+                'source': 'kitchen.feed',
+                if (kDebugMode) 'screenId': 'kitchen',
+                if (kDebugMode) 'subscriptionId': previousId,
+              },
+            );
+          },
+        ),
+      );
     }
     super.dispose();
   }
