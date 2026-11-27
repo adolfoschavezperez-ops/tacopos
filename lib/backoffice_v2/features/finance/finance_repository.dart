@@ -58,15 +58,27 @@ class FinanceRepository {
     : _db = firestore ?? FirebaseFirestore.instance;
 
   final FirebaseFirestore _db;
+  final Map<String, _CachedFinanceBundle> _bundleCache = {};
+
+  void invalidateCache() => _bundleCache.clear();
 
   Future<FinanceDashboardBundle> loadFinanceDashboard({
     required String restaurantId,
     required DateTime startDate,
     required DateTime endDate,
     String? branchId,
+    bool forceRefresh = false,
   }) async {
     final startStr = BackofficeSalesAdapter.formatBusinessDate(startDate);
     final endStr = BackofficeSalesAdapter.formatBusinessDate(endDate);
+    final cacheKey = '$restaurantId|$startStr|$endStr|${branchId ?? 'all'}';
+    final cached = _bundleCache[cacheKey];
+    if (!forceRefresh &&
+        cached != null &&
+        DateTime.now().difference(cached.cachedAt) <
+            const Duration(seconds: 60)) {
+      return cached.bundle;
+    }
 
     final daysSpan = endDate.difference(startDate).inDays + 1;
     final prevEnd = startDate.subtract(const Duration(days: 1));
@@ -272,47 +284,35 @@ class FinanceRepository {
       if (key == 'expense_budget' && val != null) expenseBudgetAmount = val;
     }
 
-    // Load order items & payments for active orders (bounded batches) & purchase items for COGS
+    // Load order items, payments, purchase items, & kitchen items in parallel
     final activeOrders = orders
         .where((o) => !isCanonicalCancelledOrder(o))
-        .take(120)
+        .take(400)
         .toList(growable: false);
     final activePurchases = purchases
         .where((p) => p.status.trim().toLowerCase() != 'cancelled')
-        .take(60)
+        .take(200)
         .toList(growable: false);
 
-    final itemsByOrder = await _fetchOrderItemSubcollections(
-      restRef,
-      activeOrders,
-    );
-    final paymentsByOrder = await _fetchOrderPaymentSubcollections(
-      restRef,
-      activeOrders,
-    );
-    final purchaseItemSnaps = await _fetchPurchaseItemSubcollections(
-      restRef,
-      activePurchases,
-    );
+    final subResults = await Future.wait([
+      _fetchOrderItemSubcollections(restRef, activeOrders),
+      _fetchOrderPaymentSubcollections(restRef, activeOrders),
+      _fetchPurchaseItemSubcollections(restRef, activePurchases),
+      _fetchKitchenItems(restRef, kitchenSessions.take(10).toList()),
+    ]);
+    final itemsByOrder = subResults[0] as Map<String, List<OrderItem>>;
+    final paymentsByOrder = subResults[1] as Map<String, List<Payment>>;
+    final purchaseItemSnaps = subResults[2] as List<SupplierPurchaseItem>;
+    final kitchenItems = subResults[3] as List<KitchenSessionItem>;
+
     final allOrderItems = itemsByOrder.values
         .expand((list) => list)
         .toList(growable: false);
     readCount +=
         allOrderItems.length +
         paymentsByOrder.values.fold<int>(0, (a, b) => a + b.length) +
-        purchaseItemSnaps.length;
-
-    final kitchenItems = <KitchenSessionItem>[];
-    for (final ks in kitchenSessions.take(10)) {
-      final snap = await restRef
-          .collection('kitchenSessions')
-          .doc(ks.id)
-          .collection('items')
-          .limit(60)
-          .get();
-      readCount += snap.docs.length;
-      kitchenItems.addAll(snap.docs.map(KitchenSessionItem.fromDoc));
-    }
+        purchaseItemSnaps.length +
+        kitchenItems.length;
 
     final productSales = _aggregateProductSales(allOrderItems);
     final ingredientCosts = resolveIngredientCosts(
@@ -361,7 +361,7 @@ class FinanceRepository {
       distributableBase: summary.operatingCashFlow,
     );
 
-    return FinanceDashboardBundle(
+    final bundle = FinanceDashboardBundle(
       summary: summary,
       previousSummary: previousSummary,
       orders: orders,
@@ -380,6 +380,31 @@ class FinanceRepository {
       expenseBudgetAmount: expenseBudgetAmount,
       readCount: readCount,
     );
+    _bundleCache[cacheKey] = _CachedFinanceBundle(
+      bundle: bundle,
+      cachedAt: DateTime.now(),
+    );
+    return bundle;
+  }
+
+  Future<List<KitchenSessionItem>> _fetchKitchenItems(
+    DocumentReference<Map<String, dynamic>> restRef,
+    List<KitchenSession> sessions,
+  ) async {
+    if (sessions.isEmpty) return const [];
+    final snaps = await Future.wait(
+      sessions.map(
+        (ks) => restRef
+            .collection('kitchenSessions')
+            .doc(ks.id)
+            .collection('items')
+            .limit(60)
+            .get(),
+      ),
+    );
+    return snaps
+        .expand((s) => s.docs.map(KitchenSessionItem.fromDoc))
+        .toList(growable: false);
   }
 
   Future<Map<String, List<OrderItem>>> _fetchOrderItemSubcollections(
@@ -387,8 +412,8 @@ class FinanceRepository {
     List<PosOrder> orders,
   ) async {
     final out = <String, List<OrderItem>>{};
-    for (var i = 0; i < orders.length; i += 20) {
-      final chunk = orders.sublist(i, (i + 20).clamp(0, orders.length));
+    for (var i = 0; i < orders.length; i += 50) {
+      final chunk = orders.sublist(i, (i + 50).clamp(0, orders.length));
       final snaps = await Future.wait(
         chunk.map(
           (o) => restRef.collection('orders').doc(o.id).collection('items').get(),
@@ -413,8 +438,8 @@ class FinanceRepository {
     List<PosOrder> orders,
   ) async {
     final out = <String, List<Payment>>{};
-    for (var i = 0; i < orders.length; i += 20) {
-      final chunk = orders.sublist(i, (i + 20).clamp(0, orders.length));
+    for (var i = 0; i < orders.length; i += 50) {
+      final chunk = orders.sublist(i, (i + 50).clamp(0, orders.length));
       final snaps = await Future.wait(
         chunk.map(
           (o) =>
@@ -673,4 +698,11 @@ class _MutableProductSale {
   final String categoryName;
   double units = 0;
   double revenue = 0;
+}
+
+class _CachedFinanceBundle {
+  const _CachedFinanceBundle({required this.bundle, required this.cachedAt});
+
+  final FinanceDashboardBundle bundle;
+  final DateTime cachedAt;
 }

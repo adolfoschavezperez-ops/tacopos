@@ -120,12 +120,14 @@ class FinanceDashboardTab extends StatelessWidget {
             ),
             KpiTile(
               label: 'Utilidad bruta est.',
-              value: s.cogsCoveredRevenue > 0
+              value: s.hasCompleteCogs
                   ? BackofficeSalesAdapter.formatMoney(s.grossProfit)
-                  : 'Parcial / N/D',
+                  : (s.hasPartialCogs
+                        ? '${BackofficeSalesAdapter.formatMoney(s.coveredGrossProfit)} (Parcial)'
+                        : 'No disponible'),
               subtitle: s.profitMarginPercent != null
                   ? 'Margen op.: ${s.profitMarginPercent!.toStringAsFixed(1)}%'
-                  : 'Requiere recetas completas',
+                  : 'Cobertura de costos: ${s.cogsCoveragePercent.toStringAsFixed(0)}%',
             ),
             KpiTile(
               label: 'Comisiones bancarias',
@@ -404,8 +406,12 @@ class IncomeStatementTab extends StatelessWidget {
                 unavailableText: 'No disponible (requiere recetas/compras)',
               ),
               _StatementLine(
-                label: '(=) Utilidad bruta estimada',
-                current: hasCogs ? s.grossProfit : null,
+                label: s.hasCompleteCogs
+                    ? '(=) Utilidad bruta estimada'
+                    : '(=) Utilidad bruta parcial (${s.cogsCoveragePercent.toStringAsFixed(0)}% cubierto)',
+                current: hasCogs
+                    ? (s.hasCompleteCogs ? s.grossProfit : s.coveredGrossProfit)
+                    : null,
                 previous: null,
                 emphasized: true,
                 unavailableText: 'No disponible',
@@ -435,15 +441,17 @@ class IncomeStatementTab extends StatelessWidget {
                 ),
               ),
               _StatementLine(
-                label: '(=) Utilidad operativa contable (estimada)',
-                current: hasCogs ? s.operatingProfitAccounting : null,
+                label: s.hasCompleteCogs
+                    ? '(=) Utilidad operativa contable (estimada)'
+                    : '(=) Utilidad operativa contable (requiere COGS 100%)',
+                current: s.hasCompleteCogs ? s.operatingProfitAccounting : null,
                 previous: null,
                 emphasized: true,
                 accentColor:
-                    hasCogs && s.operatingProfitAccounting >= 0
+                    s.hasCompleteCogs && s.operatingProfitAccounting >= 0
                         ? tokens.success
                         : tokens.danger,
-                unavailableText: 'No disponible sin COGS',
+                unavailableText: 'Parcial · ver referencia de flujo',
               ),
               const Divider(height: 20),
               _StatementLine(

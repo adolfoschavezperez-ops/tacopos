@@ -78,6 +78,7 @@ const List<_NavGroup> _navGroups = [
       section: BackofficeSection.reports,
       icon: Icons.analytics_outlined,
       activeIcon: Icons.analytics_rounded,
+      available: true,
     ),
   ]),
   _NavGroup('ADMINISTRACIÓN', [
@@ -90,6 +91,7 @@ const List<_NavGroup> _navGroups = [
       section: BackofficeSection.audit,
       icon: Icons.verified_user_outlined,
       activeIcon: Icons.verified_user_rounded,
+      available: true,
     ),
     _NavItem(
       section: BackofficeSection.settings,

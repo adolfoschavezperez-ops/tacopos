@@ -48,8 +48,12 @@ bool isFinanceOperatingExpense(CashWithdrawalRequest req) {
   if (!isApprovedExpenseStatus(req.status)) return false;
   final src = req.source.trim().toLowerCase();
   if (src == 'supplier_payment' ||
+      src == 'pago_proveedor' ||
       src == 'partner_contribution' ||
-      src == 'cash_transfer') {
+      src == 'aportacion_socio' ||
+      src == 'aportacion_socios' ||
+      src == 'cash_transfer' ||
+      src == 'transferencia_interna') {
     return false;
   }
   return req.amount > 0;
@@ -72,10 +76,17 @@ String normalizeExpenseConcept(String reason) {
 bool isPartnerSupplierPayment(SupplierPayment p) {
   final m = p.method.trim().toLowerCase();
   final f = p.fundingSource.trim().toLowerCase();
-  return m == 'partner_contribution' ||
-      m == 'aportacion_socios' ||
-      m == 'aportación de socios' ||
-      f == 'partner_contribution';
+  const aliases = {
+    'partner_contribution',
+    'partner contribution',
+    'partner_cash',
+    'partner_transfer',
+    'aportacion_socio',
+    'aportacion socio',
+    'aportacion_socios',
+    'aportación de socios',
+  };
+  return aliases.contains(m) || aliases.contains(f);
 }
 
 class PeriodDelta {
@@ -213,6 +224,9 @@ class FinancePeriodSummary {
   bool get hasCompleteCogs => cogsMissingRevenue <= 0.01 && netSales > 0;
   bool get hasPartialCogs =>
       cogsCoveredRevenue > 0.01 && cogsMissingRevenue > 0.01;
+  double get cogsCoveragePercent =>
+      netSales > 0.005 ? (cogsCoveredRevenue / netSales) * 100.0 : 0.0;
+  double get coveredGrossProfit => cogsCoveredRevenue - estimatedCogs;
 
   static FinancePeriodSummary compute({
     required List<PosOrder> orders,
@@ -390,9 +404,10 @@ class FinancePeriodSummary {
         realCollected - operatingExpensesPaid - purchasesTotal;
     final operatingProfitAccounting =
         netSales - estimatedCogs - operatingExpensesPaid;
-    final profitMarginPercent = netSales <= 0.005
-        ? null
-        : (operatingProfitAccounting / netSales) * 100.0;
+    final profitMarginPercent =
+        (netSales <= 0.005 || cogsMissingRevenue > 0.01)
+            ? null
+            : (operatingProfitAccounting / netSales) * 100.0;
 
     final operatingCashFlow =
         realCollected - operatingExpensesPaid - supplierPaidFromSales;
@@ -872,12 +887,14 @@ List<EfficiencyMetricRow> buildEfficiencyComparisons({
     EfficiencyMetricRow(
       key: 'cogs_vs_sales',
       label: 'Costo de venta teórico vs Ventas',
-      actualPercent: pct(summary.estimatedCogs),
+      actualPercent: summary.cogsCoveredRevenue > 0.005
+          ? (summary.estimatedCogs / summary.cogsCoveredRevenue) * 100.0
+          : null,
       targetPercent: targetsByKey['cogs_vs_sales'] ?? 32.0,
       amount: summary.estimatedCogs,
       note: summary.hasCompleteCogs
           ? 'Cobertura completa de recetas'
-          : 'Cobertura parcial (${summary.cogsCoveredRevenue.toStringAsFixed(0)} de ${sales.toStringAsFixed(0)})',
+          : 'Cobertura parcial (${summary.cogsCoveragePercent.toStringAsFixed(0)}% de ventas con receta/costo)',
     ),
     EfficiencyMetricRow(
       key: 'payroll_vs_sales',

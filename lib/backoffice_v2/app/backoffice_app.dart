@@ -8,6 +8,8 @@ import '../auth/backoffice_session.dart';
 import '../auth/login_page.dart';
 import '../core/design/backoffice_theme.dart';
 import '../core/env/backoffice_env.dart';
+import '../features/audit/audit_page.dart';
+import '../features/audit/audit_repository.dart';
 import '../features/authorizations/authorizations_page.dart';
 import '../features/authorizations/authorizations_repository.dart';
 import '../features/cash/cash_page.dart';
@@ -21,6 +23,8 @@ import '../features/inventory/inventory_repository.dart';
 import '../features/placeholders/module_stub_page.dart';
 import '../features/purchases/purchases_page.dart';
 import '../features/purchases/purchases_repository.dart';
+import '../features/reports/reports_page.dart';
+import '../features/reports/reports_repository.dart';
 import '../features/sales/sale_detail_page.dart';
 import '../features/sales/sales_list_page.dart';
 import '../features/sales/sales_repository.dart';
@@ -49,6 +53,8 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
   late final InventoryRepository _inventoryRepository;
   late final PurchasesRepository _purchasesRepository;
   late final FinanceRepository _financeRepository;
+  late final ReportsRepository _reportsRepository;
+  late final AuditRepository _auditRepository;
   late final BackofficeRouterDelegate _routerDelegate;
   final BackofficeRouteParser _routeParser = const BackofficeRouteParser();
   StreamSubscription<User?>? _authSub;
@@ -69,6 +75,8 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
     _inventoryRepository = InventoryRepository();
     _purchasesRepository = PurchasesRepository();
     _financeRepository = FinanceRepository();
+    _reportsRepository = ReportsRepository();
+    _auditRepository = AuditRepository();
     _routerDelegate = BackofficeRouterDelegate(
       session: _session,
       loginBuilder: (context) => BackofficeLoginPage(
@@ -208,15 +216,10 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
         repository: _financeRepository,
         onOpenSaleDetail: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
-      BackofficeSection.reports => const ModuleStubPage(
-        section: BackofficeSection.reports,
-        targetPhase: 'Fase 4',
-        description:
-            'Catálogo de 25 reportes operativos, de ventas y auditorías.',
-        plannedCapabilities: [
-          'Migración progresiva con fórmulas canónicas intactas.',
-          'Exportaciones CSV y Excel optimizadas.',
-        ],
+      BackofficeSection.reports => ReportsPage(
+        session: _session,
+        repository: _reportsRepository,
+        onOpenSaleDetail: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
       BackofficeSection.employees => const ModuleStubPage(
         section: BackofficeSection.employees,
@@ -226,13 +229,10 @@ class _BackofficeV2AppState extends State<BackofficeV2App>
           'Administración de accesos multi-sucursal y authUsers.',
         ],
       ),
-      BackofficeSection.audit => const ModuleStubPage(
-        section: BackofficeSection.audit,
-        targetPhase: 'Fase 5',
-        description: 'Bitácora de actividad (activityLog) y auditorías de integridad.',
-        plannedCapabilities: [
-          'Consulta acotada y paginada por fecha y sucursal.',
-        ],
+      BackofficeSection.audit => AuditPage(
+        session: _session,
+        repository: _auditRepository,
+        onOpenSaleDetail: (id) => onNavigate(BackofficeRoute.saleDetail(id)),
       ),
       BackofficeSection.settings => const ModuleStubPage(
         section: BackofficeSection.settings,
