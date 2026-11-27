@@ -12,8 +12,9 @@ import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Bounded, local-only diagnostics for an administrator to inspect on-device.
-/// It never stores order IDs, employee IDs, PINs, tokens, exception messages,
-/// or document paths, and it never writes diagnostics to Firebase.
+/// It stores opaque order/submission IDs only for incident correlation. It
+/// never stores employee IDs, PINs, tokens, exception messages, or paths, and
+/// never writes diagnostics to Firebase.
 class OperationalDiagnosticsService with WidgetsBindingObserver {
   OperationalDiagnosticsService._();
 
@@ -25,6 +26,15 @@ class OperationalDiagnosticsService with WidgetsBindingObserver {
     'durationMs',
     'documents',
     'convertedDocuments',
+    'serverElapsedMs',
+    'snapshotDocuments',
+    'changedDocuments',
+    'activeListeners',
+    'listenerAttach',
+    'listenerDetach',
+    'processingTimeMs',
+    'screenId',
+    'subscriptionId',
     'results',
     'listeners',
     'queueDepth',
@@ -42,6 +52,16 @@ class OperationalDiagnosticsService with WidgetsBindingObserver {
     'branchTag',
     'source',
     'versionCode',
+    'appVersionName',
+    'appVersionCode',
+    'appUptimeMs',
+    'orderId',
+    'submissionId',
+    'operation',
+    'errorCategory',
+    'appCheckState',
+    'authPresent',
+    'retryCount',
     'cpuPercent',
     'pssMb',
     'rxBytesDelta',
@@ -66,31 +86,73 @@ class OperationalDiagnosticsService with WidgetsBindingObserver {
   int? _previousRxBytes;
   int? _previousTxBytes;
   bool _started = false;
+  DateTime? _startedAt;
+  String? _appVersionName;
+  int? _appVersionCode;
   int _activeListeners = 0;
+  int _subscriptionSequence = 0;
 
   int get activeListeners => _activeListeners;
 
-  void listenerAttached(String source) {
+  void setAppVersion({required String versionName, required int versionCode}) {
+    _appVersionName = _safeLabel(versionName);
+    _appVersionCode = versionCode;
+  }
+
+  String newSubscriptionId(String screenId) {
+    if (!kDebugMode) return '';
+    _subscriptionSequence++;
+    return '${_safeLabel(screenId)}_$_subscriptionSequence';
+  }
+
+  void listenerAttached(
+    String source, {
+    String? screenId,
+    String? subscriptionId,
+  }) {
     _activeListeners++;
     record(
       'listener',
       'attach',
-      fields: {'listeners': _activeListeners, 'source': source},
+      fields: {
+        'listeners': _activeListeners,
+        'source': source,
+        if (kDebugMode) 'activeListeners': _activeListeners,
+        if (kDebugMode) 'listenerAttach': 1,
+        if (kDebugMode) 'listenerDetach': 0,
+        if (kDebugMode && screenId != null) 'screenId': screenId,
+        if (kDebugMode && subscriptionId != null)
+          'subscriptionId': subscriptionId,
+      },
     );
   }
 
-  void listenerCancelled(String source) {
+  void listenerCancelled(
+    String source, {
+    String? screenId,
+    String? subscriptionId,
+  }) {
     if (_activeListeners > 0) _activeListeners--;
     record(
       'listener',
       'cancel',
-      fields: {'listeners': _activeListeners, 'source': source},
+      fields: {
+        'listeners': _activeListeners,
+        'source': source,
+        if (kDebugMode) 'activeListeners': _activeListeners,
+        if (kDebugMode) 'listenerAttach': 0,
+        if (kDebugMode) 'listenerDetach': 1,
+        if (kDebugMode && screenId != null) 'screenId': screenId,
+        if (kDebugMode && subscriptionId != null)
+          'subscriptionId': subscriptionId,
+      },
     );
   }
 
   Future<void> initialize() async {
     if (_started || kIsWeb) return;
     _started = true;
+    _startedAt = DateTime.now();
     WidgetsBinding.instance.addObserver(this);
     SchedulerBinding.instance.addTimingsCallback(_onFrameTimings);
     _startResourceSampling();
@@ -239,6 +301,19 @@ class OperationalDiagnosticsService with WidgetsBindingObserver {
       if (branchId != null) 'branchTag': _tag(branchId),
       ...?deviceTag == null ? null : {'deviceTag': deviceTag},
       ...?rss == null ? null : {'rssMb': rss},
+      ...?(_appVersionName == null)
+          ? null
+          : {'appVersionName': _appVersionName},
+      ...?(_appVersionCode == null)
+          ? null
+          : {'appVersionCode': _appVersionCode},
+      ...?(_startedAt == null)
+          ? null
+          : {
+              'appUptimeMs': DateTime.now()
+                  .difference(_startedAt!)
+                  .inMilliseconds,
+            },
       ..._safeFields(fields),
     };
     _recent.add(row);
@@ -285,7 +360,21 @@ class OperationalDiagnosticsService with WidgetsBindingObserver {
         output[entry.key] = _safeLabel(value);
       } else if (value is String && entry.key == 'errorCode') {
         output[entry.key] = _safeLabel(value);
-      } else if (value is String && entry.key == 'stage') {
+      } else if (value is String &&
+          (entry.key == 'orderId' || entry.key == 'submissionId')) {
+        final trimmed = value.trim();
+        if (trimmed.length <= 128 &&
+            RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(trimmed)) {
+          output[entry.key] = trimmed;
+        }
+      } else if (value is String &&
+          (entry.key == 'stage' ||
+              entry.key == 'screenId' ||
+              entry.key == 'subscriptionId' ||
+              entry.key == 'appVersionName' ||
+              entry.key == 'operation' ||
+              entry.key == 'errorCategory' ||
+              entry.key == 'appCheckState')) {
         output[entry.key] = _safeLabel(value);
       }
     }

@@ -141,7 +141,7 @@ void main() {
       expect(source, contains('if (_isBackofficeWebLogin)'));
       expect(
         source,
-        contains('_employeesStream = _repository.watchEmployees();'),
+        contains('_employeesStream = _repository.watchEmployees().map('),
       );
       expect(
         source,

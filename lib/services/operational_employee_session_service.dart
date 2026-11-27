@@ -7,6 +7,7 @@ import '../models/employee.dart';
 import 'app_session.dart';
 import 'device_registry_service.dart';
 import 'operational_employee_session_store.dart';
+import 'login_performance_trace.dart';
 
 enum OperationalSessionRestoreStatus {
   noSavedSession,
@@ -100,7 +101,10 @@ class OperationalEmployeeSessionService {
     final operation = ++_operationGeneration;
     OperationalEmployeeSessionIdentity? identity;
     try {
-      identity = await _store.read();
+      identity = await LoginPerformanceTrace.measure(
+        'session_restore_secure_store_read',
+        _store.read,
+      );
     } catch (error) {
       return OperationalSessionRestoreResult(
         OperationalSessionRestoreStatus.waitingForValidation,
@@ -388,10 +392,13 @@ class OperationalEmployeeSessionService {
     final restaurant = firestore
         .collection('restaurants')
         .doc(identity.restaurantId);
-    final employeeDoc = await restaurant
-        .collection('employees')
-        .doc(identity.employeeId)
-        .get(const GetOptions(source: Source.server));
+    final employeeDoc = await LoginPerformanceTrace.measure(
+      'session_restore_employee_server_read',
+      () => restaurant
+          .collection('employees')
+          .doc(identity.employeeId)
+          .get(const GetOptions(source: Source.server)),
+    );
     if (!employeeDoc.exists) {
       throw const OperationalEmployeeSessionRevoked(
         'El empleado ya no está registrado.',
@@ -404,10 +411,13 @@ class OperationalEmployeeSessionService {
         'El acceso del empleado fue desactivado.',
       );
     }
-    final branchesSnapshot = await restaurant
-        .collection('branches')
-        .where('active', isEqualTo: true)
-        .get(const GetOptions(source: Source.server));
+    final branchesSnapshot = await LoginPerformanceTrace.measure(
+      'session_restore_active_branches_server_query',
+      () => restaurant
+          .collection('branches')
+          .where('active', isEqualTo: true)
+          .get(const GetOptions(source: Source.server)),
+    );
     final allActiveBranches = branchesSnapshot.docs
         .map(
           (doc) => Branch.fromDoc(

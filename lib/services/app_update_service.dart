@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../core/app_update/app_update_policy.dart';
 import '../core/constants/app_constants.dart';
 import 'operational_diagnostics_service.dart';
+import 'login_performance_trace.dart';
 
 const MethodChannel _appUpdateChannel = MethodChannel('tacopos/app_update');
 
@@ -283,7 +284,10 @@ class AppUpdateService {
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   Future<AppUpdateCheckResult> checkForUpdate() async {
-    final currentVersion = await currentVersionInfo();
+    final currentVersion = await LoginPerformanceTrace.measure(
+      'version_gate_platform_version',
+      currentVersionInfo,
+    );
     if (!isSupportedPlatform) {
       final result = AppUpdateCheckResult(
         decision: const AppUpdateDecision(
@@ -304,7 +308,10 @@ class AppUpdateService {
     }
 
     try {
-      final config = await _loadRemoteUpdateConfig();
+      final config = await LoginPerformanceTrace.measure(
+        'version_gate_firestore_policy_read',
+        _loadRemoteUpdateConfig,
+      );
       if (config == null) {
         final result = AppUpdateCheckResult(
           decision: const AppUpdateDecision(
@@ -317,7 +324,10 @@ class AppUpdateService {
           currentPackageName: currentVersion.packageName,
           minimumSupportedVersionCode: currentVersion.versionCode,
           recommendedVersionCode: currentVersion.versionCode,
-          playUpdateAvailability: await _checkPlayUpdate(),
+          playUpdateAvailability: await LoginPerformanceTrace.measure(
+            'version_gate_play_update_availability_channel',
+            _checkPlayUpdate,
+          ),
           configActive: false,
         );
         _logPolicyCheck(result);
@@ -332,14 +342,20 @@ class AppUpdateService {
 
       final deviceRolloutGroup = config.rolloutGroups.isEmpty
           ? null
-          : await _loadDeviceRolloutGroup();
+          : await LoginPerformanceTrace.measure(
+              'version_gate_device_rollout_read',
+              _loadDeviceRolloutGroup,
+            );
       final decision = evaluateAppUpdatePolicy(
         config.toPolicyInput(
           currentVersionCode: currentVersion.versionCode,
           rolloutGroup: deviceRolloutGroup,
         ),
       );
-      final playAvailability = await _checkPlayUpdate();
+      final playAvailability = await LoginPerformanceTrace.measure(
+        'version_gate_play_update_availability_channel',
+        _checkPlayUpdate,
+      );
 
       final adjustedDecision = _avoidNonPlayUpdateLoop(
         decision,
@@ -411,20 +427,30 @@ class AppUpdateService {
 
   Future<AppVersionInfo> currentVersionInfo() async {
     if (!isSupportedPlatform) {
-      return const AppVersionInfo(
+      const info = AppVersionInfo(
         versionName: 'web',
         versionCode: 0,
         packageName: 'web',
       );
+      OperationalDiagnosticsService.instance.setAppVersion(
+        versionName: info.versionName,
+        versionCode: info.versionCode,
+      );
+      return info;
     }
     final versionCode = await _invokeInt('versionCode');
     final versionName = await _invokeString('versionName');
     final packageName = await _invokeString('packageName');
-    return AppVersionInfo(
+    final info = AppVersionInfo(
       versionName: versionName,
       versionCode: versionCode,
       packageName: packageName,
     );
+    OperationalDiagnosticsService.instance.setAppVersion(
+      versionName: info.versionName,
+      versionCode: info.versionCode,
+    );
+    return info;
   }
 
   Future<void> startFlexibleUpdate() async {

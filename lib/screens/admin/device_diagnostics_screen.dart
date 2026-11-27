@@ -75,9 +75,7 @@ class _DeviceDiagnosticsScreenState extends State<DeviceDiagnosticsScreen> {
                 return const Padding(
                   padding: EdgeInsets.only(bottom: 12),
                   child: Text(
-                    'Registro local acotado a 128 KB. No contiene PIN, tokens, '
-                    'identificadores de órdenes ni mensajes de error. '
-                    'Los datos no se envían a Firebase.',
+                    'Registro local limitado a 128 KB. Incluye IDs opacos de orden y envio para correlacionar incidentes; no incluye PIN, tokens, IDs personales ni mensajes de excepcion. Solo se consulta desde Admin y no se envia a Firebase.',
                   ),
                 );
               }

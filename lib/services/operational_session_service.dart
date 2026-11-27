@@ -8,6 +8,7 @@ import 'device_registry_service.dart';
 import 'app_update_service.dart';
 import 'operational_auth_service.dart';
 import 'operational_diagnostics_service.dart';
+import 'login_performance_trace.dart';
 
 class OperationalSessionStatus {
   const OperationalSessionStatus({
@@ -61,10 +62,15 @@ class OperationalSessionService {
   Future<OperationalAuthStatus> bootstrapAuth() async {
     final timer = Stopwatch()..start();
     _log('app-bootstrap: start');
-    final status = await _authService.ensureSignedIn();
+    final status = await LoginPerformanceTrace.measure(
+      'firebase_anonymous_auth_ready',
+      _authService.ensureSignedIn,
+    );
     if (status.ready) {
+      final tokenTimer = LoginPerformanceTrace.start();
       try {
         await _auth.currentUser?.getIdToken();
+        LoginPerformanceTrace.finish('firebase_id_token_refresh', tokenTimer);
         _log('auth: ready');
       } on FirebaseAuthException catch (error, stackTrace) {
         // A cached anonymous Firebase session can still restore the operator
@@ -75,6 +81,12 @@ class OperationalSessionService {
           'auth: token-refresh-pending code=${error.code}',
           error,
           stackTrace,
+        );
+        LoginPerformanceTrace.finish(
+          'firebase_id_token_refresh',
+          tokenTimer,
+          result: 'pending',
+          error: error,
         );
       }
     } else {

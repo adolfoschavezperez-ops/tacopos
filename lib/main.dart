@@ -12,6 +12,7 @@ import 'core/theme/app_theme.dart';
 import 'firebase_options.dart';
 import 'screens/login_screen.dart';
 import 'services/operational_diagnostics_service.dart';
+import 'services/login_performance_trace.dart';
 import 'services/operational_session_service.dart';
 import 'widgets/app_update_gate.dart';
 import 'widgets/expense_cutoff_reminder_coordinator.dart';
@@ -43,6 +44,7 @@ const _functionsEmulatorPort = int.fromEnvironment(
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  LoginPerformanceTrace.beginAppLaunch();
 
   if (_useFirebaseEmulators &&
       (!kDebugMode ||
@@ -58,19 +60,22 @@ void main() async {
     );
   }
   if (Firebase.apps.isEmpty) {
-    await Firebase.initializeApp(
-      options: _useFirebaseEmulators
-          ? FirebaseOptions(
-              // The Firebase client SDK validates the API-key shape before
-              // sending callable requests, even when the endpoint is local.
-              // This syntactically valid placeholder is used only for the
-              // demo-project emulator path; no release build can select it.
-              apiKey: 'AIzaSyD3moTacoPOSLocalEmulatorOnly00000',
-              appId: '1:000000000000:android:0000000000000000000000',
-              messagingSenderId: '000000000000',
-              projectId: _emulatorProjectId,
-            )
-          : DefaultFirebaseOptions.currentPlatform,
+    await LoginPerformanceTrace.measure(
+      'firebase_initialize',
+      () => Firebase.initializeApp(
+        options: _useFirebaseEmulators
+            ? FirebaseOptions(
+                // The Firebase client SDK validates the API-key shape before
+                // sending callable requests, even when the endpoint is local.
+                // This syntactically valid placeholder is used only for the
+                // demo-project emulator path; no release build can select it.
+                apiKey: 'AIzaSyD3moTacoPOSLocalEmulatorOnly00000',
+                appId: '1:000000000000:android:0000000000000000000000',
+                messagingSenderId: '000000000000',
+                projectId: _emulatorProjectId,
+              )
+            : DefaultFirebaseOptions.currentPlatform,
+      ),
     );
   } else if (_useFirebaseEmulators &&
       Firebase.app().options.projectId != _emulatorProjectId) {
@@ -89,12 +94,19 @@ void main() async {
       region: 'us-central1',
     ).useFunctionsEmulator(_emulatorHost, _functionsEmulatorPort);
   } else {
-    await _activateAppCheck();
+    await LoginPerformanceTrace.measure(
+      'app_check_activate',
+      _activateAppCheck,
+    );
   }
-  await _ensureAnonymousLogin();
+  await LoginPerformanceTrace.measure(
+    'anonymous_auth_bootstrap',
+    _ensureAnonymousLogin,
+  );
   unawaited(OperationalDiagnosticsService.instance.initialize());
 
   runApp(const TacoPosApp());
+  LoginPerformanceTrace.mark('run_app');
 }
 
 Future<void> _activateAppCheck() async {

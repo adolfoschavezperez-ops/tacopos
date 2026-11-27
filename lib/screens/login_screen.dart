@@ -15,6 +15,7 @@ import '../services/app_update_service.dart';
 import '../services/backoffice_admin_auth_service.dart';
 import '../services/operational_employee_session_service.dart';
 import '../services/operational_diagnostics_service.dart';
+import '../services/login_performance_trace.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/app_update_gate.dart';
@@ -70,9 +71,16 @@ class _LoginGateState extends State<LoginGate> with WidgetsBindingObserver {
   }
 
   Future<OperationalSessionRestoreResult> _restoreSession() async {
-    final timer = Stopwatch()..start();
-    final result = await OperationalEmployeeSessionService.instance.restore();
-    timer.stop();
+    final timer = LoginPerformanceTrace.start();
+    final result = await LoginPerformanceTrace.measure(
+      'employee_session_restore',
+      OperationalEmployeeSessionService.instance.restore,
+    );
+    LoginPerformanceTrace.finish(
+      'employee_session_restore_result',
+      timer,
+      result: result.status.name,
+    );
     OperationalDiagnosticsService.instance.record(
       'session',
       'restore',
@@ -329,9 +337,35 @@ class _LoginScreenState extends State<LoginScreen> {
       _backofficeUsersFuture = _loadBackofficeUsers();
     } else {
       _repository = TacoPosRepository();
-      _employeesStream = _repository.watchEmployees();
-      _repository.ensureDefaultBranch();
-      _repository.ensureInitialAdminEmployee();
+      final employeeStreamTimer = LoginPerformanceTrace.start();
+      var firstEmployeeSnapshot = true;
+      _employeesStream = _repository.watchEmployees().map((employees) {
+        if (firstEmployeeSnapshot) {
+          firstEmployeeSnapshot = false;
+          LoginPerformanceTrace.finish(
+            'employee_list_first_snapshot',
+            employeeStreamTimer,
+            result: 'received',
+          );
+        }
+        return employees;
+      });
+      unawaited(
+        LoginPerformanceTrace.measure(
+          'ensure_default_branch_screen_init',
+          _repository.ensureDefaultBranch,
+        ),
+      );
+      unawaited(
+        LoginPerformanceTrace.measure(
+          'ensure_initial_admin_employee',
+          _repository.ensureInitialAdminEmployee,
+        ),
+      );
+      LoginPerformanceTrace.mark('pin_login_screen_created');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        LoginPerformanceTrace.mark('pin_login_screen_first_frame');
+      });
     }
   }
 
@@ -425,11 +459,15 @@ class _LoginScreenState extends State<LoginScreen> {
       _busy = true;
       _error = '';
     });
+    final loginTimer = LoginPerformanceTrace.start();
 
     try {
-      final valid = await _repository.validateEmployeePin(
-        employeeId: employee.id,
-        pin: _pinController.text.trim(),
+      final valid = await LoginPerformanceTrace.measure(
+        'pin_employee_validation',
+        () => _repository.validateEmployeePin(
+          employeeId: employee.id,
+          pin: _pinController.text.trim(),
+        ),
       );
       if (!mounted) {
         return;
@@ -443,7 +481,10 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      final branches = await _repository.getAccessibleBranches(employee);
+      final branches = await LoginPerformanceTrace.measure(
+        'pin_accessible_branches',
+        () => _repository.getAccessibleBranches(employee),
+      );
       if (!mounted) {
         return;
       }
@@ -464,11 +505,17 @@ class _LoginScreenState extends State<LoginScreen> {
         final branchToPersist =
             selectedBranch ??
             (branches.isEmpty ? Branch.defaultBranch : branches.first);
-        await OperationalEmployeeSessionService.instance
-            .validateDeviceForOperationalLogin(branchToPersist.id);
-        await OperationalEmployeeSessionService.instance.persistLogin(
-          employee,
-          branchToPersist,
+        await LoginPerformanceTrace.measure(
+          'pin_device_validation',
+          () => OperationalEmployeeSessionService.instance
+              .validateDeviceForOperationalLogin(branchToPersist.id),
+        );
+        await LoginPerformanceTrace.measure(
+          'pin_secure_session_persist',
+          () => OperationalEmployeeSessionService.instance.persistLogin(
+            employee,
+            branchToPersist,
+          ),
         );
       }
       AppSession.instance.signIn(
@@ -476,7 +523,14 @@ class _LoginScreenState extends State<LoginScreen> {
         branches: branches,
         initialBranch: selectedBranch,
       );
+      LoginPerformanceTrace.finish('pin_to_employee_session', loginTimer);
     } catch (error) {
+      LoginPerformanceTrace.finish(
+        'pin_to_employee_session',
+        loginTimer,
+        result: 'failed',
+        error: error,
+      );
       if (!mounted) {
         return;
       }

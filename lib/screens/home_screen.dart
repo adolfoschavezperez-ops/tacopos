@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 
@@ -9,6 +11,7 @@ import '../models/cash_withdrawal_request.dart';
 import '../services/app_session.dart';
 import '../services/live_presence_service.dart';
 import '../services/operational_employee_session_service.dart';
+import '../services/login_performance_trace.dart';
 import '../services/taco_pos_repository.dart';
 import '../widgets/glass.dart';
 import '../widgets/mandatory_update_gate.dart';
@@ -33,7 +36,13 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _markMainMenu();
+    LoginPerformanceTrace.mark('home_screen_created');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      LoginPerformanceTrace.mark('home_screen_first_frame');
+    });
+    unawaited(
+      LoginPerformanceTrace.measure('home_presence_update', _markMainMenu),
+    );
   }
 
   Future<void> _markMainMenu({String action = 'En menú principal'}) {

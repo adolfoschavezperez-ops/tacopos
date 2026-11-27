@@ -22,11 +22,15 @@ void main() {
 
     expect(
       source,
-      contains('OperationalSessionService.instance.bootstrapAuth()'),
+      contains("'anonymous_auth_bootstrap'"),
     );
     expect(
-      source.indexOf('_ensureAnonymousLogin()'),
-      lessThan(source.indexOf('runApp')),
+      source,
+      contains('await LoginPerformanceTrace.measure('),
+    );
+    expect(
+      source.indexOf("'anonymous_auth_bootstrap'"),
+      lessThan(source.indexOf('runApp(const TacoPosApp())')),
     );
   });
 

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../services/app_session.dart';
 import '../services/app_update_service.dart';
 import '../services/device_registry_service.dart';
+import '../services/login_performance_trace.dart';
 import '../services/operational_session_service.dart';
 
 class AppUpdateGate extends StatefulWidget {
@@ -80,17 +81,28 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
   }
 
   Future<void> _checkForUpdate() async {
+    final gateTimer = LoginPerformanceTrace.start();
+    LoginPerformanceTrace.mark('version_gate_begin');
     setState(() {
       _checking = true;
       _requiredError = null;
     });
-    final result = await _updateService.checkForUpdate();
+    final result = await LoginPerformanceTrace.measure(
+      'version_policy_check',
+      _updateService.checkForUpdate,
+    );
     if (AppSession.instance.isLoggedIn) {
-      await OperationalSessionService.instance.ensureReadyForCurrentSession(
-        updateResult: result,
+      await LoginPerformanceTrace.measure(
+        'version_gate_session_validation',
+        () => OperationalSessionService.instance.ensureReadyForCurrentSession(
+          updateResult: result,
+        ),
       );
     } else {
-      await _deviceRegistryService.recordHeartbeat(updateResult: result);
+      await LoginPerformanceTrace.measure(
+        'prelogin_device_heartbeat',
+        () => _deviceRegistryService.recordHeartbeat(updateResult: result),
+      );
     }
     if (!mounted) return;
     setState(() {
@@ -98,6 +110,7 @@ class _AppUpdateGateState extends State<AppUpdateGate> {
       _lastResult = result;
       _requiredUpdate = result.decision.isRequired ? result : null;
     });
+    LoginPerformanceTrace.finish('version_gate_released', gateTimer);
     if (result.decision.isRequired) {
       if (result.canStartImmediateUpdate) {
         unawaited(_runImmediateUpdate(result));

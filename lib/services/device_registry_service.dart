@@ -6,6 +6,7 @@ import '../core/app_update/app_update_policy.dart';
 import '../core/constants/app_constants.dart';
 import 'app_session.dart';
 import 'app_update_service.dart';
+import 'login_performance_trace.dart';
 
 class RegisteredDevice {
   const RegisteredDevice({
@@ -224,9 +225,12 @@ class DeviceRegistryService {
     }
 
     final deviceId = uid!;
-    final doc = await _devicesRef
-        .doc(deviceId)
-        .get(const GetOptions(source: Source.server));
+    final doc = await LoginPerformanceTrace.measure(
+      'device_registry_server_read',
+      () => _devicesRef
+          .doc(deviceId)
+          .get(const GetOptions(source: Source.server)),
+    );
     if (!doc.exists) {
       throw const DeviceRegistryException(
         'device-not-registered',
